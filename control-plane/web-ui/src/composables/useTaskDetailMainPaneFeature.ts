@@ -32,6 +32,9 @@ export function useTaskDetailMainPaneFeature(args: {
     terminating: Ref<boolean>;
   };
   messages: {
+    hasOlderHistory: Ref<boolean>;
+    historyLoading: Ref<boolean>;
+    loadOlderHistory: () => void | Promise<void>;
     messagesError: Ref<string | null | undefined>;
     messagesLoading: MainPaneModelArgs["messagesLoading"];
     selectedSessionId: MainPaneModelArgs["selectedSessionId"];
@@ -125,12 +128,15 @@ export function useTaskDetailMainPaneFeature(args: {
     handleContinue: args.conversation.handleContinue,
     handleExecutionModeConfirm: args.workflow.handleExecutionModeConfirm,
     handleFork: args.conversation.handleFork,
+    handleLoadOlderHistory: args.messages.loadOlderHistory,
     handleOpenFilePreview: args.sidebar.handleOpenFilePreview,
     handleRemoveQueuedContinuation: args.conversation.handleRemoveQueuedContinuation,
     handleReplyRuntimePermission: args.runtimePermission.handleReplyRuntimePermission,
     handleSelectedModelChange: args.workflow.handleSelectedModelChange,
     handleTerminate: args.conversation.handleTerminate,
+    hasOlderHistory: args.messages.hasOlderHistory,
     hasStreamingAssistant: args.page.hasStreamingAssistant,
+    historyLoading: args.messages.historyLoading,
     isExecuting: args.page.isExecuting,
     loadModels: args.workflow.loadModels,
     messagesError: normalizedMessagesError,

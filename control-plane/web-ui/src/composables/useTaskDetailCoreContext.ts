@@ -53,8 +53,11 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     clearPendingAssistantDraft,
     currentPhaseId,
     flatNodes,
+    hasOlderHistory: messageSnapshot.hasOlderHistory,
+    historyLoading: messageSnapshot.historyLoading,
     hasStreamingAssistant,
     latestTaskRefreshRequest,
+    loadOlderHistory: messageSnapshot.loadOlderHistory,
     messageReconcileRequired: computed(
       () => Boolean(messageSnapshot.trace.value?.timelineMeta?.reconcileRequired),
     ),

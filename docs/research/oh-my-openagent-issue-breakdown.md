@@ -1,0 +1,488 @@
+# oh-my-openagent 借鉴方案的 Issue 级工作包清单
+
+> 状态说明：本文档中的多个 Epic / Issue 以旧版图模型穿透控制面为前提，现已转为历史计划，不再指导当前实现。
+>
+> 相关旧兼容层工作项已被新的 Workflow Stage 主方案替代。当前执行方向请以 [dag-node-execution-plan-v2.md](../workflow/dag-node-execution-plan-v2.md) 为准。
+>
+> 历史口径说明（2026-04-05）：本文若把 `agent_runs` 当作现行执行主表或待扩展的长期结构，应按历史计划理解。当前 schema 已删除 `agent_runs` 物理表，兼容 `agentRunId` 语义改由 canonical task-domain 表投影提供。
+
+## 0. 审核修订说明（2026-03-09）
+
+> **重大修正**：原始 issue 清单基于"运行时编排能力缺失"的错误前提制定。
+> 经复审，`opencode-fork/.opencode/` 下已实现大量编排能力（9 个 Agent、orchestrator-plugin、session-tools 等）。
+>
+> **修正方向**：所有 issue 的焦点从"从零建编排"调整为"运行时能力进入控制面主链路"。
+> 标注 `[修订]` 的 issue 为本次审核后调整的内容。
+
+> **实现状态（2026-03-09）**：全部 4 个 Epic、19 个 Issue 已实现完毕，通过编译和格式检查。
+> 详细实现说明见 [oh-my-openagent 实现说明](oh-my-openagent-implementation.md)。
+
+## 1. 文档目的
+
+本文档将 [oh-my-openagent 对 OpenerX 的功能对比与可执行方案](oh-my-openagent-comparison-plan.md) 进一步拆解为可执行的 issue 级工作包，便于直接进入迭代计划、项目管理系统或 issue tracker。
+
+拆解原则：
+
+- 每个 issue 保持单一目标
+- 每个 issue 都有明确依赖、交付物和验收标准
+- 优先保证任务主模型、编排能力和插件生命周期控制面三条主线可独立推进
+
+## 2. 建议的 Epic 划分
+
+建议分为四个 Epic：
+
+1. 任务编排主模型（运行时 → 控制面穿透）
+2. 规划与任务路由（运行时能力 UI 可视化）
+3. 插件生命周期控制面
+4. 连续执行与恢复机制
+
+---
+
+## Epic 1: 任务编排主模型（历史方案）[归档]
+
+本 Epic 原本围绕旧版运行时图模型进入控制面展开，包括图模型持久化、同步链路和独立图视图。
+
+这些工作项对应的实现和计划现已整体归档，不再进入当前迭代：
+
+1. 代码、schema、migration 与数据库已经完成旧兼容层删除
+2. 产品与前端不再暴露 Task Graph 独立能力
+3. 当前执行模型以 Workflow Stage、RuntimePlan、Hook、runtime pipeline 为主
+
+后续若需要追溯历史设计，请参考仓库历史；当前执行方向以 [dag-node-execution-plan-v2.md](../workflow/dag-node-execution-plan-v2.md) 为准。
+
+---
+
+## Epic 2: 规划与任务路由（运行时能力 UI 可视化）[修订]
+
+> **背景修正**：orchestrator-plugin 已实现完整的意图分类（5 类 63 模式）、Agent 路由、模型选择。prometheus/metis/momus Agent 已实现完整的规划流水线。start-work 命令已串联完整流程。本 Epic 的目标从"从零建路由"调整为"把运行时编排决策在 UI 中可视化和可配置"。
+
+### Issue 2.1 ✅ 将运行时意图分类结果同步到控制面 [修订]
+
+目标：
+把 orchestrator-plugin 的意图分类结果（quick/deep/ops/security/architecture）同步到控制面 tasks 表。
+
+建议标题：
+`sync runtime intent classification to control plane`
+
+范围：
+
+- 在 `tasks` 表增加 `category` 和 `strategy` 字段
+- 通过事件回写将运行时分类结果写入控制面
+- 定义分类到执行策略的映射文档
+
+交付物：
+
+- 策略映射文档（与 orchestrator-plugin 对齐）
+- schema 变更 + migration
+
+依赖：
+
+- 无
+
+验收标准：
+
+- 运行时分类结果能同步到 tasks 表
+- 分类字段语义与 orchestrator-plugin 一致
+
+### Issue 2.2 ✅ 在 UI 展示规划流水线结果 [修订]
+
+目标：
+把 prometheus 规划、metis 审计、momus 验证的结果在 TaskDetail 中可视化展示。
+
+建议标题：
+`visualize planning pipeline results in ui`
+
+范围：
+
+- 通过事件流或 session 消息获取规划/审计/验证的结构化输出
+- 在 TaskDetail 增加"规划结果"面板
+- 展示 metis 审计发现和 momus 评分
+
+交付物：
+
+- BFF 规划结果查询接口
+- 前端规划结果面板组件
+
+依赖：
+
+- Issue 2.1
+
+验收标准：
+
+- 管理员可在 UI 看到规划结果和审计评分
+- 规划数据可被后续执行决策引用
+
+### Issue 2.3 ✅ 在 tasks 表增加分类与策略字段 [修订]
+
+目标：
+让 tasks 主模型承载运行时产出的分类和策略信息。
+
+建议标题：
+`add task category and execution strategy fields`
+
+范围：
+
+- 在 `tasks` 增加 category 和 strategy 字段
+- 支持保存运行时分类和规划摘要
+
+交付物：
+
+- schema 变更
+- API 请求与响应更新
+
+依赖：
+
+- Issue 2.1
+
+验收标准：
+
+- 任务创建或运行时分类后可看到类别和策略信息
+
+### Issue 2.4 ✅ 前端增加编排决策查看面板 [修订]
+
+目标：
+让管理员在 TaskDetail 中看到运行时的编排决策（意图分类、Agent 路由、模型选择）。
+
+建议标题：
+`add orchestration decisions panel in task detail`
+
+范围：
+
+- TaskDetail 增加编排决策面板
+- 显示意图分类结果、选中 Agent、选中模型、复杂度评估
+- 显示规划流水线状态（prometheus/metis/momus 各阶段是否通过）
+
+交付物：
+
+- TaskDetail 或 Tasks 页面编排决策面板
+
+依赖：
+
+- Issue 2.2
+- Issue 2.3
+
+验收标准：
+
+- 管理员能看到每个任务的编排决策过程
+- 规划流水线各阶段状态可见
+
+### Issue 2.5 ✅ 为编排策略增加 UI 配置入口 [修订]
+
+目标：
+让 orchestrator-plugin 的意图分类模式、Agent 映射策略可通过 UI 配置，而非只能编辑 .ts 文件。
+
+建议标题：
+`add orchestration strategy config ui`
+
+范围：
+
+- 在 Settings 或项目设置中增加编排策略配置
+- 支持修改类别→Agent、类别→模型的映射
+- 支持配置是否启用规划流水线（prometheus/metis/momus）
+
+交付物：
+
+- 执行策略配置 UI
+
+依赖：
+
+- Issue 2.1
+
+验收标准：
+
+- 管理员可通过 UI 修改编排策略而非编辑代码
+- 策略配置变更后能同步到 orchestrator-plugin
+
+---
+
+## Epic 3: 插件生命周期控制面
+
+### Issue 3.1 ✅ 设计插件元数据模型与状态模型
+
+目标：
+把插件从“配置文件路径”升级为“有状态的平台对象”。
+
+建议标题：
+`design plugin metadata and lifecycle state`
+
+范围：
+
+- 定义插件名称、版本、来源、启用状态、兼容范围、最近校验时间
+- 定义启用、禁用、故障、未安装等状态
+
+交付物：
+
+- 插件元数据设计文档
+
+依赖：
+
+- 无
+
+验收标准：
+
+- 插件可被统一管理，而不是只有路径列表
+
+### Issue 3.2 ✅ 增加插件元数据与状态持久化
+
+目标：
+落库插件状态与元数据。
+
+建议标题：
+`persist plugin metadata and status`
+
+范围：
+
+- 新增数据表或配置存储结构
+- 对现有插件清单做初始化同步
+
+交付物：
+
+- schema / migration
+- 初始化同步逻辑
+
+依赖：
+
+- Issue 3.1
+
+验收标准：
+
+- 页面可以读取插件状态而非仅仅读 opencode.json
+
+### Issue 3.3 ✅ 增加插件启用 / 禁用接口
+
+目标：
+让平台能够控制插件状态。
+
+建议标题：
+`add plugin enable disable api`
+
+范围：
+
+- 新增 enable/disable API
+- 同步更新配置文件和元数据状态
+
+交付物：
+
+- BFF config routes 扩展
+
+依赖：
+
+- Issue 3.2
+
+验收标准：
+
+- 插件能通过 UI 启用和禁用
+- 变更后状态一致
+
+### Issue 3.4 ✅ 增加插件安装 / 卸载能力
+
+目标：
+把插件管理从只读清单提升为基础生命周期管理。
+
+建议标题：
+`add plugin install and uninstall flow`
+
+范围：
+
+- 定义插件来源输入方式
+- 增加安装与卸载接口
+- 增加基础安全校验
+
+交付物：
+
+- API 设计
+- 前端安装/卸载交互
+
+依赖：
+
+- Issue 3.1
+
+验收标准：
+
+- 至少支持一类受控插件来源的安装和卸载
+
+### Issue 3.5 ✅ 增加插件兼容性检查任务
+
+目标：
+在 OpenCode 升级前后，自动验证插件兼容性。
+
+建议标题：
+`add plugin compatibility validation`
+
+范围：
+
+- 定义兼容性检查规则
+- 对内部插件和主流插件执行验证
+- 输出检查报告
+
+交付物：
+
+- 兼容性检查脚本或任务
+- 报告格式
+
+依赖：
+
+- Issue 3.2
+
+验收标准：
+
+- 每次升级前能自动输出插件兼容状态
+
+### Issue 3.6 ✅ Settings 页面升级为插件生命周期控制面
+
+目标：
+把现有 Settings 中的插件区域从只读改为可操作控制面。
+
+建议标题：
+`upgrade settings plugin section to lifecycle console`
+
+范围：
+
+- 显示插件状态、版本、来源、最近检查结果
+- 支持启用、禁用、安装、卸载、校验
+
+交付物：
+
+- Settings 页面插件模块改造
+
+依赖：
+
+- Issue 3.3
+- Issue 3.4
+- Issue 3.5
+
+验收标准：
+
+- 插件模块可完成基本生命周期操作
+
+---
+
+## Epic 4: 连续执行与恢复机制 [修订]
+
+> **背景修正**：session-tools 已实现 session list/read/search/summary/continue。handoff 命令已实现交接文档生成。Ralph Loop 已实现停滞检测和重试。本 Epic 的目标从"从零建恢复"调整为"把运行时恢复能力暴露给控制面 UI"。
+
+### Issue 4.1 ✅ 将 session-tools 暴露为 BFF 接口 [修订]
+
+目标：
+把运行时 session-tools 的能力（session list/read/search/summary/continue）通过 BFF 接口暴露给前端。
+
+建议标题：
+`expose session tools via bff api`
+
+范围：
+
+- 通过 OpenCode tool call 接口调用 session-tools 的各功能
+- BFF 增加 session 搜索、历史、摘要、续跑接口
+
+交付物：
+
+- handoff 数据结构文档（对齐运行时 handoff 命令输出）
+- BFF session 接口
+
+依赖：
+
+- 无
+
+验收标准：
+
+- 前端能通过 BFF 接口查询会话历史
+- 能调用 session_continue 发起续跑
+
+### Issue 4.2 ✅ 前端增加会话历史与续跑入口 [修订]
+
+目标：
+在 TaskDetail 页面展示会话历史，支持搜索和"续跑"操作。
+
+建议标题：
+`add session history and resume ui`
+
+范围：
+
+- TaskDetail 增加会话历史 tab
+- 支持按关键字搜索历史会话
+- 增加"续跑"按钮（调用 session_continue）
+- 显示最近错误与恢复记录
+
+交付物：
+
+- BFF 或 control plane 查询接口
+- TaskDetail 会话历史面板
+
+依赖：
+
+- Issue 4.1
+
+验收标准：
+
+- 支持按 taskId、sessionId、关键字检索历史
+- 用户可从 UI 直接发起续跑
+
+### Issue 4.3 ✅ 定义 fallback 与 continuation policy [修订]
+
+目标：
+为长任务和失败场景建立受治理约束的继续执行策略，让运行时已有的 Ralph Loop、retry 机制可被控制面审计。
+
+建议标题：
+`define continuation and fallback policy`
+
+范围：
+
+- 明确哪些错误可自动重试（对齐现有运行时 retry 逻辑）
+- 明确何时切换模型或策略（对齐 orchestrator-plugin 的 fallback 逻辑）
+- 明确何时必须触发审批或人工介入
+- 将恢复行为写入 audit_events
+
+交付物：
+
+- 策略文档（与运行时 retry/fallback 对齐）
+- 控制面配置项
+
+依赖：
+
+- Issue 4.1
+
+验收标准：
+
+- 中断任务可恢复
+- 失败节点可重试
+- continuation 不会绕过治理约束
+- fallback 行为可解释、可审计
+
+> ~~Issue 4.4~~ 和 ~~Issue 4.5~~ 已分别合并到 Issue 4.3 和 Issue 4.2。
+
+---
+
+## 3. 建议的执行顺序 [修订]
+
+建议按以下顺序推进：
+
+1. **先统一 Workflow Stage 主模型**：把执行阶段、Hook、RuntimePlan、agent_runs 的主链路收敛到同一模型。
+1. **先统一 Workflow Stage 主模型**：把执行阶段、Hook、RuntimePlan 与当时仍存在的 `agentRunId` 兼容链路收敛到同一模型。
+2. **再补运行时编排与可视化读取**：优先补全 pipeline、并行执行、顺序执行与当前 session 视角。
+3. **在执行主路径稳定后推进插件治理**：Epic 3。
+4. **最后补恢复与暴露能力**：Epic 4。
+
+原因：
+
+- 执行主模型必须先统一，否则前端、BFF 与 service 会长期并存多套语义。
+- pipeline 与 session 读取稳定之后，治理约束才有可靠挂载点。
+- 恢复机制属于主路径补充能力，可在模型稳定后暴露。
+
+## 4. 建议的首批迭代范围 [修订]
+
+如果只做第一轮迭代，建议先立这 6 个 issue：
+
+1. Issue 1.1 统一 Workflow Stage 与执行记录模型
+2. Issue 1.2 收敛 BFF runtime pipeline 聚合口径
+3. Issue 1.3 支持用户并行执行与结果比较
+4. Issue 1.4 支持用户顺序执行与阶段推进
+5. Issue 2.1 将运行时意图分类结果同步到控制面
+6. Issue 3.1 设计插件元数据模型与状态模型
+
+核心思路是"统一执行主模型并暴露运行时能力"，而非重建一套独立编排内核。
+
+## 5. 一页式结论 [修订]
+
+~~原结论称需要按"任务主模型、规划路由、插件生命周期、恢复机制"从零建设。~~
+
+经复审修正：OpenerX 在运行时层已具备大部分编排基础能力，控制面不应继续维护一套平行的旧图模型语义。更合理的顺序是按"**Workflow Stage 主模型统一 → 运行时执行与可视化暴露 → 插件治理 → 恢复暴露**"推进，让控制面以同一执行语义感知和治理运行时已有能力。

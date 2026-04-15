@@ -2,7 +2,7 @@
 
 这个目录用于集中当前已经收敛、仍然作为现行参考依据的文档。
 
-为避免复制出重复文件并导致后续内容漂移，这里放置的是指向原文档的符号链接，而不是副本。
+此前这里计划使用符号链接来避免内容漂移，但当前工作区里实际保留的是普通 Markdown 文件，而不是符号链接。因此这里的文档需要单独维护，不能假设会自动跟随原位置同步。
 
 ## 当前纳入范围
 
@@ -16,6 +16,13 @@
 - [agent-console-redesign-plan.md](agent-console-redesign-plan.md)
 - [current-implementation-functional-overview.md](current-implementation-functional-overview.md)
 - [member-first-architecture-design.md](member-first-architecture-design.md)
+
+另外，这个目录当前还保留两份“结构盘点 / 冗余审查”补充文档：
+
+- [all-table-structures.md](all-table-structures.md)
+- [table-structure-redundancy-review.md](table-structure-redundancy-review.md)
+
+它们更接近 schema / task-domain 审查材料，不是前台页面主链文档，但目前仍作为当前实现补充参考保留在本目录。
 
 ## 纳入标准
 

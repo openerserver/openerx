@@ -61,13 +61,13 @@
 
 ## 2. 与旧页面的关系
 
-> 说明：本文档中的 `/tasks/:taskId/v2` 与 `useTaskMessages.ts` 设计已退役。当前实现统一以 `/tasks/:taskId/v3` 为任务视图入口，并使用基于 execution-trace 的 V3 对话构建链路。
+> 说明：本文档中的 `/tasks/:taskId/v2` 与 `useTaskMessages.ts` 设计已退役。当前实现的任务视图主入口已经切到 `/tasks/:taskId`，`/tasks/:taskId/v3` 只保留兼容 redirect，并使用基于 execution-trace 的 V3 对话构建链路。
 
 | 旧页面 | 新页面 | 说明 |
 | -------- | -------- | ------ |
 | `/tasks/:taskId` (TaskDetail.vue) | 保留不动 | 旧页面继续作为全功能详情页 |
 | `/workbench` (TaskWorkbench.vue) | 保留不动 | 旧 Workbench 不改 |
-| `/tasks/:taskId/v3` (TaskDetailV3.vue) | 当前任务视图 | 现行任务视图；早期草案曾按 tree-native / tree-first 起稿，当前实现已演进为 task-domain / projection-first 主读链 |
+| `/tasks/:taskId` (TaskDetailV3.vue) | 当前任务视图 | 现行任务视图；`/tasks/:taskId/v3` 仅保留兼容 redirect。早期草案曾按 tree-native / tree-first 起稿，当前实现已演进为 task-domain / projection-first 主读链 |
 
 导航入口：
 
@@ -272,7 +272,7 @@ control-plane/web-ui/src/
 
 ## 5. 路由配置
 
-当前任务视图使用 `/tasks/:taskId/v3`，V2 路由已删除。
+当前任务视图主入口使用 `/tasks/:taskId`，`/tasks/:taskId/v3` 为兼容 alias，V2 路由已删除。
 
 ## 6. VueFlow 分支图详细设计
 
@@ -582,7 +582,7 @@ defineEmits<{
 ### 阶段 1：骨架搭建
 
 1. 历史 Phase 1 已创建 `TaskDetailV3.vue`，当时先落了 Header + 左侧主内容区空壳（Workflow 概览 + 聊天区 + 底部输入框）+ 右侧 Sidebar 占位区。
-2. 使用 `/tasks/:taskId/v3` 作为任务视图路由。
+2. 使用 `/tasks/:taskId` 作为任务视图主路由，并保留 `/tasks/:taskId/v3` 作为兼容 alias。
 3. 在旧 TaskDetail header 加一个“任务视图”的 router-link。
 4. 在任务列表 Tasks.vue 的操作栏加一个“任务视图”入口。
 
@@ -688,7 +688,7 @@ composable 单元测试：
 
 ### 15.3 不要影响旧路由
 
-当前任务视图使用 `/tasks/:taskId/v3`，并与 `/tasks/:taskId` 经典视图并存；文档中的旧 `/tasks/:taskId/v2` 方案已退役。
+当前任务视图主入口使用 `/tasks/:taskId`，`/tasks/:taskId/v3` 仅保留兼容 alias；文档中的旧 `/tasks/:taskId/v2` 方案已退役。
 
 ### 15.4 CSS 隔离
 

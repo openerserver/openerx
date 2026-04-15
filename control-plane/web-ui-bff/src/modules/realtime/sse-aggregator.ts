@@ -1255,7 +1255,10 @@ class SSEAggregator {
     return { toolName, sessionId };
   }
 
-  private async persistSessionMessageSnapshot(event: RealtimeEvent): Promise<void> {
+  private async persistSessionMessageSnapshot(
+    event: RealtimeEvent,
+    resolvedMessageSnapshot?: Record<string, unknown> | null,
+  ): Promise<void> {
     if (event.type !== "message.updated" || !event.sessionId) {
       return;
     }
@@ -1295,7 +1298,7 @@ class SSEAggregator {
       }
     }
 
-    const message = await this.resolvePersistableMessageSnapshot(event);
+    const message = resolvedMessageSnapshot ?? (await this.resolvePersistableMessageSnapshot(event));
     if (!message) {
       return;
     }
@@ -1583,6 +1586,95 @@ class SSEAggregator {
       }
     }
     return null;
+  }
+
+  private isExecutionContextText(text: string): boolean {
+    const normalized = text.trim();
+    return (
+      normalized.startsWith("Execution context:") ||
+      normalized.startsWith("当前执行上下文") ||
+      normalized.startsWith("## 当前执行上下文")
+    );
+  }
+
+  private extractRenderableMessageParts(
+    message: Record<string, unknown>,
+  ): Array<Record<string, unknown>> {
+    if (!Array.isArray(message.parts)) {
+      return [];
+    }
+
+    return message.parts
+      .map((part) =>
+        part && typeof part === "object" ? ({ ...(part as Record<string, unknown>) } as Record<string, unknown>) : null,
+      )
+      .filter((part): part is Record<string, unknown> => Boolean(part))
+      .filter((part) => {
+        const partType = asString(part.type);
+        if (partType && partType !== "text" && partType !== "thinking" && partType !== "reasoning") {
+          return false;
+        }
+
+        const text =
+          asString(part.text) ??
+          asString(part.content) ??
+          asString(part.textContent) ??
+          asString(part.contentText);
+        return Boolean(text && !this.isExecutionContextText(text));
+      });
+  }
+
+  private extractRenderableMessageText(message: Record<string, unknown>): string | null {
+    const directCandidates = [message.textContent, message.text, message.content, message.summaryText];
+    for (const candidate of directCandidates) {
+      if (typeof candidate === "string") {
+        const normalized = candidate.trim();
+        if (normalized && !this.isExecutionContextText(normalized)) {
+          return normalized;
+        }
+      }
+    }
+
+    const parts = this.extractRenderableMessageParts(message);
+    if (parts.length === 0) {
+      return null;
+    }
+
+    const text = parts
+      .map(
+        (part) =>
+          asString(part.text) ??
+          asString(part.content) ??
+          asString(part.textContent) ??
+          asString(part.contentText),
+      )
+      .filter((value): value is string => Boolean(value))
+      .join("\n")
+      .trim();
+
+    return text || null;
+  }
+
+  private buildHydratedTaskDomainMessage(
+    message: Record<string, unknown>,
+    resolvedMessageSnapshot?: Record<string, unknown> | null,
+  ): Record<string, unknown> {
+    if (!resolvedMessageSnapshot) {
+      return message;
+    }
+
+    const nextMessage = { ...message };
+    const renderableText = this.extractRenderableMessageText(resolvedMessageSnapshot);
+    if (renderableText) {
+      nextMessage.textContent = renderableText;
+    }
+
+    const renderableParts = this.extractRenderableMessageParts(resolvedMessageSnapshot);
+    if (renderableParts.length > 0) {
+      nextMessage.parts = renderableParts;
+    }
+
+    return nextMessage;
   }
 
   private extractToolIdentity(data: Record<string, unknown>): string | undefined {
@@ -1970,15 +2062,24 @@ class SSEAggregator {
       : this.transformEvent(type, parsed);
 
     if (event) {
+      const rawType = typeof event.data.rawType === "string" ? event.data.rawType : undefined;
+      const effectiveRawType = rawType ?? event.type;
+      const resolvedMessageSnapshot =
+        event.type === "message.updated" &&
+        effectiveRawType === "message.updated" &&
+        !this.hasInlineMessageContent(event.data)
+          ? await this.resolvePersistableMessageSnapshot(event)
+          : undefined;
+
       if (event.type === "session.idle" || event.type === "session.updated" || event.type === "session.status") {
         console.log(`[sse-debug] event=${event.type} sessionId=${event.sessionId} taskId=${event.taskId} agentRunId=${event.agentRunId} isCompletion=${this.isCompletionSignal(event)}`);
       }
-      for (const derivedEvent of this.buildTaskDomainEvents(event)) {
+      for (const derivedEvent of this.buildTaskDomainEvents(event, resolvedMessageSnapshot)) {
         this.emit(derivedEvent);
       }
       this.emit(event);
       if (event.type === "message.updated") {
-        void this.persistSessionMessageSnapshot(event).catch((error) => {
+        void this.persistSessionMessageSnapshot(event, resolvedMessageSnapshot).catch((error) => {
           console.error(`Failed to persist message snapshot for task ${event.taskId}:`, error);
         });
       }
@@ -2006,12 +2107,21 @@ class SSEAggregator {
     }
   }
 
-  private buildTaskDomainEvents(event: RealtimeEvent): RealtimeEvent[] {
+  private buildTaskDomainEvents(
+    event: RealtimeEvent,
+    resolvedMessageSnapshot?: Record<string, unknown> | null,
+  ): RealtimeEvent[] {
     if (event.type === "message.updated") {
       const rawType = asString(event.data.rawType) ?? event.type;
 
       if (rawType === "message.updated") {
-        const info = asRecord(event.data.info);
+        const baseInfo = asRecord(event.data.info);
+        const role = asString(baseInfo?.role) ?? asString(event.data.role);
+        const taskMessage =
+          role === "assistant"
+            ? this.buildHydratedTaskDomainMessage(event.data, resolvedMessageSnapshot)
+            : event.data;
+        const info = asRecord(taskMessage.info);
         const messageId = asString(info?.id);
         if (!info || !messageId) {
           return [];
@@ -2028,7 +2138,7 @@ class SSEAggregator {
             sessionId: event.sessionId,
             agentRunId: event.agentRunId,
             data: {
-              message: event.data,
+              message: taskMessage,
               reason: rawType,
             },
           },

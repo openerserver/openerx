@@ -49,6 +49,44 @@ describe("task message first text", () => {
     });
   });
 
+  it("ignores execution-context and tool content when extracting first assistant text", () => {
+    const patchEvent = toTaskMessagePatchEvent(
+      createEvent({
+        data: {
+          message: {
+            info: {
+              id: "assistant-1",
+              role: "assistant",
+              time: {
+                created: "2026-04-08T03:18:17.218Z",
+              },
+            },
+            parts: [
+              {
+                type: "text",
+                text: "Execution context:\n当前阶段：实现",
+              },
+              {
+                type: "tool",
+                text: "工具输出",
+              },
+              {
+                type: "text",
+                text: "真正的首段正文",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(patchEvent).toMatchObject({
+      kind: "assistant-progress",
+      messageId: "assistant-1",
+      initialText: "真正的首段正文",
+    });
+  });
+
   it("hydrates live assistant state from snapshot text before delta arrives", () => {
     const state = applyRealtimeEventToLiveAssistantState(
       createEmptyLiveAssistantState(),
@@ -76,6 +114,44 @@ describe("task message first text", () => {
 
     expect(state.orderedAssistantMessageIds).toEqual(["assistant-1"]);
     expect(state.textById.get("assistant-1")).toBe("首段正文");
+    expect(state.incompleteIds.has("assistant-1")).toBe(true);
+  });
+
+  it("hydrates live assistant state with visible text only", () => {
+    const state = applyRealtimeEventToLiveAssistantState(
+      createEmptyLiveAssistantState(),
+      createEvent({
+        data: {
+          message: {
+            info: {
+              id: "assistant-1",
+              role: "assistant",
+              time: {
+                created: "2026-04-08T03:18:17.218Z",
+              },
+            },
+            parts: [
+              {
+                type: "text",
+                text: "Execution context:\n当前阶段：实现",
+              },
+              {
+                type: "tool",
+                text: "工具输出",
+              },
+              {
+                type: "text",
+                text: "真正的首段正文",
+              },
+            ],
+          },
+        },
+      }),
+      "session-1",
+    );
+
+    expect(state.orderedAssistantMessageIds).toEqual(["assistant-1"]);
+    expect(state.textById.get("assistant-1")).toBe("真正的首段正文");
     expect(state.incompleteIds.has("assistant-1")).toBe(true);
   });
 });

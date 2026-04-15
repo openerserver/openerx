@@ -58,33 +58,81 @@ export function resolveTaskSnapshotRound(
   );
 }
 
+function resolveTaskSnapshotPartType(part: TaskRoundMessageDto["parts"][number]) {
+  const directType = typeof part.type === "string" ? part.type.trim() : "";
+  if (directType) {
+    return directType;
+  }
+
+  if (part.partType === "toolCall") {
+    return "tool";
+  }
+
+  if (part.partType === "toolResult") {
+    return "tool-result";
+  }
+
+  return "text";
+}
+
+function extractTaskSnapshotVisibleText(message: TaskRoundMessageDto) {
+  if (!Array.isArray(message.parts) || message.parts.length === 0) {
+    return message.text || undefined;
+  }
+
+  const text = message.parts
+    .filter((part) => resolveTaskSnapshotPartType(part) === "text")
+    .map((part) => (typeof part.text === "string" ? part.text.trim() : ""))
+    .filter((part) => part.length > 0)
+    .join("\n")
+    .trim();
+
+  return text || undefined;
+}
+
 export function toTaskSnapshotMessageRecord(message: TaskRoundMessageDto) {
   const completedAt = message.completedAt ?? message.updatedAt ?? null;
+  const visibleText = extractTaskSnapshotVisibleText(message);
 
   return {
     id: message.id,
     role: message.role,
     status: message.status,
     errorText: message.errorText ?? undefined,
-    text: message.text,
-    textContent: message.text,
+    text: visibleText,
+    textContent: visibleText,
     createdAt: message.createdAt,
     completedAt,
+    summaryText: visibleText,
     info: {
       id: message.id,
       role: message.role,
       status: message.status,
+      preview: visibleText,
       time: {
         created: message.startedAt ?? message.createdAt,
         completed: completedAt,
       },
     },
-    parts: message.parts.map((part) => ({
-      id: part.id,
-      type: "text",
-      text: part.text,
-      finalizedAt: part.finalizedAt ?? undefined,
-    })),
+    parts: message.parts.map((part) => {
+      const partType = resolveTaskSnapshotPartType(part);
+      const normalizedText = typeof part.text === "string" ? part.text : "";
+      return {
+        ...part,
+        type: partType,
+        text: normalizedText,
+        ...(normalizedText
+          ? {
+              content: typeof part.content === "string" ? part.content : normalizedText,
+              textContent:
+                typeof part.textContent === "string" ? part.textContent : normalizedText,
+              contentText:
+                typeof part.contentText === "string" ? part.contentText : normalizedText,
+            }
+          : {}),
+        finalizedAt: part.finalizedAt ?? undefined,
+      };
+    }),
   };
 }
 

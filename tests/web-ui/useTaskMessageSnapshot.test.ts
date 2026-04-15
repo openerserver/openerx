@@ -204,4 +204,274 @@ describe("useTaskMessageSnapshot", () => {
       persistedThroughRevision: 0,
     });
   });
+
+  it("keeps the previous round above the latest round after continue creates a new current round", async () => {
+    apiMocks.getCurrentTaskRound
+      .mockResolvedValueOnce({
+        taskId: "task-1",
+        round: {
+          id: "task-session:task-1:ses-round-1",
+          taskId: "task-1",
+          sessionId: "task-session:task-1:ses-round-1",
+          parentRoundId: "task-session:task-1:ses-root",
+          parentSessionId: "task-session:task-1:ses-root",
+          kind: "continue",
+          source: "continue",
+          status: "completed",
+          promptText: "第一轮问题",
+          createdAt: "2026-04-13T08:00:00.000Z",
+          updatedAt: "2026-04-13T08:00:01.000Z",
+        },
+      })
+      .mockResolvedValueOnce({
+        taskId: "task-1",
+        round: {
+          id: "task-session:task-1:ses-round-2",
+          taskId: "task-1",
+          sessionId: "task-session:task-1:ses-round-2",
+          parentRoundId: "task-session:task-1:ses-round-1",
+          parentSessionId: "task-session:task-1:ses-round-1",
+          kind: "continue",
+          source: "continue",
+          status: "running",
+          promptText: "第二轮问题",
+          createdAt: "2026-04-13T08:10:00.000Z",
+          updatedAt: "2026-04-13T08:10:01.000Z",
+        },
+      });
+    apiMocks.getTaskRoundMessages
+      .mockResolvedValueOnce({
+        taskId: "task-1",
+        round: {
+          id: "task-session:task-1:ses-round-1",
+          taskId: "task-1",
+          sessionId: "task-session:task-1:ses-round-1",
+          parentRoundId: "task-session:task-1:ses-root",
+          parentSessionId: "task-session:task-1:ses-root",
+          kind: "continue",
+          source: "continue",
+          status: "completed",
+          promptText: "第一轮问题",
+          createdAt: "2026-04-13T08:00:00.000Z",
+          updatedAt: "2026-04-13T08:00:01.000Z",
+        },
+        messages: [
+          {
+            id: "round-1-user",
+            roundId: "task-session:task-1:ses-round-1",
+            sessionId: "ses-round-1",
+            role: "user",
+            status: "completed",
+            text: "第一轮问题",
+            parts: [],
+            createdAt: "2026-04-13T08:00:00.000Z",
+            updatedAt: "2026-04-13T08:00:00.000Z",
+          },
+          {
+            id: "round-1-assistant",
+            roundId: "task-session:task-1:ses-round-1",
+            sessionId: "ses-round-1",
+            role: "assistant",
+            status: "completed",
+            text: "第一轮回复",
+            parts: [],
+            createdAt: "2026-04-13T08:00:01.000Z",
+            updatedAt: "2026-04-13T08:00:01.000Z",
+          },
+        ],
+        snapshotVersion: 11,
+        persistedThroughRevision: 11,
+      })
+      .mockResolvedValueOnce({
+        taskId: "task-1",
+        round: {
+          id: "task-session:task-1:ses-round-2",
+          taskId: "task-1",
+          sessionId: "task-session:task-1:ses-round-2",
+          parentRoundId: "task-session:task-1:ses-round-1",
+          parentSessionId: "task-session:task-1:ses-round-1",
+          kind: "continue",
+          source: "continue",
+          status: "running",
+          promptText: "第二轮问题",
+          createdAt: "2026-04-13T08:10:00.000Z",
+          updatedAt: "2026-04-13T08:10:01.000Z",
+        },
+        messages: [
+          {
+            id: "round-2-user",
+            roundId: "task-session:task-1:ses-round-2",
+            sessionId: "ses-round-2",
+            role: "user",
+            status: "completed",
+            text: "第二轮问题",
+            parts: [],
+            createdAt: "2026-04-13T08:10:00.000Z",
+            updatedAt: "2026-04-13T08:10:00.000Z",
+          },
+          {
+            id: "round-2-assistant",
+            roundId: "task-session:task-1:ses-round-2",
+            sessionId: "ses-round-2",
+            role: "assistant",
+            status: "streaming",
+            text: "第二轮回复",
+            parts: [],
+            createdAt: "2026-04-13T08:10:01.000Z",
+            updatedAt: "2026-04-13T08:10:01.000Z",
+          },
+        ],
+        snapshotVersion: 19,
+        persistedThroughRevision: 17,
+      });
+
+    const state = await mountSnapshot();
+
+    await state.refresh(true);
+    await flushPromises();
+
+    expect(state.sourceMessages.value.map((item) => (item as { id: string }).id)).toEqual([
+      "round-1-user",
+      "round-1-assistant",
+      "round-2-user",
+      "round-2-assistant",
+    ]);
+    expect(state.resolvedSessionId.value).toBe("ses-round-2");
+    expect(state.hasOlderHistory.value).toBe(true);
+    expect(state.trace.value?.timelineMeta).toMatchObject({
+      roundId: "task-session:task-1:ses-round-2",
+      snapshotVersion: 19,
+      persistedThroughRevision: 17,
+      itemCount: 4,
+    });
+  });
+
+  it("prepends older parent rounds when loading history upwards", async () => {
+    apiMocks.getCurrentTaskRound.mockResolvedValue({
+      taskId: "task-1",
+      round: {
+        id: "task-session:task-1:ses-round-2",
+        taskId: "task-1",
+        sessionId: "task-session:task-1:ses-round-2",
+        parentRoundId: "task-session:task-1:ses-round-1",
+        parentSessionId: "task-session:task-1:ses-round-1",
+        kind: "continue",
+        source: "continue",
+        status: "completed",
+        promptText: "第二轮问题",
+        createdAt: "2026-04-13T08:10:00.000Z",
+        updatedAt: "2026-04-13T08:10:01.000Z",
+      },
+    });
+    apiMocks.getTaskRoundMessages
+      .mockResolvedValueOnce({
+        taskId: "task-1",
+        round: {
+          id: "task-session:task-1:ses-round-2",
+          taskId: "task-1",
+          sessionId: "task-session:task-1:ses-round-2",
+          parentRoundId: "task-session:task-1:ses-round-1",
+          parentSessionId: "task-session:task-1:ses-round-1",
+          kind: "continue",
+          source: "continue",
+          status: "completed",
+          promptText: "第二轮问题",
+          createdAt: "2026-04-13T08:10:00.000Z",
+          updatedAt: "2026-04-13T08:10:01.000Z",
+        },
+        messages: [
+          {
+            id: "round-2-user",
+            roundId: "task-session:task-1:ses-round-2",
+            sessionId: "ses-round-2",
+            role: "user",
+            status: "completed",
+            text: "第二轮问题",
+            parts: [],
+            createdAt: "2026-04-13T08:10:00.000Z",
+            updatedAt: "2026-04-13T08:10:00.000Z",
+          },
+          {
+            id: "round-2-assistant",
+            roundId: "task-session:task-1:ses-round-2",
+            sessionId: "ses-round-2",
+            role: "assistant",
+            status: "completed",
+            text: "第二轮回复",
+            parts: [],
+            createdAt: "2026-04-13T08:10:01.000Z",
+            updatedAt: "2026-04-13T08:10:01.000Z",
+          },
+        ],
+        snapshotVersion: 8,
+        persistedThroughRevision: 8,
+      })
+      .mockResolvedValueOnce({
+        taskId: "task-1",
+        round: {
+          id: "task-session:task-1:ses-round-1",
+          taskId: "task-1",
+          sessionId: "task-session:task-1:ses-round-1",
+          parentRoundId: null,
+          parentSessionId: null,
+          kind: "continue",
+          source: "continue",
+          status: "completed",
+          promptText: "第一轮问题",
+          createdAt: "2026-04-13T08:00:00.000Z",
+          updatedAt: "2026-04-13T08:00:01.000Z",
+        },
+        messages: [
+          {
+            id: "round-1-user",
+            roundId: "task-session:task-1:ses-round-1",
+            sessionId: "ses-round-1",
+            role: "user",
+            status: "completed",
+            text: "第一轮问题",
+            parts: [],
+            createdAt: "2026-04-13T08:00:00.000Z",
+            updatedAt: "2026-04-13T08:00:00.000Z",
+          },
+          {
+            id: "round-1-assistant",
+            roundId: "task-session:task-1:ses-round-1",
+            sessionId: "ses-round-1",
+            role: "assistant",
+            status: "completed",
+            text: "第一轮回复",
+            parts: [],
+            createdAt: "2026-04-13T08:00:01.000Z",
+            updatedAt: "2026-04-13T08:00:01.000Z",
+          },
+        ],
+        snapshotVersion: 5,
+        persistedThroughRevision: 5,
+      });
+
+    const state = await mountSnapshot();
+
+    expect(state.hasOlderHistory.value).toBe(true);
+    expect(state.historyLoading.value).toBe(false);
+
+    const loadPromise = state.loadOlderHistory();
+    expect(state.historyLoading.value).toBe(true);
+
+    await loadPromise;
+    await flushPromises();
+
+    expect(state.historyLoading.value).toBe(false);
+    expect(state.hasOlderHistory.value).toBe(false);
+    expect(state.sourceMessages.value.map((item) => (item as { id: string }).id)).toEqual([
+      "round-1-user",
+      "round-1-assistant",
+      "round-2-user",
+      "round-2-assistant",
+    ]);
+    expect(apiMocks.getTaskRoundMessages).toHaveBeenNthCalledWith(
+      2,
+      "task-1",
+      "task-session:task-1:ses-round-1",
+    );
+  });
 });

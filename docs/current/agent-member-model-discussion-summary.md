@@ -21,10 +21,10 @@
 
 相关正式文档：
 
-- [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)
-- [docs/organization-oriented-agent-frontend-information-architecture.md](docs/organization-oriented-agent-frontend-information-architecture.md)
-- [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)
-- [docs/development-role-agents-plan.md](docs/development-role-agents-plan.md)
+- [docs/organization-oriented-agent-operating-model.md](../organization/organization-oriented-agent-operating-model.md)
+- [docs/organization-oriented-agent-frontend-information-architecture.md](../organization/organization-oriented-agent-frontend-information-architecture.md)
+- [docs/organization-oriented-agent-technical-checklist.md](../organization/organization-oriented-agent-technical-checklist.md)
+- [docs/development-role-agents-plan.md](../organization/development-role-agents-plan.md)
 - [../archive/organization/historical-boss-agent-design.md](../archive/organization/historical-boss-agent-design.md)（历史文档）
 
 ## 2. 讨论起点：任务没有问题，Agent 才是概念冲突点
@@ -560,7 +560,7 @@ flowchart TD
 
 本轮讨论最终已经收敛成正式方案文档，见：
 
-- [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)
+- [docs/organization-oriented-agent-operating-model.md](../organization/organization-oriented-agent-operating-model.md)
 
 可以把本文档理解为：
 

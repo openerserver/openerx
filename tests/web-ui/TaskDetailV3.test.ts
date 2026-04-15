@@ -223,7 +223,10 @@ vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageSnapshot", asy
     useTaskMessageSnapshot: () => ({
       activeSessionId: ref<string | undefined>(undefined),
       error: computed(() => messagesStoreMock.error),
+      hasOlderHistory: ref(false),
+      historyLoading: ref(false),
       loading: ref(false),
+      loadOlderHistory: vi.fn(async () => undefined),
       refresh: messagesState.refresh,
       resolvedSessionId: ref<string | undefined>(undefined),
       sourceMessages: computed(() => messagesStoreMock.sourceMessages),

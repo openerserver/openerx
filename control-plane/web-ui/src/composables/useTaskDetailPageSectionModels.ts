@@ -87,6 +87,7 @@ export function useTaskDetailMainPaneModel(args: {
   handleContinue: (prompt: string) => void | Promise<void>;
   handleExecutionModeConfirm: (overrides: ExecutionOverrides) => void | Promise<void>;
   handleFork: (prompt: string) => void | Promise<void>;
+  handleLoadOlderHistory: () => void | Promise<void>;
   handleOpenFilePreview: (payload: PreviewFilePayload) => void;
   handleRemoveQueuedContinuation: (id: string) => void;
   handleReplyRuntimePermission: (
@@ -96,6 +97,8 @@ export function useTaskDetailMainPaneModel(args: {
   handleSelectedModelChange: (model: string) => void | Promise<void>;
   handleTerminate: () => void | Promise<void>;
   hasStreamingAssistant: ReadonlyRef<boolean>;
+  hasOlderHistory: ReadonlyRef<boolean>;
+  historyLoading: ReadonlyRef<boolean>;
   isExecuting: ReadonlyRef<boolean>;
   loadModels: () => void | Promise<void>;
   messagesError: ReadonlyRef<string | null>;
@@ -141,12 +144,15 @@ export function useTaskDetailMainPaneModel(args: {
     handleContinue: args.handleContinue,
     handleExecutionModeConfirm: args.handleExecutionModeConfirm,
     handleFork: args.handleFork,
+    handleLoadOlderHistory: args.handleLoadOlderHistory,
     handleOpenFilePreview: args.handleOpenFilePreview,
     handleRemoveQueuedContinuation: args.handleRemoveQueuedContinuation,
     handleReplyRuntimePermission: args.handleReplyRuntimePermission,
     handleSelectedModelChange: args.handleSelectedModelChange,
     handleTerminate: args.handleTerminate,
+    hasOlderHistory: args.hasOlderHistory,
     hasStreamingAssistant: args.hasStreamingAssistant,
+    historyLoading: args.historyLoading,
     isExecuting: args.isExecuting,
     loadModels: args.loadModels,
     messagesError: args.messagesError,

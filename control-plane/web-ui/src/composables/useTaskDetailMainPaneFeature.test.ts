@@ -48,6 +48,9 @@ describe("useTaskDetailMainPaneFeature", () => {
           terminating: ref(false),
         },
         messages: {
+          hasOlderHistory: ref(true),
+          historyLoading: ref(false),
+          loadOlderHistory: async () => undefined,
           messagesError: ref(undefined),
           messagesLoading: ref(false),
           selectedSessionId: ref("session-1"),

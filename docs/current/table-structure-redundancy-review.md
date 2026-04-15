@@ -2,7 +2,7 @@
 
 - 日期：2026-04-02
 - 范围：当前 PostgreSQL Drizzle 定义
-- 来源： [control-plane/service/src/db/schema.pg.ts](control-plane/service/src/db/schema.pg.ts)
+- 来源： [control-plane/service/src/db/schema.pg.ts](../../control-plane/service/src/db/schema.pg.ts)
 - 约束：本文件只做结构审查，不涉及任何实际数据库操作
 
 ## 审查结论（摘要）
@@ -23,15 +23,15 @@
 
 新模型：
 
-- [control-plane/service/src/db/schema.pg.ts#L914](control-plane/service/src/db/schema.pg.ts#L914) `task_messages`
-- [control-plane/service/src/db/schema.pg.ts#L952](control-plane/service/src/db/schema.pg.ts#L952) `task_message_parts`
-- [control-plane/service/src/db/schema.pg.ts#L977](control-plane/service/src/db/schema.pg.ts#L977) `task_operations`
+- [control-plane/service/src/db/schema.pg.ts#L914](../../control-plane/service/src/db/schema.pg.ts#L914) `task_messages`
+- [control-plane/service/src/db/schema.pg.ts#L952](../../control-plane/service/src/db/schema.pg.ts#L952) `task_message_parts`
+- [control-plane/service/src/db/schema.pg.ts#L977](../../control-plane/service/src/db/schema.pg.ts#L977) `task_operations`
 
 旧模型：
 
-- [control-plane/service/src/db/schema.pg.ts#L1017](control-plane/service/src/db/schema.pg.ts#L1017) `task_session_messages`
-- [control-plane/service/src/db/schema.pg.ts#L1072](control-plane/service/src/db/schema.pg.ts#L1072) `task_session_message_parts`
-- [control-plane/service/src/db/schema.pg.ts#L1102](control-plane/service/src/db/schema.pg.ts#L1102) `session_operations`
+- [control-plane/service/src/db/schema.pg.ts#L1017](../../control-plane/service/src/db/schema.pg.ts#L1017) `task_session_messages`
+- [control-plane/service/src/db/schema.pg.ts#L1072](../../control-plane/service/src/db/schema.pg.ts#L1072) `task_session_message_parts`
+- [control-plane/service/src/db/schema.pg.ts#L1102](../../control-plane/service/src/db/schema.pg.ts#L1102) `session_operations`
 
 问题描述：
 
@@ -47,8 +47,8 @@
 
 涉及位置：
 
-- [control-plane/service/src/db/schema.pg.ts#L765](control-plane/service/src/db/schema.pg.ts#L765) `task_sessions`
-- [control-plane/service/src/db/schema.pg.ts#L858](control-plane/service/src/db/schema.pg.ts#L858) `task_session_runs`
+- [control-plane/service/src/db/schema.pg.ts#L765](../../control-plane/service/src/db/schema.pg.ts#L765) `task_sessions`
+- [control-plane/service/src/db/schema.pg.ts#L858](../../control-plane/service/src/db/schema.pg.ts#L858) `task_session_runs`
 
 重叠字段类型：
 
@@ -72,9 +72,9 @@
 
 涉及位置：
 
-- [control-plane/service/src/db/schema.pg.ts#L1187](control-plane/service/src/db/schema.pg.ts#L1187) `task_artifacts`
-- [control-plane/service/src/db/schema.pg.ts#L1226](control-plane/service/src/db/schema.pg.ts#L1226) `task_usage_ledger_entries`
-- [control-plane/service/src/db/schema.pg.ts#L1271](control-plane/service/src/db/schema.pg.ts#L1271) `task_timeline_views`
+- [control-plane/service/src/db/schema.pg.ts#L1187](../../control-plane/service/src/db/schema.pg.ts#L1187) `task_artifacts`
+- [control-plane/service/src/db/schema.pg.ts#L1226](../../control-plane/service/src/db/schema.pg.ts#L1226) `task_usage_ledger_entries`
+- [control-plane/service/src/db/schema.pg.ts#L1271](../../control-plane/service/src/db/schema.pg.ts#L1271) `task_timeline_views`
 
 当前绑定：
 
@@ -94,7 +94,7 @@
 
 涉及位置：
 
-- [control-plane/service/src/db/schema.pg.ts#L589](control-plane/service/src/db/schema.pg.ts#L589) `tasks`
+- [control-plane/service/src/db/schema.pg.ts#L589](../../control-plane/service/src/db/schema.pg.ts#L589) `tasks`
 
 表现：
 
@@ -114,10 +114,10 @@
 
 涉及位置：
 
-- [control-plane/service/src/db/schema.pg.ts#L695](control-plane/service/src/db/schema.pg.ts#L695) `cost_records`
-- [control-plane/service/src/db/schema.pg.ts#L858](control-plane/service/src/db/schema.pg.ts#L858) `task_session_runs`
-- [control-plane/service/src/db/schema.pg.ts#L1102](control-plane/service/src/db/schema.pg.ts#L1102) `session_operations`
-- [control-plane/service/src/db/schema.pg.ts#L1226](control-plane/service/src/db/schema.pg.ts#L1226) `task_usage_ledger_entries`
+- [control-plane/service/src/db/schema.pg.ts#L695](../../control-plane/service/src/db/schema.pg.ts#L695) `cost_records`
+- [control-plane/service/src/db/schema.pg.ts#L858](../../control-plane/service/src/db/schema.pg.ts#L858) `task_session_runs`
+- [control-plane/service/src/db/schema.pg.ts#L1102](../../control-plane/service/src/db/schema.pg.ts#L1102) `session_operations`
+- [control-plane/service/src/db/schema.pg.ts#L1226](../../control-plane/service/src/db/schema.pg.ts#L1226) `task_usage_ledger_entries`
 
 问题描述：
 
@@ -133,10 +133,10 @@
 
 涉及位置：
 
-- [control-plane/service/src/modules/tasks/agent-run-compat.ts](control-plane/service/src/modules/tasks/agent-run-compat.ts)
-- [control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts](control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts)
-- [control-plane/service/src/modules/tasks/task-agent-run-write-routes-canonical.ts](control-plane/service/src/modules/tasks/task-agent-run-write-routes-canonical.ts)
-- [control-plane/service/drizzle-pg/0033_drop_agent_runs.sql](control-plane/service/drizzle-pg/0033_drop_agent_runs.sql)
+- [control-plane/service/src/modules/tasks/agent-run-compat.ts](../../control-plane/service/src/modules/tasks/agent-run-compat.ts)
+- [control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts](../../control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts)
+- [control-plane/service/src/modules/tasks/task-agent-run-write-routes-canonical.ts](../../control-plane/service/src/modules/tasks/task-agent-run-write-routes-canonical.ts)
+- [control-plane/service/drizzle-pg/0033_drop_agent_runs.sql](../../control-plane/service/drizzle-pg/0033_drop_agent_runs.sql)
 
 问题描述：
 
@@ -166,5 +166,5 @@
 
 ## 附：与全量表结构文档的关系
 
-- 全量表结构快照： [docs/current/all-table-structures.md](docs/current/all-table-structures.md)
+- 全量表结构快照： [docs/current/all-table-structures.md](all-table-structures.md)
 - 本文：只标注冗余与 canonical 归属，不重复展开全部建表代码

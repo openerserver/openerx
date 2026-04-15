@@ -17,8 +17,8 @@
 
 相关文档：
 
-- [docs/organization-oriented-agent-dev-task-list.md](docs/organization-oriented-agent-dev-task-list.md)
-- [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)
+- [docs/organization-oriented-agent-dev-task-list.md](../organization/organization-oriented-agent-dev-task-list.md)
+- [docs/organization-oriented-agent-technical-checklist.md](../organization/organization-oriented-agent-technical-checklist.md)
 
 ## 2. 页面分层
 
@@ -129,7 +129,7 @@
 
 现有页面：
 
-- [control-plane/web-ui/src/pages/Settings.vue](control-plane/web-ui/src/pages/Settings.vue)
+- [control-plane/web-ui/src/pages/Settings.vue](../../control-plane/web-ui/src/pages/Settings.vue)
 
 最小挂接：
 
@@ -142,7 +142,7 @@
 
 现有页面：
 
-- [control-plane/web-ui/src/pages/ProjectOrchestration.vue](control-plane/web-ui/src/pages/ProjectOrchestration.vue)
+- [control-plane/web-ui/src/pages/ProjectOrchestration.vue](../../control-plane/web-ui/src/pages/ProjectOrchestration.vue)
 
 最小挂接：
 
@@ -153,7 +153,7 @@
 
 现有页面：
 
-- [control-plane/web-ui/src/pages/ProjectDetail.vue](control-plane/web-ui/src/pages/ProjectDetail.vue)
+- [control-plane/web-ui/src/pages/ProjectDetail.vue](../../control-plane/web-ui/src/pages/ProjectDetail.vue)
 
 最小挂接：
 
@@ -164,7 +164,7 @@
 
 现有页面：
 
-- [control-plane/web-ui/src/pages/TaskDetail.vue](control-plane/web-ui/src/pages/TaskDetail.vue)
+- [control-plane/web-ui/src/pages/TaskDetail.vue](../../control-plane/web-ui/src/pages/TaskDetail.vue)
 
 最小挂接：
 

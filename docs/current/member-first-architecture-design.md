@@ -1,6 +1,7 @@
 # 成员优先架构设计
 
-> 适用范围：OpenerX 控制平面、BFF、Web UI、外部运行时，以及成员优先模型下的前后台边界设计
+> runtime 状态说明：当前默认 backend 已切到 `pi-mono` runtime-provider。本文中“外部运行时”默认应理解为 runtime backend；涉及 OpenCode 的地方只保留历史 / 回退兼容语境。
+> 适用范围：OpenerX 控制平面、BFF、Web UI、runtime backend，以及成员优先模型下的前后台边界设计
 >
 > 目标：给出一份基于当前有效方案的统一架构设计，作为后续页面重写、接口收敛、命名迁移和模块拆分的架构依据
 
@@ -110,14 +111,14 @@
 
 当前任务主链应以：
 
-- [../control-plane/web-ui/src/pages/Tasks.vue](../control-plane/web-ui/src/pages/Tasks.vue)
-- [../control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue)
-- [../control-plane/web-ui/src/pages/TaskWorkbench.vue](../control-plane/web-ui/src/pages/TaskWorkbench.vue)
-- [../control-plane/web-ui/src/pages/MultiTaskMonitor.vue](../control-plane/web-ui/src/pages/MultiTaskMonitor.vue)
+- [control-plane/web-ui/src/pages/Tasks.vue](../../control-plane/web-ui/src/pages/Tasks.vue)
+- [control-plane/web-ui/src/pages/TaskDetailV3.vue](../../control-plane/web-ui/src/pages/TaskDetailV3.vue)
+- [control-plane/web-ui/src/pages/TaskWorkbench.vue](../../control-plane/web-ui/src/pages/TaskWorkbench.vue)
+- [control-plane/web-ui/src/pages/MultiTaskMonitor.vue](../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue)
 
 作为前台协作主轴。
 
-旧 [../control-plane/web-ui/src/pages/TaskDetail.vue](../control-plane/web-ui/src/pages/TaskDetail.vue) 只作为迁移兼容对象存在，不再作为主力任务心智来源。
+旧 [control-plane/web-ui/src/pages/TaskDetail.vue](../../control-plane/web-ui/src/pages/TaskDetail.vue) 只作为迁移兼容对象存在，不再作为主力任务心智来源。
 
 ## 4. 总体架构
 
@@ -128,7 +129,7 @@ flowchart LR
     BFF[BFF 聚合层]
     CP[Control Plane Service]
     DB[(PostgreSQL)]
-    RT[OpenCode Runtime]
+    RT[Runtime Backend\ndefault pi-mono]
 
     User --> UI
     UI -->|HTTP / WS| BFF
@@ -194,9 +195,9 @@ BFF 是本轮架构里最关键的过渡层。
 - 前端页面视图拼装
 - runtime SSE 面向前端的直接输出
 
-### 4.4 外部运行时
+### 4.4 Runtime Backend
 
-OpenCode Runtime 负责：
+当前默认 backend 由 BFF 通过 `runtime-provider` 托管 `pi-mono` RPC 子进程；OpenCode runtime 只保留历史 / 回退兼容路径。运行时 backend 负责：
 
 - Agent Session 生命周期
 - 消息协议

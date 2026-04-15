@@ -48,6 +48,7 @@ export interface TaskMessagePartDto {
   partType: TaskMessagePartType;
   text: string;
   finalizedAt?: string | null;
+  [key: string]: unknown;
 }
 
 export interface TaskMessageDto {
@@ -354,6 +355,7 @@ function extractLegacyMessageParts(message: unknown): TaskMessagePartDto[] {
     const partRecord = asRecord(part);
     const type = asString(partRecord?.type) ?? asString(partRecord?.partType);
     return {
+      ...(partRecord ?? {}),
       id:
         asString(partRecord?.id) ??
         `${extractLegacyMessageId(message) ?? crypto.randomUUID()}:part:${index}`,

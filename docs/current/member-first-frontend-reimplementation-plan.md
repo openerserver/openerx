@@ -8,22 +8,22 @@
 
 本次审核重点覆盖以下现有实现：
 
-- [control-plane/web-ui/src/pages/Settings.vue](control-plane/web-ui/src/pages/Settings.vue)
-- [control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue](control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue)
-- [control-plane/web-ui/src/pages/ProjectOperatingMode.vue](control-plane/web-ui/src/pages/ProjectOperatingMode.vue)
-- [control-plane/web-ui/src/pages/TaskOperatingConsole.vue](control-plane/web-ui/src/pages/TaskOperatingConsole.vue)
-- [control-plane/web-ui/src/pages/BossOperationsCenter.vue](control-plane/web-ui/src/pages/BossOperationsCenter.vue)
-- [control-plane/web-ui/src/pages/AgentConsolePage.vue](control-plane/web-ui/src/pages/AgentConsolePage.vue)
-- [control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts)
-- [control-plane/web-ui/src/components/ProjectSectionNav.vue](control-plane/web-ui/src/components/ProjectSectionNav.vue)
+- [control-plane/web-ui/src/pages/Settings.vue](../../control-plane/web-ui/src/pages/Settings.vue)
+- [control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue](../../control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue)
+- [control-plane/web-ui/src/pages/ProjectOperatingMode.vue](../../control-plane/web-ui/src/pages/ProjectOperatingMode.vue)
+- [control-plane/web-ui/src/pages/TaskOperatingConsole.vue](../../control-plane/web-ui/src/pages/TaskOperatingConsole.vue)
+- [control-plane/web-ui/src/pages/ManagementOperationsCenter.vue](../../control-plane/web-ui/src/pages/ManagementOperationsCenter.vue)
+- [control-plane/web-ui/src/pages/AgentConsolePage.vue](../../control-plane/web-ui/src/pages/AgentConsolePage.vue)
+- [control-plane/web-ui/src/router/index.ts](../../control-plane/web-ui/src/router/index.ts)
+- [control-plane/web-ui/src/components/ProjectSectionNav.vue](../../control-plane/web-ui/src/components/ProjectSectionNav.vue)
 
 对照依据如下：
 
-- [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)
-- [docs/organization-oriented-agent-frontend-information-architecture.md](docs/organization-oriented-agent-frontend-information-architecture.md)
-- [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)
-- [docs/agent-console-redesign-plan.md](docs/agent-console-redesign-plan.md)
-- [docs/agent-member-model-discussion-summary.md](docs/agent-member-model-discussion-summary.md)
+- [docs/organization-oriented-agent-operating-model.md](../organization/organization-oriented-agent-operating-model.md)
+- [docs/organization-oriented-agent-frontend-information-architecture.md](../organization/organization-oriented-agent-frontend-information-architecture.md)
+- [docs/organization-oriented-agent-technical-checklist.md](../organization/organization-oriented-agent-technical-checklist.md)
+- [docs/agent-console-redesign-plan.md](../organization/agent-console-redesign-plan.md)
+- [docs/agent-member-model-discussion-summary.md](../organization/agent-member-model-discussion-summary.md)
 
 ## 2. 审核结论
 
@@ -31,12 +31,12 @@
 
 当前页面已经接入了“组织运行”“任务运行详情”等新入口，但具体实现仍大量使用 `boss*` / `Boss*` 语义：
 
-- [control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue](control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue)
-- [control-plane/web-ui/src/pages/ProjectOperatingMode.vue](control-plane/web-ui/src/pages/ProjectOperatingMode.vue)
-- [control-plane/web-ui/src/pages/TaskOperatingConsole.vue](control-plane/web-ui/src/pages/TaskOperatingConsole.vue)
-- [control-plane/web-ui/src/pages/BossOperationsCenter.vue](control-plane/web-ui/src/pages/BossOperationsCenter.vue)
-- [control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts)
-- [control-plane/web-ui/src/components/ProjectSectionNav.vue](control-plane/web-ui/src/components/ProjectSectionNav.vue)
+- [control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue](../../control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue)
+- [control-plane/web-ui/src/pages/ProjectOperatingMode.vue](../../control-plane/web-ui/src/pages/ProjectOperatingMode.vue)
+- [control-plane/web-ui/src/pages/TaskOperatingConsole.vue](../../control-plane/web-ui/src/pages/TaskOperatingConsole.vue)
+- [control-plane/web-ui/src/pages/ManagementOperationsCenter.vue](../../control-plane/web-ui/src/pages/ManagementOperationsCenter.vue)
+- [control-plane/web-ui/src/router/index.ts](../../control-plane/web-ui/src/router/index.ts)
+- [control-plane/web-ui/src/components/ProjectSectionNav.vue](../../control-plane/web-ui/src/components/ProjectSectionNav.vue)
 
 这会造成一个直接问题：产品文档已经收敛为“管理介入”和“管理员治理”，而前端仍在显式教育用户理解“老板层”。
 
@@ -49,15 +49,15 @@
 - `ManagementOperationsCenter` 取代 `BossOperationsCenter`
 - 设置页应包含 `RoleGovernanceSettings`
 
-但当前实现仍存在三处明显缺口：
+但当前实现当前还存在两处明确缺口，以及一处兼容面尚未完全收口：
 
-1. 路由中仍是 `projects/:projectId/boss-operations`，没有 `management-operations`。
-2. 项目级导航仍是“老板经营”。
-3. 设置入口只有 `OrganizationOperatingSettings`，没有 `RoleGovernanceSettings`。
+1. 主入口已经切到 `projects/:projectId/management-operations`，但旧 `projects/:projectId/boss-operations` 仍保留 redirect 和兼容语义。
+2. 项目级导航已经改成“管理介入”，但页面内部实现和部分文件命名仍残留旧“老板层”语义。
+3. 设置入口仍只有 `OrganizationOperatingSettings`，没有 `RoleGovernanceSettings`。
 
 ### 2.3 Agent 控制台的页面定位与当前产品心智不一致
 
-[control-plane/web-ui/src/pages/AgentConsolePage.vue](control-plane/web-ui/src/pages/AgentConsolePage.vue) 当前本质上是“Agent Run 运行监控与处置台”，而不是“前台成员视角下的 Agent 页面”。
+[control-plane/web-ui/src/pages/AgentConsolePage.vue](../../control-plane/web-ui/src/pages/AgentConsolePage.vue) 当前本质上是“Agent Run 运行监控与处置台”，而不是“前台成员视角下的 Agent 页面”。
 
 现有页面的中心对象是：
 
@@ -165,7 +165,7 @@
 1. Agent 运行处置页
 2. Agent 成员 / 能力理解页
 
-当前 [control-plane/web-ui/src/pages/AgentConsolePage.vue](control-plane/web-ui/src/pages/AgentConsolePage.vue) 只能承担第 1 类，不适合作为第 2 类。
+当前 [control-plane/web-ui/src/pages/AgentConsolePage.vue](../../control-plane/web-ui/src/pages/AgentConsolePage.vue) 只能承担第 1 类，不适合作为第 2 类。
 
 因此，不应继续把当前 `/agents` 页面当成“Agent 概念总入口”。
 
@@ -177,26 +177,26 @@
 
 以下页面目前视为符合目标需求，原则上不进入本轮推倒重写范围：
 
-- [control-plane/web-ui/src/pages/Tasks.vue](control-plane/web-ui/src/pages/Tasks.vue)
-- [control-plane/web-ui/src/pages/TaskDetailV3.vue](control-plane/web-ui/src/pages/TaskDetailV3.vue)
-- [control-plane/web-ui/src/pages/TaskWorkbench.vue](control-plane/web-ui/src/pages/TaskWorkbench.vue)
-- [control-plane/web-ui/src/pages/MultiTaskMonitor.vue](control-plane/web-ui/src/pages/MultiTaskMonitor.vue)
-- [control-plane/web-ui/src/pages/ChatSettings.vue](control-plane/web-ui/src/pages/ChatSettings.vue)
+- [control-plane/web-ui/src/pages/Tasks.vue](../../control-plane/web-ui/src/pages/Tasks.vue)
+- [control-plane/web-ui/src/pages/TaskDetailV3.vue](../../control-plane/web-ui/src/pages/TaskDetailV3.vue)
+- [control-plane/web-ui/src/pages/TaskWorkbench.vue](../../control-plane/web-ui/src/pages/TaskWorkbench.vue)
+- [control-plane/web-ui/src/pages/MultiTaskMonitor.vue](../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue)
+- [control-plane/web-ui/src/pages/ChatSettings.vue](../../control-plane/web-ui/src/pages/ChatSettings.vue)
 
 这些页面后续只做必要联动，不作为本轮页面体系重写重点。
 
 补充约束：
 
-- [control-plane/web-ui/src/pages/TaskDetailV3.vue](control-plane/web-ui/src/pages/TaskDetailV3.vue) 作为主力任务页面保留
-- [control-plane/web-ui/src/pages/TaskDetail.vue](control-plane/web-ui/src/pages/TaskDetail.vue) 不再作为主力任务页心智来源，可在迁移期保留兼容入口，后续再决定是否退出
+- [control-plane/web-ui/src/pages/TaskDetailV3.vue](../../control-plane/web-ui/src/pages/TaskDetailV3.vue) 作为主力任务页面保留
+- [control-plane/web-ui/src/pages/TaskDetail.vue](../../control-plane/web-ui/src/pages/TaskDetail.vue) 不再作为主力任务页心智来源，可在迁移期保留兼容入口，后续再决定是否退出
 
 ### 4.2 待定处理
 
 以下页面不直接判定为保留或重写，需要结合后续产品边界再决定：
 
-- [control-plane/web-ui/src/pages/Projects.vue](control-plane/web-ui/src/pages/Projects.vue)
-- [control-plane/web-ui/src/pages/ProjectDetail.vue](control-plane/web-ui/src/pages/ProjectDetail.vue)
-- [control-plane/web-ui/src/pages/Users.vue](control-plane/web-ui/src/pages/Users.vue)
+- [control-plane/web-ui/src/pages/Projects.vue](../../control-plane/web-ui/src/pages/Projects.vue)
+- [control-plane/web-ui/src/pages/ProjectDetail.vue](../../control-plane/web-ui/src/pages/ProjectDetail.vue)
+- [control-plane/web-ui/src/pages/Users.vue](../../control-plane/web-ui/src/pages/Users.vue)
 
 判断标准：
 
@@ -207,17 +207,17 @@
 
 除保留页与待定页外，本轮默认按“推倒重写”处理，重点包括：
 
-- [control-plane/web-ui/src/pages/Settings.vue](control-plane/web-ui/src/pages/Settings.vue)
-- [control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue](control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue)
-- [control-plane/web-ui/src/pages/ProjectOperatingMode.vue](control-plane/web-ui/src/pages/ProjectOperatingMode.vue)
-- [control-plane/web-ui/src/pages/TaskOperatingConsole.vue](control-plane/web-ui/src/pages/TaskOperatingConsole.vue)
-- [control-plane/web-ui/src/pages/TaskOperatingOverride.vue](control-plane/web-ui/src/pages/TaskOperatingOverride.vue)
-- [control-plane/web-ui/src/pages/RecommendedScenarios.vue](control-plane/web-ui/src/pages/RecommendedScenarios.vue)
-- [control-plane/web-ui/src/pages/BossOperationsCenter.vue](control-plane/web-ui/src/pages/BossOperationsCenter.vue)
-- [control-plane/web-ui/src/pages/AgentConsolePage.vue](control-plane/web-ui/src/pages/AgentConsolePage.vue)
-- [control-plane/web-ui/src/pages/ProjectOrchestration.vue](control-plane/web-ui/src/pages/ProjectOrchestration.vue)
-- [control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue](control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue)
-- [control-plane/web-ui/src/pages/ProjectRoleExecution.vue](control-plane/web-ui/src/pages/ProjectRoleExecution.vue)
+- [control-plane/web-ui/src/pages/Settings.vue](../../control-plane/web-ui/src/pages/Settings.vue)
+- [control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue](../../control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue)
+- [control-plane/web-ui/src/pages/ProjectOperatingMode.vue](../../control-plane/web-ui/src/pages/ProjectOperatingMode.vue)
+- [control-plane/web-ui/src/pages/TaskOperatingConsole.vue](../../control-plane/web-ui/src/pages/TaskOperatingConsole.vue)
+- [control-plane/web-ui/src/pages/TaskOperatingOverride.vue](../../control-plane/web-ui/src/pages/TaskOperatingOverride.vue)
+- [control-plane/web-ui/src/pages/RecommendedScenarios.vue](../../control-plane/web-ui/src/pages/RecommendedScenarios.vue)
+- [control-plane/web-ui/src/pages/ManagementOperationsCenter.vue](../../control-plane/web-ui/src/pages/ManagementOperationsCenter.vue)
+- [control-plane/web-ui/src/pages/AgentConsolePage.vue](../../control-plane/web-ui/src/pages/AgentConsolePage.vue)
+- [control-plane/web-ui/src/pages/ProjectOrchestration.vue](../../control-plane/web-ui/src/pages/ProjectOrchestration.vue)
+- [control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue](../../control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue)
+- [control-plane/web-ui/src/pages/ProjectRoleExecution.vue](../../control-plane/web-ui/src/pages/ProjectRoleExecution.vue)
 
 这些页面的问题不是“字段叫错了”，而是其对象边界、导航语义、页面职责和用户心智来源都已经与当前方案不一致。
 
@@ -225,7 +225,7 @@
 
 ## 5.1 设置页重写
 
-目标：把 [control-plane/web-ui/src/pages/Settings.vue](control-plane/web-ui/src/pages/Settings.vue) 按治理首页重新设计，不继承旧 tab 结构作为主骨架。
+目标：把 [control-plane/web-ui/src/pages/Settings.vue](../../control-plane/web-ui/src/pages/Settings.vue) 按治理首页重新设计，不继承旧 tab 结构作为主骨架。
 
 建议结构：
 
@@ -246,8 +246,8 @@
 必要新增：
 
 - 新增 `RoleGovernanceSettings.vue`
-- 在 [control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts) 中新增 `/settings/role-governance`
-- 在 [control-plane/web-ui/src/pages/Settings.vue](control-plane/web-ui/src/pages/Settings.vue) 中增加第二张入口卡片
+- 在 [control-plane/web-ui/src/router/index.ts](../../control-plane/web-ui/src/router/index.ts) 中新增 `/settings/role-governance`
+- 在 [control-plane/web-ui/src/pages/Settings.vue](../../control-plane/web-ui/src/pages/Settings.vue) 中增加第二张入口卡片
 
 ### 5.2 OrganizationOperatingSettings 重写
 
@@ -329,26 +329,26 @@
 
 ### 5.5 ManagementOperationsCenter 重写
 
-目标：彻底替代 [control-plane/web-ui/src/pages/BossOperationsCenter.vue](control-plane/web-ui/src/pages/BossOperationsCenter.vue)，重建为项目级管理介入总览页。
+目标：继续收敛 [control-plane/web-ui/src/pages/ManagementOperationsCenter.vue](../../control-plane/web-ui/src/pages/ManagementOperationsCenter.vue)，完成对 legacy `BossOperationsCenter` 兼容语义的替代，稳定为项目级管理介入总览页。
 
 建议做法：
 
-- 新建 `ManagementOperationsCenter.vue`
+- 以 `ManagementOperationsCenter.vue` 作为当前主入口继续演进
 - 不继承“老板经营视图”信息架构
 - 按“管理决策时间线 / 升级请求 / 人工覆盖 / 项目级关注项”重新组织区块
-- 路由切到 `/projects/:projectId/management-operations`
-- 旧 `/boss-operations` 是否保留 redirect，可在切换阶段短期存在，最终应移除
+- 保留 `/boss-operations` 兼容 redirect 仅用于迁移期，并规划最终移除
+- 清理残留 `BossOperationsCenter` 文件名和旧老板层文案
 
 同步修改位置：
 
-- [control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts)
-- [control-plane/web-ui/src/components/ProjectSectionNav.vue](control-plane/web-ui/src/components/ProjectSectionNav.vue)
-- [control-plane/web-ui/src/pages/ProjectDetail.vue](control-plane/web-ui/src/pages/ProjectDetail.vue)
-- [control-plane/web-ui/src/pages/ProjectOrchestration.vue](control-plane/web-ui/src/pages/ProjectOrchestration.vue)
+- [control-plane/web-ui/src/router/index.ts](../../control-plane/web-ui/src/router/index.ts)
+- [control-plane/web-ui/src/components/ProjectSectionNav.vue](../../control-plane/web-ui/src/components/ProjectSectionNav.vue)
+- [control-plane/web-ui/src/pages/ProjectDetail.vue](../../control-plane/web-ui/src/pages/ProjectDetail.vue)
+- [control-plane/web-ui/src/pages/ProjectOrchestration.vue](../../control-plane/web-ui/src/pages/ProjectOrchestration.vue)
 
 ### 5.6 Agent 运营中心重写
 
-目标：彻底替换当前 [control-plane/web-ui/src/pages/AgentConsolePage.vue](control-plane/web-ui/src/pages/AgentConsolePage.vue) 的旧页面心智，重建为“Agent 运营中心”。
+目标：彻底替换当前 [control-plane/web-ui/src/pages/AgentConsolePage.vue](../../control-plane/web-ui/src/pages/AgentConsolePage.vue) 的旧页面心智，重建为“Agent 运营中心”。
 
 建议结论：
 
@@ -364,11 +364,11 @@
 
 可参考的现有组件拆分：
 
-- [control-plane/web-ui/src/components/agent-ops/AgentOpsHeader.vue](control-plane/web-ui/src/components/agent-ops/AgentOpsHeader.vue)
-- [control-plane/web-ui/src/components/agent-ops/AgentOpsFilterBar.vue](control-plane/web-ui/src/components/agent-ops/AgentOpsFilterBar.vue)
-- [control-plane/web-ui/src/components/agent-ops/AgentOpsQueueBoard.vue](control-plane/web-ui/src/components/agent-ops/AgentOpsQueueBoard.vue)
-- [control-plane/web-ui/src/components/agent-ops/AgentOpsAnalyticsPanel.vue](control-plane/web-ui/src/components/agent-ops/AgentOpsAnalyticsPanel.vue)
-- [control-plane/web-ui/src/components/agent-ops/AgentOpsDetailDrawer.vue](control-plane/web-ui/src/components/agent-ops/AgentOpsDetailDrawer.vue)
+- [control-plane/web-ui/src/components/agent-ops/AgentOpsHeader.vue](../../control-plane/web-ui/src/components/agent-ops/AgentOpsHeader.vue)
+- [control-plane/web-ui/src/components/agent-ops/AgentOpsFilterBar.vue](../../control-plane/web-ui/src/components/agent-ops/AgentOpsFilterBar.vue)
+- [control-plane/web-ui/src/components/agent-ops/AgentOpsQueueBoard.vue](../../control-plane/web-ui/src/components/agent-ops/AgentOpsQueueBoard.vue)
+- [control-plane/web-ui/src/components/agent-ops/AgentOpsAnalyticsPanel.vue](../../control-plane/web-ui/src/components/agent-ops/AgentOpsAnalyticsPanel.vue)
+- [control-plane/web-ui/src/components/agent-ops/AgentOpsDetailDrawer.vue](../../control-plane/web-ui/src/components/agent-ops/AgentOpsDetailDrawer.vue)
 
 建议重点重建：
 
@@ -389,8 +389,8 @@
 
 ### 5.1 路由迁移
 
-- `/projects/:projectId/boss-operations` -> redirect 到 `/projects/:projectId/management-operations`
-- `BossOperationsCenter` -> `ManagementOperationsCenter`
+- `/projects/:projectId/boss-operations` -> redirect 到 `/projects/:projectId/management-operations`（已完成）
+- `BossOperationsCenter` -> `ManagementOperationsCenter`（主入口切换已完成，兼容清理待收尾）
 - `/agents` 可短期保留路径，但页面和导航名统一改为 `Agent 运营中心`
 
 ### 5.2 组件命名迁移
@@ -427,8 +427,8 @@
 
 - 新增 `RoleGovernanceSettings.vue`
 - 新增 `/settings/role-governance`
-- 新增 `/projects/:projectId/management-operations`
-- `ProjectSectionNav` 改为“管理介入”导航项
+- 评估何时移除 `/projects/:projectId/boss-operations` 兼容 redirect
+- 继续清理 `ProjectSectionNav` 之外残留的旧“老板经营”文案
 
 ### Phase C：清理旧页面与旧命名入口
 
@@ -455,8 +455,8 @@
 
 当前已明确的实现边界应当是：
 
-1. 保留 [control-plane/web-ui/src/pages/Tasks.vue](control-plane/web-ui/src/pages/Tasks.vue)、[control-plane/web-ui/src/pages/TaskDetailV3.vue](control-plane/web-ui/src/pages/TaskDetailV3.vue)、[control-plane/web-ui/src/pages/TaskWorkbench.vue](control-plane/web-ui/src/pages/TaskWorkbench.vue)、[control-plane/web-ui/src/pages/MultiTaskMonitor.vue](control-plane/web-ui/src/pages/MultiTaskMonitor.vue)、[control-plane/web-ui/src/pages/ChatSettings.vue](control-plane/web-ui/src/pages/ChatSettings.vue)，其中 [control-plane/web-ui/src/pages/TaskDetailV3.vue](control-plane/web-ui/src/pages/TaskDetailV3.vue) 作为主力任务页
-2. [control-plane/web-ui/src/pages/Projects.vue](control-plane/web-ui/src/pages/Projects.vue)、[control-plane/web-ui/src/pages/ProjectDetail.vue](control-plane/web-ui/src/pages/ProjectDetail.vue)、[control-plane/web-ui/src/pages/Users.vue](control-plane/web-ui/src/pages/Users.vue) 视情况决定保留还是重写
+1. 保留 [control-plane/web-ui/src/pages/Tasks.vue](../../control-plane/web-ui/src/pages/Tasks.vue)、[control-plane/web-ui/src/pages/TaskDetailV3.vue](../../control-plane/web-ui/src/pages/TaskDetailV3.vue)、[control-plane/web-ui/src/pages/TaskWorkbench.vue](../../control-plane/web-ui/src/pages/TaskWorkbench.vue)、[control-plane/web-ui/src/pages/MultiTaskMonitor.vue](../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue)、[control-plane/web-ui/src/pages/ChatSettings.vue](../../control-plane/web-ui/src/pages/ChatSettings.vue)，其中 [control-plane/web-ui/src/pages/TaskDetailV3.vue](../../control-plane/web-ui/src/pages/TaskDetailV3.vue) 作为主力任务页
+2. [control-plane/web-ui/src/pages/Projects.vue](../../control-plane/web-ui/src/pages/Projects.vue)、[control-plane/web-ui/src/pages/ProjectDetail.vue](../../control-plane/web-ui/src/pages/ProjectDetail.vue)、[control-plane/web-ui/src/pages/Users.vue](../../control-plane/web-ui/src/pages/Users.vue) 视情况决定保留还是重写
 3. 其他页面默认不再修补，而按新模型重写
 4. 新实现以成员优先、前后台分层、管理介入替代旧老板层、Agent 运营中心替代旧 Agent 控制台为基本原则
 

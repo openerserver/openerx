@@ -4,7 +4,7 @@
 > 日期：2026-04-01  
 > 作者：GitHub Copilot
 >
-> 当前唯一维护版本为 [../../task-tree-data-model-replan.v2-final.md](../../task-tree-data-model-replan.v2-final.md)。
+> 当前唯一维护版本为 [../../task-tree-data-model-replan.v2-final.md](../../task-domain/task-tree-data-model-replan.v2-final.md)。
 
 ## 1. 核心结论
 

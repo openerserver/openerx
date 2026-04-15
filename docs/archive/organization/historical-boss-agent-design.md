@@ -3,7 +3,7 @@
 > 历史状态：本文件保留为历史讨论记录。
 > 当前结论：OpenerX 不再单独存在“老板层”，原先归于“老板 Agent”的经营与治理职责已并回管理员成员体系。后续产品与系统设计不应再把老板 Agent 当作正式一等对象继续扩展。
 > 命名映射：本文中的 `Boss Agent`、`BossParticipationMode`、`BossDecisionRecord`、`bossDecisions` 等术语，在当前方案中统一应理解为“管理介入 / 管理决策”的历史命名；新增设计应优先采用 `ManagementIntervention`、`ManagementParticipationMode`、`ManagementDecisionRecord`、`managementDecisions` 等命名。
-> 阅读方式：本文件可用于追溯“管理介入能力”早期为何被抽象成 `boss-agent`，但不应再被视为当前主方案的命名规范来源。涉及现行产品语义、前后台边界和对象定义时，应以 [../../organization-oriented-agent-operating-model.md](../../organization-oriented-agent-operating-model.md)、[../../organization-oriented-agent-frontend-information-architecture.md](../../organization-oriented-agent-frontend-information-architecture.md) 与 [../../organization-oriented-agent-technical-checklist.md](../../organization-oriented-agent-technical-checklist.md) 为准。
+> 阅读方式：本文件可用于追溯“管理介入能力”早期为何被抽象成 `boss-agent`，但不应再被视为当前主方案的命名规范来源。涉及现行产品语义、前后台边界和对象定义时，应以 [../../organization-oriented-agent-operating-model.md](../../organization/organization-oriented-agent-operating-model.md)、[../../organization-oriented-agent-frontend-information-architecture.md](../../organization/organization-oriented-agent-frontend-information-architecture.md) 与 [../../organization-oriented-agent-technical-checklist.md](../../organization/organization-oriented-agent-technical-checklist.md) 为准。
 > 适用范围：OpenerX 项目经营自动化、组织化研发协作、模板调度与阶段裁决能力演进
 > 历史目标：定义老板 Agent 的职责边界、输入输出、升级规则和自动托管等级，使其成为项目级管理员的模型替身
 
@@ -22,13 +22,13 @@
 
 相关文档：
 
-- [../../organization-oriented-agent-operating-model.md](../../organization-oriented-agent-operating-model.md)
-- [../../development-role-agents-plan.md](../../development-role-agents-plan.md)
+- [../../organization-oriented-agent-operating-model.md](../../organization/organization-oriented-agent-operating-model.md)
+- [../../development-role-agents-plan.md](../../organization/development-role-agents-plan.md)
 - [../../workflow-template-stage-machine-design.md](../../workflow-template-stage-machine-design.md)
 - [../../bff-role-aggregation-executor-design.md](../../bff-role-aggregation-executor-design.md)
-- [../../organization-oriented-agent-technical-checklist.md](../../organization-oriented-agent-technical-checklist.md)
+- [../../organization-oriented-agent-technical-checklist.md](../../organization/organization-oriented-agent-technical-checklist.md)
 
-在阅读本方案时，若需要统一理解“协作模式”和“自动托管等级”的组合关系，应以 [../../organization-oriented-agent-operating-model.md](../../organization-oriented-agent-operating-model.md) 中的“协作模式 × 自动托管等级对照表”为准；本文档负责进一步细化老板 Agent 在这些组合下的参与方式和职责边界。
+在阅读本方案时，若需要统一理解“协作模式”和“自动托管等级”的组合关系，应以 [../../organization-oriented-agent-operating-model.md](../../organization/organization-oriented-agent-operating-model.md) 中的“协作模式 × 自动托管等级对照表”为准；本文档负责进一步细化老板 Agent 在这些组合下的参与方式和职责边界。
 
 若需要直接按任务场景选择推荐组合，例如：
 
@@ -37,7 +37,7 @@
 - 生产发布
 - 安全修复
 
-则应优先参考 [../../organization-oriented-agent-operating-model.md](../../organization-oriented-agent-operating-model.md) 中的“推荐使用场景表”。
+则应优先参考 [../../organization-oriented-agent-operating-model.md](../../organization/organization-oriented-agent-operating-model.md) 中的“推荐使用场景表”。
 
 建议理解方式是：
 

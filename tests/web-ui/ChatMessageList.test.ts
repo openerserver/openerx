@@ -2,11 +2,13 @@ import { mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, nextTick } from "vue";
 import ChatMessageList from "../../control-plane/web-ui/src/components/task-detail-shared/ChatMessageList.vue";
+import type { TaskRoundMessagesDto } from "../../control-plane/web-ui/src/lib/api";
 import type {
   TaskConversationMessageItem,
   TaskConversationParallelItem,
 } from "../../control-plane/web-ui/src/lib/message-normalize";
 import { normalizeSessionConversationItems } from "../../control-plane/web-ui/src/lib/message-normalize";
+import { createTaskMessageSnapshotState } from "../../control-plane/web-ui/src/lib/task-message-snapshot";
 
 function createPassThroughStub(name: string) {
   return defineComponent({
@@ -142,6 +144,57 @@ describe("ChatMessageList tool cards", () => {
 
     expect(wrapper.text()).toContain("正在实时输出的第一段正文");
     expect(wrapper.text()).not.toContain("暂无文本内容");
+  });
+
+  it("requests older history automatically when the user scrolls to the top", async () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-history-anchor",
+        role: "assistant",
+        text: "当前轮次最新回复",
+        toolCalls: [],
+        createdAt: "2026-04-10T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+        hasOlderHistory: true,
+        historyLoading: false,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    const list = wrapper.get("[data-testid='task-detail-v2-message-list']").element as HTMLElement;
+    Object.defineProperty(list, "scrollHeight", {
+      configurable: true,
+      get: () => 1200,
+    });
+    Object.defineProperty(list, "clientHeight", {
+      configurable: true,
+      get: () => 320,
+    });
+
+    list.scrollTop = 0;
+    await wrapper.get("[data-testid='task-detail-v2-message-list']").trigger("scroll");
+
+    expect(wrapper.emitted("loadOlderHistory")).toHaveLength(1);
   });
 
   it("keeps user-visible instruction text from execution context prompts", () => {
@@ -374,6 +427,135 @@ describe("ChatMessageList tool cards", () => {
 
     expect(wrapper.text()).toContain("Successfully wrote 69 bytes to main.c");
     expect(wrapper.text()).toContain("Command exited with code 2");
+  });
+
+  it("restores embedded tool-call rendering from round snapshot messages", async () => {
+    const snapshot: TaskRoundMessagesDto = {
+      taskId: "task-1",
+      round: {
+        id: "task-session:task-1:session-1",
+        taskId: "task-1",
+        sessionId: "session-1",
+        kind: "continue",
+        source: "continue",
+        status: "completed",
+        promptText: "显示一下当前目录下的 c 程序",
+        createdAt: "2026-04-15T14:06:41.706Z",
+        updatedAt: "2026-04-15T14:08:28.420Z",
+      },
+      messages: [
+        {
+          id: "assistant-1",
+          roundId: "task-session:task-1:session-1",
+          sessionId: "session-1",
+          role: "assistant",
+          status: "completed",
+          text: "内部思考不应直接显示为正文",
+          errorText: null,
+          parts: [
+            {
+              id: "assistant-1:thinking",
+              partIndex: 0,
+              partType: "text",
+              type: "thinking",
+              text: "**Defining User Intent**",
+              finalizedAt: "2026-04-15T14:06:41.768Z",
+            },
+            {
+              id: "assistant-1:tool",
+              partIndex: 1,
+              partType: "toolCall",
+              type: "tool",
+              toolName: "bash",
+              callID: "bash_1",
+              input: {
+                command: "ls *.c *.h",
+              },
+              state: {
+                status: "completed",
+              },
+              text: "",
+              finalizedAt: "2026-04-15T14:06:41.768Z",
+            },
+          ],
+          createdAt: "2026-04-15T14:06:41.768Z",
+          updatedAt: "2026-04-15T14:06:41.768Z",
+          startedAt: "2026-04-15T14:06:41.768Z",
+          completedAt: "2026-04-15T14:06:41.768Z",
+        },
+        {
+          id: "tool-1",
+          roundId: "task-session:task-1:session-1",
+          sessionId: "session-1",
+          role: "tool",
+          status: "completed",
+          text: "ls: *.h: No such file or directory\nprint_cc.c\n\n\nCommand exited with code 1",
+          errorText: null,
+          parts: [
+            {
+              id: "tool-1:text",
+              partIndex: 0,
+              partType: "text",
+              text: "ls: *.h: No such file or directory\nprint_cc.c\n\n\nCommand exited with code 1",
+              finalizedAt: "2026-04-15T14:08:06.744Z",
+            },
+          ],
+          createdAt: "2026-04-15T14:08:06.744Z",
+          updatedAt: "2026-04-15T14:08:06.744Z",
+          startedAt: "2026-04-15T14:08:06.744Z",
+          completedAt: "2026-04-15T14:08:06.744Z",
+        },
+      ],
+      reconcileRequired: false,
+      snapshotVersion: 2,
+      persistedThroughRevision: 2,
+    };
+
+    const items = normalizeSessionConversationItems(
+      createTaskMessageSnapshotState({
+        taskId: "task-1",
+        requestedSessionId: "session-1",
+        response: snapshot,
+      }).sourceMessages,
+    );
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    expect(wrapper.findAll(".task-tool-call-group")).toHaveLength(1);
+    expect(wrapper.text()).toContain("查看思考过程");
+    expect(wrapper.text()).not.toContain("工具输出");
+    expect(wrapper.text()).not.toContain("内部思考不应直接显示为正文");
+
+    const toolToggle = wrapper.find("button.task-tool-call-group__toggle");
+    expect(toolToggle.exists()).toBe(true);
+    await toolToggle.trigger("click");
+
+    expect(wrapper.text()).toContain("执行 ls *.c *.h");
+    const detailToggle = wrapper.findAll("button").find((button) =>
+      button.text().includes("执行 ls *.c *.h"),
+    );
+    expect(detailToggle).toBeTruthy();
+    await detailToggle?.trigger("click");
+
+    expect(wrapper.text()).toContain("Command exited with code 1");
   });
 
   it("shows failed assistant turns inside parallel candidates instead of only relying on the candidate header", () => {

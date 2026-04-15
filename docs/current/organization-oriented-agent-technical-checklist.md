@@ -17,15 +17,15 @@
 
 相关文档：
 
-- [docs/organization-oriented-agent-dev-task-list.md](docs/organization-oriented-agent-dev-task-list.md)
-- [docs/workflow-template-stage-machine-design.md](docs/workflow-template-stage-machine-design.md)
-- [docs/bff-role-aggregation-executor-design.md](docs/bff-role-aggregation-executor-design.md)
+- [docs/organization-oriented-agent-dev-task-list.md](../organization/organization-oriented-agent-dev-task-list.md)
+- [docs/workflow-template-stage-machine-design.md](../workflow/workflow-template-stage-machine-design.md)
+- [docs/bff-role-aggregation-executor-design.md](../workflow/bff-role-aggregation-executor-design.md)
 
 ## 2. 实施边界
 
 若需要进一步进入研发排期层，可继续参考按 BFF、控制平面、前端、数据结构、测试五类拆分的开发任务清单：
 
-- [docs/organization-oriented-agent-dev-task-list.md](docs/organization-oriented-agent-dev-task-list.md)
+- [docs/organization-oriented-agent-dev-task-list.md](../organization/organization-oriented-agent-dev-task-list.md)
 
 本轮技术清单的目标不是重写全部任务执行链路，而是以“增量接入”的方式补齐以下能力：
 
@@ -213,7 +213,7 @@ interface TaskOperatingModeOverride {
 
 ### 5.1 编排策略对象扩展
 
-建议扩展 [control-plane/web-ui-bff/src/lib/orchestration-strategy.ts](control-plane/web-ui-bff/src/lib/orchestration-strategy.ts)：
+建议扩展 [control-plane/web-ui-bff/src/lib/orchestration-strategy.ts](../../control-plane/web-ui-bff/src/lib/orchestration-strategy.ts)：
 
 ```ts
 interface OrchestrationStrategy {
@@ -343,8 +343,8 @@ interface HumanEscalationRequest {
 
 建议修改位置：
 
-- [control-plane/web-ui-bff/src/modules/tasks/routes.ts](control-plane/web-ui-bff/src/modules/tasks/routes.ts)
-- [control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts)
+- [control-plane/web-ui-bff/src/modules/tasks/routes.ts](../../control-plane/web-ui-bff/src/modules/tasks/routes.ts)
+- [control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts)
 
 建议接入顺序：
 

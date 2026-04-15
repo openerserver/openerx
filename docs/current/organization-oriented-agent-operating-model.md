@@ -1,5 +1,7 @@
 # OpenerX 成员优先的 Agent 协作产品方案
 
+> runtime 状态说明：当前默认 backend 已切到 `pi-mono` runtime-provider。本文中凡提到运行时执行层，默认应理解为 runtime backend；涉及 OpenCode 的部分只保留历史边界与回退兼容语境。
+>
 > 适用范围：OpenerX 控制平面、BFF、Web UI、运行时治理与任务协作产品演进
 >
 > 目标：将现有以角色化 Agent、模板、Hook、运行时执行为主的设计，重新收敛为一套前台以 Agent 为主、成员协作为核心、Role 退居系统内部的统一产品模型
@@ -19,18 +21,18 @@
 
 相关文档：
 
-- [docs/development-role-agents-plan.md](docs/development-role-agents-plan.md)
- - [../archive/organization/historical-boss-agent-design.md](../archive/organization/historical-boss-agent-design.md)（历史文档）
-- [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)
-- [docs/organization-oriented-agent-frontend-information-architecture.md](docs/organization-oriented-agent-frontend-information-architecture.md)
-- [docs/multi-agent-hook-architecture.md](docs/multi-agent-hook-architecture.md)
+- [docs/development-role-agents-plan.md](../organization/development-role-agents-plan.md)
+- [../archive/organization/historical-boss-agent-design.md](../archive/organization/historical-boss-agent-design.md)（历史文档）
+- [docs/organization-oriented-agent-technical-checklist.md](../organization/organization-oriented-agent-technical-checklist.md)
+- [docs/organization-oriented-agent-frontend-information-architecture.md](../organization/organization-oriented-agent-frontend-information-architecture.md)
+- [docs/multi-agent-hook-architecture.md](../architecture/multi-agent-hook-architecture.md)
 
 本次重写后的文档关系建议如下：
 
-- [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)：主产品方案，定义前台心智模型、成员关系和核心对象
- - [../archive/organization/historical-boss-agent-design.md](../archive/organization/historical-boss-agent-design.md)：历史阶段曾用于细化老板 Agent 方案，当前应视为已被管理员成员模型取代的旧设计
-- [docs/development-role-agents-plan.md](docs/development-role-agents-plan.md)：保留为“系统内部职责位与阶段接入”文档，而不再视为前台主心智来源
-- [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)：把本方案落到配置项、数据结构、API 和页面承载
+- [docs/organization-oriented-agent-operating-model.md](../organization/organization-oriented-agent-operating-model.md)：主产品方案，定义前台心智模型、成员关系和核心对象
+- [../archive/organization/historical-boss-agent-design.md](../archive/organization/historical-boss-agent-design.md)：历史阶段曾用于细化老板 Agent 方案，当前应视为已被管理员成员模型取代的旧设计
+- [docs/development-role-agents-plan.md](../organization/development-role-agents-plan.md)：保留为“系统内部职责位与阶段接入”文档，而不再视为前台主心智来源
+- [docs/organization-oriented-agent-technical-checklist.md](../organization/organization-oriented-agent-technical-checklist.md)：把本方案落到配置项、数据结构、API 和页面承载
 
 ## 2. 背景与重写原因
 
@@ -41,7 +43,7 @@
 - 多 Agent 执行
 - 并行候选与聚合评判
 - 审批、阻断、修正请求与任务收口
-- 外部 OpenCode Runtime 执行接入
+- 运行时执行接入（当前默认 backend 为 `pi-mono`，兼容旧 OpenCode 路径）
 
 但原方案在产品层存在四个问题：
 
@@ -469,9 +471,11 @@ Agent 页面应回答：
 - 前台以成员与 Agent 为主
 - 系统内部继续保留 Role、模板、阶段和聚合策略
 
-### 11.2 与 OpenCode Runtime 的关系
+### 11.2 与 Runtime Backend 的关系
 
-OpenCode Runtime 仍然是外部运行时执行层。
+当前默认执行 backend 已切到由 BFF `runtime-provider` 托管的 `pi-mono` RPC 子进程。
+
+OpenCode runtime 只保留历史资料、协议排障和回退兼容语境。
 
 但在本方案中：
 
@@ -481,7 +485,7 @@ OpenCode Runtime 仍然是外部运行时执行层。
 
 ### 11.3 与现有角色化文档的关系
 
-[docs/development-role-agents-plan.md](docs/development-role-agents-plan.md) 仍然有效，但其定位应调整为：
+[docs/development-role-agents-plan.md](../organization/development-role-agents-plan.md) 仍然有效，但其定位应调整为：
 
 - 系统内部职责位设计文档
 - 阶段接入与治理配置文档

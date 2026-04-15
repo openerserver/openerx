@@ -4,7 +4,7 @@
 
 当前应优先阅读：
 
-- [../../model-paid-settings-replan.md](../../model-paid-settings-replan.md)
+- [../../product/model-paid-settings-replan.md](../../product/model-paid-settings-replan.md)
 
 历史方案：
 

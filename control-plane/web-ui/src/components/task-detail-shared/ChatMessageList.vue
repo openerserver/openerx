@@ -1,5 +1,13 @@
 <template>
   <div ref="scrollContainer" class="chat-message-list" data-testid="task-detail-v2-message-list" @scroll="handleScroll">
+    <div
+      v-if="!loading && !error && (historyLoading || hasOlderHistory)"
+      class="chat-message-list__history-status"
+    >
+      <a-typography-text type="secondary">
+        {{ historyLoading ? '正在加载更早消息...' : '向上滚动可加载更早消息' }}
+      </a-typography-text>
+    </div>
     <a-spin v-if="loading" />
     <a-alert v-else-if="error" type="error" show-icon :message="error" />
     <a-empty v-else-if="items.length === 0" description="当前分支还没有可展示的消息" />
@@ -366,15 +374,20 @@ const props = defineProps<{
   activeSessionId?: string;
   forceScrollToken?: number;
   defaultAssistantModel?: string;
+  hasOlderHistory?: boolean;
+  historyLoading?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "openFilePreview", payload: { filePath: string; content?: string }): void;
   (e: "adoptCandidate", index: number): void;
+  (e: "loadOlderHistory"): void;
 }>();
 
 const scrollContainer = ref<HTMLElement | null>(null);
 const shouldAutoScroll = ref(true);
+const historyLoadLocked = ref(false);
+const pendingHistoryAnchor = ref<{ scrollHeight: number; scrollTop: number } | null>(null);
 const revealText = ref<Record<string, string>>({});
 const expandedThinking = ref<Record<string, boolean>>({});
 const expandedFinalSent = ref<Record<string, boolean>>({});
@@ -382,6 +395,7 @@ const collapsedWorkflows = ref<Record<string, boolean>>({});
 const collapsedWorkflowSteps = ref<Record<string, boolean>>({});
 const STREAMING_PLACEHOLDER_TEXT = "正在生成...";
 const AUTO_SCROLL_THRESHOLD_PX = 120;
+const HISTORY_LOAD_TOP_THRESHOLD_PX = 80;
 const REVEAL_INTERVAL_MS = 22;
 const REVEAL_MINOR_PAUSE_MS = 90;
 const REVEAL_MAJOR_PAUSE_MS = 180;
@@ -958,6 +972,42 @@ function isNearBottom() {
 
 function handleScroll() {
   shouldAutoScroll.value = isNearBottom();
+  maybeLoadOlderHistory();
+}
+
+function maybeLoadOlderHistory() {
+  const element = scrollContainer.value;
+  if (
+    !element ||
+    !props.hasOlderHistory ||
+    props.historyLoading ||
+    historyLoadLocked.value ||
+    element.scrollTop > HISTORY_LOAD_TOP_THRESHOLD_PX
+  ) {
+    return;
+  }
+
+  pendingHistoryAnchor.value = {
+    scrollHeight: element.scrollHeight,
+    scrollTop: element.scrollTop,
+  };
+  historyLoadLocked.value = true;
+  emit("loadOlderHistory");
+}
+
+async function restoreHistoryAnchor() {
+  const anchor = pendingHistoryAnchor.value;
+  const element = scrollContainer.value;
+  pendingHistoryAnchor.value = null;
+  historyLoadLocked.value = false;
+
+  if (!anchor || !element) {
+    return;
+  }
+
+  await nextTick();
+  const scrollDelta = element.scrollHeight - anchor.scrollHeight;
+  element.scrollTop = Math.max(0, anchor.scrollTop + scrollDelta);
 }
 
 function scrollToBottom() {
@@ -1240,6 +1290,19 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => props.historyLoading ?? false,
+  async (isLoading, wasLoading) => {
+    if (isLoading) {
+      return;
+    }
+
+    if (wasLoading || historyLoadLocked.value) {
+      await restoreHistoryAnchor();
+    }
+  },
+);
+
 onBeforeUnmount(() => {
   stopReveal();
 });
@@ -1250,6 +1313,12 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+.chat-message-list__history-status {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 10px;
 }
 
 .chat-message-list__items {

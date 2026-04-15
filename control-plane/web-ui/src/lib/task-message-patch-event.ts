@@ -254,7 +254,15 @@ function extractPatchEventInlineText(event: RealtimeEvent) {
     asString(message.contentText) ??
     asString(message.summaryText);
   if (directText) {
-    return directText;
+    const normalized = directText.trim();
+    if (
+      normalized &&
+      !normalized.startsWith("Execution context:") &&
+      !normalized.startsWith("当前执行上下文") &&
+      !normalized.startsWith("## 当前执行上下文")
+    ) {
+      return normalized;
+    }
   }
 
   const parts = Array.isArray(message.parts)
@@ -274,7 +282,14 @@ function extractPatchEventInlineText(event: RealtimeEvent) {
         asString(part.textContent) ??
         asString(part.contentText),
     )
-    .filter((part): part is string => Boolean(part));
+    .map((part) => part?.trim())
+    .filter(
+      (part): part is string =>
+        Boolean(part) &&
+        !part.startsWith("Execution context:") &&
+        !part.startsWith("当前执行上下文") &&
+        !part.startsWith("## 当前执行上下文"),
+    );
 
   if (textParts.length === 0) {
     return undefined;

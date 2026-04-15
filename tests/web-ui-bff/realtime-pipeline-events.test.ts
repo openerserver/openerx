@@ -403,6 +403,171 @@ describe("SSEAggregator pipeline emitters", () => {
     }
   });
 
+  test("metadata-only assistant message.updated hydrates the task-domain patch text", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: {
+            id: "msg-1",
+            role: "assistant",
+            agent: "planner",
+            time: {
+              created: "2026-03-12T10:05:00.000Z",
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "首段正文",
+            },
+          ],
+        },
+      ],
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "ses-1",
+        info: {
+          id: "msg-1",
+          role: "assistant",
+          agent: "planner",
+          time: {
+            created: "2026-03-12T10:05:00.000Z",
+          },
+        },
+      });
+
+      expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-1", {
+        includeLineage: false,
+        bypassCircuitBreaker: true,
+      });
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.message.updated",
+        "message.updated",
+      ]);
+      expect(emitted[0]).toMatchObject({
+        sessionId: "ses-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        agentRunId: "run-1",
+        data: {
+          message: {
+            sessionId: "ses-1",
+            info: {
+              id: "msg-1",
+              role: "assistant",
+              agent: "planner",
+            },
+            textContent: "首段正文",
+            parts: [
+              {
+                type: "text",
+                text: "首段正文",
+              },
+            ],
+          },
+          reason: "message.updated",
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("metadata-only assistant message.updated excludes tool and execution-context content from hydrated patch", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: {
+            id: "msg-1",
+            role: "assistant",
+            agent: "planner",
+            time: {
+              created: "2026-03-12T10:05:00.000Z",
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "Execution context:\n当前阶段：实现",
+            },
+            {
+              type: "tool",
+              toolCallId: "tool-1",
+              toolName: "search_docs",
+              text: "工具输出",
+            },
+            {
+              type: "text",
+              text: "真正的助手正文",
+            },
+          ],
+        },
+      ],
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "ses-1",
+        info: {
+          id: "msg-1",
+          role: "assistant",
+          agent: "planner",
+          time: {
+            created: "2026-03-12T10:05:00.000Z",
+          },
+        },
+      });
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.message.updated",
+        "message.updated",
+      ]);
+      expect(emitted[0]).toMatchObject({
+        data: {
+          message: {
+            textContent: "真正的助手正文",
+            parts: [
+              {
+                type: "text",
+                text: "真正的助手正文",
+              },
+            ],
+          },
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("message mirror persistence emits round synced only after snapshot catch-up is proven", async () => {
     findAgentRunBySessionIdMock.mockReturnValue({
       subSessionId: "ses-1",

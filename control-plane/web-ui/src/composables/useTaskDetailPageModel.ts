@@ -1,5 +1,6 @@
 import { computed, ref, watch, type UnwrapNestedRefs } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import type { TaskExecutionReconcileEnvelope } from "../lib/api";
 import { useRealtimeStore } from "../stores/realtime";
 import { useTaskDetailCoreContext } from "./useTaskDetailCoreContext";
 import {
@@ -13,7 +14,10 @@ import {
 import { useTaskConversationFeature } from "./useTaskConversationFeature";
 import { useTaskDetailMainPaneFeature } from "./useTaskDetailMainPaneFeature";
 import { useTaskDetailRealtimeFeature } from "./useTaskDetailRealtimeFeature";
-import { useTaskDetailSnapshotCoordinator } from "./useTaskDetailSnapshotCoordinator";
+import {
+  useTaskDetailSnapshotCoordinator,
+  type TaskDetailSnapshotRefreshOptions,
+} from "./useTaskDetailSnapshotCoordinator";
 import { useTaskDetailSidebarPaneFeature } from "./useTaskDetailSidebarPaneFeature";
 import { useTaskDetailParallelFlow } from "./useTaskDetailParallelFlow";
 import { useTaskRuntimePermissionFeature } from "./useTaskRuntimePermissionFeature";
@@ -34,8 +38,11 @@ export function useTaskDetailPageModel() {
     clearPendingAssistantDraft,
     currentPhaseId,
     flatNodes,
+    hasOlderHistory,
+    historyLoading,
     hasStreamingAssistant,
     latestTaskRefreshRequest,
+    loadOlderHistory,
     messageReconcileRequired,
     messageTrace,
     messagesError,
@@ -133,7 +140,8 @@ export function useTaskDetailPageModel() {
     taskId,
     task,
     selectedSessionId,
-    refreshTaskSnapshot: (options) => refreshTaskSnapshot(options),
+    refreshTaskSnapshot: (options?: TaskDetailSnapshotRefreshOptions) =>
+      refreshTaskSnapshot(options),
   });
 
   const compareFlow = useTaskDetailParallelFlow({
@@ -153,8 +161,10 @@ export function useTaskDetailPageModel() {
   const compareActions = useTaskParallelCandidateActions({
     taskId,
     currentParallelRunRecord: compareFlow.currentParallelRunRecord,
-    refreshTaskSnapshot: (options) => refreshTaskSnapshot(options),
-    reconcileExecutionEnvelope: (envelope) => reconcileExecutionEnvelope(envelope),
+    refreshTaskSnapshot: (options?: TaskDetailSnapshotRefreshOptions) =>
+      refreshTaskSnapshot(options),
+    reconcileExecutionEnvelope: (envelope?: TaskExecutionReconcileEnvelope | null) =>
+      reconcileExecutionEnvelope(envelope),
   });
   const stopPhaseId = computed(
     () => compareFlow.currentParallelRunRecord.value?.phaseId ?? currentPhaseId.value ?? null,
@@ -200,8 +210,10 @@ export function useTaskDetailPageModel() {
       refreshTask,
       refreshSessions,
       refreshMessages,
-      refreshTaskSnapshot: (options) => refreshTaskSnapshot(options),
-      reconcileExecutionEnvelope: (envelope) => reconcileExecutionEnvelope(envelope),
+      refreshTaskSnapshot: (options?: TaskDetailSnapshotRefreshOptions) =>
+        refreshTaskSnapshot(options),
+      reconcileExecutionEnvelope: (envelope?: TaskExecutionReconcileEnvelope | null) =>
+        reconcileExecutionEnvelope(envelope),
       seedPendingAssistantDraft,
     },
     messageTrace,
@@ -320,6 +332,9 @@ export function useTaskDetailPageModel() {
       terminating,
     },
     messages: {
+      hasOlderHistory,
+      historyLoading,
+      loadOlderHistory,
       messagesError,
       messagesLoading,
       selectedSessionId,

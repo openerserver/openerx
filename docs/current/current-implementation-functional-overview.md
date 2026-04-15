@@ -19,7 +19,7 @@
 
 ## 2. 当前主导航
 
-根据 [control-plane/web-ui/src/layouts/MainLayout.vue](../control-plane/web-ui/src/layouts/MainLayout.vue) 和 [control-plane/web-ui/src/router/index.ts](../control-plane/web-ui/src/router/index.ts)，当前主导航包含：
+根据 [control-plane/web-ui/src/layouts/MainLayout.vue](../../control-plane/web-ui/src/layouts/MainLayout.vue) 和 [control-plane/web-ui/src/router/index.ts](../../control-plane/web-ui/src/router/index.ts)，当前主导航包含：
 
 - Dashboard
 - 任务
@@ -41,7 +41,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/Tasks.vue](../control-plane/web-ui/src/pages/Tasks.vue)
+- [control-plane/web-ui/src/pages/Tasks.vue](../../control-plane/web-ui/src/pages/Tasks.vue)
 
 当前已实现能力：
 
@@ -70,11 +70,11 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue)
+- [control-plane/web-ui/src/pages/TaskDetailV3.vue](../../control-plane/web-ui/src/pages/TaskDetailV3.vue)
 
 当前已实现特征：
 
-- 已作为独立的 `tasks/:taskId/v3` 路由存在
+- 主入口是 `/tasks/:taskId`，`/tasks/:taskId/v3` 当前只保留兼容 redirect
 - 页面内部已接入树形 breadcrumb
 - 已包含文件预览打开能力
 - 已形成新版任务详情页独立实现，不依赖旧 `TaskDetail.vue` 路由壳
@@ -82,13 +82,13 @@
 现状判断：
 
 - `TaskDetailV3` 当前应视为主力任务详情页
-- 旧 [control-plane/web-ui/src/pages/TaskDetail.vue](../control-plane/web-ui/src/pages/TaskDetail.vue) 仍存在，但不应继续视为主力任务页
+- 旧 [control-plane/web-ui/src/pages/TaskDetail.vue](../../control-plane/web-ui/src/pages/TaskDetail.vue) 仍存在，但不应继续视为主力任务页
 
 ### 3.3 任务工作台
 
 页面：
 
-- [control-plane/web-ui/src/pages/TaskWorkbench.vue](../control-plane/web-ui/src/pages/TaskWorkbench.vue)
+- [control-plane/web-ui/src/pages/TaskWorkbench.vue](../../control-plane/web-ui/src/pages/TaskWorkbench.vue)
 
 当前已实现特征：
 
@@ -105,7 +105,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/MultiTaskMonitor.vue](../control-plane/web-ui/src/pages/MultiTaskMonitor.vue)
+- [control-plane/web-ui/src/pages/MultiTaskMonitor.vue](../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue)
 
 当前已实现特征：
 
@@ -121,7 +121,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/Approvals.vue](../control-plane/web-ui/src/pages/Approvals.vue)
+- [control-plane/web-ui/src/pages/Approvals.vue](../../control-plane/web-ui/src/pages/Approvals.vue)
 
 当前已实现特征：
 
@@ -137,7 +137,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/ChatSettings.vue](../control-plane/web-ui/src/pages/ChatSettings.vue)
+- [control-plane/web-ui/src/pages/ChatSettings.vue](../../control-plane/web-ui/src/pages/ChatSettings.vue)
 
 当前已实现能力：
 
@@ -158,7 +158,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/Projects.vue](../control-plane/web-ui/src/pages/Projects.vue)
+- [control-plane/web-ui/src/pages/Projects.vue](../../control-plane/web-ui/src/pages/Projects.vue)
 
 当前已实现能力：
 
@@ -176,7 +176,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/ProjectDetail.vue](../control-plane/web-ui/src/pages/ProjectDetail.vue)
+- [control-plane/web-ui/src/pages/ProjectDetail.vue](../../control-plane/web-ui/src/pages/ProjectDetail.vue)
 
 当前已实现特征：
 
@@ -192,7 +192,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/ProjectPolicies.vue](../control-plane/web-ui/src/pages/ProjectPolicies.vue)
+- [control-plane/web-ui/src/pages/ProjectPolicies.vue](../../control-plane/web-ui/src/pages/ProjectPolicies.vue)
 
 当前已实现能力：
 
@@ -210,7 +210,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue](../control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue)
+- [control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue](../../control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue)
 
 当前已实现能力：
 
@@ -231,7 +231,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/ProjectRoleExecution.vue](../control-plane/web-ui/src/pages/ProjectRoleExecution.vue)
+- [control-plane/web-ui/src/pages/ProjectRoleExecution.vue](../../control-plane/web-ui/src/pages/ProjectRoleExecution.vue)
 
 当前已实现能力：
 
@@ -248,7 +248,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/ProjectOrchestration.vue](../control-plane/web-ui/src/pages/ProjectOrchestration.vue)
+- [control-plane/web-ui/src/pages/ProjectOrchestration.vue](../../control-plane/web-ui/src/pages/ProjectOrchestration.vue)
 
 当前已实现能力：
 
@@ -271,7 +271,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/ProjectOperatingMode.vue](../control-plane/web-ui/src/pages/ProjectOperatingMode.vue)
+- [control-plane/web-ui/src/pages/ProjectOperatingMode.vue](../../control-plane/web-ui/src/pages/ProjectOperatingMode.vue)
 
 当前已实现能力：
 
@@ -286,11 +286,15 @@
 - 但仍使用 `bossParticipationMode` 等旧命名
 - 需要作为后续重写对象处理
 
-### 4.8 项目老板经营视图
+### 4.8 项目管理介入视图
 
 页面：
 
-- [control-plane/web-ui/src/pages/BossOperationsCenter.vue](../control-plane/web-ui/src/pages/BossOperationsCenter.vue)
+- [control-plane/web-ui/src/pages/ManagementOperationsCenter.vue](../../control-plane/web-ui/src/pages/ManagementOperationsCenter.vue)
+
+兼容入口：
+
+- `/projects/:projectId/boss-operations` 当前 redirect 到 `/projects/:projectId/management-operations`
 
 当前已实现能力：
 
@@ -302,9 +306,9 @@
 
 现状判断：
 
-- 这页已形成完整项目级治理总览页
-- 但它的心智和命名都属于旧“老板层”方案
-- 后续应以“Management Operations”方向替代
+- 当前主入口已经切到 Management Operations 页面，旧 `boss-operations` 只保留兼容入口
+- 但这组能力的语义和数据对象仍带有旧“老板层”方案痕迹
+- 后续应继续沿“Management Operations”方向清理旧命名与旧心智
 
 ## 5. 当前任务运行与组织运行页面
 
@@ -312,7 +316,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/TaskOperatingConsole.vue](../control-plane/web-ui/src/pages/TaskOperatingConsole.vue)
+- [control-plane/web-ui/src/pages/TaskOperatingConsole.vue](../../control-plane/web-ui/src/pages/TaskOperatingConsole.vue)
 
 当前已实现能力：
 
@@ -332,7 +336,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/TaskOperatingOverride.vue](../control-plane/web-ui/src/pages/TaskOperatingOverride.vue)
+- [control-plane/web-ui/src/pages/TaskOperatingOverride.vue](../../control-plane/web-ui/src/pages/TaskOperatingOverride.vue)
 
 当前已实现能力：
 
@@ -349,8 +353,11 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/RecommendedScenarios.vue](../control-plane/web-ui/src/pages/RecommendedScenarios.vue)
-- [control-plane/web-ui/src/pages/TaskOperatingModeLauncher.vue](../control-plane/web-ui/src/pages/TaskOperatingModeLauncher.vue)
+- [control-plane/web-ui/src/pages/RecommendedScenarios.vue](../../control-plane/web-ui/src/pages/RecommendedScenarios.vue)
+
+兼容入口：
+
+- `/projects/:projectId/operating-mode-launcher` 当前 redirect 到 `/projects/:projectId/recommended-scenarios`
 
 当前已实现能力：
 
@@ -360,7 +367,7 @@
 
 现状判断：
 
-- 这部分功能已经接通
+- 当前实际入口已经收敛到 Recommended Scenarios，旧 `operating-mode-launcher` 只保留兼容跳转
 - 但仍依赖旧运行模式命名和旧老板参与字段
 
 ## 6. 当前设置与治理页面
@@ -369,7 +376,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/Settings.vue](../control-plane/web-ui/src/pages/Settings.vue)
+- [control-plane/web-ui/src/pages/Settings.vue](../../control-plane/web-ui/src/pages/Settings.vue)
 
 当前已实现能力非常多，主要包括：
 
@@ -394,7 +401,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue](../control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue)
+- [control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue](../../control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue)
 
 当前已实现能力：
 
@@ -412,8 +419,8 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/WorkflowTemplatesAdmin.vue](../control-plane/web-ui/src/pages/WorkflowTemplatesAdmin.vue)
-- [control-plane/web-ui/src/pages/WorkflowTemplateEditor.vue](../control-plane/web-ui/src/pages/WorkflowTemplateEditor.vue)
+- [control-plane/web-ui/src/pages/WorkflowTemplatesAdmin.vue](../../control-plane/web-ui/src/pages/WorkflowTemplatesAdmin.vue)
+- [control-plane/web-ui/src/pages/WorkflowTemplateEditor.vue](../../control-plane/web-ui/src/pages/WorkflowTemplateEditor.vue)
 
 当前已实现能力：
 
@@ -434,7 +441,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/AgentConsolePage.vue](../control-plane/web-ui/src/pages/AgentConsolePage.vue)
+- [control-plane/web-ui/src/pages/AgentConsolePage.vue](../../control-plane/web-ui/src/pages/AgentConsolePage.vue)
 
 当前已实现能力：
 
@@ -457,7 +464,7 @@
 
 页面：
 
-- [control-plane/web-ui/src/pages/Users.vue](../control-plane/web-ui/src/pages/Users.vue)
+- [control-plane/web-ui/src/pages/Users.vue](../../control-plane/web-ui/src/pages/Users.vue)
 
 当前已实现特征：
 

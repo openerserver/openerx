@@ -1588,6 +1588,7 @@ export interface TaskRoundMessagePartDto {
   partType: TaskRoundMessagePartType;
   text: string;
   finalizedAt?: string | null;
+  [key: string]: unknown;
 }
 
 export interface TaskRoundMessageDto {

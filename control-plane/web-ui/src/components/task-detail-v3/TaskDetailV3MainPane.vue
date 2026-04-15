@@ -93,8 +93,11 @@
       :active-session-id="main.selectedSessionId"
       :force-scroll-token="main.conversationFocusToken"
       :default-assistant-model="main.assistantMessageModelFallback"
+      :has-older-history="main.hasOlderHistory"
+      :history-loading="main.historyLoading"
       @open-file-preview="main.handleOpenFilePreview"
       @adopt-candidate="main.handleAdoptCandidate"
+      @load-older-history="main.handleLoadOlderHistory"
     />
 
     <ChatComposer

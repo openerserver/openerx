@@ -2,12 +2,12 @@
 
 > 状态：可选优化草案，非任务域主链路收尾阻塞项  
 > 日期：2026-03-21  
-> 关联文档：[../../project-tree-storage-design.md](../../project-tree-storage-design.md)
+> 关联文档：[../../project-tree-storage-design.md](../../task-domain/project-tree-storage-design.md)
 > 说明：本文讨论的是 `project_tree_events` 这一历史兼容链路的可选优化与收敛，不再代表 task/session/timeline 当前主读写架构，也不再构成任务域主读收尾的必做项。当前主路径已经切到 `conversation_*`、`task_domain_events` 与 `task_timeline_views`。
 
 ## 0. 背景与动机
 
-本文档用于承接 [../../project-tree-storage-design.md](../../project-tree-storage-design.md) 中已单列出来的可选优化项，将 `pg_trgm` 搜索能力与基于 `project_tree_events` 的增量推送能力，统一收敛到一份“树模型后续优化方案”中。
+本文档用于承接 [../../project-tree-storage-design.md](../../task-domain/project-tree-storage-design.md) 中已单列出来的可选优化项，将 `pg_trgm` 搜索能力与基于 `project_tree_events` 的增量推送能力，统一收敛到一份“树模型后续优化方案”中。
 
 历史实现里的 `project_tree_events` 曾采用纯追加（append-only）事件溯源模式存储所有对话消息。
 在旧写路径里，每次 OpenCode Runtime 发出 `message.updated` SSE 事件，BFF 的 `persistSessionMessageSnapshot()` 都会向 CP Service 发送完整消息快照，Service 端写入 **2~3 行事件**（created/updated + snapshot + 可选 completed）。

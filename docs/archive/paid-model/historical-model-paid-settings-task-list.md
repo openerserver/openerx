@@ -1,6 +1,6 @@
 # Historical: 模型付费设置改造 — 可执行任务清单
 
-> 源方案：[model-paid-settings-replan.md](../../model-paid-settings-replan.md)
+> 源方案：[model-paid-settings-replan.md](../../product/model-paid-settings-replan.md)
 > 改造目标：把"模型是否付费 + 怎么收费"收敛到系统模型目录；把"项目能不能继续用"收敛到项目额度钱包。
 > 状态更新（2026-04-14）：接口层收口已先行完成一部分：service `/:projectId/paid-execution-lease` 接口与 `project.settings.allowPaidExecution` 已删除，Dashboard governance 已去掉 `activeLeaseCount`，测试 helper 也不再使用 `ALLOW_PAID_MODEL_EXECUTION`。下文保留的 lease / allowPaidExecution 条目主要用于记录迁移路径与尚未完成的 DB 清理。
 

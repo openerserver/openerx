@@ -6,7 +6,7 @@
 
 - 由于测试误触发或编排配置残留，系统可能在短时间内对付费模型发起大量真实请求，造成不可接受的成本放大。
 
-> 方案边界更新（2026-04-14）：本文继续保留“付费模型强 guard / 租约 / 多层预检”的历史设计上下文。如果当前产品目标改为“由管理员定义付费模型与计费方式，并只通过项目额度限制使用”，应优先参考 [../../model-paid-settings-replan.md](../../model-paid-settings-replan.md)。
+> 方案边界更新（2026-04-14）：本文继续保留“付费模型强 guard / 租约 / 多层预检”的历史设计上下文。如果当前产品目标改为“由管理员定义付费模型与计费方式，并只通过项目额度限制使用”，应优先参考 [../../product/model-paid-settings-replan.md](../../product/model-paid-settings-replan.md)。
 >
 > 现状更新（2026-04-14）：当前活跃合同已经不再把项目级 `paid-execution-lease` 接口、`ALLOW_PAID_MODEL_EXECUTION=1` 测试门控或 Dashboard `activeLeaseCount` 当成现行行为。它们在本文中若再次出现，除非明确标注为“历史方案”或“待清理 DB 残留”，否则都应按旧设计上下文理解。
 
@@ -25,8 +25,8 @@
 - [../../architecture-overview.md](../../architecture-overview.md)
 - [../../approval-standards-management-plan.md](../../approval-standards-management-plan.md)
 - [../../multi-agent-hook-architecture.md](../../multi-agent-hook-architecture.md)
-- [../../dashboard-provider-token-stats-plan.md](../../dashboard-provider-token-stats-plan.md)
-- [../../raw-audit-trace-plan.md](../../raw-audit-trace-plan.md)
+- [../../operations/dashboard-provider-token-stats-plan.md](../../operations/dashboard-provider-token-stats-plan.md)
+- [../../raw-audit-trace-plan.md](../../runtime/raw-audit-trace-plan.md)
 - [tests/README.md](../../../tests/README.md)
 
 > 状态更新（2026-04-05）：本文中大量 `agent_runs` 提法属于删除前设计上下文。当前 schema 已删除 `agent_runs` 物理表；Dashboard provider token 聚合已改为读取 `runtime_usage_ledgers`，`agentRunId` 仅作为兼容标识继续存在。因此，本文凡把 `agent_runs` 写成“当前稳定真值源”或“现行运营主表”的段落，都应按历史口径理解，当前实现应以 `runtime_usage_ledgers`、`runtime_usage_ledger_steps` 与 canonical task-domain 表为准。
@@ -2186,7 +2186,7 @@ interface PaidExecutionEstimate {
 
 目标：把已有 guard / lease / breaker / 预检能力转成管理员能直接消费的治理总览，而不是继续散落在项目页、任务页和审计流里。
 
-该 epic 需要与 [../../dashboard-provider-token-stats-plan.md](../../dashboard-provider-token-stats-plan.md) 以及 [../../raw-audit-trace-plan.md](../../raw-audit-trace-plan.md) 对齐。
+该 epic 需要与 [../../operations/dashboard-provider-token-stats-plan.md](../../operations/dashboard-provider-token-stats-plan.md) 以及 [../../raw-audit-trace-plan.md](../../runtime/raw-audit-trace-plan.md) 对齐。
 
 #### B1. 明确首页治理视图与现有 Dashboard 的边界
 
