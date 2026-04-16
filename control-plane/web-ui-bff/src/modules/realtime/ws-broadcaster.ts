@@ -1,6 +1,7 @@
 import * as jose from "jose";
 import type { JWTPayload } from "../../middleware/auth";
 import type { RealtimeEvent } from "../../types/events";
+import { summarizeRealtimeEvent, traceServerRealtime } from "./realtime-debug";
 import { sseAggregator } from "./sse-aggregator";
 
 // ── WebSocket Broadcaster ──────────────────────────────────────────
@@ -64,6 +65,38 @@ function shouldBroadcastEventToClient(client: WSClient, event: RealtimeEvent) {
   return true;
 }
 
+function explainBroadcastDecision(client: WSClient, event: RealtimeEvent) {
+  if (!canClientAccessEventProject(client, event)) {
+    return { allowed: false, reason: "project-access-denied" } as const;
+  }
+
+  if (isProjectSubscribed(client, event)) {
+    return { allowed: true, reason: "project-subscribed" } as const;
+  }
+
+  if (isTaskFilteredOut(client, event)) {
+    return { allowed: false, reason: "task-filtered-out" } as const;
+  }
+
+  if (requiresExplicitMatch(client) && !event.projectId && !event.taskId) {
+    return { allowed: false, reason: "explicit-match-required" } as const;
+  }
+
+  return { allowed: true, reason: "default-allowed" } as const;
+}
+
+function summarizeClient(clientId: string, client: WSClient) {
+  return {
+    clientId,
+    userId: client.userId,
+    projectScopeCount: client.projectIds.size,
+    subscribedProjectCount: client.subscribedProjects.size,
+    subscribedTaskCount: client.subscribedTasks.size,
+    subscribedProjects: Array.from(client.subscribedProjects),
+    subscribedTasks: Array.from(client.subscribedTasks),
+  };
+}
+
 function sendMessageToClient(client: WSClient, message: string) {
   try {
     client.ws.send(message);
@@ -84,11 +117,16 @@ class WSBroadcaster {
   addClient(id: string, client: WSClient): void {
     this.clients.set(id, client);
     console.log(`WS client connected: ${id} (user: ${client.userId})`);
+    traceServerRealtime("ws:client-connected", summarizeClient(id, client));
   }
 
   removeClient(id: string): void {
+    const client = this.clients.get(id);
     this.clients.delete(id);
     console.log(`WS client disconnected: ${id}`);
+    if (client) {
+      traceServerRealtime("ws:client-disconnected", summarizeClient(id, client));
+    }
   }
 
   /**
@@ -98,6 +136,10 @@ class WSBroadcaster {
     const client = this.clients.get(clientId);
     if (client) {
       client.subscribedTasks.add(taskId);
+      traceServerRealtime("ws:subscribe-task", {
+        ...summarizeClient(clientId, client),
+        taskId,
+      });
     }
   }
 
@@ -105,6 +147,10 @@ class WSBroadcaster {
     const client = this.clients.get(clientId);
     if (client) {
       client.subscribedProjects.add(projectId);
+      traceServerRealtime("ws:subscribe-project", {
+        ...summarizeClient(clientId, client),
+        projectId,
+      });
     }
   }
 
@@ -113,13 +159,31 @@ class WSBroadcaster {
    */
   broadcast(event: RealtimeEvent): void {
     const message = JSON.stringify(event);
+    const reasons: Record<string, number> = {};
+    let deliveredCount = 0;
 
-    for (const [, client] of this.clients) {
-      if (!shouldBroadcastEventToClient(client, event)) {
+    for (const [clientId, client] of this.clients) {
+      const decision = explainBroadcastDecision(client, event);
+      reasons[decision.reason] = (reasons[decision.reason] ?? 0) + 1;
+      traceServerRealtime("ws:broadcast-decision", {
+        ...summarizeRealtimeEvent(event),
+        ...summarizeClient(clientId, client),
+        allowed: decision.allowed,
+        reason: decision.reason,
+      });
+      if (!decision.allowed) {
         continue;
       }
       sendMessageToClient(client, message);
+      deliveredCount += 1;
     }
+
+    traceServerRealtime("ws:broadcast-summary", {
+      ...summarizeRealtimeEvent(event),
+      clientCount: this.clients.size,
+      deliveredCount,
+      reasons,
+    });
   }
 
   /**
@@ -130,6 +194,10 @@ class WSBroadcaster {
     if (client) {
       try {
         client.ws.send(JSON.stringify(event));
+        traceServerRealtime("ws:send-targeted", {
+          ...summarizeRealtimeEvent(event),
+          ...summarizeClient(clientId, client),
+        });
       } catch {
         // Client disconnected
       }
@@ -211,6 +279,12 @@ export const websocketHandler = {
           return;
         }
         wsBroadcaster.subscribeToTask(clientId, data.taskId);
+        traceServerRealtime("ws:client-message", {
+          clientId,
+          action: "subscribe_task",
+          taskId: data.taskId,
+          projectId: typeof data.projectId === "string" ? data.projectId : undefined,
+        });
         ws.send(JSON.stringify({ type: "subscribed", taskId: data.taskId }));
         return;
       }
@@ -221,6 +295,11 @@ export const websocketHandler = {
           return;
         }
         wsBroadcaster.subscribeToProject(clientId, data.projectId);
+        traceServerRealtime("ws:client-message", {
+          clientId,
+          action: "subscribe_project",
+          projectId: data.projectId,
+        });
         ws.send(JSON.stringify({ type: "subscribed", projectId: data.projectId }));
       }
     } catch {

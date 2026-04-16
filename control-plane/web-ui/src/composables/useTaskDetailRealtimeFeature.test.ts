@@ -41,6 +41,7 @@ describe("useTaskDetailRealtimeFeature", () => {
     const latestTaskRefreshRequest = ref(null);
     const messageReconcileRequired = ref(false);
     const workflowReconcileRequired = ref(false);
+    const forceMessagePolling = ref(false);
     const realtimeConnected = ref(true);
     const refreshFlowSnapshot = vi.fn();
     const refreshMessageSnapshot = vi.fn();
@@ -59,6 +60,7 @@ describe("useTaskDetailRealtimeFeature", () => {
         latestTaskRefreshRequest,
         messageReconcileRequired,
         workflowReconcileRequired,
+        forceMessagePolling,
         realtimeConnected,
         refreshFlowSnapshot,
         refreshMessageSnapshot,
@@ -78,6 +80,7 @@ describe("useTaskDetailRealtimeFeature", () => {
       latestTaskRefreshRequest,
       messageReconcileRequired,
       workflowReconcileRequired,
+      forceMessagePolling,
       realtimeConnected,
       shouldPollRunningStatus,
       refreshFlowSnapshot,

@@ -3,8 +3,11 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  getContinueLatencyLogFilePath,
   markContinueLatencyStage,
   noteContinueLatencyRuntimeEvent,
+  noteContinueLatencyStateSnapshot,
+  shouldTraceContinueLatency,
 } from "./continue-latency-tracer";
 import {
   ensureAgentRunForSession,
@@ -18,6 +21,7 @@ import {
   type PiMonoRpcEvent,
   type PiMonoRpcExtensionUiRequest,
   type PiMonoRpcExtensionUiResponse,
+  type PiMonoRpcState,
 } from "./pimono-rpc-client";
 import type {
   RuntimeBackend,
@@ -66,6 +70,7 @@ type PiMonoRuntimeHandle = {
   stopRequested?: boolean;
   disposed?: boolean;
   recovering?: Promise<void>;
+  activeAssistantMessageId?: string;
   assistantMessageIdAliases: Map<string, string>;
   approvedExternalDirectories: Set<string>;
   approvedCommands: Set<string>;
@@ -291,6 +296,7 @@ function readPiMonoRpcConfig(): PiMonoRpcConfig {
   const cwd = resolve(process.env.PI_MONO_RPC_CWD?.trim() || defaultLocation.cwd || ".");
   const parsedArgs = parsePiMonoArgs(process.env.PI_MONO_RPC_ARGS);
   const extensionPath = readDefaultPiMonoGovernanceExtensionPath();
+  const continueLatencyLogFilePath = getContinueLatencyLogFilePath();
   return {
     command: process.env.PI_MONO_RPC_COMMAND?.trim() || DEFAULT_PI_MONO_RPC_COMMAND,
     args: normalizePiMonoCliArgs(
@@ -300,8 +306,92 @@ function readPiMonoRpcConfig(): PiMonoRpcConfig {
     cwd,
     env: {
       OPENERX_PI_MONO_ALLOWED_ROOTS: JSON.stringify(readPiMonoAllowedRoots(cwd)),
+      ...(continueLatencyLogFilePath
+        ? { OPENERX_CONTINUE_LATENCY_LOG_FILE: continueLatencyLogFilePath }
+        : {}),
     },
   };
+}
+
+function formatPiMonoRuntimeModelRoute(model?: RuntimeModelRef | null) {
+  if (!model?.providerId) {
+    return model?.modelId?.trim() || undefined;
+  }
+
+  const providerId = model.providerId.trim();
+  const modelId = model.modelId.trim();
+  if (!modelId) {
+    return providerId;
+  }
+  if (modelId.startsWith(`${providerId}/`) || modelId.startsWith(`${providerId}:`)) {
+    return modelId;
+  }
+
+  return `${providerId}:${modelId}`;
+}
+
+function formatPiMonoRpcStateModelRoute(model: PiMonoRpcState["model"]) {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+
+  const record = model as Record<string, unknown>;
+  const providerId = typeof record.provider === "string" ? record.provider.trim() : "";
+  const modelId =
+    typeof record.id === "string"
+      ? record.id.trim()
+      : typeof record.modelId === "string"
+        ? record.modelId.trim()
+        : "";
+
+  if (!providerId) {
+    return modelId || undefined;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  if (modelId.startsWith(`${providerId}/`) || modelId.startsWith(`${providerId}:`)) {
+    return modelId;
+  }
+
+  return `${providerId}:${modelId}`;
+}
+
+function recordPiMonoContinueStateSnapshot(
+  sessionId: string,
+  stage: Parameters<typeof noteContinueLatencyStateSnapshot>[1],
+  state: PiMonoRpcState,
+  requestedModel?: RuntimeModelRef,
+) {
+  noteContinueLatencyStateSnapshot(sessionId, stage, {
+    requestedModelRoute: formatPiMonoRuntimeModelRoute(requestedModel),
+    modelRoute: formatPiMonoRpcStateModelRoute(state.model),
+    thinkingLevel: state.thinkingLevel,
+    followUpMode: state.followUpMode,
+    sessionFile: state.sessionFile,
+    messageCount: state.messageCount,
+    pendingMessageCount: state.pendingMessageCount,
+    isStreaming: state.isStreaming,
+    autoCompactionEnabled: state.autoCompactionEnabled,
+  });
+}
+
+async function capturePiMonoContinueStateSnapshot(
+  sessionId: string,
+  handle: PiMonoRuntimeHandle,
+  stage: Parameters<typeof noteContinueLatencyStateSnapshot>[1],
+  requestedModel?: RuntimeModelRef,
+) {
+  if (!shouldTraceContinueLatency()) {
+    return;
+  }
+
+  try {
+    const state = await handle.client.getState();
+    recordPiMonoContinueStateSnapshot(sessionId, stage, state, requestedModel);
+  } catch {
+    // Best-effort diagnostics only.
+  }
 }
 
 function expandPiMonoHomePath(path: string) {
@@ -1257,6 +1347,61 @@ function readPiMonoMessageTimestamp(message: unknown) {
   return undefined;
 }
 
+function readPiMonoMessageResponseId(message: unknown) {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  const record = message as Record<string, unknown>;
+  return typeof record.responseId === "string" && record.responseId.trim().length > 0
+    ? record.responseId.trim()
+    : undefined;
+}
+
+function bindPiMonoAssistantMessageAliases(
+  handle: PiMonoRuntimeHandle,
+  message: unknown,
+  canonicalId: string,
+) {
+  const timestamp = readPiMonoMessageTimestamp(message);
+  if (typeof timestamp === "number") {
+    handle.assistantMessageIdAliases.set(`${handle.sessionId}:assistant:${timestamp}`, canonicalId);
+  }
+
+  const responseId = readPiMonoMessageResponseId(message);
+  if (responseId) {
+    handle.assistantMessageIdAliases.set(`${handle.sessionId}:assistant:${responseId}`, canonicalId);
+  }
+}
+
+function readPiMonoNormalizedMessageId(message: {
+  info: Record<string, unknown>;
+  parts: Array<Record<string, unknown>>;
+} | null) {
+  const id = message?.info?.id;
+  return typeof id === "string" && id.trim().length > 0 ? id.trim() : undefined;
+}
+
+function overwritePiMonoNormalizedMessageId(
+  message: {
+    info: Record<string, unknown>;
+    parts: Array<Record<string, unknown>>;
+  } | null,
+  messageId: string,
+) {
+  if (!message) {
+    return message;
+  }
+
+  return {
+    ...message,
+    info: {
+      ...message.info,
+      id: messageId,
+    },
+  };
+}
+
 function extractPiMonoFailure(message: unknown) {
   if (!message || typeof message !== "object") {
     return null;
@@ -1373,10 +1518,39 @@ function buildPiMonoRealtimeMessageSnapshot(handle: PiMonoRuntimeHandle, message
   };
 }
 
+function readPiMonoRuntimeEventRole(
+  event: PiMonoRpcEvent,
+  assistantMessageEvent?: Record<string, unknown> | null,
+) {
+  switch (event.type) {
+    case "message_start":
+    case "message_end":
+      return readPiMonoMessageRole(event.message);
+    case "message_update": {
+      const partialMessage =
+        event.message ??
+        (typeof assistantMessageEvent?.partial === "object" ? assistantMessageEvent.partial : undefined);
+      return readPiMonoMessageRole(partialMessage);
+    }
+    default:
+      return null;
+  }
+}
+
 function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpcEvent) {
   handle.eventChain = handle.eventChain
     .then(async () => {
-      noteContinueLatencyRuntimeEvent(handle.sessionId, event.type);
+      const assistantMessageEvent =
+        event.type === "message_update" &&
+        typeof event.assistantMessageEvent === "object" &&
+        event.assistantMessageEvent
+          ? (event.assistantMessageEvent as Record<string, unknown>)
+          : null;
+      noteContinueLatencyRuntimeEvent(handle.sessionId, event.type, {
+        role: readPiMonoRuntimeEventRole(event, assistantMessageEvent) ?? undefined,
+        assistantMessageType:
+          typeof assistantMessageEvent?.type === "string" ? assistantMessageEvent.type : undefined,
+      });
 
       switch (event.type) {
         case "agent_start": {
@@ -1387,15 +1561,27 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
         }
         case "message_end": {
           const role = readPiMonoMessageRole(event.message);
+          if (role === "assistant" && handle.activeAssistantMessageId) {
+            bindPiMonoAssistantMessageAliases(handle, event.message, handle.activeAssistantMessageId);
+          }
           const message = await loadLatestPiMonoNormalizedMessage(handle, role);
           if (!message) {
             return;
           }
 
+          const emittedMessage =
+            role === "assistant" && handle.activeAssistantMessageId
+              ? overwritePiMonoNormalizedMessageId(message, handle.activeAssistantMessageId)
+              : message;
+
           await ingestPiMonoRealtimeEvent("message.updated", {
             sessionId: handle.sessionId,
-            ...message,
+            ...emittedMessage,
           });
+
+          if (role === "assistant") {
+            handle.activeAssistantMessageId = undefined;
+          }
           return;
         }
         case "extension_ui_request": {
@@ -1430,6 +1616,12 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
             return;
           }
 
+          const messageId = readPiMonoNormalizedMessageId(message);
+          if (messageId) {
+            handle.activeAssistantMessageId = messageId;
+            bindPiMonoAssistantMessageAliases(handle, event.message, messageId);
+          }
+
           await ingestPiMonoRealtimeEvent("message.updated", {
             sessionId: handle.sessionId,
             ...message,
@@ -1437,11 +1629,15 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
           return;
         }
         case "message_update": {
-          const assistantMessageEvent =
-            typeof event.assistantMessageEvent === "object" && event.assistantMessageEvent
-              ? (event.assistantMessageEvent as Record<string, unknown>)
-              : null;
-          if (!assistantMessageEvent || assistantMessageEvent.type !== "text_delta") {
+          const assistantMessageType =
+            typeof assistantMessageEvent?.type === "string" ? assistantMessageEvent.type : undefined;
+          const partType =
+            assistantMessageType === "text_delta"
+              ? "text"
+              : assistantMessageType === "thinking_delta"
+                ? "thinking"
+                : null;
+          if (!assistantMessageEvent || !partType) {
             return;
           }
 
@@ -1450,11 +1646,15 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
             (typeof assistantMessageEvent.partial === "object"
               ? assistantMessageEvent.partial
               : undefined);
+          if (handle.activeAssistantMessageId && partialMessage) {
+            bindPiMonoAssistantMessageAliases(handle, partialMessage, handle.activeAssistantMessageId);
+          }
           const snapshot = buildPiMonoRealtimeMessageSnapshot(handle, partialMessage);
-          const messageId =
-            typeof snapshot?.info.id === "string" && snapshot.info.id.length > 0
-              ? snapshot.info.id
-              : null;
+          const canonicalSnapshot =
+            handle.activeAssistantMessageId && snapshot
+              ? overwritePiMonoNormalizedMessageId(snapshot, handle.activeAssistantMessageId)
+              : snapshot;
+          const messageId = readPiMonoNormalizedMessageId(canonicalSnapshot) ?? null;
           const delta =
             typeof assistantMessageEvent.delta === "string" &&
             assistantMessageEvent.delta.length > 0
@@ -1469,7 +1669,7 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
             sessionId: handle.sessionId,
             delta,
             part: {
-              type: "text",
+              type: partType,
               messageID: messageId,
               text: delta,
             },
@@ -1508,6 +1708,7 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
           if (messages.length > 0) {
             handle.cachedMessages = messages;
           }
+          handle.activeAssistantMessageId = undefined;
 
           const lastAssistant = [...messages]
             .reverse()
@@ -1651,6 +1852,7 @@ async function createPiMonoRuntimeHandle(args: {
       status: state.isStreaming ? "running" : "idle",
       pendingGuidance: [],
       cachedMessages: [],
+      activeAssistantMessageId: undefined,
       assistantMessageIdAliases: new Map<string, string>(),
       approvedExternalDirectories: new Set<string>(),
       approvedCommands: new Set<string>(),
@@ -1705,6 +1907,7 @@ async function createPiMonoForkRuntimeHandle(parent: PiMonoRuntimeHandle, title?
       status: state.isStreaming ? "running" : "idle",
       pendingGuidance: [],
       cachedMessages: [],
+      activeAssistantMessageId: undefined,
       assistantMessageIdAliases: new Map<string, string>(),
       approvedExternalDirectories: new Set(parent.approvedExternalDirectories),
       approvedCommands: new Set(parent.approvedCommands),
@@ -1752,6 +1955,7 @@ async function recoverPiMonoHandle(handle: PiMonoRuntimeHandle, action: string) 
       if (handle.status === "failed") {
         handle.status = "paused";
       }
+      handle.activeAssistantMessageId = undefined;
       handle.lastError = undefined;
     } catch (error) {
       await client.stop().catch(() => undefined);
@@ -1962,6 +2166,12 @@ async function continuePiMonoSession(
     taskId: handle.taskId,
     promptLength: prompt.length,
   });
+  await capturePiMonoContinueStateSnapshot(
+    sessionId,
+    handle,
+    "runtime-state-handle-ready",
+    options?.model,
+  );
   if (handle.pauseRequested) {
     await ensurePiMonoPauseSettled(handle, "continuing session");
   }
@@ -1974,6 +2184,12 @@ async function continuePiMonoSession(
     taskId: handle.taskId,
     promptLength: prompt.length,
   });
+  await capturePiMonoContinueStateSnapshot(
+    sessionId,
+    handle,
+    "runtime-state-after-model-set",
+    options?.model,
+  );
 
   if (handle.taskId && handle.projectId) {
     const agentRunId = ensureAgentRunForSession(
@@ -1992,6 +2208,12 @@ async function continuePiMonoSession(
 
   const wasRunning = handle.status === "running";
   handle.status = "running";
+  await capturePiMonoContinueStateSnapshot(
+    sessionId,
+    handle,
+    "runtime-state-before-dispatch",
+    options?.model,
+  );
   markContinueLatencyStage(sessionId, "runtime-dispatch-begin", {
     taskId: handle.taskId,
     promptLength: prompt.length,

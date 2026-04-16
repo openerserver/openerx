@@ -18,6 +18,8 @@ type TaskMessagePatchEventBase = {
   rawEventKind: string;
 };
 
+type AssistantDeltaPartType = "text" | "thinking" | "reasoning";
+
 export type TaskMessagePatchEvent =
   | (TaskMessagePatchEventBase & {
       kind: "assistant-progress";
@@ -26,6 +28,7 @@ export type TaskMessagePatchEvent =
       modelLabel?: string;
       createdAt?: string;
       initialText?: string;
+      initialThinkingText?: string;
     })
   | (TaskMessagePatchEventBase & {
       kind: "assistant-completed";
@@ -35,10 +38,12 @@ export type TaskMessagePatchEvent =
       createdAt?: string;
       completedAt?: string;
       initialText?: string;
+      initialThinkingText?: string;
     })
   | (TaskMessagePatchEventBase & {
       kind: "assistant-delta";
       messageId: string;
+      partType?: AssistantDeltaPartType;
       textDelta: string;
     })
   | (TaskMessagePatchEventBase & {
@@ -285,7 +290,7 @@ function extractPatchEventInlineText(event: RealtimeEvent) {
     .map((part) => part?.trim())
     .filter(
       (part): part is string =>
-        Boolean(part) &&
+        typeof part === "string" &&
         !part.startsWith("Execution context:") &&
         !part.startsWith("当前执行上下文") &&
         !part.startsWith("## 当前执行上下文"),
@@ -296,6 +301,40 @@ function extractPatchEventInlineText(event: RealtimeEvent) {
   }
 
   return textParts.join("\n").trim() || undefined;
+}
+
+function extractPatchEventInlineThinkingText(event: RealtimeEvent) {
+  if (eventKindOf(event) !== "task.message.updated") {
+    return undefined;
+  }
+
+  const message = asRecord(event.data.message);
+  if (!message || !Array.isArray(message.parts)) {
+    return undefined;
+  }
+
+  const thinkingParts = message.parts
+    .map((part) => asRecord(part))
+    .filter((part): part is Record<string, unknown> => Boolean(part))
+    .filter((part) => {
+      const partType = asString(part.type);
+      return partType === "thinking" || partType === "reasoning";
+    })
+    .map(
+      (part) =>
+        asString(part.text) ??
+        asString(part.content) ??
+        asString(part.textContent) ??
+        asString(part.contentText),
+    )
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part));
+
+  if (thinkingParts.length === 0) {
+    return undefined;
+  }
+
+  return thinkingParts.join("\n").trim() || undefined;
 }
 
 function eventKindOf(event: RealtimeEvent) {
@@ -325,6 +364,7 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
         createdAt,
         completedAt,
         initialText: extractPatchEventInlineText(event),
+        initialThinkingText: extractPatchEventInlineThinkingText(event),
       };
     }
 
@@ -353,7 +393,11 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
     const partType = asString(part?.type);
     const textDelta =
       typeof event.data.delta === "string" ? event.data.delta : asString(part?.text);
-    if (!messageId || partType !== "text" || !textDelta) {
+    if (
+      !messageId ||
+      (partType !== "text" && partType !== "thinking" && partType !== "reasoning") ||
+      !textDelta
+    ) {
       return buildIgnoredPatchEvent(event);
     }
 
@@ -361,6 +405,7 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
       ...base,
       kind: "assistant-delta",
       messageId,
+      partType,
       textDelta,
     };
   }

@@ -115,13 +115,44 @@ defineProps<{
 }
 
 @media (max-width: 1200px) {
-  .task-detail-v3-shell {
+  .task-detail-v3-header {
     flex-direction: column;
-    min-height: 0;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 1200px), (max-height: 720px) {
+  .task-detail-v3-page {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .task-detail-v3-shell {
+    flex: 0 0 auto;
+    min-height: auto;
+    overflow: visible;
   }
 
   .task-detail-v3-main {
-    flex: 1;
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .task-detail-v3-page :deep(.chat-message-list) {
+    flex: 0 0 auto;
+    height: clamp(220px, 38vh, 420px);
+  }
+}
+
+@media (max-width: 1200px) {
+  .task-detail-v3-shell {
+    flex-direction: column;
+    min-height: auto;
+  }
+
+  .task-detail-v3-main {
+    flex: 0 0 auto;
   }
 
   .task-detail-v3-sidebar,

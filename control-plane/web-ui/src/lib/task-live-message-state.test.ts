@@ -73,6 +73,36 @@ describe("task live message state", () => {
     expect(state.incompleteIds.has("assistant-1")).toBe(true);
   });
 
+  it("hydrates initial assistant thinking from a message snapshot update", () => {
+    const state = applyRealtimeEventToLiveAssistantState(
+      createEmptyLiveAssistantState(),
+      createEvent({
+        data: {
+          message: {
+            info: {
+              id: "assistant-1",
+              role: "assistant",
+              time: {
+                created: "2026-04-08T03:18:17.218Z",
+              },
+            },
+            parts: [
+              {
+                type: "thinking",
+                text: "先拆解问题。",
+              },
+            ],
+          },
+        },
+      }),
+      "session-1",
+    );
+
+    expect(state.orderedAssistantMessageIds).toEqual(["assistant-1"]);
+    expect(state.thinkingById.get("assistant-1")).toBe("先拆解问题。");
+    expect(state.incompleteIds.has("assistant-1")).toBe(true);
+  });
+
   it("accumulates assistant deltas before completion", () => {
     const initial = createEmptyLiveAssistantState();
     const withFirstDelta = applyRealtimeEventToLiveAssistantState(
@@ -107,6 +137,42 @@ describe("task live message state", () => {
     expect(withSecondDelta.orderedAssistantMessageIds).toEqual(["assistant-1"]);
     expect(withSecondDelta.textById.get("assistant-1")).toBe("你好，世界");
     expect(withSecondDelta.incompleteIds.has("assistant-1")).toBe(true);
+  });
+
+  it("accumulates assistant thinking deltas independently from text", () => {
+    const initial = createEmptyLiveAssistantState();
+    const withThinking = applyRealtimeEventToLiveAssistantState(
+      initial,
+      createEvent({
+        type: "task.message.delta",
+        data: {
+          part: {
+            messageID: "assistant-1",
+            type: "thinking",
+            text: "先看日志",
+          },
+        },
+      }),
+      "session-1",
+    );
+    const withText = applyRealtimeEventToLiveAssistantState(
+      withThinking,
+      createEvent({
+        type: "task.message.delta",
+        data: {
+          part: {
+            messageID: "assistant-1",
+            type: "text",
+            text: "结论如下",
+          },
+        },
+      }),
+      "session-1",
+    );
+
+    expect(withText.thinkingById.get("assistant-1")).toBe("先看日志");
+    expect(withText.textById.get("assistant-1")).toBe("结论如下");
+    expect(withText.incompleteIds.has("assistant-1")).toBe(true);
   });
 
   it("marks an assistant as completed once the terminal update arrives", () => {

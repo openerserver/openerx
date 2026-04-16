@@ -1580,7 +1580,12 @@ export type TaskRoundMessageStatus =
   | "completed"
   | "failed"
   | "cancelled";
-export type TaskRoundMessagePartType = "text" | "toolCall" | "toolResult";
+export type TaskRoundMessagePartType =
+  | "text"
+  | "thinking"
+  | "reasoning"
+  | "toolCall"
+  | "toolResult";
 
 export interface TaskRoundMessagePartDto {
   id: string;

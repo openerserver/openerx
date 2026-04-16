@@ -64,6 +64,19 @@ function resolveTaskSnapshotPartType(part: TaskRoundMessageDto["parts"][number])
     return directType;
   }
 
+  const legacyType = typeof part.partType === "string" ? part.partType.trim() : "";
+  if (legacyType) {
+    if (legacyType === "toolCall") {
+      return "tool";
+    }
+
+    if (legacyType === "toolResult") {
+      return "tool-result";
+    }
+
+    return legacyType;
+  }
+
   if (part.partType === "toolCall") {
     return "tool";
   }
@@ -88,6 +101,138 @@ function extractTaskSnapshotVisibleText(message: TaskRoundMessageDto) {
     .trim();
 
   return text || undefined;
+}
+
+function extractTaskSnapshotThinkingText(message: TaskRoundMessageDto) {
+  if (!Array.isArray(message.parts) || message.parts.length === 0) {
+    return undefined;
+  }
+
+  const text = message.parts
+    .filter((part) => {
+      const partType = resolveTaskSnapshotPartType(part);
+      return partType === "thinking" || partType === "reasoning";
+    })
+    .map((part) => (typeof part.text === "string" ? part.text.trim() : ""))
+    .filter((part) => part.length > 0)
+    .join("\n")
+    .trim();
+
+  return text || undefined;
+}
+
+function hasTaskSnapshotToolParts(message: TaskRoundMessageDto) {
+  return Array.isArray(message.parts)
+    ? message.parts.some((part) => {
+        const partType = resolveTaskSnapshotPartType(part);
+        return partType === "tool" || partType === "tool-result";
+      })
+    : false;
+}
+
+function normalizeTaskSnapshotComparableText(text?: string | null) {
+  return typeof text === "string" ? text.replace(/\s+/gu, " ").trim() : "";
+}
+
+function collapseTaskSnapshotDuplicateAssistantFailures(messages: TaskRoundMessageDto[]) {
+  return messages.filter((message, index) => {
+    if (message.role !== "assistant") {
+      return true;
+    }
+
+    const hasError =
+      message.status === "failed" ||
+      (typeof message.errorText === "string" && message.errorText.trim().length > 0);
+    if (!hasError) {
+      return true;
+    }
+
+    const normalizedText = normalizeTaskSnapshotComparableText(
+      extractTaskSnapshotVisibleText(message) ?? message.text,
+    );
+    if (!normalizedText) {
+      return true;
+    }
+
+    return !messages.slice(index + 1).some((candidate) => {
+      if (candidate.role !== "assistant" || candidate.status !== "completed") {
+        return false;
+      }
+
+      if (candidate.roundId !== message.roundId || candidate.sessionId !== message.sessionId) {
+        return false;
+      }
+
+      return (
+        normalizeTaskSnapshotComparableText(
+          extractTaskSnapshotVisibleText(candidate) ?? candidate.text,
+        ) === normalizedText
+      );
+    });
+  });
+}
+
+function collapseTaskSnapshotSupersededAssistantProgress(messages: TaskRoundMessageDto[]) {
+  return messages.filter((message, index) => {
+    if (message.role !== "assistant") {
+      return true;
+    }
+
+    if (message.status === "completed") {
+      return true;
+    }
+
+    if (hasTaskSnapshotToolParts(message)) {
+      return true;
+    }
+
+    const visibleText = normalizeTaskSnapshotComparableText(
+      extractTaskSnapshotVisibleText(message) ?? message.text,
+    );
+    if (visibleText) {
+      return true;
+    }
+
+    const thinkingText = normalizeTaskSnapshotComparableText(
+      extractTaskSnapshotThinkingText(message),
+    );
+
+    return !messages.slice(index + 1).some((candidate) => {
+      if (candidate.role !== "assistant" || candidate.status !== "completed") {
+        return false;
+      }
+
+      if (candidate.roundId !== message.roundId || candidate.sessionId !== message.sessionId) {
+        return false;
+      }
+
+      if (hasTaskSnapshotToolParts(candidate)) {
+        return false;
+      }
+
+      const candidateVisibleText = normalizeTaskSnapshotComparableText(
+        extractTaskSnapshotVisibleText(candidate) ?? candidate.text,
+      );
+      if (!candidateVisibleText) {
+        return false;
+      }
+
+      if (!thinkingText) {
+        return true;
+      }
+
+      const candidateThinkingText = normalizeTaskSnapshotComparableText(
+        extractTaskSnapshotThinkingText(candidate),
+      );
+      return Boolean(candidateThinkingText) && candidateThinkingText.includes(thinkingText);
+    });
+  });
+}
+
+function collapseTaskSnapshotDuplicateAssistantMessages(messages: TaskRoundMessageDto[]) {
+  return collapseTaskSnapshotSupersededAssistantProgress(
+    collapseTaskSnapshotDuplicateAssistantFailures(messages),
+  );
 }
 
 export function toTaskSnapshotMessageRecord(message: TaskRoundMessageDto) {
@@ -173,15 +318,16 @@ export function createTaskMessageSnapshotState(args: {
   response: TaskRoundMessagesDto;
   includeLineage?: boolean;
 }): TaskMessageSnapshotState {
+  const sourceRoundMessages = Array.isArray(args.response.messages)
+    ? collapseTaskSnapshotDuplicateAssistantMessages(args.response.messages)
+    : [];
   const resolvedSessionId =
     resolveTaskSnapshotRuntimeSessionId(args.taskId, args.requestedSessionId) ??
     resolveTaskSnapshotRuntimeSessionId(args.taskId, args.response.round.sessionId) ??
     resolveTaskSnapshotRuntimeSessionId(args.taskId, args.response.round.id);
 
   return {
-    sourceMessages: Array.isArray(args.response.messages)
-      ? args.response.messages.map((message) => toTaskSnapshotMessageRecord(message))
-      : [],
+    sourceMessages: sourceRoundMessages.map((message) => toTaskSnapshotMessageRecord(message)),
     resolvedSessionId,
     trace: {
       taskId: args.taskId,
@@ -192,7 +338,7 @@ export function createTaskMessageSnapshotState(args: {
       timelineMeta: {
         readSource: "task-domain-projection",
         includeLineage: args.includeLineage,
-        itemCount: args.response.messages.length,
+        itemCount: sourceRoundMessages.length,
         complete: !args.response.reconcileRequired,
         roundId: args.response.round.id,
         snapshotVersion: args.response.snapshotVersion,

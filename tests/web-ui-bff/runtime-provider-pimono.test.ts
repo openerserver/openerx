@@ -162,10 +162,19 @@ function buildFakePiMonoRpcServerScript() {
         buildAssistantMessage(text),
         (options && options.overrides) || {},
       );
+      if (options && options.clearResponseIdAtEnd) {
+        assistant.responseId = undefined;
+      }
+      if (options && typeof options.endTimestampOffsetMs === "number") {
+        assistant.timestamp += options.endTimestampOffsetMs;
+      }
       const startAssistant =
         options && options.clearResponseIdAtStart
           ? Object.assign({}, assistant, { responseId: undefined })
-          : assistant;
+          : Object.assign({}, assistant);
+      if (options && typeof options.startTimestampOffsetMs === "number") {
+        startAssistant.timestamp += options.startTimestampOffsetMs;
+      }
 
       write({ type: "message_start", message: startAssistant });
       if (text) {
@@ -273,6 +282,7 @@ function buildFakePiMonoRpcServerScript() {
       }
 
       write({ id: command.id, type: "response", command: command.type, success: true });
+      const timestampDriftOnly = command.message.includes("__timestamp_drift__");
       write({
         type: "tool_execution_start",
         toolCallId: "tool-1",
@@ -288,7 +298,11 @@ function buildFakePiMonoRpcServerScript() {
         isError: false,
       });
       writeAssistantTurn("reply:" + command.message, {
-        clearResponseIdAtStart: command.message.includes("__late_response_id__"),
+        clearResponseIdAtStart:
+          command.message.includes("__late_response_id__") || timestampDriftOnly,
+        clearResponseIdAtEnd: timestampDriftOnly,
+        startTimestampOffsetMs: timestampDriftOnly ? -777 : undefined,
+        endTimestampOffsetMs: timestampDriftOnly ? 777 : undefined,
       });
     }
 
@@ -737,6 +751,79 @@ describe("pi-mono runtime provider", () => {
       "task-1",
       "proj-1",
       "hello __late_response_id__",
+      {
+        model: { providerId: "github-copilot", modelId: "gpt-5.4" },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+
+    await waitForMockCalls(10);
+
+    const assistantUpdateIds = ingestParsedEventMock.mock.calls
+      .filter(
+        (call) =>
+          call[0] === "message.updated" &&
+          typeof call[1] === "object" &&
+          call[1] &&
+          typeof (call[1] as Record<string, unknown>).info === "object" &&
+          ((call[1] as Record<string, unknown>).info as Record<string, unknown>).role ===
+            "assistant",
+      )
+      .map((call) => {
+        const payload = call[1] as Record<string, unknown>;
+        const info = payload.info as Record<string, unknown> | undefined;
+        return typeof info?.id === "string" ? info.id : "";
+      })
+      .filter((value) => value.length > 0);
+
+    expect(assistantUpdateIds.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(assistantUpdateIds).size).toBe(1);
+
+    const assistantMessageId = assistantUpdateIds[0];
+    const assistantDeltaEvent = ingestParsedEventMock.mock.calls.find(
+      (call) => call[0] === "message.part.updated",
+    );
+    expect(assistantDeltaEvent?.[1]).toEqual(
+      expect.objectContaining({
+        sessionId: "rpc-session-1",
+        part: expect.objectContaining({
+          type: "text",
+          messageID: assistantMessageId,
+        }),
+      }),
+    );
+
+    const messages = await piMonoRuntimeProvider.getSessionMessages("rpc-session-1");
+    expect(messages.ok).toBe(true);
+
+    const assistantMessages = Array.isArray(messages.data)
+      ? messages.data.filter((message) => {
+          const record = message as Record<string, unknown>;
+          const info = record.info as Record<string, unknown> | undefined;
+          return info?.role === "assistant";
+        })
+      : [];
+
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toEqual(
+      expect.objectContaining({
+        info: expect.objectContaining({
+          id: assistantMessageId,
+          role: "assistant",
+        }),
+      }),
+    );
+  });
+
+  test("keeps assistant message ids stable when end timestamp drifts without a responseId", async () => {
+    configurePiMonoRpcEnv();
+
+    const { piMonoRuntimeProvider } = await import(runtimeProviderPiMonoModulePath);
+    const result = await piMonoRuntimeProvider.createSession(
+      "task-1",
+      "proj-1",
+      "hello __timestamp_drift__",
       {
         model: { providerId: "github-copilot", modelId: "gpt-5.4" },
       },

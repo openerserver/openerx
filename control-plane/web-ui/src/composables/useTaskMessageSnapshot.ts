@@ -9,6 +9,10 @@ import {
   createEmptyTaskMessageSnapshotState,
   createTaskMessageSnapshotState,
 } from "../lib/task-message-snapshot";
+import {
+  measureTaskRealtimeDuration,
+  traceTaskDetailRealtime,
+} from "../lib/task-detail-realtime-debug";
 
 type TaskMessageRoundSlice = {
   round: TaskRoundDto;
@@ -153,7 +157,9 @@ export function useTaskMessageSnapshot(
     slice: TaskMessageRoundSlice;
   }) {
     const nextRoundId = args.slice.round.id;
-    const previousOrder = args.contextKey === lastContextKey ? roundOrder.value.slice() : [];
+    const previousOrder = lastContextKey.startsWith(`${args.taskId}::`)
+      ? roundOrder.value.slice()
+      : [];
 
     roundSlices.set(nextRoundId, args.slice);
 
@@ -185,6 +191,7 @@ export function useTaskMessageSnapshot(
     const currentTaskId = taskId.value;
     const requestedSessionId = sessionId.value;
     const currentContextKey = buildContextKey(currentTaskId, requestedSessionId);
+    const startedAt = performance.now();
 
     if (!currentTaskId) {
       lastContextKey = "";
@@ -197,6 +204,14 @@ export function useTaskMessageSnapshot(
       historyLoading.value = false;
       return;
     }
+
+    traceTaskDetailRealtime("snapshot:refresh-start", {
+      taskId: currentTaskId,
+      requestedSessionId,
+      silent,
+      refreshGeneration: currentRefreshGeneration,
+      roundOrder: [...roundOrder.value],
+    }, { taskId: currentTaskId });
 
     if (!silent) {
       loading.value = true;
@@ -216,6 +231,13 @@ export function useTaskMessageSnapshot(
       if (!nextState) {
         lastContextKey = currentContextKey;
         resetState(currentTaskId, requestedSessionId);
+        traceTaskDetailRealtime("snapshot:refresh-empty", {
+          taskId: currentTaskId,
+          requestedSessionId,
+          silent,
+          refreshGeneration: currentRefreshGeneration,
+          durationMs: measureTaskRealtimeDuration(startedAt),
+        }, { taskId: currentTaskId });
         return;
       }
 
@@ -225,6 +247,20 @@ export function useTaskMessageSnapshot(
         requestedSessionId,
         slice: nextState,
       });
+      traceTaskDetailRealtime("snapshot:refresh-complete", {
+        taskId: currentTaskId,
+        requestedSessionId,
+        resolvedSessionId: nextState.resolvedSessionId,
+        roundId: nextState.round.id,
+        snapshotVersion: nextState.timelineMeta.snapshotVersion,
+        persistedThroughRevision: nextState.timelineMeta.persistedThroughRevision,
+        reconcileRequired: nextState.timelineMeta.reconcileRequired,
+        sourceMessageCount: nextState.sourceMessages.length,
+        roundOrder: [...roundOrder.value],
+        silent,
+        refreshGeneration: currentRefreshGeneration,
+        durationMs: measureTaskRealtimeDuration(startedAt),
+      }, { taskId: currentTaskId });
     } catch (nextError) {
       if (currentRefreshGeneration !== refreshGeneration) {
         return;
@@ -234,6 +270,14 @@ export function useTaskMessageSnapshot(
         resetState(currentTaskId, requestedSessionId);
         error.value = nextError instanceof Error ? nextError.message : "加载消息失败";
       }
+      traceTaskDetailRealtime("snapshot:refresh-failed", {
+        taskId: currentTaskId,
+        requestedSessionId,
+        silent,
+        refreshGeneration: currentRefreshGeneration,
+        durationMs: measureTaskRealtimeDuration(startedAt),
+        error: nextError instanceof Error ? nextError.message : String(nextError),
+      }, { level: "warn", taskId: currentTaskId });
     } finally {
       if (currentRefreshGeneration === refreshGeneration) {
         loading.value = false;

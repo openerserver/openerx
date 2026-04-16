@@ -1,5 +1,12 @@
 import { createEmptyLiveAssistantState } from "../lib/message-normalize";
 import {
+  summarizeLiveAssistantState,
+  summarizeTaskPatchEffects,
+  summarizeTaskPatchEvent,
+  summarizeTaskPatchEvents,
+  traceTaskDetailRealtime,
+} from "../lib/task-detail-realtime-debug";
+import {
   createTaskLiveAssistantStateManager,
   type ConsumePendingTaskPatchEventsOptions,
 } from "../lib/task-live-assistant-state-manager";
@@ -17,6 +24,7 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
   const {
     taskPatchEventSignature,
     realtimeConnected,
+    getTaskPatchEvents: getMappedTaskPatchEvents,
     getRelevantTaskPatchEvents,
     getLatestRelevantTaskPatchEvent,
   } = useTaskMessagePatchFeed(taskIds);
@@ -43,11 +51,22 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
     sessionId,
   }: TaskMessagePatchConsumerScope) {
     const latestTaskPatchEvent = getLatestTaskPatchEvent(taskId);
+    const patchEvents = getTaskPatchEvents(taskId);
+    const mappedPatchEvents = getMappedTaskPatchEvents(taskId);
     if (!taskId || !sessionId) {
       liveAssistantStateManager.markConsumerHandled(
         consumerId,
         latestTaskPatchEvent?.eventId ?? null,
       );
+      traceTaskDetailRealtime("consumer:replay-history-skipped", {
+        consumerId,
+        taskId,
+        sessionId,
+        patchEventCount: patchEvents.length,
+        mappedPatchEventCount: mappedPatchEvents.length,
+        latestMappedTaskPatchEvent: summarizeTaskPatchEvent(mappedPatchEvents[0] ?? null),
+        latestTaskPatchEvent: summarizeTaskPatchEvent(latestTaskPatchEvent),
+      }, { taskId });
       return {
         latestTaskPatchEvent,
         liveAssistantState: createEmptyLiveAssistantState(),
@@ -57,12 +76,23 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
     const liveAssistantState = liveAssistantStateManager.replaceLiveAssistantStateFromHistory(
       taskId,
       sessionId,
-      getTaskPatchEvents(taskId),
+      patchEvents,
     );
     liveAssistantStateManager.markConsumerHandled(
       consumerId,
       latestTaskPatchEvent?.eventId ?? null,
     );
+
+    traceTaskDetailRealtime("consumer:replay-history", {
+      consumerId,
+      taskId,
+      sessionId,
+      patchEventCount: patchEvents.length,
+      mappedPatchEventCount: mappedPatchEvents.length,
+      latestMappedTaskPatchEvent: summarizeTaskPatchEvent(mappedPatchEvents[0] ?? null),
+      latestTaskPatchEvent: summarizeTaskPatchEvent(latestTaskPatchEvent),
+      liveAssistantState: summarizeLiveAssistantState(liveAssistantState),
+    }, { taskId });
 
     return {
       latestTaskPatchEvent,
@@ -76,16 +106,33 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
     sessionId,
   }: TaskMessagePatchConsumerScope) {
     const latestTaskPatchEvent = getLatestTaskPatchEvent(taskId);
+    const patchEvents = getTaskPatchEvents(taskId);
+    const mappedPatchEvents = getMappedTaskPatchEvents(taskId);
     const consumed = liveAssistantStateManager.consumePendingTaskPatchEvents({
       consumerId,
       taskId,
       sessionId,
-      patchEvents: getTaskPatchEvents(taskId),
+      patchEvents,
     });
+    const effects = summarizeTaskMessagePatchEffects(consumed.pendingEvents);
+
+    traceTaskDetailRealtime("consumer:consume-pending", {
+      consumerId,
+      taskId,
+      sessionId,
+      patchEventCount: patchEvents.length,
+      mappedPatchEventCount: mappedPatchEvents.length,
+      latestMappedTaskPatchEvent: summarizeTaskPatchEvent(mappedPatchEvents[0] ?? null),
+      latestTaskPatchEvent: summarizeTaskPatchEvent(latestTaskPatchEvent),
+      pendingEventCount: consumed.pendingEvents.length,
+      pendingEvents: summarizeTaskPatchEvents(consumed.pendingEvents),
+      effects: summarizeTaskPatchEffects(effects),
+      liveAssistantState: summarizeLiveAssistantState(consumed.liveAssistantState),
+    }, { taskId });
 
     return {
       latestTaskPatchEvent,
-      effects: summarizeTaskMessagePatchEffects(consumed.pendingEvents),
+      effects,
       ...consumed,
     };
   }

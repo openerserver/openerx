@@ -91,6 +91,28 @@ describe("task conversation display", () => {
     });
   });
 
+  it("creates a standalone streaming assistant draft from live thinking deltas", () => {
+    const liveState = createEmptyLiveAssistantState();
+    liveState.orderedAssistantMessageIds = ["assistant-3"];
+    liveState.thinkingById.set("assistant-3", "先梳理 child session 的时序");
+    liveState.incompleteIds.add("assistant-3");
+
+    const items = buildTaskConversationDisplayMessages({
+      persistedItems: [],
+      liveAssistantState: liveState,
+      authority: "realtime",
+      pendingAssistantDraft: null,
+      activeSessionId: "session-1",
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: "assistant-3",
+      thinkingText: "先梳理 child session 的时序",
+      isStreaming: true,
+    });
+  });
+
   it("keeps a single assistant record while authority moves from realtime to persisted", () => {
     const liveState = createEmptyLiveAssistantState();
     liveState.orderedAssistantMessageIds = ["assistant-1"];

@@ -35,6 +35,7 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     conversationItems: baseConversationItems,
     hasStreamingAssistant,
     latestTaskRefreshRequest,
+    needsMessagePollingFallback,
     realtimeConnected,
     seedPendingAssistantDraft,
   } = useTaskMessageStore(taskId, messageSnapshot.activeSessionId, {
@@ -64,6 +65,7 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     messageTrace: messageSnapshot.trace,
     messagesError: messageSnapshot.error,
     messagesLoading: messageSnapshot.loading,
+    needsMessagePollingFallback,
     projectId,
     realtimeConnected,
     refreshMessages: messageSnapshot.refresh,

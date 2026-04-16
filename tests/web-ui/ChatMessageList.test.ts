@@ -107,6 +107,44 @@ describe("ChatMessageList tool cards", () => {
     expect(wrapper.text()).toContain("准备展示最终回复。");
   });
 
+  it("does not render empty-text fallback for assistant messages with thinking only", () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-thinking-only-1",
+        role: "assistant",
+        thinkingText: "先确认当前任务状态。",
+        text: undefined,
+        toolCalls: [],
+        createdAt: "2026-04-10T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("查看思考过程");
+    expect(wrapper.text()).not.toContain("暂无文本内容");
+  });
+
   it("renders streaming assistant text immediately without waiting for reveal throttling", async () => {
     const items: TaskConversationMessageItem[] = [
       {
@@ -194,6 +232,58 @@ describe("ChatMessageList tool cards", () => {
     list.scrollTop = 0;
     await wrapper.get("[data-testid='task-detail-v2-message-list']").trigger("scroll");
 
+    expect(wrapper.emitted("loadOlderHistory")).toHaveLength(1);
+  });
+
+  it("requests older history when the sticky history trigger is clicked", async () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-history-click",
+        role: "assistant",
+        text: "当前轮次最新回复",
+        toolCalls: [],
+        createdAt: "2026-04-10T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+        hasOlderHistory: true,
+        historyLoading: false,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    const list = wrapper.get("[data-testid='task-detail-v2-message-list']").element as HTMLElement;
+    Object.defineProperty(list, "scrollHeight", {
+      configurable: true,
+      get: () => 1200,
+    });
+    Object.defineProperty(list, "clientHeight", {
+      configurable: true,
+      get: () => 320,
+    });
+
+    list.scrollTop = 640;
+    await wrapper.get(".chat-message-list__history-trigger").trigger("click");
+
+    expect(wrapper.text()).toContain("向上滚动或点击加载更早消息");
     expect(wrapper.emitted("loadOlderHistory")).toHaveLength(1);
   });
 

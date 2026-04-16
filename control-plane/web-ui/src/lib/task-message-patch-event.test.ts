@@ -117,7 +117,30 @@ describe("task message patch event", () => {
     ).toMatchObject({
       kind: "assistant-delta",
       messageId: "assistant-1",
+      partType: "text",
       textDelta: "你好",
+    });
+  });
+
+  it("maps a thinking delta into an assistant patch", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.message.delta",
+          data: {
+            part: {
+              messageID: "assistant-1",
+              type: "thinking",
+              text: "先分析上下文",
+            },
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "assistant-delta",
+      messageId: "assistant-1",
+      partType: "thinking",
+      textDelta: "先分析上下文",
     });
   });
 

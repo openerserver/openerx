@@ -16,6 +16,12 @@ import {
   getTaskConversationRenderMessageItems,
   type PendingAssistantDraftState,
 } from "../lib/task-conversation-display";
+import {
+  summarizeLiveAssistantState,
+  summarizeTaskPatchEvent,
+  summarizeTaskRefreshRequest,
+  traceTaskDetailRealtime,
+} from "../lib/task-detail-realtime-debug";
 import { useTaskMessagePatchConsumer } from "./useTaskMessagePatchConsumer";
 
 export type TaskConversationAuthority = "persisted" | "realtime";
@@ -163,6 +169,46 @@ function resolveAckRevision(args: {
   return args.persistedThroughRevision ?? args.snapshotVersion ?? args.persistedRevision ?? 0;
 }
 
+function hasPersistedAssistantPayloadCaughtUp(args: {
+  persistedItems: TaskConversationMessageItem[];
+  liveAssistantState: LiveAssistantState;
+}) {
+  const persistedAssistantById = new Map(
+    args.persistedItems
+      .filter((item) => item.role === "assistant")
+      .map((item) => [item.key, item] as const),
+  );
+
+  for (const messageId of args.liveAssistantState.orderedAssistantMessageIds) {
+    const liveText = args.liveAssistantState.textById.get(messageId)?.trim();
+    const liveThinkingText = args.liveAssistantState.thinkingById.get(messageId)?.trim();
+    const hasLivePayload =
+      args.liveAssistantState.metaById.has(messageId) ||
+      Boolean(liveText) ||
+      Boolean(liveThinkingText) ||
+      args.liveAssistantState.incompleteIds.has(messageId);
+
+    if (!hasLivePayload) {
+      continue;
+    }
+
+    const persistedItem = persistedAssistantById.get(messageId);
+    if (!persistedItem) {
+      return false;
+    }
+
+    if (liveText && !persistedItem.text?.trim()) {
+      return false;
+    }
+
+    if (liveThinkingText && !persistedItem.thinkingText?.trim()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function useTaskMessageStore(
   taskId: Ref<string>,
   sessionId: Ref<string | undefined>,
@@ -222,6 +268,15 @@ export function useTaskMessageStore(
       return "realtime" as const;
     }
 
+    if (
+      !hasPersistedAssistantPayloadCaughtUp({
+        persistedItems: persistedItems.value,
+        liveAssistantState: liveAssistantState.value,
+      })
+    ) {
+      return "realtime" as const;
+    }
+
     return "persisted" as const;
   });
   const displayLiveAssistantState = computed(() =>
@@ -256,10 +311,28 @@ export function useTaskMessageStore(
 
     return items.value.some((item) => item.key === pending.key);
   });
+  const hasLiveAssistantPatchActivity = computed(() => {
+    const state = liveAssistantState.value;
+    return (
+      state.orderedAssistantMessageIds.length > 0 ||
+      state.incompleteIds.size > 0 ||
+      state.textById.size > 0 ||
+      state.thinkingById.size > 0 ||
+      state.metaById.size > 0
+    );
+  });
   const hasStreamingAssistant = computed(() =>
     conversationItems.value.some(
       (item) => item.role === "assistant" && Boolean(item.isStreaming),
     ),
+  );
+  const streamingAssistantKeys = computed(() =>
+    conversationItems.value
+      .filter((item) => item.role === "assistant" && Boolean(item.isStreaming))
+      .map((item) => item.key),
+  );
+  const needsMessagePollingFallback = computed(
+    () => hasVisiblePendingAssistantDraft.value && !hasLiveAssistantPatchActivity.value,
   );
 
   function seedPendingAssistantDraft(targetSessionId?: string) {
@@ -274,6 +347,12 @@ export function useTaskMessageStore(
       createdAt,
       knownAssistantKeys: new Set(assistantMessageKeys.value),
     };
+    traceTaskDetailRealtime("store:seed-pending-draft", {
+      taskId: taskId.value,
+      sessionId: targetSessionId,
+      pendingDraftKey: pendingAssistantDraft.value.key,
+      knownAssistantKeys: [...pendingAssistantDraft.value.knownAssistantKeys],
+    }, { taskId: taskId.value });
   }
 
   function clearPendingAssistantDraft(targetSessionId?: string) {
@@ -285,15 +364,22 @@ export function useTaskMessageStore(
       return;
     }
 
+    traceTaskDetailRealtime("store:clear-pending-draft", {
+      taskId: taskId.value,
+      sessionId: pendingAssistantDraft.value.sessionId,
+      pendingDraftKey: pendingAssistantDraft.value.key,
+      requestedSessionId: targetSessionId,
+    }, { taskId: taskId.value });
     pendingAssistantDraft.value = null;
   }
 
   function resetLiveAssistantStateFromHistory() {
-    liveAssistantState.value = replaceLiveAssistantStateFromHistory({
+    const replayed = replaceLiveAssistantStateFromHistory({
       consumerId: "task-message-store",
       taskId: taskId.value,
       sessionId: sessionId.value,
-    }).liveAssistantState;
+    });
+    liveAssistantState.value = replayed.liveAssistantState;
 
     const authorityState = resolveConversationAuthorityState(
       getTaskPatchEvents(taskId.value),
@@ -301,6 +387,15 @@ export function useTaskMessageStore(
     );
     conversationAuthority.value = authorityState.authority;
     latestPersistenceAck.value = authorityState.latestPersistenceAck;
+
+    traceTaskDetailRealtime("store:reset-from-history", {
+      taskId: taskId.value,
+      sessionId: sessionId.value,
+      latestTaskPatchEvent: summarizeTaskPatchEvent(replayed.latestTaskPatchEvent),
+      authority: authorityState.authority,
+      latestPersistenceAck: authorityState.latestPersistenceAck,
+      liveAssistantState: summarizeLiveAssistantState(liveAssistantState.value),
+    }, { taskId: taskId.value });
   }
 
   watch([taskId, sessionId], resetLiveAssistantStateFromHistory, { immediate: true });
@@ -317,6 +412,11 @@ export function useTaskMessageStore(
       const refreshReason = latestTaskRefreshRequest.value?.reason;
       if (refreshReason === "task-completed" || refreshReason === "task-failed") {
         pendingAssistantDraft.value = null;
+        traceTaskDetailRealtime("store:auto-clear-pending-draft", {
+          taskId: taskId.value,
+          sessionId: sessionId.value,
+          reason: "draft-no-longer-visible",
+        }, { taskId: taskId.value });
       }
     },
   );
@@ -340,11 +440,15 @@ export function useTaskMessageStore(
   watch(
     () => latestTaskPatchEvent.value?.eventId,
     () => {
+      const authorityBefore = conversationAuthority.value;
       const consumed = consumePendingTaskPatchEvents({
         consumerId: "task-message-store",
         taskId: taskId.value,
         sessionId: sessionId.value,
       });
+      let authorityAfter = authorityBefore;
+      let nextPersistenceAck = latestPersistenceAck.value;
+
       if (consumed.hasPendingEvents) {
         const authorityState = reduceConversationAuthorityState({
           pendingEvents: consumed.pendingEvents,
@@ -354,14 +458,73 @@ export function useTaskMessageStore(
         });
         conversationAuthority.value = authorityState.authority;
         latestPersistenceAck.value = authorityState.latestPersistenceAck;
+        authorityAfter = authorityState.authority;
+        nextPersistenceAck = authorityState.latestPersistenceAck;
       }
 
       if (!consumed.hasPendingEvents || !consumed.liveAssistantState) {
+        traceTaskDetailRealtime("store:consume-patch", {
+          taskId: taskId.value,
+          sessionId: sessionId.value,
+          latestTaskPatchEvent: summarizeTaskPatchEvent(latestTaskPatchEvent.value),
+          hasPendingEvents: consumed.hasPendingEvents,
+          authorityBefore,
+          authorityAfter,
+          latestPersistenceAck: nextPersistenceAck,
+          liveAssistantState: summarizeLiveAssistantState(liveAssistantState.value),
+        }, { taskId: taskId.value });
         return;
       }
 
       liveAssistantState.value = consumed.liveAssistantState;
+      traceTaskDetailRealtime("store:consume-patch", {
+        taskId: taskId.value,
+        sessionId: sessionId.value,
+        latestTaskPatchEvent: summarizeTaskPatchEvent(latestTaskPatchEvent.value),
+        hasPendingEvents: consumed.hasPendingEvents,
+        authorityBefore,
+        authorityAfter,
+        latestPersistenceAck: nextPersistenceAck,
+        liveAssistantState: summarizeLiveAssistantState(liveAssistantState.value),
+      }, { taskId: taskId.value });
     },
+  );
+
+  watch(
+    [
+      taskId,
+      sessionId,
+      displayConversationAuthority,
+      () => items.value.length,
+      () => conversationItems.value.length,
+      hasStreamingAssistant,
+      () => latestTaskRefreshRequest.value?.eventId,
+    ],
+    () => {
+      traceTaskDetailRealtime("render:conversation-state", {
+        taskId: taskId.value,
+        sessionId: sessionId.value,
+        displayConversationAuthority: displayConversationAuthority.value,
+        messageItemCount: items.value.length,
+        conversationItemCount: conversationItems.value.length,
+        hasStreamingAssistant: hasStreamingAssistant.value,
+        streamingAssistantKeys: streamingAssistantKeys.value,
+        hasVisiblePendingAssistantDraft: hasVisiblePendingAssistantDraft.value,
+        hasLiveAssistantPatchActivity: hasLiveAssistantPatchActivity.value,
+        needsMessagePollingFallback: needsMessagePollingFallback.value,
+        pendingAssistantDraft: pendingAssistantDraft.value
+          ? {
+              key: pendingAssistantDraft.value.key,
+              sessionId: pendingAssistantDraft.value.sessionId,
+              createdAt: pendingAssistantDraft.value.createdAt,
+              knownAssistantKeyCount: pendingAssistantDraft.value.knownAssistantKeys.size,
+            }
+          : null,
+        latestTaskRefreshRequest: summarizeTaskRefreshRequest(latestTaskRefreshRequest.value),
+        liveAssistantState: summarizeLiveAssistantState(displayLiveAssistantState.value),
+      }, { taskId: taskId.value });
+    },
+    { immediate: true },
   );
 
   return {
@@ -372,6 +535,7 @@ export function useTaskMessageStore(
     clearPendingAssistantDraft,
     displayConversationAuthority,
     hasStreamingAssistant,
+    needsMessagePollingFallback,
     latestTaskRefreshRequest,
     latestPersistenceAck,
     liveAssistantState,

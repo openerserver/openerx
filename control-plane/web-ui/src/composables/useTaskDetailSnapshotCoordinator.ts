@@ -1,5 +1,9 @@
 import { type Ref } from "vue";
 import type { TaskExecutionReconcileEnvelope } from "../lib/api";
+import {
+  measureTaskRealtimeDuration,
+  traceTaskDetailRealtime,
+} from "../lib/task-detail-realtime-debug";
 
 export type TaskDetailSnapshotRefreshOptions = {
   workflow?: boolean;
@@ -32,9 +36,21 @@ export function useTaskDetailSnapshotCoordinator(args: {
       return;
     }
 
+    const startedAt = performance.now();
     try {
+      traceTaskDetailRealtime("snapshot-coordinator:refresh-messages", {
+        taskId: args.taskId.value,
+      }, { taskId: args.taskId.value });
       await args.refreshMessages(true);
+      traceTaskDetailRealtime("snapshot-coordinator:refresh-messages-complete", {
+        taskId: args.taskId.value,
+        durationMs: measureTaskRealtimeDuration(startedAt),
+      }, { taskId: args.taskId.value });
     } catch {
+      traceTaskDetailRealtime("snapshot-coordinator:refresh-messages-failed", {
+        taskId: args.taskId.value,
+        durationMs: measureTaskRealtimeDuration(startedAt),
+      }, { level: "warn", taskId: args.taskId.value });
       // Keep current page state when a silent refresh fails.
     }
   }
@@ -76,6 +92,11 @@ export function useTaskDetailSnapshotCoordinator(args: {
     };
 
     const nextSessionId = envelope?.nextSessionId?.trim() || undefined;
+    traceTaskDetailRealtime("snapshot-coordinator:reconcile-envelope", {
+      taskId: args.taskId.value,
+      nextSessionId,
+      refreshTargets,
+    }, { taskId: args.taskId.value });
     if (nextSessionId && args.selectedSessionId) {
       args.selectedSessionId.value = nextSessionId;
     }
@@ -93,7 +114,12 @@ export function useTaskDetailSnapshotCoordinator(args: {
       return;
     }
 
+    const startedAt = performance.now();
     try {
+      traceTaskDetailRealtime("snapshot-coordinator:initial-load-start", {
+        taskId: currentTaskId,
+        projectId: args.projectId.value,
+      }, { taskId: currentTaskId });
       await args.loadInitialWorkflowSnapshot();
       if (args.taskId.value !== currentTaskId) {
         return;
@@ -109,7 +135,17 @@ export function useTaskDetailSnapshotCoordinator(args: {
       }
 
       args.subscribeTask(currentTaskId);
+      traceTaskDetailRealtime("snapshot-coordinator:initial-load-complete", {
+        taskId: currentTaskId,
+        projectId: args.projectId.value,
+        durationMs: measureTaskRealtimeDuration(startedAt),
+      }, { taskId: currentTaskId });
     } catch {
+      traceTaskDetailRealtime("snapshot-coordinator:initial-load-failed", {
+        taskId: currentTaskId,
+        projectId: args.projectId.value,
+        durationMs: measureTaskRealtimeDuration(startedAt),
+      }, { level: "warn", taskId: currentTaskId });
       // useProjectTreeTask handles its own error state
     }
   }

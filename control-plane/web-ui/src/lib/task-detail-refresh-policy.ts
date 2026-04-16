@@ -48,7 +48,10 @@ export type TaskDetailRefreshRequest = {
   shouldBumpTraceRefreshKey: boolean;
 };
 
-function getTaskDetailRefreshTargets(kind: TaskMessagePatchEvent["kind"]): TaskDetailRefreshTargets {
+function getTaskDetailRefreshTargets(
+  kind: TaskMessagePatchEvent["kind"],
+  shouldRefreshMessages: boolean,
+): TaskDetailRefreshTargets {
   if (kind === "task-reconcile-required") {
     return {
       workflow: true,
@@ -60,7 +63,7 @@ function getTaskDetailRefreshTargets(kind: TaskMessagePatchEvent["kind"]): TaskD
   return {
     workflow: WORKFLOW_REFRESH_REASONS.has(kind),
     flow: FLOW_REFRESH_REASONS.has(kind),
-    messages: kind === "round-synced" || kind === "message-reconcile-required",
+    messages: shouldRefreshMessages,
   };
 }
 
@@ -79,7 +82,10 @@ export function getTaskDetailRefreshRequest(
   return {
     eventId: patchEvent.eventId,
     reason: patchEvent.kind,
-    targets: getTaskDetailRefreshTargets(patchEvent.kind),
+    targets: getTaskDetailRefreshTargets(
+      patchEvent.kind,
+      effects.shouldRefreshTaskDetailMessages,
+    ),
     shouldBumpTraceRefreshKey: effects.shouldBumpTaskDetailTraceRefreshKey,
   };
 }
@@ -93,7 +99,7 @@ export function shouldBumpTaskDetailTraceRefreshKey(
 export function shouldRefreshTaskDetailMessages(
   patchEvent: TaskMessagePatchEvent | null | undefined,
 ) {
-  return getTaskDetailRefreshRequest(patchEvent)?.targets.messages ?? false;
+  return getTaskMessagePatchEffects(patchEvent).shouldRefreshTaskDetailMessages;
 }
 
 export function shouldScheduleTaskDetailRefresh(

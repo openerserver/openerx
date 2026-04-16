@@ -26,16 +26,29 @@ type ContinueLatencyTrace = {
   firstRawRuntimeEventAtMs?: number;
   firstAssistantRuntimeEventType?: string;
   firstAssistantRuntimeEventAtMs?: number;
+  firstAssistantThinkingRuntimeEventType?: string;
+  firstAssistantThinkingRuntimeEventAtMs?: number;
+  firstAssistantTextRuntimeEventType?: string;
+  firstAssistantTextRuntimeEventAtMs?: number;
   firstTaskDomainEventType?: string;
   firstTaskDomainEventAtMs?: number;
   firstTaskMessageEventType?: string;
   firstTaskMessageEventAtMs?: number;
+  effectiveModelRoute?: string;
+  effectiveThinkingLevel?: string;
+  effectiveFollowUpMode?: string;
+  effectiveSessionFile?: string;
+  effectiveMessageCount?: number;
+  effectivePendingMessageCount?: number;
+  effectiveIsStreaming?: boolean;
+  effectiveAutoCompactionEnabled?: boolean;
 };
 
 const ACTIVE_TRACE_TTL_MS = 10 * 60_000;
 const COMPLETED_TRACE_TTL_MS = 60_000;
 const ASSISTANT_RUNTIME_EVENT_TYPES = new Set(["message_start", "message_update", "message_end"]);
 const TASK_MESSAGE_EVENT_TYPES = new Set(["task.message.updated", "task.message.delta"]);
+const THINKING_PART_TYPES = new Set(["thinking", "reasoning"]);
 const continueLatencyTraces = new Map<string, ContinueLatencyTrace>();
 const DEFAULT_CONTINUE_LATENCY_LOG_FILE = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -74,6 +87,10 @@ function isContinueLatencyTracingEnabled() {
   return process.env.NODE_ENV !== "production";
 }
 
+export function shouldTraceContinueLatency() {
+  return isContinueLatencyTracingEnabled();
+}
+
 function resolveContinueLatencyLogFilePath() {
   const configured = process.env.OPENERX_CONTINUE_LATENCY_LOG_FILE?.trim();
   if (configured) {
@@ -91,6 +108,10 @@ function resolveContinueLatencyLogFilePath() {
   }
 
   return DEFAULT_CONTINUE_LATENCY_LOG_FILE;
+}
+
+export function getContinueLatencyLogFilePath() {
+  return resolveContinueLatencyLogFilePath();
 }
 
 function persistContinueLatencyLog(line: string) {
@@ -208,6 +229,22 @@ function logContinueLatencySummary(trace: ContinueLatencyTrace) {
       trace.firstAssistantRuntimeEventAtMs,
       trace.firstRawRuntimeEventAtMs,
     ),
+    routeToFirstAssistantThinkingRuntimeEventMs: diffMs(
+      trace.firstAssistantThinkingRuntimeEventAtMs,
+      trace.stages["route-received"],
+    ),
+    firstAssistantRuntimeToFirstAssistantThinkingRuntimeEventMs: diffMs(
+      trace.firstAssistantThinkingRuntimeEventAtMs,
+      trace.firstAssistantRuntimeEventAtMs,
+    ),
+    routeToFirstAssistantTextRuntimeEventMs: diffMs(
+      trace.firstAssistantTextRuntimeEventAtMs,
+      trace.stages["route-received"],
+    ),
+    firstAssistantRuntimeToFirstAssistantTextRuntimeEventMs: diffMs(
+      trace.firstAssistantTextRuntimeEventAtMs,
+      trace.firstAssistantRuntimeEventAtMs,
+    ),
     routeToFirstTaskDomainEventMs: diffMs(
       trace.firstTaskDomainEventAtMs,
       trace.stages["route-received"],
@@ -222,9 +259,27 @@ function logContinueLatencySummary(trace: ContinueLatencyTrace) {
     ),
     firstRawRuntimeEvent: trace.firstRawRuntimeEventType,
     firstAssistantRuntimeEvent: trace.firstAssistantRuntimeEventType,
+    firstAssistantThinkingRuntimeEvent: trace.firstAssistantThinkingRuntimeEventType,
+    firstAssistantTextRuntimeEvent: trace.firstAssistantTextRuntimeEventType,
     firstTaskDomainEvent: trace.firstTaskDomainEventType,
     firstTaskMessageEvent: trace.firstTaskMessageEventType,
+    effectiveModel: trace.effectiveModelRoute,
+    effectiveThinkingLevel: trace.effectiveThinkingLevel,
+    effectiveFollowUpMode: trace.effectiveFollowUpMode,
+    effectiveSessionFile: trace.effectiveSessionFile,
+    effectiveMessageCount: trace.effectiveMessageCount,
+    effectivePendingMessageCount: trace.effectivePendingMessageCount,
+    effectiveIsStreaming: trace.effectiveIsStreaming,
+    effectiveAutoCompactionEnabled: trace.effectiveAutoCompactionEnabled,
   });
+}
+
+function formatRuntimeEventLabel(eventType: string, assistantMessageType?: string) {
+  if (!assistantMessageType || eventType !== "message_update") {
+    return eventType;
+  }
+
+  return `${eventType}:${assistantMessageType}`;
 }
 
 function getOrCreateContinueLatencyTrace(args: {
@@ -361,7 +416,14 @@ export function markContinueLatencyStage(
   return trace.traceId;
 }
 
-export function noteContinueLatencyRuntimeEvent(sessionId: string, eventType: string) {
+export function noteContinueLatencyRuntimeEvent(
+  sessionId: string,
+  eventType: string,
+  detail: {
+    role?: string;
+    assistantMessageType?: string;
+  } = {},
+) {
   const now = Date.now();
   const trace = continueLatencyTraces.get(sessionId);
   if (!trace) {
@@ -369,30 +431,136 @@ export function noteContinueLatencyRuntimeEvent(sessionId: string, eventType: st
   }
 
   trace.lastUpdatedAtMs = now;
+  const runtimeEventLabel = formatRuntimeEventLabel(eventType, detail.assistantMessageType);
   if (!trace.firstRawRuntimeEventAtMs) {
     trace.firstRawRuntimeEventAtMs = now;
-    trace.firstRawRuntimeEventType = eventType;
+    trace.firstRawRuntimeEventType = runtimeEventLabel;
     logContinueLatencyStage(trace, "first-raw-runtime-event", {
-      eventType,
+      eventType: runtimeEventLabel,
+      role: detail.role,
       elapsedMs: diffMs(now, trace.stages["route-received"] ?? trace.startedAtMs),
       sinceDispatchResolvedMs: diffMs(now, trace.stages["runtime-dispatch-resolved"]),
     });
   }
 
-  if (!trace.firstAssistantRuntimeEventAtMs && ASSISTANT_RUNTIME_EVENT_TYPES.has(eventType)) {
+  const isAssistantRuntimeEvent =
+    detail.role === "assistant" && ASSISTANT_RUNTIME_EVENT_TYPES.has(eventType);
+  if (!trace.firstAssistantRuntimeEventAtMs && isAssistantRuntimeEvent) {
     trace.firstAssistantRuntimeEventAtMs = now;
-    trace.firstAssistantRuntimeEventType = eventType;
+    trace.firstAssistantRuntimeEventType = runtimeEventLabel;
     logContinueLatencyStage(trace, "first-assistant-runtime-event", {
-      eventType,
+      eventType: runtimeEventLabel,
       elapsedMs: diffMs(now, trace.stages["route-received"] ?? trace.startedAtMs),
       sinceFirstRawRuntimeEventMs: diffMs(now, trace.firstRawRuntimeEventAtMs),
+    });
+  }
+
+  if (
+    !trace.firstAssistantThinkingRuntimeEventAtMs &&
+    detail.role === "assistant" &&
+    detail.assistantMessageType === "thinking_delta"
+  ) {
+    trace.firstAssistantThinkingRuntimeEventAtMs = now;
+    trace.firstAssistantThinkingRuntimeEventType = runtimeEventLabel;
+    logContinueLatencyStage(trace, "first-assistant-thinking-runtime-event", {
+      eventType: runtimeEventLabel,
+      elapsedMs: diffMs(now, trace.stages["route-received"] ?? trace.startedAtMs),
+      sinceFirstAssistantRuntimeEventMs: diffMs(now, trace.firstAssistantRuntimeEventAtMs),
+    });
+  }
+
+  if (
+    !trace.firstAssistantTextRuntimeEventAtMs &&
+    detail.role === "assistant" &&
+    detail.assistantMessageType === "text_delta"
+  ) {
+    trace.firstAssistantTextRuntimeEventAtMs = now;
+    trace.firstAssistantTextRuntimeEventType = runtimeEventLabel;
+    logContinueLatencyStage(trace, "first-assistant-text-runtime-event", {
+      eventType: runtimeEventLabel,
+      elapsedMs: diffMs(now, trace.stages["route-received"] ?? trace.startedAtMs),
+      sinceFirstAssistantRuntimeEventMs: diffMs(now, trace.firstAssistantRuntimeEventAtMs),
     });
   }
 
   return trace.traceId;
 }
 
-export function noteContinueLatencyTaskDomainEvent(sessionId: string, eventType: string) {
+export function noteContinueLatencyStateSnapshot(
+  sessionId: string,
+  stage:
+    | "runtime-state-handle-ready"
+    | "runtime-state-after-model-set"
+    | "runtime-state-before-dispatch",
+  detail: {
+    modelRoute?: string;
+    thinkingLevel?: string;
+    followUpMode?: string;
+    sessionFile?: string;
+    messageCount?: number;
+    pendingMessageCount?: number;
+    isStreaming?: boolean;
+    autoCompactionEnabled?: boolean;
+    requestedModelRoute?: string;
+  },
+) {
+  const now = Date.now();
+  const trace = continueLatencyTraces.get(sessionId);
+  if (!trace) {
+    return undefined;
+  }
+
+  trace.lastUpdatedAtMs = now;
+  if (detail.modelRoute) {
+    trace.effectiveModelRoute = detail.modelRoute;
+  }
+  if (detail.thinkingLevel) {
+    trace.effectiveThinkingLevel = detail.thinkingLevel;
+  }
+  if (detail.followUpMode) {
+    trace.effectiveFollowUpMode = detail.followUpMode;
+  }
+  if (detail.sessionFile) {
+    trace.effectiveSessionFile = detail.sessionFile;
+  }
+  if (typeof detail.messageCount === "number") {
+    trace.effectiveMessageCount = detail.messageCount;
+  }
+  if (typeof detail.pendingMessageCount === "number") {
+    trace.effectivePendingMessageCount = detail.pendingMessageCount;
+  }
+  if (typeof detail.isStreaming === "boolean") {
+    trace.effectiveIsStreaming = detail.isStreaming;
+  }
+  if (typeof detail.autoCompactionEnabled === "boolean") {
+    trace.effectiveAutoCompactionEnabled = detail.autoCompactionEnabled;
+  }
+
+  logContinueLatencyStage(trace, stage, {
+    elapsedMs: diffMs(now, trace.stages["route-received"] ?? trace.startedAtMs),
+    sinceRuntimeEnteredMs: diffMs(now, trace.stages["runtime-continue-entered"]),
+    modelRoute: detail.modelRoute,
+    requestedModelRoute: detail.requestedModelRoute,
+    thinkingLevel: detail.thinkingLevel,
+    followUpMode: detail.followUpMode,
+    sessionFile: detail.sessionFile,
+    messageCount: detail.messageCount,
+    pendingMessageCount: detail.pendingMessageCount,
+    isStreaming: detail.isStreaming,
+    autoCompactionEnabled: detail.autoCompactionEnabled,
+  });
+
+  return trace.traceId;
+}
+
+export function noteContinueLatencyTaskDomainEvent(
+  sessionId: string,
+  eventType: string,
+  detail: {
+    role?: string;
+    partType?: string;
+  } = {},
+) {
   const now = Date.now();
   const trace = continueLatencyTraces.get(sessionId);
   if (!trace) {
@@ -410,12 +578,26 @@ export function noteContinueLatencyTaskDomainEvent(sessionId: string, eventType:
     });
   }
 
-  if (!trace.firstTaskMessageEventAtMs && TASK_MESSAGE_EVENT_TYPES.has(eventType)) {
+  const isAssistantTaskMessageEvent =
+    (eventType === "task.message.updated" && detail.role === "assistant") ||
+    (eventType === "task.message.delta" && detail.partType === "text") ||
+    (eventType === "task.message.delta" && THINKING_PART_TYPES.has(detail.partType ?? ""));
+
+  if (
+    !trace.firstTaskMessageEventAtMs &&
+    TASK_MESSAGE_EVENT_TYPES.has(eventType) &&
+    isAssistantTaskMessageEvent
+  ) {
     trace.firstTaskMessageEventAtMs = now;
-    trace.firstTaskMessageEventType = eventType;
+    trace.firstTaskMessageEventType =
+      eventType === "task.message.delta" && detail.partType
+        ? `${eventType}:${detail.partType}`
+        : eventType;
     trace.completedAtMs = now;
     logContinueLatencyStage(trace, "first-task-message-event", {
-      eventType,
+      eventType: trace.firstTaskMessageEventType,
+      role: detail.role,
+      partType: detail.partType,
       elapsedMs: diffMs(now, trace.stages["route-received"] ?? trace.startedAtMs),
       sinceFirstAssistantRuntimeEventMs: diffMs(now, trace.firstAssistantRuntimeEventAtMs),
     });

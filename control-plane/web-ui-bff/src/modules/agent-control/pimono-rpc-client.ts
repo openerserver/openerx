@@ -137,7 +137,7 @@ export type PiMonoRpcEvent =
     }
   | PiMonoRpcExtensionUiRequest;
 
-type PiMonoRpcState = {
+export type PiMonoRpcState = {
   model?: unknown;
   thinkingLevel: string;
   isStreaming: boolean;

@@ -436,6 +436,131 @@ describe("useTaskMessageStore", () => {
     expect(store.items.value.map((item) => item.text)).toEqual(["persisted reply"]);
   });
 
+  it("keeps live assistant text visible until persisted assistant payload includes the reply", async () => {
+    const persistedItems = ref<TaskConversationMessageItem[]>([]);
+    const snapshotRevision = ref(0);
+    const { store } = mountStore({
+      persistedItems,
+      snapshotRevision,
+    });
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-progress",
+        data: {
+          message: {
+            id: "assistant-1",
+            role: "assistant",
+            time: {
+              created: "2026-04-08T03:18:17.218Z",
+            },
+            parts: [
+              {
+                type: "thinking",
+                text: "先拆解问题。",
+              },
+            ],
+          },
+        },
+      }),
+      createEvent({
+        id: "event-delta",
+        type: "task.message.delta",
+        data: {
+          part: {
+            messageID: "assistant-1",
+            type: "text",
+            text: "live reply",
+          },
+        },
+      }),
+    ];
+
+    await nextTick();
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-ack",
+        type: "task.round.synced",
+        data: {
+          roundId: "task-session:task-1:session-1",
+          taskSessionId: "task-session:task-1:session-1",
+          messageId: "assistant-1",
+          snapshotVersion: 9,
+          persistedThroughRevision: 9,
+        },
+      }),
+      createEvent({
+        id: "event-completed",
+        data: {
+          message: {
+            id: "assistant-1",
+            role: "assistant",
+            time: {
+              created: "2026-04-08T03:18:17.218Z",
+              completed: "2026-04-08T03:18:24.437Z",
+            },
+          },
+        },
+      }),
+      ...realtimeStoreMock.events,
+    ];
+
+    await nextTick();
+
+    expect(store.conversationAuthority.value).toBe("persisted");
+    expect(store.displayConversationAuthority.value).toBe("realtime");
+    expect(store.items.value).toMatchObject([
+      {
+        key: "assistant-1",
+        text: "live reply",
+        thinkingText: "先拆解问题。",
+        isStreaming: false,
+      },
+    ]);
+
+    persistedItems.value = [
+      createConversationItem({
+        key: "assistant-1",
+        thinkingText: "先拆解问题。",
+        text: undefined,
+        createdAt: "2026-04-08T03:18:19.218Z",
+      }),
+    ];
+    snapshotRevision.value = 9;
+
+    await nextTick();
+
+    expect(store.displayConversationAuthority.value).toBe("realtime");
+    expect(store.items.value).toMatchObject([
+      {
+        key: "assistant-1",
+        text: "live reply",
+        thinkingText: "先拆解问题。",
+      },
+    ]);
+
+    persistedItems.value = [
+      createConversationItem({
+        key: "assistant-1",
+        thinkingText: "先拆解问题。",
+        text: "persisted reply",
+        createdAt: "2026-04-08T03:18:19.218Z",
+      }),
+    ];
+
+    await nextTick();
+
+    expect(store.displayConversationAuthority.value).toBe("persisted");
+    expect(store.items.value).toMatchObject([
+      {
+        key: "assistant-1",
+        text: "persisted reply",
+        thinkingText: "先拆解问题。",
+      },
+    ]);
+  });
+
   it("owns pending assistant draft lifecycle inside the store contract", async () => {
     const persistedItems = ref<TaskConversationMessageItem[]>([
       createConversationItem({

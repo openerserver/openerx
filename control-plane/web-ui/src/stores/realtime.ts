@@ -1,4 +1,8 @@
 import { defineStore } from "pinia";
+import {
+  summarizeRealtimeEvent,
+  traceTaskDetailRealtime,
+} from "../lib/task-detail-realtime-debug";
 
 export interface RealtimeEvent {
   id: string;
@@ -109,6 +113,10 @@ export const useRealtimeStore = defineStore("realtime", {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
         }
+        traceTaskDetailRealtime("ws:open", {
+          subscribedTaskIds: [...this.subscribedTaskIds],
+          subscribedProjectIds: [...this.subscribedProjectIds],
+        });
         this.restoreSubscriptions();
       };
 
@@ -118,17 +126,32 @@ export const useRealtimeStore = defineStore("realtime", {
           if (!data) {
             return;
           }
+          traceTaskDetailRealtime("ws:message", {
+            event: summarizeRealtimeEvent(data),
+          }, { taskId: data.taskId });
           this.pushEvent(data);
-        } catch {
-          // Malformed message
+        } catch (error) {
+          traceTaskDetailRealtime(
+            "ws:message-parse-error",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+            { level: "warn" },
+          );
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (closeEvent) => {
         this.connected = false;
         if (this.ws === ws) {
           this.ws = null;
         }
+        traceTaskDetailRealtime("ws:close", {
+          code: closeEvent.code,
+          reason: closeEvent.reason,
+          wasClean: closeEvent.wasClean,
+          reconnectEnabled: this.reconnectEnabled,
+        }, { level: closeEvent.wasClean ? "info" : "warn" });
         if (!this.reconnectEnabled) {
           return;
         }
@@ -139,7 +162,12 @@ export const useRealtimeStore = defineStore("realtime", {
         }, 3000);
       };
 
-      ws.onerror = () => ws.close();
+      ws.onerror = () => {
+        traceTaskDetailRealtime("ws:error", {
+          connected: this.connected,
+        }, { level: "warn" });
+        ws.close();
+      };
     },
 
     disconnect() {
@@ -155,9 +183,17 @@ export const useRealtimeStore = defineStore("realtime", {
     },
 
     subscribeTask(taskId: string) {
+      const alreadySubscribed = this.subscribedTaskIds.includes(taskId);
       if (!taskId || this.subscribedTaskIds.includes(taskId)) {
         if (taskId && this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ type: "subscribe_task", taskId }));
+        }
+        if (taskId) {
+          traceTaskDetailRealtime("ws:subscribe-task", {
+            taskId,
+            alreadySubscribed: true,
+            socketState: this.ws?.readyState ?? null,
+          }, { taskId });
         }
         return;
       }
@@ -165,6 +201,11 @@ export const useRealtimeStore = defineStore("realtime", {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ type: "subscribe_task", taskId }));
       }
+      traceTaskDetailRealtime("ws:subscribe-task", {
+        taskId,
+        alreadySubscribed,
+        socketState: this.ws?.readyState ?? null,
+      }, { taskId });
     },
 
     subscribeProject(projectId: string) {
@@ -178,6 +219,11 @@ export const useRealtimeStore = defineStore("realtime", {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ type: "subscribe_project", projectId }));
       }
+      traceTaskDetailRealtime("ws:subscribe-project", {
+        projectId,
+        alreadySubscribed,
+        socketState: this.ws?.readyState ?? null,
+      });
     },
 
     restoreSubscriptions() {
@@ -196,10 +242,18 @@ export const useRealtimeStore = defineStore("realtime", {
 
     pushEvent(event: RealtimeEvent) {
       if (this.events.some((entry) => entry.id === event.id)) {
+        traceTaskDetailRealtime("ws:dedupe-event", {
+          event: summarizeRealtimeEvent(event),
+          totalEvents: this.events.length,
+        }, { taskId: event.taskId });
         return;
       }
 
       this.events = [event, ...this.events].slice(0, MAX_EVENTS);
+      traceTaskDetailRealtime("ws:push-event", {
+        event: summarizeRealtimeEvent(event),
+        totalEvents: this.events.length,
+      }, { taskId: event.taskId });
     },
   },
 });

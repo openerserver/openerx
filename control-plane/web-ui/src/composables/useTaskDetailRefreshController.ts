@@ -1,5 +1,10 @@
 import { onScopeDispose, ref, type Ref, watch } from "vue";
 import {
+  measureTaskRealtimeDuration,
+  summarizeTaskRefreshRequest,
+  traceTaskDetailRealtime,
+} from "../lib/task-detail-realtime-debug";
+import {
   shouldRefreshTaskDetailMessagesFromPoll,
   type TaskDetailRefreshTargets,
   type TaskDetailRefreshRequest,
@@ -16,6 +21,7 @@ export function useTaskDetailRefreshController(args: {
   latestTaskRefreshRequest: Ref<TaskDetailRefreshRequest | null | undefined>;
   messageReconcileRequired: Ref<boolean>;
   workflowReconcileRequired: Ref<boolean>;
+  forceMessagePolling: Ref<boolean>;
   realtimeConnected: Ref<boolean>;
   shouldPollRunningStatus: Ref<boolean>;
   refreshFlowSnapshot: () => void | Promise<void>;
@@ -38,6 +44,9 @@ export function useTaskDetailRefreshController(args: {
     if (runningStatusPollTimer) {
       clearInterval(runningStatusPollTimer);
       runningStatusPollTimer = null;
+      traceTaskDetailRealtime("refresh:poll-stop", {
+        taskId: args.taskId.value,
+      }, { taskId: args.taskId.value });
     }
   }
 
@@ -51,24 +60,57 @@ export function useTaskDetailRefreshController(args: {
 
     clearScheduledTaskRefresh();
     const delay = 180;
-    taskRefreshTimer = setTimeout(() => {
+    traceTaskDetailRealtime("refresh:schedule", {
+      taskId: args.taskId.value,
+      reason,
+      options,
+      delay,
+    }, { taskId: args.taskId.value });
+    taskRefreshTimer = setTimeout(async () => {
       taskRefreshTimer = null;
-      if (options.messages && !options.workflow && !options.flow) {
-        void args.refreshMessageSnapshot();
-        return;
-      }
+      const startedAt = performance.now();
+      const refreshPath = options.messages && !options.workflow && !options.flow
+        ? "messages-only"
+        : options.workflow && !options.flow && !options.messages
+          ? "workflow-only"
+          : options.flow && !options.workflow && !options.messages
+            ? "flow-only"
+            : "task-snapshot";
+      traceTaskDetailRealtime("refresh:execute", {
+        taskId: args.taskId.value,
+        reason,
+        options,
+        refreshPath,
+      }, { taskId: args.taskId.value });
 
-      if (options.workflow && !options.flow && !options.messages) {
-        void args.refreshWorkflowSnapshot();
-        return;
-      }
+      try {
+        if (refreshPath === "messages-only") {
+          await args.refreshMessageSnapshot();
+        } else if (refreshPath === "workflow-only") {
+          await args.refreshWorkflowSnapshot();
+        } else if (refreshPath === "flow-only") {
+          await args.refreshFlowSnapshot();
+        } else {
+          await args.refreshTaskSnapshot(options);
+        }
 
-      if (options.flow && !options.workflow && !options.messages) {
-        void args.refreshFlowSnapshot();
-        return;
+        traceTaskDetailRealtime("refresh:complete", {
+          taskId: args.taskId.value,
+          reason,
+          options,
+          refreshPath,
+          durationMs: measureTaskRealtimeDuration(startedAt),
+        }, { taskId: args.taskId.value });
+      } catch (error) {
+        traceTaskDetailRealtime("refresh:failed", {
+          taskId: args.taskId.value,
+          reason,
+          options,
+          refreshPath,
+          durationMs: measureTaskRealtimeDuration(startedAt),
+          error: error instanceof Error ? error.message : String(error),
+        }, { level: "warn", taskId: args.taskId.value });
       }
-
-      void args.refreshTaskSnapshot(options);
     }, delay);
   }
 
@@ -81,12 +123,32 @@ export function useTaskDetailRefreshController(args: {
       return;
     }
 
+    traceTaskDetailRealtime("refresh:poll-start", {
+      taskId: args.taskId.value,
+      realtimeConnected: args.realtimeConnected.value,
+      forceMessagePolling: args.forceMessagePolling.value,
+    }, { taskId: args.taskId.value });
     runningStatusPollTimer = setInterval(() => {
-      if (shouldRefreshTaskDetailMessagesFromPoll(args.realtimeConnected.value)) {
+      if (
+        args.forceMessagePolling.value ||
+        shouldRefreshTaskDetailMessagesFromPoll(args.realtimeConnected.value)
+      ) {
+        traceTaskDetailRealtime("refresh:poll-tick", {
+          taskId: args.taskId.value,
+          realtimeConnected: args.realtimeConnected.value,
+          forceMessagePolling: args.forceMessagePolling.value,
+          mode: "task-snapshot",
+        }, { taskId: args.taskId.value });
         void args.refreshTaskSnapshot({ workflow: false, flow: true, messages: true });
         return;
       }
 
+      traceTaskDetailRealtime("refresh:poll-tick", {
+        taskId: args.taskId.value,
+        realtimeConnected: args.realtimeConnected.value,
+        forceMessagePolling: args.forceMessagePolling.value,
+        mode: "flow-only",
+      }, { taskId: args.taskId.value });
       void args.refreshFlowSnapshot();
     }, 2000);
   }
@@ -99,6 +161,10 @@ export function useTaskDetailRefreshController(args: {
         return;
       }
 
+      traceTaskDetailRealtime("refresh:request", {
+        taskId: args.taskId.value,
+        request: summarizeTaskRefreshRequest(refreshRequest),
+      }, { taskId: args.taskId.value });
       if (refreshRequest.shouldBumpTraceRefreshKey) {
         traceRefreshKey.value += 1;
       }
@@ -113,6 +179,9 @@ export function useTaskDetailRefreshController(args: {
         return;
       }
 
+      traceTaskDetailRealtime("refresh:realtime-reconnected", {
+        taskId: args.taskId.value,
+      }, { taskId: args.taskId.value });
       scheduleTaskRefreshOptions(
         { workflow: false, flow: false, messages: true },
         "realtime-reconnected",
@@ -127,6 +196,9 @@ export function useTaskDetailRefreshController(args: {
         return;
       }
 
+      traceTaskDetailRealtime("refresh:message-reconcile-required", {
+        taskId: args.taskId.value,
+      }, { taskId: args.taskId.value });
       scheduleTaskRefreshOptions(
         { workflow: false, flow: false, messages: true },
         "message-reconcile-required",
@@ -141,6 +213,9 @@ export function useTaskDetailRefreshController(args: {
         return;
       }
 
+      traceTaskDetailRealtime("refresh:workflow-reconcile-required", {
+        taskId: args.taskId.value,
+      }, { taskId: args.taskId.value });
       scheduleTaskRefreshOptions(
         { workflow: true, flow: false, messages: false },
         "workflow-reconcile-required",

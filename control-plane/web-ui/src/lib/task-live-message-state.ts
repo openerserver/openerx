@@ -27,6 +27,7 @@ export function cloneLiveAssistantState(state: LiveAssistantState): LiveAssistan
     orderedAssistantMessageIds: [...state.orderedAssistantMessageIds],
     metaById: new Map(state.metaById),
     textById: new Map(state.textById),
+    thinkingById: new Map(state.thinkingById),
     incompleteIds: new Set(state.incompleteIds),
   };
 }
@@ -82,14 +83,28 @@ export function applyTaskMessagePatchEventToLiveAssistantState(
       );
     }
 
+    if (patchEvent.initialThinkingText) {
+      nextState.thinkingById.set(
+        messageId,
+        mergeStreamingText(
+          nextState.thinkingById.get(messageId),
+          patchEvent.initialThinkingText,
+        ),
+      );
+    }
+
     return nextState;
   }
 
   rememberAssistantMessageId(nextState, patchEvent.messageId);
   nextState.incompleteIds.add(patchEvent.messageId);
-  nextState.textById.set(
+  const targetMap =
+    patchEvent.partType === "thinking" || patchEvent.partType === "reasoning"
+      ? nextState.thinkingById
+      : nextState.textById;
+  targetMap.set(
     patchEvent.messageId,
-    mergeStreamingText(nextState.textById.get(patchEvent.messageId), patchEvent.textDelta),
+    mergeStreamingText(targetMap.get(patchEvent.messageId), patchEvent.textDelta),
   );
   return nextState;
 }
@@ -122,6 +137,7 @@ export function replayTaskMessagePatchEvents(
     state.orderedAssistantMessageIds = nextState.orderedAssistantMessageIds;
     state.metaById = nextState.metaById;
     state.textById = nextState.textById;
+    state.thinkingById = nextState.thinkingById;
     state.incompleteIds = nextState.incompleteIds;
   }
 

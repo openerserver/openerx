@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	type GenerateContentConfig,
 	type GenerateContentParameters,
@@ -42,6 +45,149 @@ export interface GoogleOptions extends StreamOptions {
 	};
 }
 
+const DEFAULT_GOOGLE_PROVIDER_LATENCY_LOG_FILE = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../../../../tmp/continue-latency.log",
+);
+
+let didReportGoogleProviderLogWriteFailure = false;
+
+function isTruthyEnvValue(value?: string) {
+	if (!value) {
+		return false;
+	}
+
+	const normalized = value.trim().toLowerCase();
+	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function isFalsyEnvValue(value?: string) {
+	if (!value) {
+		return false;
+	}
+
+	const normalized = value.trim().toLowerCase();
+	return normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off";
+}
+
+function shouldTraceGoogleProviderLatency() {
+	const configured = process.env.OPENERX_CONTINUE_LATENCY_DEBUG;
+	if (isTruthyEnvValue(configured)) {
+		return true;
+	}
+	if (isFalsyEnvValue(configured)) {
+		return false;
+	}
+
+	return process.env.NODE_ENV !== "production";
+}
+
+function resolveGoogleProviderLatencyLogFilePath() {
+	const configured =
+		process.env.OPENERX_PI_MONO_PROVIDER_LATENCY_LOG_FILE?.trim() ||
+		process.env.OPENERX_CONTINUE_LATENCY_LOG_FILE?.trim();
+	if (configured) {
+		if (isFalsyEnvValue(configured)) {
+			return undefined;
+		}
+		if (isTruthyEnvValue(configured)) {
+			return DEFAULT_GOOGLE_PROVIDER_LATENCY_LOG_FILE;
+		}
+		return resolve(process.cwd(), configured);
+	}
+
+	if (process.env.NODE_ENV === "test") {
+		return undefined;
+	}
+
+	return DEFAULT_GOOGLE_PROVIDER_LATENCY_LOG_FILE;
+}
+
+function persistGoogleProviderLatencyLog(line: string) {
+	const logFilePath = resolveGoogleProviderLatencyLogFilePath();
+	if (!logFilePath) {
+		return;
+	}
+
+	try {
+		mkdirSync(dirname(logFilePath), { recursive: true });
+		appendFileSync(logFilePath, `${new Date().toISOString()} ${line}\n`, "utf8");
+	} catch (error) {
+		if (didReportGoogleProviderLogWriteFailure) {
+			return;
+		}
+		didReportGoogleProviderLogWriteFailure = true;
+		console.warn(
+			`[provider-latency/google] stage=file-log-write-failed path=${logFilePath} error=${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
+function formatGoogleProviderLatencyDetail(detail: Record<string, unknown>) {
+	return Object.entries(detail)
+		.flatMap(([key, value]) => {
+			if (value === undefined || value === null || value === "") {
+				return [];
+			}
+			return `${key}=${String(value)}`;
+		})
+		.join(" ");
+}
+
+function logGoogleProviderLatency(stage: string, detail: Record<string, unknown>) {
+	if (!shouldTraceGoogleProviderLatency()) {
+		return;
+	}
+
+	const line = `[provider-latency/google] stage=${stage} ${formatGoogleProviderLatencyDetail(detail)}`.trim();
+	console.log(line);
+	persistGoogleProviderLatencyLog(line);
+}
+
+function summarizeGoogleThinkingConfig(thinkingConfig?: ThinkingConfig) {
+	if (!thinkingConfig) {
+		return {};
+	}
+
+	return {
+		thinkingIncludeThoughts:
+			typeof thinkingConfig.includeThoughts === "boolean" ? thinkingConfig.includeThoughts : undefined,
+		thinkingLevel:
+			typeof thinkingConfig.thinkingLevel === "string" ? thinkingConfig.thinkingLevel : undefined,
+		thinkingBudget:
+			typeof thinkingConfig.thinkingBudget === "number" ? thinkingConfig.thinkingBudget : undefined,
+	};
+}
+
+function summarizeGoogleContext(context: Context) {
+	const userMessages = context.messages.filter((message) => message.role === "user");
+	const lastUserMessage = [...userMessages].reverse()[0];
+	const lastUserChars = (() => {
+		if (!lastUserMessage) {
+			return undefined;
+		}
+
+		if (typeof lastUserMessage.content === "string") {
+			return lastUserMessage.content.length;
+		}
+
+		return lastUserMessage.content.reduce((count, part) => {
+			if (part.type === "text") {
+				return count + part.text.length;
+			}
+			return count;
+		}, 0);
+	})();
+
+	return {
+		contextMessageCount: context.messages.length,
+		userMessageCount: userMessages.length,
+		toolCount: context.tools?.length,
+		systemPromptChars: context.systemPrompt?.length,
+		lastUserChars,
+	};
+}
+
 // Counter for generating unique tool call IDs
 let toolCallCounter = 0;
 
@@ -79,13 +225,49 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			if (nextParams !== undefined) {
 				params = nextParams as GenerateContentParameters;
 			}
+			const generateContentStartedAt = Date.now();
+			logGoogleProviderLatency("generate-content-stream-begin", {
+				provider: model.provider,
+				model: model.id,
+				reasoningSupported: model.reasoning,
+				transport: options?.transport,
+				toolChoice: options?.toolChoice,
+				requestedThinkingEnabled: options?.thinking?.enabled,
+				requestedThinkingLevel: options?.thinking?.level,
+				requestedThinkingBudget: options?.thinking?.budgetTokens,
+				...summarizeGoogleThinkingConfig(params.config?.thinkingConfig),
+				...summarizeGoogleContext(context),
+				pid: process.pid,
+			});
 			const googleStream = await client.models.generateContentStream(params);
+			const generateContentResolvedAt = Date.now();
+			logGoogleProviderLatency("generate-content-stream-resolved", {
+				provider: model.provider,
+				model: model.id,
+				elapsedMs: generateContentResolvedAt - generateContentStartedAt,
+				...summarizeGoogleThinkingConfig(params.config?.thinkingConfig),
+				pid: process.pid,
+			});
 
 			stream.push({ type: "start", partial: output });
 			let currentBlock: TextContent | ThinkingContent | null = null;
 			const blocks = output.content;
 			const blockIndex = () => blocks.length - 1;
+			let didLogFirstChunk = false;
 			for await (const chunk of googleStream) {
+				if (!didLogFirstChunk) {
+					didLogFirstChunk = true;
+					const firstChunkAt = Date.now();
+					logGoogleProviderLatency("first-provider-chunk", {
+						provider: model.provider,
+						model: model.id,
+						elapsedMs: firstChunkAt - generateContentStartedAt,
+						sinceStreamResolvedMs: firstChunkAt - generateContentResolvedAt,
+						candidateCount: chunk.candidates?.length,
+						thoughtsTokenCount: chunk.usageMetadata?.thoughtsTokenCount,
+						pid: process.pid,
+					});
+				}
 				// @google/genai documents GenerateContentResponse.responseId as an output-only field
 				// used to identify each response. Keep the first non-empty one from the stream.
 				output.responseId ||= chunk.responseId;
@@ -259,6 +441,12 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
+			logGoogleProviderLatency("stream-error", {
+				provider: model.provider,
+				model: model.id,
+				error: error instanceof Error ? error.message : JSON.stringify(error),
+				pid: process.pid,
+			});
 			// Remove internal index property used during streaming
 			for (const block of output.content) {
 				if ("index" in block) {

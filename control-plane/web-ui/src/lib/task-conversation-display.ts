@@ -223,13 +223,19 @@ function overlayPersistedConversationItem(args: {
   }
 
   const liveText = liveAssistantState.textById.get(item.key);
+  const liveThinkingText = liveAssistantState.thinkingById.get(item.key);
   const nextText =
     liveText && liveText.length > (item.text?.length ?? 0) ? liveText : item.text;
+  const nextThinkingText =
+    liveThinkingText && liveThinkingText.length > (item.thinkingText?.length ?? 0)
+      ? liveThinkingText
+      : item.thinkingText;
   const liveMeta = liveAssistantState.metaById.get(item.key);
   const nextIsStreaming = liveAssistantState.incompleteIds.has(item.key);
 
   if (
     nextText === item.text &&
+    nextThinkingText === item.thinkingText &&
     nextIsStreaming === Boolean(item.isStreaming) &&
     (!liveMeta?.agent || liveMeta.agent === item.agent) &&
     (!liveMeta?.createdAt || liveMeta.createdAt === item.createdAt)
@@ -241,6 +247,7 @@ function overlayPersistedConversationItem(args: {
     ...item,
     agent: item.agent ?? liveMeta?.agent,
     text: nextText,
+    thinkingText: nextThinkingText,
     createdAt: item.createdAt ?? liveMeta?.createdAt,
     isStreaming: nextIsStreaming,
   } satisfies TaskConversationMessageItem;
@@ -293,6 +300,7 @@ function createPersistedMessageRecord(args: {
     args.authority === "realtime" &&
     args.originalItem.role === "assistant" &&
     (args.liveAssistantState.textById.has(args.originalItem.key) ||
+      args.liveAssistantState.thinkingById.has(args.originalItem.key) ||
       args.liveAssistantState.metaById.has(args.originalItem.key) ||
       args.liveAssistantState.incompleteIds.has(args.originalItem.key));
 
@@ -333,7 +341,8 @@ function buildStreamingAssistantDraft(args: {
 
     const meta = args.liveAssistantState.metaById.get(messageId);
     const text = args.liveAssistantState.textById.get(messageId)?.trim();
-    if (!meta && !text) {
+    const thinkingText = args.liveAssistantState.thinkingById.get(messageId)?.trim();
+    if (!meta && !text && !thinkingText) {
       continue;
     }
 
@@ -362,7 +371,8 @@ function buildStreamingAssistantDraft(args: {
         key: messageId,
         role: "assistant",
         agent: meta?.agent,
-        text: text || "正在生成...",
+        text: text || (thinkingText ? undefined : "正在生成..."),
+        thinkingText,
         toolCalls: [],
         createdAt: meta?.createdAt,
         raw: null,

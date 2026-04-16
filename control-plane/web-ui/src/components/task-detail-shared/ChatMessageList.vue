@@ -4,9 +4,14 @@
       v-if="!loading && !error && (historyLoading || hasOlderHistory)"
       class="chat-message-list__history-status"
     >
-      <a-typography-text type="secondary">
-        {{ historyLoading ? '正在加载更早消息...' : '向上滚动可加载更早消息' }}
-      </a-typography-text>
+      <button
+        type="button"
+        class="chat-message-list__history-trigger"
+        :disabled="historyLoading"
+        @click="handleLoadOlderHistoryClick"
+      >
+        {{ historyLoading ? '正在加载更早消息...' : '向上滚动或点击加载更早消息' }}
+      </button>
     </div>
     <a-spin v-if="loading" />
     <a-alert v-else-if="error" type="error" show-icon :message="error" />
@@ -247,7 +252,7 @@
                       <span class="streaming-skeleton__dot">.</span>
                     </div>
                     <pre
-                      v-else-if="displayText(turn.item) || sanitizedItemText(turn.item) || (!turn.toolCalls.length && !turn.item.isStreaming)"
+                      v-else-if="displayText(turn.item) || sanitizedItemText(turn.item) || shouldRenderEmptyTextFallback(turn.item, turn.toolCalls.length)"
                       class="chat-message-card__plain chat-message-card__parallel-plain"
                       :class="{ 'chat-message-card__plain--streaming': turn.item.isStreaming || isRevealing(turn.item) }"
                     >{{ displayText(turn.item) || sanitizedItemText(turn.item) || '暂无文本内容' }}</pre>
@@ -336,7 +341,7 @@
             </div>
           </template>
           <pre
-            v-else-if="displayText(item) || sanitizedItemText(item) || (!item.toolCalls.length && !item.isStreaming)"
+            v-else-if="displayText(item) || sanitizedItemText(item) || shouldRenderEmptyTextFallback(item, item.toolCalls.length)"
             class="chat-message-card__plain"
             :class="{ 'chat-message-card__plain--streaming': item.isStreaming || isRevealing(item) }"
           >{{ displayText(item) || sanitizedItemText(item) || '暂无文本内容' }}</pre>
@@ -939,6 +944,18 @@ function assistantThinkingText(item: TaskConversationMessageItem) {
   return sanitizeTextForDisplay("assistant", item.thinkingText);
 }
 
+function shouldRenderEmptyTextFallback(item: TaskConversationMessageItem, toolCallCount: number) {
+  if (toolCallCount > 0 || item.isStreaming) {
+    return false;
+  }
+
+  if (item.role === "assistant" && assistantThinkingText(item)?.trim()) {
+    return false;
+  }
+
+  return true;
+}
+
 function hasStandaloneMessageContent(item: TaskConversationMessageItem) {
   if (item.role === "tool") {
     return item.toolCalls.length === 0 && Boolean(sanitizedItemText(item)?.trim() || item.text?.trim());
@@ -975,16 +992,19 @@ function handleScroll() {
   maybeLoadOlderHistory();
 }
 
-function maybeLoadOlderHistory() {
+function requestOlderHistory(options: { requireNearTop?: boolean } = {}) {
   const element = scrollContainer.value;
   if (
     !element ||
     !props.hasOlderHistory ||
     props.historyLoading ||
-    historyLoadLocked.value ||
-    element.scrollTop > HISTORY_LOAD_TOP_THRESHOLD_PX
+    historyLoadLocked.value
   ) {
-    return;
+    return false;
+  }
+
+  if ((options.requireNearTop ?? true) && element.scrollTop > HISTORY_LOAD_TOP_THRESHOLD_PX) {
+    return false;
   }
 
   pendingHistoryAnchor.value = {
@@ -993,6 +1013,15 @@ function maybeLoadOlderHistory() {
   };
   historyLoadLocked.value = true;
   emit("loadOlderHistory");
+  return true;
+}
+
+function maybeLoadOlderHistory() {
+  requestOlderHistory({ requireNearTop: true });
+}
+
+function handleLoadOlderHistoryClick() {
+  requestOlderHistory({ requireNearTop: false });
 }
 
 async function restoreHistoryAnchor() {
@@ -1316,9 +1345,42 @@ onBeforeUnmount(() => {
 }
 
 .chat-message-list__history-status {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   justify-content: center;
   padding: 8px 0 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0.82));
+}
+
+.chat-message-list__history-trigger {
+  border: 1px solid rgba(22, 119, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(240, 247, 255, 0.96);
+  color: #1677ff;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.chat-message-list__history-trigger:hover:not(:disabled) {
+  background: rgba(230, 244, 255, 1);
+  border-color: rgba(22, 119, 255, 0.28);
+  box-shadow: 0 6px 14px rgba(22, 119, 255, 0.08);
+}
+
+.chat-message-list__history-trigger:disabled {
+  cursor: default;
+  color: rgba(0, 0, 0, 0.45);
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(250, 250, 250, 0.96);
 }
 
 .chat-message-list__items {

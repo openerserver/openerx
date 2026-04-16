@@ -103,6 +103,42 @@ describe("task message patch effects", () => {
     });
   });
 
+  it("treats tool message updates as a task detail message refresh boundary", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("tool-message", {
+          rawEventKind: "task.message.updated",
+          messageId: "tool-1",
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: false,
+      shouldRefreshTaskDetailMessages: true,
+      shouldScheduleTaskDetailRefresh: true,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: false,
+    });
+  });
+
+  it("treats user message updates as a task detail message refresh boundary", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("user-message", {
+          rawEventKind: "task.message.updated",
+          messageId: "user-1",
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: false,
+      shouldRefreshTaskDetailMessages: true,
+      shouldScheduleTaskDetailRefresh: true,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: false,
+    });
+  });
+
   it("treats workflow reconcile required as a workflow-only snapshot refresh boundary", () => {
     expect(
       getTaskMessagePatchEffects(

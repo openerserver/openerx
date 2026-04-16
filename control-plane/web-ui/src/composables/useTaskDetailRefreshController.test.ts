@@ -21,6 +21,7 @@ describe("useTaskDetailRefreshController", () => {
     const latestTaskRefreshRequest = ref<TaskDetailRefreshRequest | null>(null);
     const messageReconcileRequired = ref(false);
     const workflowReconcileRequired = ref(false);
+    const forceMessagePolling = ref(false);
     const realtimeConnected = ref(true);
     const shouldPollRunningStatus = ref(false);
     const refreshFlowSnapshot = vi.fn(async () => undefined);
@@ -35,6 +36,7 @@ describe("useTaskDetailRefreshController", () => {
         latestTaskRefreshRequest,
         messageReconcileRequired,
         workflowReconcileRequired,
+        forceMessagePolling,
         realtimeConnected,
         shouldPollRunningStatus,
         refreshFlowSnapshot,
@@ -51,6 +53,7 @@ describe("useTaskDetailRefreshController", () => {
       latestTaskRefreshRequest,
       messageReconcileRequired,
       workflowReconcileRequired,
+      forceMessagePolling,
       realtimeConnected,
       shouldPollRunningStatus,
       refreshFlowSnapshot,
@@ -225,6 +228,7 @@ describe("useTaskDetailRefreshController", () => {
 
   it("polls running status and gates message refresh on realtime connectivity", async () => {
     const {
+      forceMessagePolling,
       realtimeConnected,
       shouldPollRunningStatus,
       refreshFlowSnapshot,
@@ -247,12 +251,22 @@ describe("useTaskDetailRefreshController", () => {
       messages: true,
     });
 
+    realtimeConnected.value = true;
+    forceMessagePolling.value = true;
+    vi.advanceTimersByTime(2000);
+    await nextTick();
+    expect(refreshTaskSnapshot).toHaveBeenNthCalledWith(2, {
+      workflow: false,
+      flow: true,
+      messages: true,
+    });
+
     shouldPollRunningStatus.value = false;
     await nextTick();
     vi.advanceTimersByTime(2000);
     await nextTick();
     expect(refreshFlowSnapshot).toHaveBeenCalledTimes(1);
-    expect(refreshTaskSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes canonical messages once realtime reconnects", async () => {

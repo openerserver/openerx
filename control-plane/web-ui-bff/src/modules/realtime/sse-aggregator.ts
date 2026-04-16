@@ -47,6 +47,7 @@ import {
 import { queryTaskRoundSyncState } from "../tasks/task-round-facade";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
+import { summarizeRealtimeEvent, traceServerRealtime } from "./realtime-debug";
 
 // Aggregates runtime events and transforms them into
 // standard RealtimeEvent format for WebSocket broadcast.
@@ -1293,7 +1294,7 @@ class SSEAggregator {
         if (!terminal) {
           return;
         }
-      } else if (partType !== "text") {
+      } else if (partType !== "text" && partType !== "thinking" && partType !== "reasoning") {
         return;
       }
     }
@@ -1934,6 +1935,12 @@ class SSEAggregator {
 
     if (shouldHydrateFromRuntime && messageId) {
       const runtimeMessage = await this.loadRuntimeMessageSnapshot(event.sessionId, messageId);
+      traceServerRealtime("aggregator:hydrate-message", {
+        ...summarizeRealtimeEvent(event),
+        shouldHydrateFromRuntime,
+        hydratedFromRuntime: Boolean(runtimeMessage),
+        resolvedMessageId: this.extractRealtimeMessageId(runtimeMessage ?? {}),
+      });
       if (runtimeMessage) {
         return runtimeMessage;
       }
@@ -1953,7 +1960,15 @@ class SSEAggregator {
     sessionId: string,
   ): Promise<{ taskId: string; projectId?: string } | null> {
     const cached = this.sessionToTaskCache.get(sessionId);
-    if (cached) return cached;
+    if (cached) {
+      traceServerRealtime("aggregator:resolve-session-task", {
+        sessionId,
+        taskId: cached.taskId,
+        projectId: cached.projectId,
+        source: "cache",
+      });
+      return cached;
+    }
 
     // DB lookup via service (deduplicate concurrent requests)
     let pending = this.pendingSessionLookups.get(sessionId);
@@ -1966,8 +1981,20 @@ class SSEAggregator {
         if (result.ok && result.data?.taskId) {
           const entry = { taskId: result.data.taskId, projectId: result.data.projectId };
           this.sessionToTaskCache.set(sessionId, entry);
+          traceServerRealtime("aggregator:resolve-session-task", {
+            sessionId,
+            taskId: entry.taskId,
+            projectId: entry.projectId,
+            source: "service-lookup",
+            ok: true,
+          });
           return entry;
         }
+        traceServerRealtime("aggregator:resolve-session-task", {
+          sessionId,
+          source: "service-lookup",
+          ok: false,
+        });
         return null;
       });
       this.pendingSessionLookups.set(sessionId, pending);
@@ -2061,6 +2088,16 @@ class SSEAggregator {
         })
       : this.transformEvent(type, parsed);
 
+    traceServerRealtime("aggregator:runtime-ingress", {
+      receivedType: type,
+      payloadType: asString(payload?.type),
+      payloadSessionId: asString(payload?.sessionId) ?? asString(payload?.sessionID),
+      transformed: Boolean(event),
+      transformedEvent: event ? summarizeRealtimeEvent(event) : null,
+      parsedKeys: Object.keys(parsed).slice(0, 20),
+      payloadKeys: payload ? Object.keys(payload).slice(0, 20) : [],
+    });
+
     if (event) {
       const rawType = typeof event.data.rawType === "string" ? event.data.rawType : undefined;
       const effectiveRawType = rawType ?? event.type;
@@ -2071,10 +2108,16 @@ class SSEAggregator {
           ? await this.resolvePersistableMessageSnapshot(event)
           : undefined;
 
-      if (event.type === "session.idle" || event.type === "session.updated" || event.type === "session.status") {
-        console.log(`[sse-debug] event=${event.type} sessionId=${event.sessionId} taskId=${event.taskId} agentRunId=${event.agentRunId} isCompletion=${this.isCompletionSignal(event)}`);
-      }
-      for (const derivedEvent of this.buildTaskDomainEvents(event, resolvedMessageSnapshot)) {
+      const derivedEvents = this.buildTaskDomainEvents(event, resolvedMessageSnapshot);
+      traceServerRealtime("aggregator:derived-events", {
+        ...summarizeRealtimeEvent(event),
+        isCompletionSignal: this.isCompletionSignal(event),
+        resolvedMessageSnapshotId: this.extractRealtimeMessageId(resolvedMessageSnapshot ?? {}),
+        derivedCount: derivedEvents.length,
+        derivedTypes: derivedEvents.map((derivedEvent) => derivedEvent.type),
+        derivedEvents: derivedEvents.map((derivedEvent) => summarizeRealtimeEvent(derivedEvent)),
+      });
+      for (const derivedEvent of derivedEvents) {
         this.emit(derivedEvent);
       }
       this.emit(event);
@@ -2151,7 +2194,11 @@ class SSEAggregator {
         const partType = asString(part?.type);
         const delta = asString(event.data.delta) ?? asString(part?.text);
 
-        if (!messageId || partType !== "text" || !delta) {
+        if (
+          !messageId ||
+          (partType !== "text" && partType !== "thinking" && partType !== "reasoning") ||
+          !delta
+        ) {
           return [];
         }
 
@@ -2222,6 +2269,17 @@ class SSEAggregator {
     const sessionId = this.extractSessionId(type, data);
     const run = sessionId ? findAgentRunBySessionId(sessionId) : undefined;
 
+    if (sessionId && !run) {
+      traceServerRealtime("aggregator:session-unmapped", {
+        receivedType: type,
+        mappedType,
+        sessionId,
+        rawType: asString(data.rawType),
+        phaseId: asString(data.phaseId) ?? asString(data.phaseID),
+        cachedTaskId: this.sessionToTaskCache.get(sessionId)?.taskId,
+      });
+    }
+
     // Populate session→task cache when agent run provides the mapping
     if (run?.taskId && sessionId) {
       this.sessionToTaskCache.set(sessionId, {
@@ -2251,8 +2309,22 @@ class SSEAggregator {
 
   private emit(event: RealtimeEvent): void {
     if (event.sessionId && event.type.startsWith("task.")) {
-      noteContinueLatencyTaskDomainEvent(event.sessionId, event.type);
+      const message = asRecord(event.data.message);
+      const messageInfo = asRecord(message?.info) ?? message;
+      const part = asRecord(event.data.part);
+      noteContinueLatencyTaskDomainEvent(event.sessionId, event.type, {
+        role: event.type === "task.message.updated" ? asString(messageInfo?.role) : undefined,
+        partType:
+          event.type === "task.message.delta"
+            ? asString(event.data.partType) ?? asString(part?.type)
+            : undefined,
+      });
     }
+
+    traceServerRealtime("aggregator:emit", {
+      ...summarizeRealtimeEvent(event),
+      handlerCount: this.handlers.size,
+    });
 
     for (const handler of this.handlers) {
       handler(event);

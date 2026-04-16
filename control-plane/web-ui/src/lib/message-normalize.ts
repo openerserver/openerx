@@ -107,6 +107,7 @@ export type LiveAssistantState = {
   orderedAssistantMessageIds: string[];
   metaById: Map<string, LiveAssistantMeta>;
   textById: Map<string, string>;
+  thinkingById: Map<string, string>;
   incompleteIds: Set<string>;
 };
 
@@ -741,6 +742,7 @@ export function collectLiveAssistantState(
   const knownAssistantIds = new Set<string>();
   const metaById = new Map<string, LiveAssistantMeta>();
   const textById = new Map<string, string>();
+  const thinkingById = new Map<string, string>();
   const incompleteIds = new Set<string>();
   const sessionEvents = events
     .filter((item) => item.sessionId === sessionId)
@@ -780,25 +782,60 @@ export function collectLiveAssistantState(
     incompleteIds.add(messageId);
   };
 
-  const rememberAssistantText = (event: RealtimeEvent) => {
+  const rememberAssistantContent = (event: RealtimeEvent) => {
     const eventKind = getRealtimeEventKind(event);
-    const part = getRealtimePart(event);
 
     if (eventKind !== "task.message.updated" && eventKind !== "task.message.delta") {
       return;
     }
 
-    const messageId = asString(part?.messageID);
-    if (!messageId || !knownAssistantIds.has(messageId)) {
-      return;
-    }
-    const incomingText =
-      typeof event.data.delta === "string" ? event.data.delta : asString(part?.text);
-    if (asString(part?.type) !== "text" || typeof incomingText !== "string") {
+    if (eventKind === "task.message.updated") {
+      const message = asRecord(event.data.message);
+      const info = asRecord(message?.info) ?? message;
+      const messageId = asString(info?.id);
+      if (!messageId || !knownAssistantIds.has(messageId)) {
+        return;
+      }
+
+      const parts = Array.isArray(message?.parts)
+        ? message.parts
+            .map((part) => asRecord(part))
+            .filter((part): part is Record<string, unknown> => Boolean(part))
+        : [];
+      const incomingText = normalizeText(parts);
+      const incomingThinkingText = normalizeThinkingText(parts);
+      if (incomingText) {
+        textById.set(messageId, mergeStreamingText(textById.get(messageId), incomingText));
+      }
+      if (incomingThinkingText) {
+        thinkingById.set(
+          messageId,
+          mergeStreamingText(thinkingById.get(messageId), incomingThinkingText),
+        );
+      }
       return;
     }
 
-    textById.set(messageId, mergeStreamingText(textById.get(messageId), incomingText));
+    const part = getRealtimePart(event);
+    const messageId = asString(part?.messageID);
+    const partType = asString(part?.type);
+    const incomingText =
+      typeof event.data.delta === "string" ? event.data.delta : asString(part?.text);
+    if (!messageId || !knownAssistantIds.has(messageId) || typeof incomingText !== "string") {
+      return;
+    }
+
+    if (!partType || partType === "text") {
+      textById.set(messageId, mergeStreamingText(textById.get(messageId), incomingText));
+      return;
+    }
+
+    if (partType === "thinking" || partType === "reasoning") {
+      thinkingById.set(
+        messageId,
+        mergeStreamingText(thinkingById.get(messageId), incomingText),
+      );
+    }
   };
 
   for (const event of sessionEvents) {
@@ -806,13 +843,14 @@ export function collectLiveAssistantState(
   }
 
   for (const event of sessionEvents) {
-    rememberAssistantText(event);
+    rememberAssistantContent(event);
   }
 
   return {
     orderedAssistantMessageIds,
     metaById,
     textById,
+    thinkingById,
     incompleteIds,
   };
 }
@@ -822,6 +860,7 @@ export function createEmptyLiveAssistantState(): LiveAssistantState {
     orderedAssistantMessageIds: [],
     metaById: new Map<string, LiveAssistantMeta>(),
     textById: new Map<string, string>(),
+    thinkingById: new Map<string, string>(),
     incompleteIds: new Set<string>(),
   };
 }
@@ -842,7 +881,7 @@ export function normalizeMessage(
   const key = asString(info?.id) ?? asString(record?.id) ?? `${role}-${index}`;
   const toolCalls = normalizeToolCalls(parts);
   const isStreaming = role === "assistant" && liveState.incompleteIds.has(key);
-  const thinkingText = normalizeThinkingText(parts);
+  const persistedThinkingText = normalizeThinkingText(parts);
   const persistedText =
     normalizeText(parts) ??
     asString(record?.textContent) ??
@@ -852,8 +891,13 @@ export function normalizeMessage(
     asString(record?.content) ??
     asString(info?.preview);
   const liveText = liveState.textById.get(key);
+  const liveThinkingText = liveState.thinkingById.get(key);
   const text =
     liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
+  const thinkingText =
+    liveThinkingText && liveThinkingText.length > (persistedThinkingText?.length ?? 0)
+      ? liveThinkingText
+      : persistedThinkingText;
   const status =
     asString(record?.status) ??
     asString(info?.status) ??
