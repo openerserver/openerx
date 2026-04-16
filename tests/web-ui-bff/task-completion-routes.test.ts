@@ -408,11 +408,6 @@ describe("task completion routes", () => {
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
-      {
-        url: "/api/tasks/task-adopt-1/sessions/task-session%3Atask-adopt-1%3Asession-a/activate",
-        method: "POST",
-        response: { ok: true, data: { ok: true } },
-      },
     ]);
 
     const { taskRoutes } = await loadTaskRoutes();
@@ -478,7 +473,7 @@ describe("task completion routes", () => {
           url === "/api/tasks/task-adopt-1/sessions/task-session%3Atask-adopt-1%3Asession-a/activate" &&
           options?.method === "POST",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   test("POST /:taskId/phases/:phaseId/candidates/:index/adopt returns 404 when the phase candidate group is missing", async () => {
@@ -657,11 +652,6 @@ describe("task completion routes", () => {
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
-      {
-        url: "/api/tasks/task-adopt-awaiting/sessions/task-session%3Atask-adopt-awaiting%3Asession-b/activate",
-        method: "POST",
-        response: { ok: true, data: { ok: true } },
-      },
     ]);
 
     const { taskRoutes } = await loadTaskRoutes();
@@ -708,6 +698,14 @@ describe("task completion routes", () => {
           options?.method === "POST",
       ),
     ).toBe(true);
+    expect(
+      cpFetchCalls.some(
+        ([url, options]) =>
+          url ===
+            "/api/tasks/task-adopt-awaiting/sessions/task-session%3Atask-adopt-awaiting%3Asession-b/activate" &&
+          options?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
   test("POST /:taskId/phases/:phaseId/candidates/:index/adopt rejects genuinely running candidate even when task is awaiting adoption", async () => {

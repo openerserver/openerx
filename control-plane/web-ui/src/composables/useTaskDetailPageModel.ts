@@ -36,6 +36,7 @@ export function useTaskDetailPageModel() {
     ancestors,
     baseConversationItems,
     clearPendingAssistantDraft,
+    currentSessionId,
     currentPhaseId,
     flatNodes,
     hasOlderHistory,
@@ -43,11 +44,13 @@ export function useTaskDetailPageModel() {
     hasStreamingAssistant,
     latestTaskRefreshRequest,
     loadOlderHistory,
+    locallySatisfiedMessageRefreshEventId,
     messageReconcileRequired,
     messageTrace,
     messagesError,
     messagesLoading,
     needsMessagePollingFallback,
+    phaseSlices,
     projectId,
     realtimeConnected,
     refreshMessages,
@@ -146,11 +149,14 @@ export function useTaskDetailPageModel() {
   });
 
   const compareFlow = useTaskDetailParallelFlow({
+    currentPhaseId,
+    currentSessionId,
     taskId,
     taskNodeId,
     task,
     taskSessionSummaries,
     flatNodes,
+    phaseSlices,
     selectedSessionId,
     selectedSessionNode,
     baseConversationItems,
@@ -281,6 +287,7 @@ export function useTaskDetailPageModel() {
       messageReconcileRequired,
       workflowReconcileRequired,
       forceMessagePolling: needsMessagePollingFallback,
+      skipMessageRefreshEventId: locallySatisfiedMessageRefreshEventId,
       realtimeConnected,
       refreshFlowSnapshot: compareFlow.refreshFlowSnapshot,
       refreshMessageSnapshot,
@@ -315,6 +322,7 @@ export function useTaskDetailPageModel() {
     compare: {
       canTerminateExecution,
       conversationItems: compareFlow.conversationItems,
+      phaseBlocks: compareFlow.phaseBlocks,
       handleAdoptCandidate: compareActions.handleAdoptCandidate,
     },
     conversation: {

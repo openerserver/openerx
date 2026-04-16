@@ -212,4 +212,79 @@ describe("buildTaskDetailParallelReadModel", () => {
     ]);
     expect(readModel.sessionTreeFallbackRunSessionKey).toBe("");
   });
+
+  it("prefers phase-scoped runs over session-summary and tree fallback inference", () => {
+    const readModel = buildTaskDetailParallelReadModel({
+      agentRuns: [],
+      baseConversationItems: [],
+      configuredCandidates: buildConfiguredCandidates(),
+      currentPhaseId: "phase-live",
+      flatNodes: [
+        buildNode({ id: "root-node", runtimeSessionId: "root-session" }),
+        buildNode({
+          id: "candidate-node-1",
+          parentId: "root-node",
+          runtimeSessionId: "tree-candidate-1",
+        }),
+        buildNode({
+          id: "candidate-node-2",
+          parentId: "root-node",
+          runtimeSessionId: "tree-candidate-2",
+        }),
+      ],
+      phaseParallelRuns: [
+        {
+          parallelRunId: "task-phase:phase-live",
+          phaseId: "phase-live",
+          startedAt: "2026-04-12T10:00:00.000Z",
+          parentSessionId: "root-session",
+          executionSessionId: "root-session",
+          winnerCandidateIndex: 1,
+          candidateSessions: [
+            {
+              label: "方案 A",
+              model: "gpt-5.4-mini",
+              status: "completed",
+              sessionId: "phase-candidate-1",
+            },
+            {
+              label: "方案 B",
+              model: "gpt-5.4",
+              status: "completed",
+              sessionId: "phase-candidate-2",
+            },
+          ],
+        },
+      ],
+      selectedSessionId: undefined,
+      selectedSessionNode: null,
+      task: {
+        id: "task-1",
+        sessionId: "root-session",
+        currentPhaseId: "phase-live",
+        status: "running",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+      } as any,
+      taskNodeId: "task-root-node",
+      taskSessionSummaries: [
+        buildSummary({ id: "summary-candidate-1", phaseId: "phase-old", candidateIndex: 0 }),
+        buildSummary({ id: "summary-candidate-2", phaseId: "phase-old", candidateIndex: 1 }),
+      ],
+    });
+
+    expect(readModel.resolvedParallelRuns.map((run) => run.parallelRunId)).toEqual([
+      "task-phase:phase-live",
+    ]);
+    expect(readModel.currentParallelRunId).toBe("task-phase:phase-live");
+    expect(readModel.currentParallelRunRecord).toMatchObject({
+      parallelRunId: "task-phase:phase-live",
+      winnerCandidateIndex: 1,
+    });
+    expect(readModel.visibleParallelCandidateSessionIds).toEqual([
+      "phase-candidate-1",
+      "phase-candidate-2",
+    ]);
+    expect(readModel.sessionTreeFallbackRunSessionKey).toBe("");
+  });
 });

@@ -1,43 +1,54 @@
 import { effectScope, nextTick, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TaskPhaseRecord } from "../../control-plane/web-ui/src/lib/api";
 import { useTaskMessageSnapshot } from "../../control-plane/web-ui/src/composables/useTaskMessageSnapshot";
 
 const apiMocks = vi.hoisted(() => ({
-  getCurrentTaskRound: vi.fn(),
-  getTaskRoundMessages: vi.fn(),
+  getTaskPhases: vi.fn(),
+  getTaskPhaseView: vi.fn(),
 }));
 
-vi.mock("../../control-plane/web-ui/src/lib/api", () => ({
-  getCurrentTaskRound: apiMocks.getCurrentTaskRound,
-  getTaskRoundMessages: apiMocks.getTaskRoundMessages,
-}));
-
-function createRound(overrides?: Partial<Record<string, unknown>>) {
+vi.mock("../../control-plane/web-ui/src/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../control-plane/web-ui/src/lib/api")>();
   return {
-    id: "task-session:task-1:session-1",
-    taskId: "task-1",
-    sessionId: "session-1",
-    kind: "continue",
-    source: "continue",
+    ...actual,
+    getTaskPhases: apiMocks.getTaskPhases,
+    getTaskPhaseView: apiMocks.getTaskPhaseView,
+  };
+});
+
+function createPhase(overrides?: Partial<TaskPhaseRecord>): TaskPhaseRecord {
+  return {
+    id: "phase-1",
+    phaseIndex: 1,
+    phaseKind: "single",
+    triggerType: "continue",
     status: "completed",
-    promptText: "Summarize progress",
+    parentPhaseId: null,
+    resumedFromPhaseId: null,
+    awaitingAdoptionSince: null,
+    anchorSessionId: null,
+    coordinationKey: null,
+    candidateCount: null,
+    winnerSessionId: null,
+    judgeSessionId: null,
+    startedAt: "2026-04-08T03:18:17.218Z",
+    finishedAt: "2026-04-08T03:18:24.437Z",
     createdAt: "2026-04-08T03:18:17.218Z",
     updatedAt: "2026-04-08T03:18:24.437Z",
+    sessionIds: [],
     ...overrides,
   };
 }
 
 function createAssistantMessage(args: {
   id: string;
-  roundId: string;
   sessionId: string;
   text: string;
   createdAt: string;
-  completedAt: string;
 }) {
   return {
     id: args.id,
-    roundId: args.roundId,
     sessionId: args.sessionId,
     role: "assistant",
     status: "completed",
@@ -51,8 +62,38 @@ function createAssistantMessage(args: {
       },
     ],
     createdAt: args.createdAt,
-    updatedAt: args.completedAt,
-    completedAt: args.completedAt,
+    updatedAt: args.createdAt,
+    completedAt: args.createdAt,
+  };
+}
+
+function createPhaseView(args: {
+  phase: TaskPhaseRecord;
+  currentSessionId: string;
+  messages: unknown[];
+}) {
+  return {
+    data: {
+      phase: args.phase,
+      sessions: [],
+      messageGroups: [
+        {
+          runtimeSessionId: args.currentSessionId,
+          phaseRole: "mainline",
+          phaseItemIndex: 0,
+          messages: args.messages,
+        },
+      ],
+      meta: {
+        currentSessionId: args.currentSessionId,
+        currentPhaseId: args.phase.id,
+        latestPhaseId: args.phase.id,
+        phaseCount: 1,
+        sessionCount: 1,
+        messageGroupCount: 1,
+        messageCount: args.messages.length,
+      },
+    },
   };
 }
 
@@ -60,12 +101,8 @@ describe("useTaskMessageSnapshot history continuity", () => {
   let scope: ReturnType<typeof effectScope> | null = null;
 
   beforeEach(() => {
-    apiMocks.getCurrentTaskRound.mockReset();
-    apiMocks.getTaskRoundMessages.mockReset();
-    apiMocks.getCurrentTaskRound.mockResolvedValue({
-      taskId: "task-1",
-      round: createRound(),
-    });
+    apiMocks.getTaskPhases.mockReset();
+    apiMocks.getTaskPhaseView.mockReset();
   });
 
   afterEach(() => {
@@ -73,73 +110,82 @@ describe("useTaskMessageSnapshot history continuity", () => {
     scope = null;
   });
 
-  it("keeps loaded lineage history when the active session advances to a child round", async () => {
-    apiMocks.getTaskRoundMessages
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: createRound({
-          id: "task-session:task-1:session-1",
+  it("keeps loaded phase history when currentPhaseId advances to a child phase", async () => {
+    const phaseRoot = createPhase({
+      id: "phase-root",
+      phaseIndex: 1,
+      sessionIds: ["task-session:task-1:session-root"],
+    });
+    const phase1 = createPhase({
+      id: "phase-1",
+      phaseIndex: 2,
+      parentPhaseId: "phase-root",
+      sessionIds: ["task-session:task-1:session-1"],
+    });
+    const phase2 = createPhase({
+      id: "phase-2",
+      phaseIndex: 3,
+      parentPhaseId: "phase-1",
+      sessionIds: ["task-session:task-1:session-2"],
+    });
+
+    const phase1View = createPhaseView({
+      phase: phase1,
+      currentSessionId: "session-1",
+      messages: [
+        createAssistantMessage({
+          id: "assistant-current",
           sessionId: "session-1",
-          parentRoundId: "task-session:task-1:session-root",
+          text: "current reply",
+          createdAt: "2026-04-08T03:18:19.218Z",
         }),
-        messages: [
-          createAssistantMessage({
-            id: "assistant-current",
-            roundId: "task-session:task-1:session-1",
-            sessionId: "session-1",
-            text: "current reply",
-            createdAt: "2026-04-08T03:18:19.218Z",
-            completedAt: "2026-04-08T03:18:24.437Z",
-          }),
-        ],
-        snapshotVersion: 2,
-        persistedThroughRevision: 2,
-      })
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: createRound({
-          id: "task-session:task-1:session-root",
+      ],
+    });
+    const phaseRootView = createPhaseView({
+      phase: phaseRoot,
+      currentSessionId: "session-root",
+      messages: [
+        createAssistantMessage({
+          id: "assistant-root",
           sessionId: "session-root",
-          parentRoundId: undefined,
+          text: "root reply",
+          createdAt: "2026-04-08T03:18:10.218Z",
         }),
-        messages: [
-          createAssistantMessage({
-            id: "assistant-root",
-            roundId: "task-session:task-1:session-root",
-            sessionId: "session-root",
-            text: "root reply",
-            createdAt: "2026-04-08T03:18:10.218Z",
-            completedAt: "2026-04-08T03:18:12.437Z",
-          }),
-        ],
-        snapshotVersion: 1,
-        persistedThroughRevision: 1,
-      })
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: createRound({
-          id: "task-session:task-1:session-2",
+      ],
+    });
+    const phase2View = createPhaseView({
+      phase: phase2,
+      currentSessionId: "session-2",
+      messages: [
+        createAssistantMessage({
+          id: "assistant-child",
           sessionId: "session-2",
-          parentRoundId: "task-session:task-1:session-1",
+          text: "child reply",
+          createdAt: "2026-04-08T03:18:30.218Z",
         }),
-        messages: [
-          createAssistantMessage({
-            id: "assistant-child",
-            roundId: "task-session:task-1:session-2",
-            sessionId: "session-2",
-            text: "child reply",
-            createdAt: "2026-04-08T03:18:30.218Z",
-            completedAt: "2026-04-08T03:18:36.437Z",
-          }),
-        ],
-        snapshotVersion: 3,
-        persistedThroughRevision: 3,
-      });
+      ],
+    });
+
+    apiMocks.getTaskPhases
+      .mockResolvedValueOnce({ data: [phaseRoot, phase1] })
+      .mockResolvedValueOnce({ data: [phaseRoot, phase1] })
+      .mockResolvedValue({ data: [phaseRoot, phase1, phase2] });
+    apiMocks.getTaskPhaseView
+      .mockResolvedValueOnce(phase1View)
+      .mockResolvedValueOnce(phaseRootView)
+      .mockResolvedValue(phase2View);
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
+    const currentSessionId = ref<string | null>("session-1");
+    const currentPhaseId = ref<string | null>("phase-1");
     scope = effectScope();
-    const snapshot = scope.run(() => useTaskMessageSnapshot(taskId, sessionId));
+    const snapshot = scope.run(() =>
+      useTaskMessageSnapshot(taskId, sessionId, {
+        currentSessionId,
+        currentPhaseId,
+      }),
+    );
     if (!snapshot) {
       throw new Error("expected message snapshot");
     }
@@ -155,13 +201,16 @@ describe("useTaskMessageSnapshot history continuity", () => {
     await Promise.resolve();
     await nextTick();
 
-    expect(apiMocks.getTaskRoundMessages).toHaveBeenNthCalledWith(2, "task-1", "task-session:task-1:session-root");
+    expect(apiMocks.getTaskPhaseView).toHaveBeenNthCalledWith(2, "task-1", "phase-root");
     expect(snapshot.sourceMessages.value.map((item: any) => item.text)).toEqual([
       "root reply",
       "current reply",
     ]);
 
     sessionId.value = "session-2";
+    currentSessionId.value = "session-2";
+    currentPhaseId.value = "phase-2";
+    await snapshot.refresh();
     await Promise.resolve();
     await nextTick();
     await Promise.resolve();

@@ -1,11 +1,48 @@
 # OpenerX
 
-OpenerX is an AI agent control plane repository. It combines governance-oriented control plane APIs, a frontend BFF, a Vue-based Web UI, and runtime integration for agent execution, approvals, audit, budgeting, and task-domain trace views.
+OpenerX is an AI Dev/Ops control plane for enterprise engineering organizations that need to run AI agents inside governed delivery workflows. It is not a personal AI IDE or a standalone orchestration engine. It is the operating layer that connects tasks, projects, members, agents, approvals, budgets, audits, and runtime execution into one controllable surface.
+
+## Who It's For
+
+This project is primarily for:
+
+- AI platform and DevOps teams that run shared agent infrastructure
+- Engineering managers and technical leads who need controlled, cross-team AI operations
+- Security, compliance, and governance owners who require approval paths, audit trails, and policy enforcement
+- Cost and operations stakeholders who need budget guardrails and execution visibility
+- Internal product and delivery teams that need to integrate external runtimes into their own task and workflow systems
+
+## What Problem It Solves
+
+Most organizations do not struggle because AI tools cannot generate enough output. They struggle because once AI starts touching real engineering work, the organization needs ownership, approvals, cost controls, auditability, and runtime visibility. OpenerX is designed for that stage: it standardizes how agent-driven work is launched, observed, approved, and governed across projects and environments.
+
+## 中文对外介绍
+
+OpenerX 是一个面向企业研发组织的 AI Dev/Ops 控制平面，用来把 AI Agent 纳入可治理、可审计、可追责的研发流程。它不是个人 AI IDE，也不是单纯的 Agent 编排器，而是连接任务、项目、成员、Agent、审批、预算、审计与运行时执行的统一控制面。
+
+它主要适合以下类型的用户和团队：
+
+- 平台工程与 DevOps 团队，需要统一管理组织内的 Agent 基础设施和运行入口
+- 研发管理者与技术负责人，需要让多团队协作中的 AI 使用可控、可见、可追踪
+- 安全、合规与治理负责人，需要审批、审计、策略和预算约束能力
+- 内部产品和交付团队，需要把外部 runtime 能力接入企业自己的任务和流程体系
+
+OpenerX 重点解决的不是“AI 能不能生成内容”这类个人效率问题，而是“企业如何把 AI 纳入正式研发流程”这类组织问题，例如谁可以发起高风险操作、哪些动作需要审批、一次任务里 Agent 实际做了什么、成本和责任如何追溯。
+
+如果用一句话概括，OpenerX 想提供的是一个让企业能够放心使用 AI Agent 的控制面：前台围绕 Project、Task、Member 和 Agent 组织协作，后台通过控制平面治理与运行时执行分离的架构，把执行、审批、预算、审计和追踪统一起来。
 
 The repository currently supports two shapes at the same time:
 
 - The formal split architecture: Web UI -> BFF -> Control Plane Service -> PostgreSQL, plus an external runtime.
 - A unified local development app in `control-plane/app` that embeds the Control Plane and BFF behind one HTTP entrypoint on port `4098` for faster day-to-day development and smoke checks.
+
+## What It Helps Teams Do
+
+- Govern AI agent usage across projects, organizations, environments, users, and policies
+- Observe task execution, runtime sessions, and task-domain traces in one place
+- Add approval, audit, cost, and budget controls around agent operations
+- Connect browser workflows to OpenCode-compatible runtimes through a managed control surface
+- Give developers and operators a shared system for local development, smoke checks, and regression testing
 
 ## Key Capabilities
 

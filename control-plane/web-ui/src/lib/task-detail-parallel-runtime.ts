@@ -12,6 +12,8 @@ type ConfiguredParallelCandidate = {
 };
 
 type ParallelSelectionContext = {
+  currentPhaseId?: string | null;
+  currentSessionId?: string | null;
   selectedSessionId?: string;
   selectedSessionNode?: TreeSessionNodeRecord | null;
   flatNodes: TreeSessionNodeRecord[];
@@ -588,30 +590,46 @@ export function resolvePreferredConversationSessionId(
     return undefined;
   }
 
-  const currentSessionId = resolveScopedSessionId(args);
+  const scopedSessionId = resolveScopedSessionId(args);
   const currentRun = args.currentParallelRun;
-  const taskSessionId =
-    typeof args.task?.sessionId === "string" && args.task.sessionId.length > 0
-      ? args.task.sessionId
-      : undefined;
-  const taskSessionIsCurrentCandidate = Boolean(
-    taskSessionId &&
-      currentRun?.candidateSessions.some((candidate) => candidate.sessionId === taskSessionId),
-  );
-
-  if (taskSessionIsCurrentCandidate && hasSessionNode(args.flatNodes, taskSessionId)) {
-    return taskSessionId;
-  }
-
   const mainlineSessionId =
     currentRun?.executionSessionId ?? currentRun?.parentSessionId ?? args.task?.sessionId;
+  const explicitCurrentSessionId =
+    typeof args.currentSessionId === "string" && args.currentSessionId.length > 0
+      ? args.currentSessionId
+      : undefined;
+  const explicitCurrentPhaseId =
+    typeof args.currentPhaseId === "string" && args.currentPhaseId.length > 0
+      ? args.currentPhaseId
+      : undefined;
 
   if (
-    currentSessionId &&
-    currentSessionId !== mainlineSessionId &&
+    explicitCurrentPhaseId &&
+    explicitCurrentSessionId &&
+    scopedSessionId === explicitCurrentSessionId &&
+    currentRun &&
+    runReferencesSession(currentRun, explicitCurrentSessionId)
+  ) {
+    return explicitCurrentSessionId;
+  }
+
+  if (
+    explicitCurrentPhaseId &&
+    explicitCurrentSessionId &&
+    explicitCurrentSessionId !== mainlineSessionId &&
+    currentRun &&
+    runReferencesSession(currentRun, explicitCurrentSessionId) &&
+    (!scopedSessionId || !runReferencesSession(currentRun, scopedSessionId))
+  ) {
+    return explicitCurrentSessionId;
+  }
+
+  if (
+    scopedSessionId &&
+    scopedSessionId !== mainlineSessionId &&
     (!currentRun ||
       (!isSessionTreeFallbackParallelRun(currentRun) &&
-        !runReferencesSession(currentRun, currentSessionId)))
+        !runReferencesSession(currentRun, scopedSessionId)))
   ) {
     return undefined;
   }
@@ -630,21 +648,57 @@ export function resolveNextSelectedSessionId(
     isCurrentParallelRunPendingAdoption: boolean;
   },
 ) {
+  const selectedSessionId =
+    typeof args.selectedSessionId === "string" && args.selectedSessionId.length > 0
+      ? args.selectedSessionId
+      : undefined;
+  const currentSessionId =
+    typeof args.currentSessionId === "string" && args.currentSessionId.length > 0
+      ? args.currentSessionId
+      : undefined;
+  const currentPhaseId =
+    typeof args.currentPhaseId === "string" && args.currentPhaseId.length > 0
+      ? args.currentPhaseId
+      : undefined;
+  const selectedNodeSessionId = args.selectedSessionNode?.runtimeSessionId;
+  const currentSessionLineage = currentSessionId
+    ? buildSessionLineageRuntimeSessionIds(args.flatNodes, currentSessionId)
+    : new Set<string>();
+  const anchoredSessionId = selectedSessionId ?? selectedNodeSessionId;
+
+  if (
+    currentPhaseId &&
+    currentSessionId &&
+    anchoredSessionId &&
+    anchoredSessionId !== currentSessionId &&
+    currentSessionLineage.has(anchoredSessionId)
+  ) {
+    return currentSessionId;
+  }
+
   const preferredSessionId = resolvePreferredConversationSessionId(args);
   if (preferredSessionId) {
     return preferredSessionId;
   }
 
-  const selectedSessionId =
-    typeof args.selectedSessionId === "string" && args.selectedSessionId.length > 0
-      ? args.selectedSessionId
-      : undefined;
   if (
     selectedSessionId &&
     !hasSessionNode(args.flatNodes, selectedSessionId) &&
     args.task?.status === "running"
   ) {
     return selectedSessionId;
+  }
+  if (
+    !selectedSessionId &&
+    currentPhaseId &&
+    currentSessionId &&
+    currentSessionId !== selectedNodeSessionId &&
+    hasSessionNode(args.flatNodes, currentSessionId) &&
+    args.currentParallelRun &&
+    runReferencesSession(args.currentParallelRun, currentSessionId) &&
+    (!selectedNodeSessionId || !runReferencesSession(args.currentParallelRun, selectedNodeSessionId))
+  ) {
+    return currentSessionId;
   }
 
   if (!selectedSessionId && !args.currentParallelRun && !args.adoptedCandidateSessionId) {

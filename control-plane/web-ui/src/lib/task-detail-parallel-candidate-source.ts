@@ -3,6 +3,7 @@ import {
   getTaskExecutionTraceView,
 } from "./api";
 import {
+  type TaskConversationMessageItem,
   normalizeSessionConversationItems,
 } from "./message-normalize";
 import {
@@ -17,6 +18,12 @@ import { condenseParallelCandidateToolItems } from "./task-detail-parallel-tool-
 import { normalizeTraceConversationItems } from "./task-trace-conversation";
 
 export type { ParallelCandidateSessionState } from "./task-detail-parallel-source-policy";
+
+function hasParallelCandidateTraceState(
+  traceState?: ParallelCandidateSessionState["traceState"] | null,
+) {
+  return Boolean(traceState?.state || traceState?.note);
+}
 
 async function loadParallelCandidateSessionMessageFallback(
   currentTaskId: string,
@@ -47,12 +54,25 @@ export async function loadParallelCandidateSessionState(args: {
   sessionId: string;
   silent?: boolean;
   cachedState?: ParallelCandidateSessionState;
+  phaseBaseline?: ParallelCandidateSessionState;
   onProgress?: (state: ParallelCandidateSessionState) => void;
 }) {
-  const sessionMessageFallbackPromise = loadParallelCandidateSessionMessageFallback(
-    args.taskId,
-    args.sessionId,
-  );
+  const phaseBaseline = args.phaseBaseline;
+  const canDisplayPhaseBaseline =
+    Boolean(phaseBaseline) &&
+    (hasDisplayableParallelCandidateItems(phaseBaseline?.items ?? []) ||
+      phaseBaseline?.hasSettledReply === true);
+  if (canDisplayPhaseBaseline && phaseBaseline?.skipTraceLoad === true) {
+    args.onProgress?.(phaseBaseline);
+    return phaseBaseline;
+  }
+
+  const sessionMessageFallbackPromise = canDisplayPhaseBaseline
+    ? Promise.resolve({
+        items: [] as TaskConversationMessageItem[],
+        hasSettledReply: false,
+      })
+    : loadParallelCandidateSessionMessageFallback(args.taskId, args.sessionId);
   const tracePromise = getTaskExecutionTraceView(args.taskId, args.sessionId, {
     includeLineage: false,
   })
@@ -63,7 +83,15 @@ export async function loadParallelCandidateSessionState(args: {
   const canDisplaySessionFallback =
     hasDisplayableParallelCandidateItems(sessionMessageFallback.items) ||
     sessionMessageFallback.hasSettledReply;
-  if (canDisplaySessionFallback) {
+  if (canDisplayPhaseBaseline && phaseBaseline) {
+    args.onProgress?.({
+      items: phaseBaseline.items,
+      hasSettledReply: phaseBaseline.hasSettledReply,
+      traceState: hasParallelCandidateTraceState(args.cachedState?.traceState)
+        ? (args.cachedState?.traceState ?? {})
+        : phaseBaseline.traceState,
+    });
+  } else if (canDisplaySessionFallback) {
     args.onProgress?.({
       items: sessionMessageFallback.items,
       hasSettledReply: sessionMessageFallback.hasSettledReply,
@@ -74,6 +102,12 @@ export async function loadParallelCandidateSessionState(args: {
   const traceResult = await tracePromise;
   return resolveParallelCandidateSessionStateFromSources({
     cachedState: args.cachedState,
+    phaseBaseline: canDisplayPhaseBaseline
+      ? {
+          items: phaseBaseline?.items ?? [],
+          hasSettledReply: phaseBaseline?.hasSettledReply === true,
+        }
+      : undefined,
     sessionFallback: sessionMessageFallback,
     silent: args.silent,
     traceLoad: traceResult.ok

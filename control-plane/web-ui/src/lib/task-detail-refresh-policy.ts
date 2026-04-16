@@ -14,8 +14,6 @@ export type TaskDetailRefreshTargets = {
 
 const WORKFLOW_REFRESH_REASONS = new Set<TaskMessagePatchEvent["kind"]>([
   "workflow-reconcile-required",
-  "session-created",
-  "session-updated",
   "task-updated",
   "task-completed",
   "task-continued",
@@ -29,8 +27,6 @@ const WORKFLOW_REFRESH_REASONS = new Set<TaskMessagePatchEvent["kind"]>([
 
 const FLOW_REFRESH_REASONS = new Set<TaskMessagePatchEvent["kind"]>([
   "flow-reconcile-required",
-  "session-created",
-  "session-updated",
   "phase-created",
   "phase-updated",
   "phase-awaiting-adoption",

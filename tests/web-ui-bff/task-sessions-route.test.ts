@@ -1524,6 +1524,285 @@ describe("task sessions route", () => {
     });
   });
 
+  test("keeps pending parallel defaults on the mainline round and suppresses synthetic candidate prompts", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      const rootRoundMessages = {
+        ok: true,
+        data: {
+          data: [
+            {
+              id: "task-session:task-1:session-root:user-prompt",
+              role: "user",
+              textContent: "解释一下当前方案",
+              sessionId: "task-session:task-1:session-root",
+              createdAt: "2026-03-20T10:00:00.000Z",
+              parts: [
+                {
+                  id: "root-user-part",
+                  partType: "text",
+                  textContent: "解释一下当前方案",
+                  jsonPayload: {},
+                },
+              ],
+            },
+          ],
+          meta: {
+            readSource: "task-session-first",
+            sessionId: "task-session:task-1:session-root",
+            snapshotVersion: 7,
+            messageCount: 1,
+            cacheState: "complete",
+            complete: true,
+            itemCount: 1,
+          },
+        },
+      };
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                parentRuntimeSessionId: null,
+                sourceType: "root",
+                sessionKind: "manual_branch",
+                executionStatus: "running",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-20T10:00:00.000Z",
+                updatedAt: "2026-03-20T10:00:04.000Z",
+              },
+              {
+                id: "task-session:task-1:session-candidate-a",
+                runtimeSessionId: "session-candidate-a",
+                parentRuntimeSessionId: null,
+                sourceType: "parallel",
+                sessionKind: "candidate",
+                phaseId: "phase-compare-1",
+                phaseRole: "candidate",
+                candidateIndex: 0,
+                executionStatus: "completed",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-20T10:00:05.000Z",
+                updatedAt: "2026-03-20T10:00:06.000Z",
+              },
+              {
+                id: "task-session:task-1:session-candidate-b",
+                runtimeSessionId: "session-candidate-b",
+                parentRuntimeSessionId: null,
+                sourceType: "parallel",
+                sessionKind: "candidate",
+                phaseId: "phase-compare-1",
+                phaseRole: "candidate",
+                candidateIndex: 1,
+                executionStatus: "completed",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-20T10:00:05.100Z",
+                updatedAt: "2026-03-20T10:00:06.100Z",
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:session-candidate-a",
+            },
+          },
+        };
+      }
+
+      if (
+        url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-root/messages" ||
+        url ===
+          "/api/tasks/task-1/query/normalized-conversation?sessionId=task-session%3Atask-1%3Asession-root&includeLineage=false"
+      ) {
+        return rootRoundMessages;
+      }
+
+      if (url === "/api/tasks/task-1/messages") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root:user-prompt",
+                role: "user",
+                textContent: "解释一下当前方案",
+                sessionId: "task-session:task-1:session-root",
+                createdAt: "2026-03-20T10:00:00.000Z",
+                parts: [
+                  {
+                    id: "root-user-part",
+                    partType: "text",
+                    textContent: "解释一下当前方案",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+              {
+                role: "user",
+                textContent: "解释一下当前方案",
+                sessionId: "task-session:task-1:session-root",
+                createdAt: "2026-03-20T10:00:05.000Z",
+                rawPayload: {
+                  id: "task-session:task-1:session-candidate-a:user-prompt",
+                  info: {
+                    id: "session-candidate-a:user-prompt",
+                    role: "user",
+                  },
+                },
+                parts: [
+                  {
+                    id: "candidate-a-user-part",
+                    partType: "text",
+                    textContent: "解释一下当前方案",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+              {
+                role: "user",
+                textContent: "解释一下当前方案",
+                sessionId: "task-session:task-1:session-root",
+                createdAt: "2026-03-20T10:00:05.100Z",
+                rawPayload: {
+                  id: "task-session:task-1:session-candidate-b:user-prompt",
+                  info: {
+                    id: "session-candidate-b:user-prompt",
+                    role: "user",
+                  },
+                },
+                parts: [
+                  {
+                    id: "candidate-b-user-part",
+                    partType: "text",
+                    textContent: "解释一下当前方案",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+              {
+                id: "task-session:task-1:session-candidate-a:assistant:1",
+                role: "assistant",
+                textContent: "候选 A 回复",
+                sessionId: "task-session:task-1:session-candidate-a",
+                createdAt: "2026-03-20T10:00:05.200Z",
+                parts: [
+                  {
+                    id: "candidate-a-assistant-part",
+                    partType: "text",
+                    textContent: "候选 A 回复",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+              {
+                id: "task-session:task-1:session-candidate-b:assistant:1",
+                role: "assistant",
+                textContent: "候选 B 回复",
+                sessionId: "task-session:task-1:session-candidate-b",
+                createdAt: "2026-03-20T10:00:05.300Z",
+                parts: [
+                  {
+                    id: "candidate-b-assistant-part",
+                    partType: "text",
+                    textContent: "候选 B 回复",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+            ],
+            meta: {
+              readSource: "task-session-first",
+              sessionId: "task-session:task-1:session-candidate-a",
+              includeLineage: true,
+              snapshotVersion: 11,
+              messageCount: 5,
+              cachedSessionCount: 3,
+              cacheState: "complete",
+              complete: true,
+              itemCount: 5,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const messagesResponse = await taskRoutes.request("http://localhost/task-1/messages", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(messagesResponse.status).toBe(200);
+    await expect(messagesResponse.json()).resolves.toEqual({
+      data: [
+        expect.objectContaining({
+          id: "task-session:task-1:session-root:user-prompt",
+          role: "user",
+          text: "解释一下当前方案",
+        }),
+      ],
+      meta: expect.objectContaining({
+        readSource: "task-session-first",
+        includeLineage: true,
+        sessionId: "session-root",
+        messageCount: 1,
+        cacheState: "complete",
+        complete: true,
+        itemCount: 1,
+        cachedSessionCount: 3,
+      }),
+    });
+
+    const sessionsResponse = await taskRoutes.request("http://localhost/task-1/sessions", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(sessionsResponse.status).toBe(200);
+    await expect(sessionsResponse.json()).resolves.toEqual({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          id: "session-root",
+          taskSessionId: "task-session:task-1:session-root",
+          isActive: true,
+        }),
+        expect.objectContaining({
+          id: "session-candidate-a",
+          taskSessionId: "task-session:task-1:session-candidate-a",
+          isActive: false,
+        }),
+      ]),
+      meta: expect.objectContaining({
+        currentSessionId: "session-root",
+      }),
+    });
+
+    const currentRoundResponse = await taskRoutes.request("http://localhost/task-1/current-round", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(currentRoundResponse.status).toBe(200);
+    await expect(currentRoundResponse.json()).resolves.toEqual({
+      taskId: "task-1",
+      round: expect.objectContaining({
+        id: "task-session:task-1:session-root",
+        kind: "continue",
+        partial: true,
+      }),
+    });
+  });
+
   test("reads task-level conversation messages from the task-first cache", async () => {
     setCpFetchImplementation(async (url: string) => {
       if (url === "/api/tasks/task-1/messages") {
@@ -3072,6 +3351,80 @@ describe("task sessions route", () => {
       method: "POST",
       authorization: "Bearer test",
     });
+  });
+
+  test("activates task session by public task-session id via lineage record", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                isActive: true,
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-1:session-leaf",
+                runtimeSessionId: "session-leaf",
+                branchName: "branch-leaf",
+                isActive: false,
+                archivedAt: null,
+              },
+            ],
+          },
+        };
+      }
+
+      if (
+        url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-leaf/activate" &&
+        options?.method === "POST"
+      ) {
+        return { ok: true, data: { ok: true } };
+      }
+
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "finished task",
+            status: "completed",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/sessions/task-session:task-1:session-leaf/activate",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      sessionId: "task-session:task-1:session-leaf",
+    });
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-leaf/activate",
+      {
+        method: "POST",
+        authorization: "Bearer test",
+      },
+    );
   });
 
   test("archives task session by runtime session id via lineage record", async () => {

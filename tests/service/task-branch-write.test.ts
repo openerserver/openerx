@@ -268,34 +268,7 @@ describe("task branch write", () => {
     const result = await api.activateTaskBranch("task-1", "branch-node-1");
 
     expect(result.ok).toBe(true);
-    expect(syncTaskBranchCompatTreeNode).toHaveBeenCalledTimes(1);
-
-    const firstCallArg = syncTaskBranchCompatTreeNode.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(firstCallArg).toEqual({
-      taskId: "task-1",
-      runtimeSessionId: "fork-session-1",
-      parentRuntimeSessionId: "root-session-1",
-      forkedFromMessageId: "msg-activate-1",
-      branchName: "feature/fork-activate",
-      sourceType: "fork",
-      isActive: true,
-      archivedAt: null,
-    });
-    expect(Object.keys(firstCallArg).sort()).toEqual([
-      "archivedAt",
-      "branchName",
-      "forkedFromMessageId",
-      "isActive",
-      "parentRuntimeSessionId",
-      "runtimeSessionId",
-      "sourceType",
-      "taskId",
-    ]);
-    expect(firstCallArg).not.toHaveProperty("status");
-    expect(firstCallArg).not.toHaveProperty("result");
-    expect(firstCallArg).not.toHaveProperty("strategy");
-    expect(firstCallArg).not.toHaveProperty("executionMode");
-    expect(firstCallArg).not.toHaveProperty("changesSummary");
+    expect(syncTaskBranchCompatTreeNode).not.toHaveBeenCalled();
 
     expect(upsertConversationSessionRecord).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -312,7 +285,7 @@ describe("task branch write", () => {
       expect.objectContaining({ id: "task-1" }),
       { status: "running", sessionId: "fork-session-1" },
     );
-    expect(upsertTaskTreeNode).toHaveBeenCalledTimes(1);
+    expect(upsertTaskTreeNode).not.toHaveBeenCalled();
     expect(syncTaskAggregateFromSnapshot).toHaveBeenCalledTimes(1);
   });
 

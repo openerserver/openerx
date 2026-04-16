@@ -32,8 +32,9 @@
 1. [task-session-first-execution-plan.md](task-session-first-execution-plan.md)
 2. [task-session-five-table-examples.md](task-session-five-table-examples.md)
 3. [task-phase-first-schema-api-draft.md](task-phase-first-schema-api-draft.md)
-4. [task-tree-data-model-replan.v2-final.md](task-tree-data-model-replan.v2-final.md)
-5. [project-tree-storage-design.md](project-tree-storage-design.md)
+4. [task-phase-first-task-detail-design.md](task-phase-first-task-detail-design.md)
+5. [task-tree-data-model-replan.v2-final.md](task-tree-data-model-replan.v2-final.md)
+6. [project-tree-storage-design.md](project-tree-storage-design.md)
 
 ## 4. Cleanup 与历史兼容材料
 

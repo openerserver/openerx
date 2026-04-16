@@ -84,10 +84,12 @@ export type TaskMessagePatchEvent =
   | (TaskMessagePatchEventBase & {
       kind: "user-message";
       messageId?: string;
+      rawMessage?: unknown;
     })
   | (TaskMessagePatchEventBase & {
       kind: "tool-message";
       messageId?: string;
+      rawMessage?: unknown;
     })
   | (TaskMessagePatchEventBase & {
       kind: "session-created" | "session-updated";
@@ -337,6 +339,10 @@ function extractPatchEventInlineThinkingText(event: RealtimeEvent) {
   return thinkingParts.join("\n").trim() || undefined;
 }
 
+function extractPatchEventRawMessage(event: RealtimeEvent) {
+  return asRecord(event.data.message) ?? undefined;
+}
+
 function eventKindOf(event: RealtimeEvent) {
   return getRealtimeEventKind(event);
 }
@@ -373,6 +379,7 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
         ...base,
         kind: "user-message",
         messageId,
+        rawMessage: extractPatchEventRawMessage(event),
       };
     }
 
@@ -381,6 +388,7 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
         ...base,
         kind: "tool-message",
         messageId,
+        rawMessage: extractPatchEventRawMessage(event),
       };
     }
 

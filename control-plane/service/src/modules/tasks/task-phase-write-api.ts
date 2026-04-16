@@ -10,10 +10,13 @@ import {
   type TaskSessionMode,
   type TaskSessionNodeStatus,
   taskExecutionPhases,
+  taskMessages,
+  taskSessionRuns,
   taskSessions,
   taskSnapshots,
 } from "../../db/schema";
 import type { TaskTreeRecord } from "../project-tree/task-view";
+import { buildPublicTaskExecutionPhaseRecord } from "./task-phase-public-record";
 
 function asNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -106,6 +109,7 @@ function buildAdoptedTaskSessionUpdate(args: {
   session: typeof taskSessions.$inferSelect;
   winnerSessionId: string;
   updatedAt: string;
+  winnerFinishedAt?: string | null;
 }) {
   const statusDerivedExecution = mapTaskSessionStatusToExecutionStatus(args.session.status);
   const currentExecutionStatus =
@@ -120,13 +124,78 @@ function buildAdoptedTaskSessionUpdate(args: {
     args.session.id === args.winnerSessionId
       ? "completed"
       : (mapExecutionStatusToTaskSessionStatus(nextExecutionStatus) ?? args.session.status ?? null);
+  const nextFinishedAt =
+    args.session.id === args.winnerSessionId
+      ? (args.session.finishedAt ?? args.winnerFinishedAt ?? args.updatedAt)
+      : args.session.finishedAt;
 
   return {
     winnerSessionId: args.winnerSessionId,
     status: nextStatus ?? args.session.status,
     executionStatus: nextExecutionStatus ?? args.session.executionStatus,
+    finishedAt: nextFinishedAt,
     updatedAt: args.updatedAt,
   } satisfies Partial<typeof taskSessions.$inferInsert>;
+}
+
+async function reconcileAdoptedWinnerLatestRun(args: {
+  taskId: string;
+  winnerSession: typeof taskSessions.$inferSelect;
+  now: string;
+}) {
+  const latestRunId = asNonEmptyString(args.winnerSession.latestRunId);
+  const headMessageId = asNonEmptyString(args.winnerSession.headMessageId);
+  if (!latestRunId || !headMessageId) {
+    return args.winnerSession.finishedAt ?? null;
+  }
+
+  const [latestRun, headMessage] = await Promise.all([
+    db.query.taskSessionRuns.findFirst({
+      where: and(
+        eq(taskSessionRuns.taskId, args.taskId),
+        eq(taskSessionRuns.sessionId, args.winnerSession.id),
+        eq(taskSessionRuns.id, latestRunId),
+      ),
+    }),
+    db.query.taskMessages.findFirst({
+      where: and(
+        eq(taskMessages.taskId, args.taskId),
+        eq(taskMessages.sessionId, args.winnerSession.id),
+        eq(taskMessages.id, headMessageId),
+      ),
+    }),
+  ]);
+
+  const completedAt = headMessage?.completedAt ?? latestRun?.finishedAt ?? args.winnerSession.finishedAt ?? args.now;
+  if (!latestRun || !headMessage) {
+    return completedAt;
+  }
+
+  if (
+    headMessage.role !== "assistant" ||
+    headMessage.status !== "completed" ||
+    headMessage.createdByRunId !== latestRun.id
+  ) {
+    return completedAt;
+  }
+
+  if (latestRun.status !== "completed" || !latestRun.finishedAt) {
+    await db
+      .update(taskSessionRuns)
+      .set({
+        status: "completed",
+        finishedAt: completedAt,
+      })
+      .where(
+        and(
+          eq(taskSessionRuns.taskId, args.taskId),
+          eq(taskSessionRuns.sessionId, args.winnerSession.id),
+          eq(taskSessionRuns.id, latestRun.id),
+        ),
+      );
+  }
+
+  return completedAt;
 }
 
 type UpsertTaskExecutionPhaseArgs = {
@@ -233,43 +302,6 @@ async function upsertTaskSnapshotPhaseState(args: {
     target: taskSnapshots.taskId,
     set: snapshotValues,
   });
-}
-
-function buildPublicTaskExecutionPhaseRecord(args: {
-  phase: typeof taskExecutionPhases.$inferSelect;
-  sessionIds: string[];
-}) {
-  return {
-    id: args.phase.id,
-    taskId: args.phase.taskId,
-    projectId: args.phase.projectId,
-    parentPhaseId: args.phase.parentPhaseId,
-    phaseIndex: args.phase.phaseIndex,
-    phaseKind: args.phase.phaseKind,
-    triggerType: args.phase.triggerType,
-    status: args.phase.status,
-    resumedFromPhaseId: args.phase.resumedFromPhaseId,
-    awaitingAdoptionSince: args.phase.awaitingAdoptionSince,
-    cancelRequestedAt: args.phase.cancelRequestedAt,
-    cancelledAt: args.phase.cancelledAt,
-    terminalReason: args.phase.terminalReason,
-    lastHeartbeatAt: args.phase.lastHeartbeatAt,
-    anchorSessionId: args.phase.anchorSessionId,
-    anchorMessageId: args.phase.anchorMessageId,
-    coordinationKey: null,
-    candidateCount: args.phase.candidateCount,
-    winnerSessionId: args.phase.winnerSessionId,
-    judgeSessionId: args.phase.judgeSessionId,
-    requestedModel: args.phase.requestedModel,
-    effectiveModel: args.phase.effectiveModel,
-    resultSummary: args.phase.resultSummary,
-    errorText: args.phase.errorText,
-    startedAt: args.phase.startedAt,
-    finishedAt: args.phase.finishedAt,
-    createdAt: args.phase.createdAt,
-    updatedAt: args.phase.updatedAt,
-    sessionIds: args.sessionIds,
-  };
 }
 
 export function createTaskPhaseWriteApi(deps: {
@@ -454,6 +486,11 @@ export function createTaskPhaseWriteApi(deps: {
     const sessions = await loadTaskPhaseSessions(args.taskId, args.phaseId);
 
     const now = new Date().toISOString();
+    const winnerFinishedAt = await reconcileAdoptedWinnerLatestRun({
+      taskId: args.taskId,
+      winnerSession,
+      now,
+    });
     await db
       .update(taskExecutionPhases)
       .set({
@@ -473,6 +510,7 @@ export function createTaskPhaseWriteApi(deps: {
             session,
             winnerSessionId: winnerSession.id,
             updatedAt: now,
+            winnerFinishedAt,
           }),
         )
         .where(and(eq(taskSessions.taskId, args.taskId), eq(taskSessions.id, session.id)));

@@ -1,4 +1,5 @@
 import { fetchTaskSessionCachedCompatMessages } from "./task-session-read-compat";
+import { resolvePendingParallelCompatMainlineRecord } from "./task-session-parallel-compat";
 import {
   fetchTaskSessionLineageRecords,
   toCanonicalTaskSessionId,
@@ -178,6 +179,11 @@ function compareNullableIso(left?: string | null, right?: string | null) {
 }
 
 function pickCurrentRoundRecord(records: TaskSessionLineageRecord[]) {
+  const pendingParallelMainlineRecord = resolvePendingParallelCompatMainlineRecord(records);
+  if (pendingParallelMainlineRecord) {
+    return pendingParallelMainlineRecord;
+  }
+
   const activeRecords = records.filter((record) => record.isActive);
   const preferredActive = activeRecords
     .filter((record) => resolveRoundKind(record) === "continue")

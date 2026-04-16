@@ -59,4 +59,106 @@ describe("task-detail-parallel-conversation-projector", () => {
 
     expect(items.map((item) => item.key)).toEqual(["user-1", "parallel-run-1", "user-2"]);
   });
+
+  it("suppresses top-level candidate prompts that belong to the pending parallel sessions", () => {
+    const items = buildConversationItemsWithParallelRuns({
+      baseConversationItems: [
+        {
+          key: "15d71817-2f0c-4e0d-b4b0-7ad39312df8d:user-prompt",
+          role: "user",
+          text: "package.json  是什么？",
+          createdAt: "2026-04-16T03:39:32.401Z",
+          toolCalls: [],
+          raw: {
+            id: "15d71817-2f0c-4e0d-b4b0-7ad39312df8d:user-prompt",
+            sessionId: "15d71817-2f0c-4e0d-b4b0-7ad39312df8d",
+          },
+        } as any,
+        {
+          key: "11e568b2-5610-436c-913d-8813604c7095:user-prompt",
+          role: "user",
+          text: "pi-monorepo 项目 是什么？",
+          createdAt: "2026-04-16T03:44:35.294Z",
+          toolCalls: [],
+          raw: {
+            id: "11e568b2-5610-436c-913d-8813604c7095:user-prompt",
+            sessionId: "11e568b2-5610-436c-913d-8813604c7095",
+          },
+        } as any,
+        {
+          key: "65ad1ede-ed5a-4705-969b-405342dcc85f:user-prompt",
+          role: "user",
+          text: "pi-monorepo 项目 是什么？",
+          createdAt: "2026-04-16T03:44:35.282Z",
+          toolCalls: [],
+          raw: {
+            id: "65ad1ede-ed5a-4705-969b-405342dcc85f:user-prompt",
+            sessionId: "65ad1ede-ed5a-4705-969b-405342dcc85f",
+          },
+        } as any,
+      ],
+      parallelConversationItems: [
+        {
+          key: "parallel-task-session:task-phase:phase-1",
+          role: "parallel",
+          createdAt: "2026-04-16T03:44:35.294Z",
+          candidates: [
+            {
+              key: "candidate-a",
+              index: 0,
+              label: "候选 A",
+              status: "completed",
+              loading: false,
+              items: [
+                {
+                  key: "65ad1ede-ed5a-4705-969b-405342dcc85f:assistant:1",
+                  role: "assistant",
+                  text: "候选 A 回复",
+                  createdAt: "2026-04-16T03:44:49.000Z",
+                  toolCalls: [],
+                  raw: null,
+                },
+              ],
+              canAdopt: true,
+              isAdopted: false,
+              isRecommended: false,
+            },
+            {
+              key: "candidate-b",
+              index: 1,
+              label: "候选 B",
+              status: "completed",
+              loading: false,
+              items: [
+                {
+                  key: "11e568b2-5610-436c-913d-8813604c7095:assistant:1",
+                  role: "assistant",
+                  text: "候选 B 回复",
+                  createdAt: "2026-04-16T03:44:46.000Z",
+                  toolCalls: [],
+                  raw: null,
+                },
+              ],
+              canAdopt: true,
+              isAdopted: false,
+              isRecommended: false,
+            },
+          ],
+          raw: {
+            parallelRunId: "run-1",
+            candidateSessions: [
+              { sessionId: "65ad1ede-ed5a-4705-969b-405342dcc85f" },
+              { sessionId: "11e568b2-5610-436c-913d-8813604c7095" },
+            ],
+          },
+          toolCalls: [],
+        } as any,
+      ],
+    });
+
+    expect(items.map((item) => item.key)).toEqual([
+      "15d71817-2f0c-4e0d-b4b0-7ad39312df8d:user-prompt",
+      "parallel-task-session:task-phase:phase-1",
+    ]);
+  });
 });

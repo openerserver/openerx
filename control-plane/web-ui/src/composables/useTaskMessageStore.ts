@@ -29,6 +29,7 @@ export type TaskConversationAuthority = "persisted" | "realtime";
 export type TaskConversationPersistenceAck = {
   eventId: string;
   kind: "message-persisted" | "round-synced";
+  phaseId?: string;
   sessionId?: string;
   roundId?: string;
   taskSessionId?: string;
@@ -71,6 +72,7 @@ function toPersistenceAck(
   return {
     eventId: patchEvent.eventId,
     kind: patchEvent.kind,
+    phaseId: patchEvent.phaseId,
     sessionId: patchEvent.sessionId,
     roundId: patchEvent.roundId,
     taskSessionId: patchEvent.taskSessionId,

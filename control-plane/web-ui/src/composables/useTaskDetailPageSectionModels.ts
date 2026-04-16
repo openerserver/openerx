@@ -8,6 +8,7 @@ import type {
   TaskStageViewModel,
 } from "../lib/api";
 import type { TaskConversationListItem } from "../lib/message-normalize";
+import type { TaskDetailPhaseBlock } from "../lib/task-detail-phase-blocks";
 import type { TaskDisplayStatus } from "../lib/task-display-status";
 import type { ExecutionOverrides } from "../lib/taskExecutionMode";
 import type { TreeTask } from "./useProjectTreeTask";
@@ -74,6 +75,7 @@ export function useTaskDetailMainPaneModel(args: {
   composerResetToken: Ref<number>;
   conversationFocusToken: Ref<number>;
   conversationItems: ReadonlyRef<TaskConversationListItem[]>;
+  phaseBlocks: ReadonlyRef<TaskDetailPhaseBlock[]>;
   editableExecutionMode: ReadonlyRef<ExecutionMode>;
   editableJudgeConfig: ReadonlyRef<JudgeConfig>;
   editableParallelCandidates: ReadonlyRef<Array<{ label?: string; model: string }>>;
@@ -131,6 +133,7 @@ export function useTaskDetailMainPaneModel(args: {
     composerResetToken: args.composerResetToken,
     conversationFocusToken: args.conversationFocusToken,
     conversationItems: args.conversationItems,
+    phaseBlocks: args.phaseBlocks,
     editableExecutionMode: args.editableExecutionMode,
     editableJudgeConfig: args.editableJudgeConfig,
     editableParallelCandidates: args.editableParallelCandidates,

@@ -12,6 +12,40 @@ function buildAssistantItem(text: string) {
 }
 
 describe("task-detail-parallel-source-policy", () => {
+  it("prefers phase-view baseline display over session fallback when both are available", () => {
+    expect(
+      resolveParallelCandidateSessionStateFromSources({
+        phaseBaseline: {
+          items: [buildAssistantItem("phase baseline reply")],
+          hasSettledReply: true,
+        },
+        sessionFallback: {
+          items: [buildAssistantItem("session fallback reply")],
+          hasSettledReply: true,
+        },
+        traceLoad: {
+          ok: true,
+          trace: {
+            taskId: "task-1",
+            sessionId: "session-a",
+            latestResponse: "trace reply",
+            messages: [],
+            timeline: [],
+            segments: [],
+            hookExecutions: [],
+            followupExecutions: [],
+          } as any,
+          traceItems: [buildAssistantItem("trace reply")],
+          traceState: {},
+        },
+      }),
+    ).toEqual({
+      items: [buildAssistantItem("phase baseline reply")],
+      hasSettledReply: true,
+      traceState: {},
+    });
+  });
+
   it("keeps session fallback display when trace has no displayable reply", () => {
     expect(
       resolveParallelCandidateSessionStateFromSources({
@@ -40,7 +74,75 @@ describe("task-detail-parallel-source-policy", () => {
       hasSettledReply: true,
       traceState: {
         state: "incomplete",
-        note: "执行追踪暂未返回可展示回复，当前已回退到会话消息展示候选内容。",
+        note: "执行追踪暂未返回可展示回复，当前继续展示来自会话消息的候选内容。",
+      },
+    });
+  });
+
+  it("preserves phase baseline trace state when a running candidate trace has no displayable reply", () => {
+    expect(
+      resolveParallelCandidateSessionStateFromSources({
+        phaseBaseline: {
+          items: [buildAssistantItem("phase baseline reply")],
+          hasSettledReply: true,
+          traceState: {
+            state: "incomplete",
+            note: "当前候选仍在执行，阶段视图里的候选内容可能还不完整。",
+          },
+        },
+        sessionFallback: {
+          items: [],
+          hasSettledReply: false,
+        },
+        traceLoad: {
+          ok: true,
+          trace: {
+            taskId: "task-1",
+            sessionId: "session-a",
+            latestResponse: "",
+            messages: [],
+            timeline: [],
+            segments: [],
+            hookExecutions: [],
+            followupExecutions: [],
+          } as any,
+          traceItems: [],
+          traceState: {},
+        },
+      }),
+    ).toEqual({
+      items: [buildAssistantItem("phase baseline reply")],
+      hasSettledReply: true,
+      traceState: {
+        state: "incomplete",
+        note: "当前候选仍在执行，阶段视图里的候选内容可能还不完整。",
+      },
+    });
+  });
+
+  it("preserves phase baseline trace state when trace loading fails", () => {
+    expect(
+      resolveParallelCandidateSessionStateFromSources({
+        phaseBaseline: {
+          items: [buildAssistantItem("phase baseline reply")],
+          hasSettledReply: true,
+          traceState: {
+            state: "stale",
+            note: "当前候选已暂停，当前展示的是最近一次阶段视图快照。",
+          },
+        },
+        sessionFallback: {
+          items: [],
+          hasSettledReply: false,
+        },
+        traceLoad: { ok: false },
+      }),
+    ).toEqual({
+      items: [buildAssistantItem("phase baseline reply")],
+      hasSettledReply: true,
+      traceState: {
+        state: "stale",
+        note: "当前候选已暂停，当前展示的是最近一次阶段视图快照。",
       },
     });
   });
@@ -59,7 +161,7 @@ describe("task-detail-parallel-source-policy", () => {
       hasSettledReply: true,
       traceState: {
         state: "stale",
-        note: "执行追踪暂时不可用，当前已回退到会话消息展示候选回复。",
+        note: "执行追踪暂时不可用，当前继续展示来自会话消息的候选内容。",
       },
     });
   });

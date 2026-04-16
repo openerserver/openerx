@@ -21,6 +21,7 @@
 8. [version-page-copy-and-comparison-draft.md](version-page-copy-and-comparison-draft.md)
 9. [website-copy-and-version-page-plan.md](website-copy-and-version-page-plan.md)
 10. [website-homepage-copy-draft.md](website-homepage-copy-draft.md)
+11. [project-introduction.md](project-introduction.md)
 
 ## 3. 阅读边界
 

@@ -86,7 +86,34 @@
       style="margin-bottom: 12px"
     />
 
+    <div v-if="main.phaseBlocks.length > 0" class="task-detail-v3-phase-blocks">
+      <div
+        v-if="!main.messagesLoading && !main.messagesError && (main.historyLoading || main.hasOlderHistory)"
+        class="task-detail-v3-phase-blocks__history"
+      >
+        <button
+          type="button"
+          class="task-detail-v3-phase-blocks__history-trigger"
+          :disabled="main.historyLoading"
+          @click="main.handleLoadOlderHistory"
+        >
+          {{ main.historyLoading ? "正在加载更早阶段..." : "加载更早阶段" }}
+        </button>
+      </div>
+
+      <a-spin v-if="main.messagesLoading" />
+      <a-alert v-else-if="main.messagesError" type="error" show-icon :message="main.messagesError" />
+      <TaskDetailPhaseBlockList
+        v-else
+        :blocks="main.phaseBlocks"
+        :default-assistant-model="main.assistantMessageModelFallback"
+        @open-file-preview="main.handleOpenFilePreview"
+        @adopt-candidate="main.handleAdoptCandidate"
+      />
+    </div>
+
     <ChatMessageList
+      v-else
       :items="main.conversationItems"
       :loading="main.messagesLoading"
       :error="main.messagesError"
@@ -150,6 +177,9 @@ defineProps<{
 const TaskDetailQuickOverview = defineAsyncComponent(
   () => import("../task-detail/TaskDetailQuickOverview.vue"),
 );
+const TaskDetailPhaseBlockList = defineAsyncComponent(
+  () => import("./TaskDetailPhaseBlockList.vue"),
+);
 const ChatMessageList = defineAsyncComponent(
   () => import("../task-detail-shared/ChatMessageList.vue"),
 );
@@ -162,6 +192,35 @@ const ExecutionModeModal = defineAsyncComponent(
 </script>
 
 <style scoped>
+.task-detail-v3-phase-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-detail-v3-phase-blocks__history {
+  display: flex;
+  justify-content: center;
+}
+
+.task-detail-v3-phase-blocks__history-trigger {
+  border: 1px solid rgba(22, 119, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(240, 247, 255, 0.96);
+  color: #1677ff;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.task-detail-v3-phase-blocks__history-trigger:disabled {
+  cursor: default;
+  color: rgba(0, 0, 0, 0.45);
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(250, 250, 250, 0.96);
+}
+
 .runtime-permission-card {
   border: 1px solid var(--color-border-secondary, #f0f0f0);
   border-radius: 8px;

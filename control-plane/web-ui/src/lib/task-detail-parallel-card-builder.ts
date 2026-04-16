@@ -1,5 +1,6 @@
 import type {
   ExecutionCandidate,
+  ExecutionTraceTimelineMeta,
   ProjectionRunCandidate,
   ProjectionRunRecord,
   TaskExecutionTrace,
@@ -134,9 +135,18 @@ function resolveParallelCandidateDisplayStatus(
 }
 
 export function resolveParallelCandidateTraceState(trace: TaskExecutionTrace) {
-  const timelineMeta = trace.timelineMeta;
+  return resolveParallelCandidateTraceStateFromTimelineMeta(
+    trace.timelineMeta,
+    trace.timeline?.length ?? 0,
+  );
+}
+
+export function resolveParallelCandidateTraceStateFromTimelineMeta(
+  timelineMeta?: Pick<ExecutionTraceTimelineMeta, "cacheState" | "complete" | "itemCount" | "reconcileRequired"> | null,
+  fallbackItemCount = 0,
+) {
   const itemCount =
-    typeof timelineMeta?.itemCount === "number" ? timelineMeta.itemCount : trace.timeline?.length ?? 0;
+    typeof timelineMeta?.itemCount === "number" ? timelineMeta.itemCount : fallbackItemCount;
   const timelineAvailability = resolveTraceTimelineAvailability(timelineMeta, itemCount);
 
   if (timelineMeta?.reconcileRequired === true) {

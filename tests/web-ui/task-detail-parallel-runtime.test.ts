@@ -248,4 +248,56 @@ describe("task detail parallel runtime visibility", () => {
 
     expect(nextSessionId).toBeUndefined();
   });
+
+  it("prefers the mainline root session when task.sessionId already points at a pending candidate", () => {
+    const nextSessionId = resolveNextSelectedSessionId({
+      selectedSessionId: undefined,
+      selectedSessionNode: null,
+      flatNodes: [
+        {
+          id: "node-root",
+          runtimeSessionId: "root-session",
+          isActive: false,
+        },
+        {
+          id: "node-candidate-a",
+          parentId: "node-root",
+          runtimeSessionId: "candidate-a",
+          isActive: true,
+        },
+        {
+          id: "node-candidate-b",
+          parentId: "node-root",
+          runtimeSessionId: "candidate-b",
+          isActive: false,
+        },
+      ],
+      task: {
+        id: "task-1",
+        sessionId: "candidate-a",
+        status: "completed",
+      },
+      currentParallelRun: {
+        parallelRunId: "run-pending-adopt",
+        executionSessionId: "root-session",
+        parentSessionId: "root-session",
+        candidateSessions: [
+          {
+            label: "候选 A",
+            status: "completed",
+            sessionId: "candidate-a",
+          },
+          {
+            label: "候选 B",
+            status: "completed",
+            sessionId: "candidate-b",
+          },
+        ],
+      },
+      adoptedCandidateSessionId: undefined,
+      isCurrentParallelRunPendingAdoption: true,
+    });
+
+    expect(nextSessionId).toBe("root-session");
+  });
 });

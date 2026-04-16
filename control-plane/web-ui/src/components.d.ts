@@ -104,6 +104,7 @@ declare module 'vue' {
     TaskCodeChanges: typeof import('./components/TaskCodeChanges.vue')['default']
     TaskCompletionActionsCard: typeof import('./components/task-detail/TaskCompletionActionsCard.vue')['default']
     TaskDetailPageShell: typeof import('./components/task-detail-v3/TaskDetailPageShell.vue')['default']
+    TaskDetailPhaseBlockList: typeof import('./components/task-detail-v3/TaskDetailPhaseBlockList.vue')['default']
     TaskDetailQuickOverview: typeof import('./components/task-detail/TaskDetailQuickOverview.vue')['default']
     TaskDetailV3MainPane: typeof import('./components/task-detail-v3/TaskDetailV3MainPane.vue')['default']
     TaskDetailV3SidebarPane: typeof import('./components/task-detail-v3/TaskDetailV3SidebarPane.vue')['default']

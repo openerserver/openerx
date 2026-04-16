@@ -242,23 +242,14 @@ describe("task detail refresh policy", () => {
     });
   });
 
-  it("refreshes on session creation snapshots without forcing message reload", () => {
+  it("does not use session creation snapshots as a task detail refresh boundary", () => {
     const event = createPatchEvent("session-created", {
       rawEventKind: "task.snapshot.updated",
     });
 
-    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(false);
     expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
-    expect(getTaskDetailRefreshRequest(event)).toEqual({
-      eventId: "event-1",
-      reason: "session-created",
-      targets: {
-        workflow: true,
-        flow: true,
-        messages: false,
-      },
-      shouldBumpTraceRefreshKey: false,
-    });
+    expect(getTaskDetailRefreshRequest(event)).toBeNull();
   });
 
   it("refreshes flow for phase lifecycle events without forcing message reload", () => {

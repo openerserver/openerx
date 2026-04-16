@@ -94,6 +94,7 @@ import {
   fetchTaskConversationCompatMessages,
   fetchTaskSessionCachedCompatMessages,
 } from "./task-session-read-compat";
+import { resolvePendingParallelCompatMainlineSessionId } from "./task-session-parallel-compat";
 import {
   queryCurrentTaskRound,
   queryTaskRoundMessages,
@@ -283,6 +284,61 @@ async function fetchTaskSessionLineageRecords(taskId: string, authorization: str
     records,
     activeRecords: records.filter((record) => !record.archivedAt),
   };
+}
+
+function matchesTaskSessionRecordIdentifier(
+  record: TaskSessionLineageRecord,
+  sessionId?: string | null,
+) {
+  const normalizedSessionId = asNonEmptyString(sessionId);
+  if (!normalizedSessionId) {
+    return false;
+  }
+
+  return record.runtimeSessionId === normalizedSessionId || record.id === normalizedSessionId;
+}
+
+function resolveEffectiveCurrentTaskSessionRecord(
+  records: TaskSessionLineageRecord[],
+  currentSessionId?: string | null,
+) {
+  const pendingParallelMainlineSessionId = resolvePendingParallelCompatMainlineSessionId(records);
+  if (pendingParallelMainlineSessionId) {
+    const pendingParallelMainlineRecord = records.find((record) =>
+      matchesTaskSessionRecordIdentifier(record, pendingParallelMainlineSessionId),
+    );
+    if (pendingParallelMainlineRecord) {
+      return pendingParallelMainlineRecord;
+    }
+  }
+
+  const normalizedCurrentSessionId = asNonEmptyString(currentSessionId);
+  if (!normalizedCurrentSessionId) {
+    return null;
+  }
+
+  return (
+    records.find((record) => matchesTaskSessionRecordIdentifier(record, normalizedCurrentSessionId)) ??
+    null
+  );
+}
+
+function isEffectiveCurrentTaskSessionRecord(
+  record: TaskSessionLineageRecord,
+  effectiveCurrentRecord: TaskSessionLineageRecord | null,
+  fallbackCurrentSessionId?: string | null,
+) {
+  if (effectiveCurrentRecord) {
+    return (
+      record.runtimeSessionId === effectiveCurrentRecord.runtimeSessionId ||
+      (Boolean(record.id) && record.id === effectiveCurrentRecord.id)
+    );
+  }
+
+  return (
+    record.isActive ||
+    matchesTaskSessionRecordIdentifier(record, fallbackCurrentSessionId)
+  );
 }
 
 function extractRuntimeSessionIdFromPublicTaskSessionId(taskId: string, sessionId: string) {
@@ -5862,40 +5918,6 @@ async function stopNonWinningCandidateSessions(args: {
   return stoppedCandidates;
 }
 
-async function activateCandidateAdoptionTaskSession(args: {
-  task: ExecutableTask & { result?: string };
-  taskId: string;
-  sessionId: string;
-  authorization: string;
-}) {
-  const { task, taskId, sessionId, authorization } = args;
-  const activation = await activateTaskSessionLineage(taskId, sessionId, authorization);
-  if (!activation.ok) {
-    return {
-      ok: false as const,
-      response: {
-        status: activation.status,
-        body: { error: activation.error },
-      },
-    };
-  }
-
-  wsBroadcaster.broadcast({
-    id: crypto.randomUUID(),
-    type: "session.activated",
-    ts: new Date().toISOString(),
-    taskId,
-    projectId: task.projectId,
-    data: {
-      sessionId,
-      branchName: activation.branchName,
-      source: "candidate-adopt",
-    },
-  });
-
-  return { ok: true as const };
-}
-
 async function buildPhaseFirstCandidateAdoptionContext(args: {
   taskId: string;
   phaseId: string;
@@ -7327,6 +7349,19 @@ taskRoutes.get("/:taskId/phases", async (c) => {
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
+taskRoutes.get("/:taskId/phases/:phaseId/view", async (c) => {
+  const taskId = c.req.param("taskId");
+  const phaseId = c.req.param("phaseId");
+  const result = await cpFetch(
+    `/api/tasks/${encodeURIComponent(taskId)}/phases/${encodeURIComponent(phaseId)}/view`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
 taskRoutes.post("/:taskId/phases", async (c) => {
   const taskId = c.req.param("taskId");
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -7512,16 +7547,6 @@ taskRoutes.post("/:taskId/phases/:phaseId/candidates/:index/adopt", async (c) =>
     winnerRuntimeSessionId: adoptionContext.context.winnerRuntimeSessionId,
   });
 
-  const activation = await activateCandidateAdoptionTaskSession({
-    task,
-    taskId,
-    sessionId: adoptionContext.context.winnerRuntimeSessionId,
-    authorization,
-  });
-  if (!activation.ok) {
-    return c.json(activation.response.body, activation.response.status as 400 | 404 | 502);
-  }
-
   const adoptionResult = await finalizePhaseFirstCandidateAdoption({
     taskId,
     authorization,
@@ -7535,6 +7560,22 @@ taskRoutes.post("/:taskId/phases/:phaseId/candidates/:index/adopt", async (c) =>
   if (!adoptionResult.ok) {
     return c.json(adoptionResult.response.body, adoptionResult.response.status);
   }
+
+  const winnerRecord = adoptionContext.context.phaseGroup.find(
+    (record) => record.runtimeSessionId === adoptionContext.context.winnerRuntimeSessionId,
+  );
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "session.activated",
+    ts: new Date().toISOString(),
+    taskId,
+    projectId: task.projectId,
+    data: {
+      sessionId: adoptionContext.context.winnerRuntimeSessionId,
+      branchName: winnerRecord?.branchName ?? null,
+      source: "candidate-adopt",
+    },
+  });
 
   return c.json(adoptionResult.response.body, adoptionResult.response.status);
 });
@@ -7908,6 +7949,10 @@ taskRoutes.get("/:taskId/branches", async (c) => {
       records: repaired,
       authorization,
     });
+    const effectiveCurrentRecord = resolveEffectiveCurrentTaskSessionRecord(
+      normalizedRecords,
+      taskResult.data?.sessionId,
+    );
 
     const sessions = normalizedRecords.map((record) => {
       const runtime = runtimeMap.get(record.runtimeSessionId);
@@ -7918,7 +7963,11 @@ taskRoutes.get("/:taskId/branches", async (c) => {
         phaseRole: record.phaseRole ?? null,
         phaseItemIndex: record.phaseItemIndex ?? null,
         title: runtime?.title ?? record.branchName ?? "",
-        isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
+        isActive: isEffectiveCurrentTaskSessionRecord(
+          record,
+          effectiveCurrentRecord,
+          taskResult.data?.sessionId,
+        ),
         summary: runtime?.summary ?? null,
         createdAt: runtime?.createdAt ?? record.createdAt ?? null,
         updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
@@ -7956,6 +8005,10 @@ taskRoutes.get(":taskId/sessions", async (c) => {
       records: repaired,
       authorization,
     });
+    const effectiveCurrentRecord = resolveEffectiveCurrentTaskSessionRecord(
+      normalizedRecords,
+      taskResult.data?.sessionId,
+    );
 
     const publicTaskSessionIdByIdentifier = new Map<string, string>();
     for (const record of normalizedRecords) {
@@ -7998,7 +8051,11 @@ taskRoutes.get(":taskId/sessions", async (c) => {
         phaseRole: record.phaseRole ?? null,
         phaseItemIndex: record.phaseItemIndex ?? null,
         title: record.branchName ?? runtime?.title ?? "",
-        isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
+        isActive: isEffectiveCurrentTaskSessionRecord(
+          record,
+          effectiveCurrentRecord,
+          taskResult.data?.sessionId,
+        ),
         summary: runtime?.summary ?? null,
         createdAt: runtime?.createdAt ?? record.createdAt ?? null,
         updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
@@ -8033,15 +8090,22 @@ taskRoutes.get(":taskId/sessions", async (c) => {
       },
       null,
     );
-    const currentRecord = normalizedRecords.find(
-      (record) =>
-        record.runtimeSessionId === taskResult.data?.sessionId || record.id === taskResult.data?.sessionId,
-    );
+    const currentRecord =
+      effectiveCurrentRecord ??
+      normalizedRecords.find(
+        (record) =>
+          record.runtimeSessionId === taskResult.data?.sessionId ||
+          record.id === taskResult.data?.sessionId,
+      );
 
     return c.json({
       data: sessions,
       meta: {
-        currentSessionId: asNonEmptyString(taskResult.data?.sessionId) ?? null,
+        currentSessionId:
+          asNonEmptyString(currentRecord?.runtimeSessionId) ??
+          asNonEmptyString(currentRecord?.id) ??
+          asNonEmptyString(taskResult.data?.sessionId) ??
+          null,
         currentPhaseId: currentRecord ? resolvePhaseId(currentRecord) : null,
         latestPhaseId: latestRecord ? resolvePhaseId(latestRecord) : null,
         phaseCount: new Set(
@@ -9011,8 +9075,8 @@ async function activateTaskSessionLineage(
     return { ok: false, status: 502, error: "Failed to fetch branch lineage" };
   }
 
-  const record = lineageResult.records.find(
-    (r: TaskSessionRecord) => r.runtimeSessionId === sessionId,
+  const record = lineageResult.records.find((r: TaskSessionRecord) =>
+    matchesTaskSessionRecordIdentifier(r, sessionId),
   );
   if (!record) {
     return { ok: false, status: 404, error: "Session not found in branch lineage" };

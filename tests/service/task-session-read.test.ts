@@ -296,6 +296,274 @@ afterEach(() => {
 });
 
 describe("task session read API", () => {
+  test("prefers explicit snapshot currentPhaseId over deriving it from currentSessionId", async () => {
+    const rootSessionId = "task-session:task-1:session-root";
+    const candidateSessionId = "task-session:task-1:session-candidate";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: rootSessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "session-root",
+          phaseId: "phase-root",
+          coordinationKey: "phase-root",
+          createdAt: "2026-04-16T10:00:00.000Z",
+        },
+        {
+          id: candidateSessionId,
+          taskId: "task-1",
+          parentSessionId: rootSessionId,
+          runtimeSessionId: "session-candidate",
+          phaseId: "phase-compare",
+          coordinationKey: "phase-compare",
+          sessionKind: "candidate",
+          phaseRole: "candidate",
+          phaseItemIndex: 0,
+          candidateIndex: 0,
+          executionModeSnapshot: "parallel",
+          createdAt: "2026-04-16T10:01:00.000Z",
+        },
+      ],
+      phaseRows: [
+        {
+          id: "phase-root",
+          taskId: "task-1",
+          phaseIndex: 1,
+          createdAt: "2026-04-16T10:00:00.000Z",
+        },
+        {
+          id: "phase-compare",
+          taskId: "task-1",
+          phaseIndex: 2,
+          createdAt: "2026-04-16T10:01:00.000Z",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: "session-root",
+        currentPhaseId: "phase-compare",
+        latestSessionId: "session-candidate",
+        latestPhaseId: "phase-compare",
+      },
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.listTaskSessions("task-1");
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.meta.currentSessionId).toBe(rootSessionId);
+    expect(response.data.meta.currentPhaseId).toBe("phase-compare");
+    expect(response.data.meta.latestPhaseId).toBe("phase-compare");
+  });
+
+  test("builds a phase-scoped view with ordered sessions and grouped messages", async () => {
+    const candidateSessionA = "task-session:task-1:session-a";
+    const candidateSessionB = "task-session:task-1:session-b";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: "task-session:task-1:session-root",
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "session-root",
+          phaseId: "phase-root",
+          coordinationKey: "phase-root",
+          createdAt: "2026-04-16T10:00:00.000Z",
+        },
+        {
+          id: candidateSessionA,
+          taskId: "task-1",
+          parentSessionId: "task-session:task-1:session-root",
+          runtimeSessionId: "session-a",
+          phaseId: "phase-compare",
+          coordinationKey: "phase-compare",
+          sessionKind: "candidate",
+          phaseRole: "candidate",
+          phaseItemIndex: 0,
+          candidateIndex: 0,
+          executionModeSnapshot: "parallel",
+          executionStatus: "complete",
+          title: "候选 A",
+          selectedModel: "github-copilot:gpt-5-mini",
+          createdAt: "2026-04-16T10:01:00.000Z",
+          updatedAt: "2026-04-16T10:01:30.000Z",
+        },
+        {
+          id: candidateSessionB,
+          taskId: "task-1",
+          parentSessionId: "task-session:task-1:session-root",
+          runtimeSessionId: "session-b",
+          phaseId: "phase-compare",
+          coordinationKey: "phase-compare",
+          sessionKind: "candidate",
+          phaseRole: "candidate",
+          phaseItemIndex: 1,
+          candidateIndex: 1,
+          executionModeSnapshot: "parallel",
+          executionStatus: "complete",
+          branchName: "候选 B",
+          selectedModel: "openai:gpt-4o",
+          createdAt: "2026-04-16T10:01:01.000Z",
+          updatedAt: "2026-04-16T10:01:31.000Z",
+        },
+      ],
+      phaseRows: [
+        {
+          id: "phase-root",
+          taskId: "task-1",
+          projectId: "project-1",
+          phaseIndex: 1,
+          phaseKind: "single",
+          triggerType: "execute",
+          status: "completed",
+          createdAt: "2026-04-16T10:00:00.000Z",
+          updatedAt: "2026-04-16T10:00:10.000Z",
+        },
+        {
+          id: "phase-compare",
+          taskId: "task-1",
+          projectId: "project-1",
+          parentPhaseId: "phase-root",
+          phaseIndex: 2,
+          phaseKind: "parallel",
+          triggerType: "continue",
+          status: "awaiting_adoption",
+          candidateCount: 2,
+          winnerSessionId: null,
+          createdAt: "2026-04-16T10:01:00.000Z",
+          updatedAt: "2026-04-16T10:01:40.000Z",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: "session-root",
+        currentPhaseId: "phase-compare",
+        latestSessionId: "session-b",
+        latestPhaseId: "phase-compare",
+      },
+      messageRowsByCall: [
+        [
+          {
+            id: "msg-a-1",
+            taskId: "task-1",
+            sessionId: candidateSessionA,
+            role: "assistant",
+            status: "completed",
+            seq: 1,
+            textContent: "候选 A 回复",
+            textPreview: "候选 A 回复",
+            rawPayload: {},
+            tokenUsed: 12,
+            createdAt: "2026-04-16T10:01:10.000Z",
+            updatedAt: "2026-04-16T10:01:10.000Z",
+          },
+        ],
+        [
+          {
+            id: "msg-b-1",
+            taskId: "task-1",
+            sessionId: candidateSessionB,
+            role: "assistant",
+            status: "completed",
+            seq: 1,
+            textContent: "候选 B 回复",
+            textPreview: "候选 B 回复",
+            rawPayload: {},
+            tokenUsed: 14,
+            createdAt: "2026-04-16T10:01:11.000Z",
+            updatedAt: "2026-04-16T10:01:11.000Z",
+          },
+        ],
+      ],
+      partRowsByCall: [[], []],
+      timelineRows: [
+        {
+          id: "timeline-a-1",
+          taskId: "task-1",
+          projectId: "project-1",
+          sessionId: candidateSessionA,
+          messageId: "msg-a-1",
+          operationId: null,
+          artifactId: null,
+          itemKind: "message",
+          itemRole: "assistant",
+          title: null,
+          displayText: "候选 A 回复",
+          metadataJson: null,
+          sortAt: "2026-04-16T10:01:10.000Z",
+          createdAt: "2026-04-16T10:01:10.000Z",
+          updatedAt: "2026-04-16T10:01:10.000Z",
+        },
+      ],
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.getTaskPhaseView("task-1", "phase-compare");
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.data.phase).toMatchObject({
+      id: "phase-compare",
+      phaseIndex: 2,
+      phaseKind: "parallel",
+      status: "awaiting_adoption",
+      candidateCount: 2,
+      sessionIds: [candidateSessionA, candidateSessionB],
+    });
+    expect(response.data.data.sessions.map((session) => session.id)).toEqual([
+      candidateSessionA,
+      candidateSessionB,
+    ]);
+    expect(response.data.data.messageGroups).toEqual([
+      expect.objectContaining({
+        taskSessionId: candidateSessionA,
+        runtimeSessionId: "session-a",
+        title: "候选 A",
+        selectedModel: "github-copilot:gpt-5-mini",
+        timelineMeta: {
+          cacheState: "complete",
+          complete: true,
+          itemCount: 1,
+        },
+        messages: [expect.objectContaining({ id: "msg-a-1", textContent: "候选 A 回复" })],
+      }),
+      expect.objectContaining({
+        taskSessionId: candidateSessionB,
+        runtimeSessionId: "session-b",
+        title: "候选 B",
+        selectedModel: "openai:gpt-4o",
+        timelineMeta: {
+          cacheState: "none",
+          complete: false,
+          itemCount: 0,
+        },
+        messages: [expect.objectContaining({ id: "msg-b-1", textContent: "候选 B 回复" })],
+      }),
+    ]);
+    expect(response.data.data.meta).toMatchObject({
+      currentSessionId: "task-session:task-1:session-root",
+      currentPhaseId: "phase-compare",
+      latestSessionId: candidateSessionB,
+      latestPhaseId: "phase-compare",
+      messageGroupCount: 2,
+      messageCount: 2,
+    });
+  });
+
   test("maps snapshot currentSessionId runtime ids back to canonical task-session ids", async () => {
     const sessionId = "task-session:task-1:session-1";
     const { createTaskSessionReadApi } = await loadTaskSessionReadModule({

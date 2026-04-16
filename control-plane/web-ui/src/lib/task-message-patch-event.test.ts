@@ -122,6 +122,66 @@ describe("task message patch event", () => {
     });
   });
 
+  it("keeps raw message payloads on user and tool updates", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          phaseId: "phase-2",
+          data: {
+            message: {
+              id: "user-1",
+              role: "user",
+              text: "第二阶段追加问题",
+              createdAt: "2026-04-08T03:18:30.000Z",
+            },
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "user-message",
+      phaseId: "phase-2",
+      messageId: "user-1",
+      rawMessage: {
+        id: "user-1",
+        role: "user",
+        text: "第二阶段追加问题",
+      },
+    });
+
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          phaseId: "phase-2",
+          data: {
+            message: {
+              id: "tool-1",
+              role: "tool",
+              parts: [
+                {
+                  type: "tool",
+                  toolName: "grep_search",
+                  state: "completed",
+                  input: {
+                    query: "phase-2 log",
+                  },
+                },
+              ],
+              createdAt: "2026-04-08T03:18:31.000Z",
+            },
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "tool-message",
+      phaseId: "phase-2",
+      messageId: "tool-1",
+      rawMessage: {
+        id: "tool-1",
+        role: "tool",
+      },
+    });
+  });
+
   it("maps a thinking delta into an assistant patch", () => {
     expect(
       toTaskMessagePatchEvent(

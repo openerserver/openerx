@@ -22,6 +22,7 @@ export function useTaskDetailRefreshController(args: {
   messageReconcileRequired: Ref<boolean>;
   workflowReconcileRequired: Ref<boolean>;
   forceMessagePolling: Ref<boolean>;
+  skipMessageRefreshEventId?: Ref<string | null>;
   realtimeConnected: Ref<boolean>;
   shouldPollRunningStatus: Ref<boolean>;
   refreshFlowSnapshot: () => void | Promise<void>;
@@ -167,6 +168,20 @@ export function useTaskDetailRefreshController(args: {
       }, { taskId: args.taskId.value });
       if (refreshRequest.shouldBumpTraceRefreshKey) {
         traceRefreshKey.value += 1;
+      }
+      if (
+        refreshRequest.targets.messages === true &&
+        refreshRequest.targets.workflow === false &&
+        refreshRequest.targets.flow === false &&
+        args.skipMessageRefreshEventId?.value === refreshRequest.eventId
+      ) {
+        traceTaskDetailRealtime("refresh:skip", {
+          taskId: args.taskId.value,
+          reason: refreshRequest.reason,
+          eventId: refreshRequest.eventId,
+          refreshPath: "messages-only",
+        }, { taskId: args.taskId.value });
+        return;
       }
       scheduleTaskRefresh(refreshRequest);
     },

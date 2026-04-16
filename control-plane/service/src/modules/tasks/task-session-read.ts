@@ -18,6 +18,7 @@ import {
 } from "../../db/schema";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import { ensureTaskWorkflowFactsAvailable } from "../task-workflows/legacy-role-workflow-storage";
+import { buildPublicTaskExecutionPhaseRecord } from "./task-phase-public-record";
 import { resolvePublicTaskSessionSourceType } from "./task-session-public-source-type";
 import {
   dedupeTaskToolTimelineRows,
@@ -414,6 +415,31 @@ function resolveTaskSessionPhaseIdBySessionId<
   return resolveTaskSessionPhaseId(findTaskSessionByIdentifier(sessions, sessionId));
 }
 
+function resolveTaskExecutionPhaseId<
+  TPhase extends { id: string },
+  TSession extends {
+    id: string;
+    phaseId?: string | null;
+    coordinationKey?: string | null;
+    runtimeSessionId?: string | null;
+  },
+>(args: {
+  explicitPhaseId?: string | null;
+  phases: TPhase[];
+  sessions: TSession[];
+  sessionId?: string | null;
+}) {
+  const explicitPhaseId = asNonEmptyString(args.explicitPhaseId);
+  if (explicitPhaseId) {
+    return (
+      args.phases.find((phase) => phase.id === explicitPhaseId)?.id ??
+      explicitPhaseId
+    );
+  }
+
+  return resolveTaskSessionPhaseIdBySessionId(args.sessions, args.sessionId);
+}
+
 function countTaskSessionPhases<
   TSession extends { id: string; phaseId?: string | null; coordinationKey?: string | null },
 >(sessions: TSession[]) {
@@ -477,6 +503,55 @@ function normalizePublicTaskSessionExecutionStatus(args: {
   }
 
   return normalizedExecutionStatus ?? normalizedLegacyStatus;
+}
+
+function isCompleteTaskSessionExecutionStatus(status?: string | null) {
+  return status === "complete" || status === "failed" || status === "cancelled";
+}
+
+function buildTaskPhaseMessageGroupTimelineMeta(args: {
+  executionStatus?: string | null;
+  itemCount: number;
+}) {
+  const itemCount = Number.isFinite(args.itemCount) && args.itemCount > 0 ? args.itemCount : 0;
+  const normalizedExecutionStatus = normalizePublicTaskSessionExecutionStatus({
+    executionStatus: args.executionStatus,
+  });
+  const isComplete = isCompleteTaskSessionExecutionStatus(normalizedExecutionStatus);
+  const cacheState =
+    itemCount <= 0 ? ("none" as const) : isComplete ? ("complete" as const) : ("partial" as const);
+
+  return {
+    cacheState,
+    complete: cacheState === "complete",
+    itemCount,
+  };
+}
+
+async function loadTaskTimelineItemCountsBySessionId(taskId: string, sessionIds: string[]) {
+  if (sessionIds.length === 0) {
+    return new Map<string, number>();
+  }
+
+  const rows = await db
+    .select({
+      sessionId: taskTimelineViews.sessionId,
+    })
+    .from(taskTimelineViews)
+    .where(and(eq(taskTimelineViews.taskId, taskId), inArray(taskTimelineViews.sessionId, sessionIds)))
+    .orderBy(asc(taskTimelineViews.sessionId));
+
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const sessionId = asNonEmptyString(row.sessionId);
+    if (!sessionId) {
+      continue;
+    }
+
+    counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1);
+  }
+
+  return counts;
 }
 
 function projectPublicTaskSessions<
@@ -2492,8 +2567,18 @@ export function createTaskSessionReadApi(deps: {
       projectedSessions,
       snapshot?.currentSessionId,
     );
-    const currentPhaseId = resolveTaskSessionPhaseIdBySessionId(projectedSessions, currentSessionId);
-    const latestPhaseId = resolveTaskSessionPhaseIdBySessionId(projectedSessions, latestSessionId);
+    const currentPhaseId = resolveTaskExecutionPhaseId({
+      explicitPhaseId: snapshot?.currentPhaseId,
+      phases,
+      sessions: projectedSessions,
+      sessionId: currentSessionId,
+    });
+    const latestPhaseId = resolveTaskExecutionPhaseId({
+      explicitPhaseId: snapshot?.latestPhaseId,
+      phases,
+      sessions: projectedSessions,
+      sessionId: latestSessionId,
+    });
 
     return {
       ok: true as const,
@@ -2508,6 +2593,107 @@ export function createTaskSessionReadApi(deps: {
           latestPhaseId,
           phaseCount: countTaskSessionPhases(projectedSessions),
           sessionCount: projectedSessions.length,
+        },
+      },
+    };
+  }
+
+  async function getTaskPhaseView(taskId: string, phaseId: string) {
+    const task = await ensureTask(taskId);
+    if (!task) {
+      return { ok: false as const, status: 404 as const, error: "Task not found" };
+    }
+
+    const [snapshot, sessions, phases] = await Promise.all([
+      loadTaskSnapshot(taskId),
+      loadTaskSessionRecords(taskId),
+      loadTaskExecutionPhaseRecords(taskId),
+    ]);
+    const phase = phases.find((record) => record.id === phaseId) ?? null;
+    if (!phase) {
+      return { ok: false as const, status: 404 as const, error: "Task phase not found" };
+    }
+
+    const selectedModelBySessionId = await loadTaskSessionSelectedModelFallbacks(
+      taskId,
+      collectMissingTaskSessionModelIds(sessions),
+    );
+    const hydratedSessions = hydrateTaskSessionSelectedModels(sessions, selectedModelBySessionId);
+    const phaseIndexById = new Map(phases.map((record) => [record.id, record.phaseIndex] as const));
+    const projectedSessions = orderTaskSessionsByPhase(
+      projectPublicTaskSessions(hydratedSessions),
+      phaseIndexById,
+    );
+    const phaseSessions = projectedSessions.filter(
+      (session) => resolveTaskSessionPhaseId(session) === phaseId,
+    );
+    const timelineItemCountsBySessionId = await loadTaskTimelineItemCountsBySessionId(
+      taskId,
+      phaseSessions.map((session) => session.id),
+    );
+    const latestSessionId = resolveLatestTaskSessionId(projectedSessions);
+    const currentSessionId = resolveCurrentTaskSessionId(
+      projectedSessions,
+      snapshot?.currentSessionId,
+    );
+    const currentPhaseId = resolveTaskExecutionPhaseId({
+      explicitPhaseId: snapshot?.currentPhaseId,
+      phases,
+      sessions: projectedSessions,
+      sessionId: currentSessionId,
+    });
+    const latestPhaseId = resolveTaskExecutionPhaseId({
+      explicitPhaseId: snapshot?.latestPhaseId,
+      phases,
+      sessions: projectedSessions,
+      sessionId: latestSessionId,
+    });
+    const messageGroups = await Promise.all(
+      phaseSessions.map(async (session) => ({
+        taskSessionId: session.id,
+        runtimeSessionId: asNonEmptyString(session.runtimeSessionId),
+        phaseRole: session.phaseRole ?? null,
+        phaseItemIndex:
+          typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
+        candidateIndex:
+          typeof session.candidateIndex === "number" ? session.candidateIndex : null,
+        stepIndex: typeof session.stepIndex === "number" ? session.stepIndex : null,
+        title: asNonEmptyString(session.title) ?? asNonEmptyString(session.branchName) ?? null,
+        selectedModel: asNonEmptyString(session.selectedModel) ?? null,
+        executionStatus: asNonEmptyString(session.executionStatus) ?? null,
+        timelineMeta: buildTaskPhaseMessageGroupTimelineMeta({
+          executionStatus: session.executionStatus,
+          itemCount: timelineItemCountsBySessionId.get(session.id) ?? 0,
+        }),
+        messages: await loadTaskSessionMessagesInternal(taskId, session.id),
+      })),
+    );
+
+    return {
+      ok: true as const,
+      status: 200 as const,
+      data: {
+        data: {
+          phase: buildPublicTaskExecutionPhaseRecord({
+            phase,
+            sessionIds: phaseSessions.map((session) => session.id),
+          }),
+          sessions: phaseSessions,
+          messageGroups,
+          meta: {
+            readSource: "task-phase-first" as const,
+            currentSessionId,
+            currentPhaseId,
+            latestSessionId,
+            latestPhaseId,
+            phaseCount: countTaskSessionPhases(projectedSessions),
+            sessionCount: phaseSessions.length,
+            messageGroupCount: messageGroups.length,
+            messageCount: messageGroups.reduce(
+              (count, group) => count + group.messages.length,
+              0,
+            ),
+          },
         },
       },
     };
@@ -2940,6 +3126,7 @@ export function createTaskSessionReadApi(deps: {
 
   return {
     listTaskSessions,
+    getTaskPhaseView,
     getTaskSession,
     buildTaskTreeResponse,
     buildTaskTimelineResponse,

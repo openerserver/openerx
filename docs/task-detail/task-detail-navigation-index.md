@@ -17,6 +17,13 @@
 
 ## 2. 推荐阅读顺序
 
+### 2.0 前置领域设计
+
+如果当前问题是“为什么 TaskDetail 顺序这么容易乱，以及 authority 应该收在哪里”，先读：
+
+1. [../task-domain/task-phase-first-task-detail-design.md](../task-domain/task-phase-first-task-detail-design.md)
+   作用：明确 TaskDetail 当前乱序和重复显示的根因，并正式定义 phase-first 主链、显示不变量和 realtime contract。
+
 ### 2.1 第一层：先看现网
 
 按下面顺序读，先建立“今天代码已经是什么样”的共识。
@@ -53,6 +60,8 @@
    作用：执行总入口。说明现在已经做到哪里、下一阶段该按什么顺序继续收口。
 2. [task-detail-continue-simplified-migration-checklist.md](task-detail-continue-simplified-migration-checklist.md)
    作用：迁移核对清单。适合在真正改代码或验收 cutover 时逐项勾检。
+3. [task-detail-phase-first-migration-checklist.md](task-detail-phase-first-migration-checklist.md)
+   作用：按 service、BFF、web-ui 三层拆分 TaskDetail phase-first 改造任务，适合做实施排期和验收边界。
 
 ## 3. 按场景跳转
 
@@ -64,6 +73,8 @@
 4. 想查“目标模块以后应该怎么拆”：先看 [task-detail-continue-target-module-architecture.md](task-detail-continue-target-module-architecture.md)。
 5. 想查“realtime DTO 最终应该长什么样”：先看 [task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md)。
 6. 想查“下一步还剩哪些收口项”：先看 [task-detail-unified-implementation-roadmap.md](task-detail-unified-implementation-roadmap.md)。
+7. 想查“顺序错乱和重复显示的根因，以及新的 authority 应放在哪里”：先看 [../task-domain/task-phase-first-task-detail-design.md](../task-domain/task-phase-first-task-detail-design.md)。
+8. 想直接按层拆任务：先看 [task-detail-phase-first-migration-checklist.md](task-detail-phase-first-migration-checklist.md)。
 
 ## 4. 扩展专题
 

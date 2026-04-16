@@ -1,7 +1,13 @@
 <template>
-  <div ref="scrollContainer" class="chat-message-list" data-testid="task-detail-v2-message-list" @scroll="handleScroll">
+  <div
+    ref="scrollContainer"
+    class="chat-message-list"
+    :class="{ 'chat-message-list--embedded': embedded }"
+    data-testid="task-detail-v2-message-list"
+    @scroll="handleScroll"
+  >
     <div
-      v-if="!loading && !error && (historyLoading || hasOlderHistory)"
+      v-if="!embedded && !loading && !error && (historyLoading || hasOlderHistory)"
       class="chat-message-list__history-status"
     >
       <button
@@ -376,6 +382,7 @@ const props = defineProps<{
   items: TaskConversationListItem[];
   loading: boolean;
   error: string | null;
+  embedded?: boolean;
   activeSessionId?: string;
   forceScrollToken?: number;
   defaultAssistantModel?: string;
@@ -988,6 +995,9 @@ function isNearBottom() {
 }
 
 function handleScroll() {
+  if (props.embedded) {
+    return;
+  }
   shouldAutoScroll.value = isNearBottom();
   maybeLoadOlderHistory();
 }
@@ -1342,6 +1352,12 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+.chat-message-list--embedded {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
 }
 
 .chat-message-list__history-status {

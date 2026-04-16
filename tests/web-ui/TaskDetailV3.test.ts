@@ -30,6 +30,8 @@ const apiMocks = vi.hoisted(() => ({
   forkTaskSession: vi.fn(),
   getModelsList: vi.fn(),
   getTaskAgentRuns: vi.fn(),
+  getTaskPhases: vi.fn(),
+  getTaskPhaseView: vi.fn(),
   getTaskSessions: vi.fn(),
   getTaskExecutionTraceView: vi.fn(),
   getTaskMemberView: vi.fn(),
@@ -46,6 +48,8 @@ const legacyParallelFixtureState = vi.hoisted(() => ({
   agentRunsResponse: { data: [] as Array<any> },
   domainRunsResponse: { data: [] as Array<any> },
   domainRunDetailResponse: null as { data: any } | null,
+  phaseResponse: null as { data: Array<any> } | null,
+  phaseViewResponses: new Map<string, { data: any }>(),
   domainRunDetailImplementation: null as
     | null
     | ((taskId: string, runId: string) => Promise<{ data: any }> | { data: any }),
@@ -132,6 +136,7 @@ const branchState = vi.hoisted(() => ({
       branchName: "main",
     },
   ] as Array<any>,
+  currentSessionId: "ses-1" as string | null,
   currentPhaseId: null as string | null,
   sessionSummaries: null as Array<any> | null,
   selectedNode: {
@@ -148,9 +153,14 @@ const branchSessionSummariesRef = ref<Array<any>>([]);
 const messagesState = vi.hoisted(() => ({
   trace: null as Record<string, unknown> | null,
   conversationItems: [] as Array<unknown>,
+  phaseSlices: [] as Array<any>,
   hasStreamingAssistant: false,
+  hasOlderHistory: false,
+  historyLoading: false,
   clearPendingAssistantDraft: vi.fn(),
   error: null as string | null,
+  loading: false,
+  loadOlderHistory: vi.fn(async () => undefined),
   refresh: vi.fn(async () => undefined),
   seedPendingAssistantDraft: vi.fn(),
   sourceMessages: [] as Array<unknown>,
@@ -208,6 +218,7 @@ vi.mock("../../control-plane/web-ui/src/composables/useProjectTreeTask", () => (
 
 vi.mock("../../control-plane/web-ui/src/composables/useTreeBranches", () => ({
   useTreeBranches: () => ({
+    currentSessionId: computed(() => branchState.currentSessionId),
     currentPhaseId: computed(() => branchState.currentPhaseId),
     flatNodes: computed(() => branchState.flatNodes),
     sessionSummaries: branchSessionSummariesRef,
@@ -223,10 +234,11 @@ vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageSnapshot", asy
     useTaskMessageSnapshot: () => ({
       activeSessionId: ref<string | undefined>(undefined),
       error: computed(() => messagesStoreMock.error),
-      hasOlderHistory: ref(false),
-      historyLoading: ref(false),
-      loading: ref(false),
-      loadOlderHistory: vi.fn(async () => undefined),
+      hasOlderHistory: computed(() => messagesStoreMock.hasOlderHistory),
+      historyLoading: computed(() => messagesStoreMock.historyLoading),
+      loading: computed(() => messagesStoreMock.loading),
+      loadOlderHistory: messagesState.loadOlderHistory,
+      phaseSlices: computed(() => messagesStoreMock.phaseSlices),
       refresh: messagesState.refresh,
       resolvedSessionId: ref<string | undefined>(undefined),
       sourceMessages: computed(() => messagesStoreMock.sourceMessages),
@@ -255,6 +267,7 @@ vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageStore", async 
         return getTaskDetailRefreshRequest(event ? toTaskMessagePatchEvent(event as any) : null);
       }),
       realtimeConnected: computed(() => realtimeStoreMock.connected),
+      needsMessagePollingFallback: computed(() => false),
       seedPendingAssistantDraft: messagesState.seedPendingAssistantDraft,
     }),
   };
@@ -347,6 +360,7 @@ const ChatComposerStub = defineComponent({
 const ChatMessageListStub = defineComponent({
   name: "ChatMessageList",
   props: {
+    embedded: { type: Boolean, default: false },
     items: { type: Array, default: () => [] },
     activeSessionId: { type: String, default: undefined },
     forceScrollToken: { type: Number, default: 0 },
@@ -470,11 +484,12 @@ const ChatMessageListStub = defineComponent({
     },
   },
   template: `
-    <div data-testid="chat-message-list">
+    <div data-testid="chat-message-list" :data-embedded="String(embedded)">
       <div
         data-testid="chat-message-list-meta"
         :data-session-id="activeSessionId || ''"
         :data-force-scroll-token="String(forceScrollToken)"
+        :data-embedded="String(embedded)"
       />
       <div
         v-for="item in items"
@@ -499,6 +514,47 @@ const ChatMessageListStub = defineComponent({
   `,
 });
 
+const TaskDetailPhaseBlockListStub = defineComponent({
+  name: "TaskDetailPhaseBlockList",
+  props: {
+    blocks: { type: Array, default: () => [] },
+  },
+  methods: {
+    itemText(item: unknown) {
+      const record = item as {
+        text?: string;
+        candidates?: Array<{ label?: string }>;
+      };
+      if (typeof record?.text === "string" && record.text.length > 0) {
+        return record.text;
+      }
+      return record?.candidates?.[0]?.label ?? "";
+    },
+  },
+  template: `
+    <div data-testid="phase-block-list">
+      <section
+        v-for="block in blocks"
+        :key="block.key"
+        class="task-detail-v3-phase-block"
+        :data-phase-id="block.phaseId"
+        :data-phase-index="String(block.phaseIndex)"
+      >
+        <header>{{ block.phaseIndex }}|{{ block.phaseKind }}|{{ block.status }}|{{ block.triggerType }}</header>
+        <div
+          v-for="item in block.items"
+          :key="item.key"
+          class="phase-block-item"
+          :data-role="item.role"
+          :data-text="itemText(item)"
+        >
+          {{ item.role }}:{{ itemText(item) }}
+        </div>
+      </section>
+    </div>
+  `,
+});
+
 function getFixtureDataArray<T>(response: { data?: Array<T> } | null | undefined) {
   return Array.isArray(response?.data) ? response.data : [];
 }
@@ -510,6 +566,10 @@ function toFixtureTimestamp(value: unknown) {
 
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function isTerminalFixturePhaseStatus(status: unknown) {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 type LegacyNormalizedAgentRun = Record<string, any> & {
@@ -603,9 +663,15 @@ async function buildLegacyParallelFixtureProjection() {
     }),
   );
   const derivedGroups: Array<{
+    phaseId: string;
     rootSessionId?: string;
     candidateSessionIds: string[];
     startedAt?: string;
+    finishedAt?: string;
+    updatedAt?: string;
+    status?: string;
+    candidateCount?: number;
+    winnerSessionId?: string | null;
   }> = [];
 
   const resolveProjectedSessionId = (
@@ -789,10 +855,23 @@ async function buildLegacyParallelFixtureProjection() {
     }
 
     derivedGroups.push({
+      phaseId: args.coordinationKey,
       rootSessionId:
         typeof args.run.rootSessionId === "string" ? args.run.rootSessionId : taskState.task.sessionId,
       candidateSessionIds: groupCandidateSessionIds,
       startedAt: args.run.startedAt ?? args.run.createdAt ?? undefined,
+      finishedAt:
+        args.detail?.run?.finishedAt ??
+        args.detail?.run?.updatedAt ??
+        args.run.finishedAt ??
+        args.run.updatedAt ??
+        undefined,
+      updatedAt: args.run.updatedAt ?? args.run.createdAt ?? undefined,
+      status:
+        args.detail?.run?.status ??
+        (typeof args.run.status === "string" ? args.run.status : undefined),
+      candidateCount: groupCandidateSessionIds.length,
+      winnerSessionId: typeof winnerSessionId === "string" ? winnerSessionId : null,
     });
   };
 
@@ -919,6 +998,82 @@ function mergeFixtureRecords<T extends { id?: string | null }>(primary: T[], fal
   return Array.from(merged.values());
 }
 
+async function buildLegacyParallelPhaseFixtures() {
+  const explicitPhases = getFixtureDataArray(legacyParallelFixtureState.phaseResponse);
+  const explicitSessions = getFixtureDataArray(legacyParallelFixtureState.taskSessionsResponse);
+  const projection = await buildLegacyParallelFixtureProjection();
+  const mergedSessions = mergeFixtureRecords(explicitSessions, projection.sessions);
+
+  const phasesById = new Map<string, any>(
+    explicitPhases
+      .filter((phase) => typeof phase?.id === "string" && phase.id.length > 0)
+      .map((phase) => [phase.id, phase] as const),
+  );
+
+  projection.groups.forEach((group, index) => {
+    if (!group.phaseId || phasesById.has(group.phaseId)) {
+      return;
+    }
+
+    const status = group.status ?? "completed";
+
+    phasesById.set(group.phaseId, {
+      id: group.phaseId,
+      phaseIndex: index + 1,
+      phaseKind: "parallel",
+      triggerType: "execute",
+      status,
+      parentPhaseId: null,
+      resumedFromPhaseId: null,
+      awaitingAdoptionSince: null,
+      anchorSessionId: group.rootSessionId ?? null,
+      coordinationKey: group.phaseId,
+      candidateCount: group.candidateCount ?? group.candidateSessionIds.length,
+      winnerSessionId: group.winnerSessionId ?? null,
+      judgeSessionId: null,
+      startedAt: group.startedAt ?? null,
+      finishedAt: isTerminalFixturePhaseStatus(status) ? (group.finishedAt ?? null) : null,
+      createdAt: group.startedAt ?? null,
+      updatedAt: group.updatedAt ?? group.finishedAt ?? group.startedAt ?? null,
+      sessionIds: [group.rootSessionId, ...group.candidateSessionIds].filter(
+        (sessionId): sessionId is string =>
+          typeof sessionId === "string" && sessionId.length > 0,
+      ),
+    });
+  });
+
+  const phaseViewsById = new Map<string, any>(legacyParallelFixtureState.phaseViewResponses);
+  for (const phase of Array.from(phasesById.values())) {
+    if (phaseViewsById.has(phase.id)) {
+      continue;
+    }
+
+    const sessions = mergedSessions.filter((session) => session.phaseId === phase.id);
+    phaseViewsById.set(phase.id, {
+      data: {
+        phase,
+        sessions,
+        messageGroups: [],
+        meta: {
+          readSource: "test-fixture-derived-phase-parallel",
+          currentPhaseId: phase.id,
+          latestPhaseId: phase.id,
+          sessionCount: sessions.length,
+          messageGroupCount: 0,
+          messageCount: 0,
+        },
+      },
+    });
+  }
+
+  return {
+    phases: Array.from(phasesById.values()).sort(
+      (left, right) => (Number(left.phaseIndex) || 0) - (Number(right.phaseIndex) || 0),
+    ),
+    phaseViewsById,
+  };
+}
+
 async function applyLegacyParallelFixtureFallbacks() {
   const explicitSessions = getFixtureDataArray(legacyParallelFixtureState.taskSessionsResponse);
   const projection = await buildLegacyParallelFixtureProjection();
@@ -1031,6 +1186,7 @@ async function mountPage() {
           name: "TaskDetailQuickOverview",
           template: '<div data-testid="quick-overview" />',
         }),
+        TaskDetailPhaseBlockList: TaskDetailPhaseBlockListStub,
         ChatMessageList: ChatMessageListStub,
         ChatComposer: ChatComposerStub,
         ExecutionModeModal: defineComponent({
@@ -1108,6 +1264,8 @@ async function mountPage() {
   await flushPromises();
   await nextTick();
   await flushPromises();
+  await nextTick();
+  await flushPromises();
   mountedWrappers.push(wrapper);
   return wrapper;
 }
@@ -1131,6 +1289,8 @@ describe("TaskDetailV3 runtime permissions", () => {
     legacyParallelFixtureState.agentRunsResponse = { data: [] };
     legacyParallelFixtureState.domainRunsResponse = { data: [] };
     legacyParallelFixtureState.domainRunDetailResponse = null;
+    legacyParallelFixtureState.phaseResponse = null;
+    legacyParallelFixtureState.phaseViewResponses.clear();
     legacyParallelFixtureState.domainRunDetailImplementation = null;
     routeState.params = { taskId: "task-1" };
     routeState.query = {};
@@ -1171,6 +1331,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         : [];
     });
     branchState.currentPhaseId = null;
+    branchState.currentSessionId = taskState.task.sessionId ?? null;
     branchState.sessionSummaries = null;
     branchSessionSummariesRef.value = [];
     branchState.flatNodes = [
@@ -1187,9 +1348,17 @@ describe("TaskDetailV3 runtime permissions", () => {
     realtimeStoreMock.events = [];
     messagesState.trace = null;
     messagesState.conversationItems = [];
+    messagesState.phaseSlices = [];
     messagesState.hasStreamingAssistant = false;
+    messagesState.hasOlderHistory = false;
+    messagesState.historyLoading = false;
+    messagesState.loading = false;
     messagesState.clearPendingAssistantDraft.mockReset();
+    messagesState.error = null;
+    messagesState.loadOlderHistory.mockReset();
+    messagesState.loadOlderHistory.mockImplementation(async () => undefined);
     messagesState.seedPendingAssistantDraft.mockReset();
+    messagesState.sourceMessages = [];
     apiMocks.getTaskWorkflowView.mockResolvedValue(null);
     apiMocks.getTaskMemberView.mockResolvedValue({
       taskId: "task-1",
@@ -1256,6 +1425,23 @@ describe("TaskDetailV3 runtime permissions", () => {
     });
     apiMocks.getModelsList.mockResolvedValue({ data: [] });
     apiMocks.getTaskAgentRuns.mockResolvedValue({ data: [] });
+    apiMocks.getTaskPhases.mockImplementation(async () => {
+      const fixtures = await buildLegacyParallelPhaseFixtures();
+      if (fixtures.phases.length > 0) {
+        return { data: fixtures.phases };
+      }
+
+      throw new Error("phase fixtures unavailable");
+    });
+    apiMocks.getTaskPhaseView.mockImplementation(async (_taskId: string, phaseId: string) => {
+      const fixtures = await buildLegacyParallelPhaseFixtures();
+      const phaseView = fixtures.phaseViewsById.get(phaseId)?.data;
+      if (phaseView) {
+        return { data: phaseView };
+      }
+
+      throw new Error(`phase view unavailable: ${phaseId}`);
+    });
     apiMocks.getTaskConversationMessages.mockResolvedValue({ data: [] });
     apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
     setLegacyParallelRuns([]);
@@ -1433,7 +1619,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(wrapper.get('[data-testid="trace-panel"]').attributes("data-refresh-key")).toBe("1");
   });
 
-  it("refreshes task state when a task-domain snapshot event arrives without forcing message reload", async () => {
+  it("refreshes phase-aware task and compare state without forcing message reload", async () => {
     vi.useFakeTimers();
     try {
       const wrapper = await mountPage();
@@ -1444,10 +1630,10 @@ describe("TaskDetailV3 runtime permissions", () => {
       realtimeStoreMock.events = [
         {
           id: "evt-snapshot-1",
-          type: "task.snapshot.updated",
+          type: "task.phase.updated",
           taskId: "task-1",
           data: {
-            reason: "session.updated",
+            phaseId: "phase-1",
           },
         },
       ];
@@ -1869,6 +2055,124 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(
       wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id"),
     ).toBe("ses-1");
+    expect(routerState.replace).not.toHaveBeenCalled();
+  });
+
+  it("uses the current parallel run root session when task.sessionId has drifted onto an active candidate", async () => {
+    taskState.task.status = "completed";
+    taskState.task.agentRunId = undefined;
+    taskState.task.executionMode = "parallel";
+    taskState.task.orchestrationKind = "parallel";
+    taskState.task.currentRunId = "run-pending-adopt-drifted";
+    taskState.task.sessionId = "ses-a";
+    branchState.flatNodes = [
+      {
+        id: "node-session-root",
+        parentId: "node-task-1",
+        runtimeSessionId: "ses-root",
+        isActive: false,
+        contentText: "主分支",
+        branchName: "main",
+      },
+      {
+        id: "node-session-a",
+        parentId: "node-session-root",
+        runtimeSessionId: "ses-a",
+        isActive: true,
+        contentText: "候选 A",
+        branchName: "candidate-a",
+      },
+      {
+        id: "node-session-b",
+        parentId: "node-session-root",
+        runtimeSessionId: "ses-b",
+        isActive: false,
+        contentText: "候选 B",
+        branchName: "candidate-b",
+      },
+    ];
+    branchState.selectedNode = null;
+    messagesState.conversationItems = [
+      {
+        key: "user-mainline-drifted",
+        role: "user",
+        text: "请并行比较两个候选",
+        createdAt: "2026-03-22T04:05:00.000Z",
+        toolCalls: [],
+        raw: null,
+      },
+    ];
+    setLegacyParallelRuns([
+      {
+        id: "run-pending-adopt-drifted",
+        taskId: "task-1",
+        projectId: "proj-1",
+        orchestrationKind: "parallel",
+        triggerType: "user_execute",
+        status: "completed",
+        rootSessionId: "ses-root",
+        createdAt: "2026-03-22T04:05:00.000Z",
+        updatedAt: "2026-03-22T04:05:10.000Z",
+      },
+    ]);
+    setLegacyParallelRunDetail({
+      run: {
+        id: "run-pending-adopt-drifted",
+        taskId: "task-1",
+        projectId: "proj-1",
+        orchestrationKind: "parallel",
+        triggerType: "user_execute",
+        status: "completed",
+        rootSessionId: "ses-root",
+        createdAt: "2026-03-22T04:05:00.000Z",
+        updatedAt: "2026-03-22T04:05:10.000Z",
+      },
+      nodes: [],
+      candidateNodes: [
+        {
+          id: "pending-drifted-node-a",
+          runId: "run-pending-adopt-drifted",
+          taskId: "task-1",
+          projectId: "proj-1",
+          nodeKind: "candidate",
+          nodeKey: "candidate:0",
+          title: "候选 A",
+          candidateIndex: 0,
+          agentType: "executor",
+          modelUsed: "gpt-5-mini",
+          sessionId: "ses-a",
+          status: "completed",
+          resultText: "A",
+          createdAt: "2026-03-22T04:05:01.000Z",
+          updatedAt: "2026-03-22T04:05:02.000Z",
+        },
+        {
+          id: "pending-drifted-node-b",
+          runId: "run-pending-adopt-drifted",
+          taskId: "task-1",
+          projectId: "proj-1",
+          nodeKind: "candidate",
+          nodeKey: "candidate:1",
+          title: "候选 B",
+          candidateIndex: 1,
+          agentType: "executor",
+          modelUsed: "gpt-4o",
+          sessionId: "ses-b",
+          status: "completed",
+          resultText: "B",
+          createdAt: "2026-03-22T04:05:01.000Z",
+          updatedAt: "2026-03-22T04:05:02.000Z",
+        },
+      ],
+      judgeNode: null,
+      winnerCandidateIndex: null,
+    });
+
+    const wrapper = await mountPage();
+
+    expect(
+      wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id"),
+    ).toBe("ses-root");
     expect(routerState.replace).not.toHaveBeenCalled();
   });
 
@@ -2881,10 +3185,10 @@ describe("TaskDetailV3 runtime permissions", () => {
       .map((node) => node.text())
       .join("\n");
 
-    expect(candidateTexts).toContain("current-summary-a");
-    expect(candidateTexts).toContain("current-summary-b");
-    expect(candidateTexts).not.toContain("stale-summary-main");
-    expect(candidateTexts).not.toContain("stale-summary-b");
+    expect(candidateTexts).toContain("current-trace-a");
+    expect(candidateTexts).toContain("current-trace-b");
+    expect(candidateTexts).not.toContain("stale-trace-main");
+    expect(candidateTexts).not.toContain("stale-trace-b");
   });
 
   it("keeps a selected historical session pinned instead of forcing the current pending-adoption batch", async () => {
@@ -3928,16 +4232,22 @@ describe("TaskDetailV3 runtime permissions", () => {
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
-    await flushPromises();
-    await nextTick();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await flushPromises();
+      await nextTick();
+    }
 
     let parallelItem = wrapper
       .findAll(".chat-item")
       .find((node) => node.attributes("data-role") === "parallel");
 
+    expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "ses-a", {
+      includeLineage: false,
+    });
+    expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|running");
+    expect(parallelItem?.attributes("data-candidate-entry-roles")).toBe("assistant|");
     expect(wrapper.get(".parallel-candidate-texts").text()).toContain("会话回退候选 A");
     expect(wrapper.get(".parallel-candidate-texts").text()).not.toContain("追踪候选 B");
-    expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|running");
 
     traceB.resolve({
       taskId: "task-1",
@@ -6217,6 +6527,177 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(parallelItem?.attributes("data-candidate-agents")).toBe("|");
   });
 
+  it("renders ordered phase blocks from snapshot phase slices instead of a single flat message list", async () => {
+    taskState.task.status = "completed";
+    taskState.task.executionMode = "single";
+    messagesState.conversationItems = [
+      {
+        key: "flat-user",
+        role: "user",
+        text: "旧扁平消息",
+        createdAt: "2026-03-22T08:59:00.000Z",
+        toolCalls: [],
+        raw: null,
+      },
+    ];
+    messagesState.phaseSlices = [
+      {
+        phase: {
+          id: "phase-2",
+          phaseIndex: 2,
+          phaseKind: "single",
+          triggerType: "continue",
+          status: "completed",
+          startedAt: "2026-03-22T09:10:00.000Z",
+        },
+        sourceMessages: [
+          {
+            id: "phase-2-user",
+            role: "user",
+            text: "第二阶段问题",
+            createdAt: "2026-03-22T09:10:01.000Z",
+          },
+        ],
+        resolvedSessionId: "ses-phase-2",
+      },
+      {
+        phase: {
+          id: "phase-1",
+          phaseIndex: 1,
+          phaseKind: "single",
+          triggerType: "execute",
+          status: "completed",
+          startedAt: "2026-03-22T09:00:00.000Z",
+        },
+        sourceMessages: [
+          {
+            id: "phase-1-user",
+            role: "user",
+            text: "第一阶段问题",
+            createdAt: "2026-03-22T09:00:01.000Z",
+          },
+          {
+            id: "phase-1-assistant",
+            role: "assistant",
+            text: "第一阶段回复",
+            createdAt: "2026-03-22T09:00:02.000Z",
+          },
+        ],
+        resolvedSessionId: "ses-phase-1",
+      },
+    ];
+    apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+    const wrapper = await mountPage();
+    const blocks = wrapper.findAll(".task-detail-v3-phase-block");
+    const phaseBlockList = wrapper.find('[data-testid="phase-block-list"]');
+    const messageLists = wrapper.findAll('[data-testid="chat-message-list"]');
+    const renderedItems = wrapper.findAll(".phase-block-item").map((node) => ({
+      role: node.attributes("data-role"),
+      text: node.attributes("data-text"),
+    }));
+
+    expect(phaseBlockList.exists()).toBe(true);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]?.attributes("data-phase-index")).toBe("1");
+    expect(blocks[0]?.attributes("data-phase-id")).toBe("phase-1");
+    expect(blocks[1]?.attributes("data-phase-index")).toBe("2");
+    expect(blocks[1]?.attributes("data-phase-id")).toBe("phase-2");
+    expect(messageLists).toHaveLength(0);
+    expect(renderedItems).toEqual([
+      { role: "user", text: "第一阶段问题" },
+      { role: "assistant", text: "第一阶段回复" },
+      { role: "user", text: "第二阶段问题" },
+    ]);
+    expect(renderedItems.some((item) => item.text === "旧扁平消息")).toBe(false);
+  });
+
+  it("includes current live assistant items inside the current phase block", async () => {
+    taskState.task.status = "running";
+    branchState.currentPhaseId = "phase-2";
+    messagesState.phaseSlices = [
+      {
+        phase: {
+          id: "phase-1",
+          phaseIndex: 1,
+          phaseKind: "single",
+          triggerType: "execute",
+          status: "completed",
+          startedAt: "2026-03-22T09:00:00.000Z",
+        },
+        sourceMessages: [
+          {
+            id: "phase-1-user",
+            role: "user",
+            text: "第一阶段问题",
+            createdAt: "2026-03-22T09:00:01.000Z",
+          },
+        ],
+        resolvedSessionId: "ses-phase-1",
+      },
+      {
+        phase: {
+          id: "phase-2",
+          phaseIndex: 2,
+          phaseKind: "single",
+          triggerType: "continue",
+          status: "running",
+          startedAt: "2026-03-22T09:10:00.000Z",
+        },
+        sourceMessages: [
+          {
+            id: "phase-2-user",
+            role: "user",
+            text: "第二阶段问题",
+            createdAt: "2026-03-22T09:10:01.000Z",
+          },
+        ],
+        resolvedSessionId: "ses-phase-2",
+      },
+    ];
+    messagesState.conversationItems = [
+      {
+        key: "phase-1-user",
+        role: "user",
+        text: "第一阶段问题",
+        createdAt: "2026-03-22T09:00:01.000Z",
+        toolCalls: [],
+        raw: null,
+      },
+      {
+        key: "phase-2-user",
+        role: "user",
+        text: "第二阶段问题",
+        createdAt: "2026-03-22T09:10:01.000Z",
+        toolCalls: [],
+        raw: null,
+      },
+      {
+        key: "pending-assistant:ses-phase-2:2026-03-22T09:10:02.000Z",
+        role: "assistant",
+        text: "正在生成...",
+        createdAt: "2026-03-22T09:10:02.000Z",
+        toolCalls: [],
+        raw: null,
+        isStreaming: true,
+      },
+    ];
+    apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+    const wrapper = await mountPage();
+    const phaseTwoItems = wrapper
+      .findAll('.task-detail-v3-phase-block[data-phase-id="phase-2"] .phase-block-item')
+      .map((node) => ({
+        role: node.attributes("data-role"),
+        text: node.attributes("data-text"),
+      }));
+
+    expect(phaseTwoItems).toEqual([
+      { role: "user", text: "第二阶段问题" },
+      { role: "assistant", text: "正在生成..." },
+    ]);
+  });
+
   it("derives the adopted fallback candidate from task session summaries", async () => {
     taskState.task.status = "running";
     taskState.task.executionMode = "parallel";
@@ -7403,6 +7884,8 @@ describe("TaskDetailV3 runtime permissions", () => {
     taskState.task.orchestrationKind = "parallel";
     taskState.task.currentRunId = undefined;
     taskState.task.sessionId = "ses-current-a";
+    branchState.currentSessionId = "ses-current-a";
+    branchState.currentPhaseId = "phase-current";
     branchState.flatNodes = [
       {
         id: "node-root",

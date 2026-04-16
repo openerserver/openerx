@@ -33,10 +33,23 @@ export type TaskDetailParallelReadModel = {
 };
 
 function resolveCurrentParallelRunId(args: {
+  currentPhaseId?: string | null;
   resolvedParallelRuns: ParallelRunRecord[];
   sessionScopedParallelRuns: ParallelRunRecord[];
   task?: TreeTask | null | undefined;
 }) {
+  const currentPhaseComparableRun =
+    typeof args.currentPhaseId === "string" && args.currentPhaseId.length > 0
+      ? args.resolvedParallelRuns.find(
+          (run) =>
+            run.phaseId === args.currentPhaseId && run.candidateSessions.length >= 2,
+        )
+      : null;
+
+  if (currentPhaseComparableRun) {
+    return currentPhaseComparableRun.parallelRunId;
+  }
+
   const taskSessionComparableRun = findLatestComparableRunForSession(
     args.resolvedParallelRuns,
     args.task?.sessionId,
@@ -104,39 +117,56 @@ function buildResolvedParallelRuns(args: {
   agentRuns: TaskAgentRunRecord[];
   configuredCandidates: ConfiguredParallelCandidate[];
   flatNodes: TreeSessionNodeRecord[];
+  phaseAuthorityLoaded?: boolean;
+  phaseParallelRuns?: ParallelRunRecord[];
   selectedSessionId?: string;
   selectedSessionNode?: TreeSessionNodeRecord | null;
   task?: TreeTask | null | undefined;
   taskNodeId: string;
   taskSessionSummaries: TaskSessionRecord[];
 }) {
-  const primaryParallelRuns = buildSessionSummaryParallelRuns({
-    task: args.task,
-    sessionSummaries: args.taskSessionSummaries,
-    sessionNodes: args.flatNodes,
-    agentRuns: args.agentRuns,
-    configuredCandidates: args.configuredCandidates.map((candidate) => ({
-      label: candidate.label,
-      model: candidate.model ?? "",
-    })),
-  });
+  const phaseParallelRuns = Array.isArray(args.phaseParallelRuns)
+    ? args.phaseParallelRuns.filter((run) => run.candidateSessions.length >= 2)
+    : [];
+  const shouldUsePhaseAuthority = args.phaseAuthorityLoaded === true;
+  const summaryParallelRuns =
+    shouldUsePhaseAuthority || phaseParallelRuns.length > 0
+      ? []
+      : buildSessionSummaryParallelRuns({
+          task: args.task,
+          sessionSummaries: args.taskSessionSummaries,
+          sessionNodes: args.flatNodes,
+          agentRuns: args.agentRuns,
+          configuredCandidates: args.configuredCandidates.map((candidate) => ({
+            label: candidate.label,
+            model: candidate.model ?? "",
+          })),
+        });
+  const primaryParallelRuns = shouldUsePhaseAuthority
+    ? phaseParallelRuns
+    : phaseParallelRuns.length > 0
+      ? phaseParallelRuns
+      : summaryParallelRuns;
 
-  const sessionTreeFallbackRun = buildSessionTreeFallbackParallelRun({
-    taskNodeId: args.taskNodeId,
-    task: args.task,
-    flatNodes: args.flatNodes,
-    selectedSessionId: args.selectedSessionId,
-    selectedSessionNode: args.selectedSessionNode,
-    configuredCandidates: args.configuredCandidates,
-    existingRuns: primaryParallelRuns,
-  });
+  const sessionTreeFallbackRun =
+    shouldUsePhaseAuthority || phaseParallelRuns.length > 0
+      ? null
+      : buildSessionTreeFallbackParallelRun({
+          taskNodeId: args.taskNodeId,
+          task: args.task,
+          flatNodes: args.flatNodes,
+          selectedSessionId: args.selectedSessionId,
+          selectedSessionNode: args.selectedSessionNode,
+          configuredCandidates: args.configuredCandidates,
+          existingRuns: primaryParallelRuns,
+        });
   const resolvedRuns = sessionTreeFallbackRun
     ? [...primaryParallelRuns, sessionTreeFallbackRun]
     : primaryParallelRuns;
 
   return resolvedRuns
     .map((run) => {
-      if (typeof run.winnerCandidateIndex === "number") {
+      if (typeof run.winnerCandidateIndex === "number" || typeof run.phaseId === "string") {
         return run;
       }
 
@@ -171,7 +201,10 @@ export function buildTaskDetailParallelReadModel(args: {
   agentRuns: TaskAgentRunRecord[];
   baseConversationItems: TaskConversationListItem[];
   configuredCandidates: ConfiguredParallelCandidate[];
+  currentPhaseId?: string | null;
   flatNodes: TreeSessionNodeRecord[];
+  phaseAuthorityLoaded?: boolean;
+  phaseParallelRuns?: ParallelRunRecord[];
   selectedSessionId?: string;
   selectedSessionNode?: TreeSessionNodeRecord | null;
   task?: TreeTask | null | undefined;
@@ -189,6 +222,7 @@ export function buildTaskDetailParallelReadModel(args: {
     task: args.task,
   });
   const currentParallelRunId = resolveCurrentParallelRunId({
+    currentPhaseId: args.currentPhaseId,
     resolvedParallelRuns,
     sessionScopedParallelRuns,
     task: args.task,

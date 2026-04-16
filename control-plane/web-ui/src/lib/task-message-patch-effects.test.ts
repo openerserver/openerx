@@ -193,7 +193,7 @@ describe("task message patch effects", () => {
     });
   });
 
-  it("refreshes session snapshots without forcing canonical message reload", () => {
+  it("keeps session snapshots out of task detail refresh scheduling", () => {
     expect(
       getTaskMessagePatchEffects(
         createPatchEvent("session-created", {
@@ -204,7 +204,7 @@ describe("task message patch effects", () => {
       updatesLiveAssistantState: false,
       shouldRefreshCanonicalMessages: false,
       shouldRefreshTaskDetailMessages: false,
-      shouldScheduleTaskDetailRefresh: true,
+      shouldScheduleTaskDetailRefresh: false,
       shouldBumpTaskDetailTraceRefreshKey: false,
       shouldRefreshMonitorSummary: true,
     });

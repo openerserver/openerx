@@ -22,6 +22,7 @@ describe("useTaskDetailRefreshController", () => {
     const messageReconcileRequired = ref(false);
     const workflowReconcileRequired = ref(false);
     const forceMessagePolling = ref(false);
+    const skipMessageRefreshEventId = ref<string | null>(null);
     const realtimeConnected = ref(true);
     const shouldPollRunningStatus = ref(false);
     const refreshFlowSnapshot = vi.fn(async () => undefined);
@@ -37,6 +38,7 @@ describe("useTaskDetailRefreshController", () => {
         messageReconcileRequired,
         workflowReconcileRequired,
         forceMessagePolling,
+        skipMessageRefreshEventId,
         realtimeConnected,
         shouldPollRunningStatus,
         refreshFlowSnapshot,
@@ -54,6 +56,7 @@ describe("useTaskDetailRefreshController", () => {
       messageReconcileRequired,
       workflowReconcileRequired,
       forceMessagePolling,
+      skipMessageRefreshEventId,
       realtimeConnected,
       shouldPollRunningStatus,
       refreshFlowSnapshot,
@@ -85,6 +88,34 @@ describe("useTaskDetailRefreshController", () => {
     vi.advanceTimersByTime(1);
     await nextTick();
     expect(refreshMessageSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("skips a redundant round-synced message-only refresh once the local phase snapshot has caught up", async () => {
+    const {
+      latestTaskRefreshRequest,
+      refreshMessageSnapshot,
+      refreshTaskSnapshot,
+      skipMessageRefreshEventId,
+    } = mountController();
+
+    skipMessageRefreshEventId.value = "event-ack-1";
+    latestTaskRefreshRequest.value = {
+      eventId: "event-ack-1",
+      reason: "round-synced",
+      targets: {
+        workflow: false,
+        flow: false,
+        messages: true,
+      },
+      shouldBumpTraceRefreshKey: false,
+    };
+
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshMessageSnapshot).not.toHaveBeenCalled();
     expect(refreshTaskSnapshot).not.toHaveBeenCalled();
   });
 
@@ -154,12 +185,12 @@ describe("useTaskDetailRefreshController", () => {
     expect(refreshTaskSnapshot).not.toHaveBeenCalled();
   });
 
-  it("uses the combined snapshot path when one request spans multiple refresh targets", async () => {
+  it("uses the combined snapshot path when one request spans workflow and flow targets", async () => {
     const { latestTaskRefreshRequest, refreshFlowSnapshot, refreshTaskSnapshot, refreshWorkflowSnapshot } = mountController();
 
     latestTaskRefreshRequest.value = {
       eventId: "event-session-1",
-      reason: "session-created",
+      reason: "task-updated",
       targets: {
         workflow: true,
         flow: true,

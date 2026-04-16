@@ -12,7 +12,10 @@ type QueuedContinuationItem = {
 };
 
 export function useTaskDetailMainPaneFeature(args: {
-  compare: Pick<MainPaneModelArgs, "canTerminateExecution" | "conversationItems" | "handleAdoptCandidate">;
+  compare: Pick<
+    MainPaneModelArgs,
+    "canTerminateExecution" | "conversationItems" | "handleAdoptCandidate" | "phaseBlocks"
+  >;
   conversation: Pick<
     MainPaneModelArgs,
     | "assistantMessageModelFallback"
@@ -115,6 +118,7 @@ export function useTaskDetailMainPaneFeature(args: {
     composerResetToken: args.conversation.composerResetToken,
     conversationFocusToken: args.conversation.conversationFocusToken,
     conversationItems: args.compare.conversationItems,
+    phaseBlocks: args.compare.phaseBlocks,
     editableExecutionMode: args.workflow.editableExecutionMode,
     editableJudgeConfig: args.workflow.editableJudgeConfig,
     editableParallelCandidates: args.workflow.editableParallelCandidates,

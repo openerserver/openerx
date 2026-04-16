@@ -63,6 +63,7 @@ export function buildTaskSessionRegistrations(
     activateTaskSession: shared.branchWriteApi.activateTaskBranch,
     archiveTaskSession: shared.branchWriteApi.archiveTaskBranch,
     listTaskSessions: shared.sessionReadApi.listTaskSessions,
+    getTaskPhaseView: shared.sessionReadApi.getTaskPhaseView,
     getTaskSession: shared.sessionReadApi.getTaskSession,
     buildTaskConversationMessagesResponse:
       shared.sessionReadApi.buildTaskConversationMessagesResponse,

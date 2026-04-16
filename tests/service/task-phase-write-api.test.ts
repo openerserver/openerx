@@ -18,6 +18,31 @@ const fakeTaskSessions = {
   createdAt: "createdAt",
   status: "status",
   executionStatus: "executionStatus",
+  latestRunId: "latestRunId",
+  headMessageId: "headMessageId",
+  finishedAt: "finishedAt",
+};
+
+const fakeTaskSessionRuns = {
+  id: "id",
+  taskId: "taskId",
+  sessionId: "sessionId",
+  status: "status",
+  finishedAt: "finishedAt",
+};
+
+const fakeTaskMessages = {
+  id: "id",
+  taskId: "taskId",
+  sessionId: "sessionId",
+  role: "role",
+  status: "status",
+  createdByRunId: "createdByRunId",
+  completedAt: "completedAt",
+};
+
+const fakeTaskOperations = {
+  id: "id",
 };
 
 const fakeTaskSnapshots = {
@@ -46,6 +71,15 @@ function resolveTableName(table: unknown) {
   if (table === fakeTaskSnapshots) {
     return "task_snapshots";
   }
+  if (table === fakeTaskSessionRuns) {
+    return "task_session_runs";
+  }
+  if (table === fakeTaskMessages) {
+    return "task_messages";
+  }
+  if (table === fakeTaskOperations) {
+    return "task_operations";
+  }
 
   return "unknown";
 }
@@ -55,6 +89,8 @@ async function loadTaskPhaseWriteModule(options?: {
   phaseSessions?: Array<Record<string, unknown>>;
   winnerSession?: Record<string, unknown> | null;
   existingSnapshot?: Record<string, unknown> | null;
+  winnerLatestRun?: Record<string, unknown> | null;
+  winnerHeadMessage?: Record<string, unknown> | null;
 }) {
   importCounter += 1;
 
@@ -81,6 +117,12 @@ async function loadTaskPhaseWriteModule(options?: {
       taskSessions: {
         findMany: mock(async () => options?.phaseSessions ?? []),
         findFirst: mock(async () => options?.winnerSession ?? null),
+      },
+      taskSessionRuns: {
+        findFirst: mock(async () => options?.winnerLatestRun ?? null),
+      },
+      taskMessages: {
+        findFirst: mock(async () => options?.winnerHeadMessage ?? null),
       },
       taskSnapshots: {
         findFirst: mock(async () => options?.existingSnapshot ?? null),
@@ -114,6 +156,9 @@ async function loadTaskPhaseWriteModule(options?: {
   }));
   mock.module("../../control-plane/service/src/db/schema", () => ({
     taskExecutionPhases: fakeTaskExecutionPhases,
+    taskMessages: fakeTaskMessages,
+    taskOperations: fakeTaskOperations,
+    taskSessionRuns: fakeTaskSessionRuns,
     taskSessions: fakeTaskSessions,
     taskSnapshots: fakeTaskSnapshots,
   }));
@@ -271,6 +316,9 @@ describe("task phase write api", () => {
       createdAt: "2026-04-09T09:59:01.000Z",
       status: "completed",
       executionStatus: "running",
+      latestRunId: "run-a",
+      headMessageId: "msg-a",
+      finishedAt: "2026-04-09T10:00:01.000Z",
     };
     const candidateB = {
       id: "session-b",
@@ -279,12 +327,31 @@ describe("task phase write api", () => {
       createdAt: "2026-04-09T09:59:02.000Z",
       status: "completed",
       executionStatus: "complete",
+      latestRunId: "run-b",
+      headMessageId: "msg-b",
+      finishedAt: null,
     };
 
     const { createTaskPhaseWriteApi, insertCalls, updateCalls } = await loadTaskPhaseWriteModule({
       phaseFindFirstResults: [phase],
       phaseSessions: [candidateA, candidateB],
       winnerSession: candidateB,
+      winnerLatestRun: {
+        id: "run-b",
+        taskId: "task-1",
+        sessionId: "session-b",
+        status: "running",
+        finishedAt: null,
+      },
+      winnerHeadMessage: {
+        id: "msg-b",
+        taskId: "task-1",
+        sessionId: "session-b",
+        role: "assistant",
+        status: "completed",
+        createdByRunId: "run-b",
+        completedAt: "2026-04-09T10:00:02.500Z",
+      },
       existingSnapshot: {
         taskId: "task-1",
         lifecycleStatus: "active",
@@ -315,6 +382,12 @@ describe("task phase write api", () => {
 
     const sessionUpdates = updateCalls.filter((call) => call.table === "task_sessions");
     expect(sessionUpdates).toHaveLength(2);
+    const runUpdates = updateCalls.filter((call) => call.table === "task_session_runs");
+    expect(runUpdates).toHaveLength(1);
+    expect(runUpdates[0]?.payload).toMatchObject({
+      status: "completed",
+      finishedAt: "2026-04-09T10:00:02.500Z",
+    });
     expect(sessionUpdates[0]?.payload).toMatchObject({
       winnerSessionId: "session-b",
       status: "completed",
@@ -325,6 +398,7 @@ describe("task phase write api", () => {
       winnerSessionId: "session-b",
       status: "completed",
       executionStatus: "complete",
+      finishedAt: "2026-04-09T10:00:02.500Z",
       updatedAt: expect.any(String),
     });
 

@@ -182,12 +182,101 @@ function resolveParallelConversationWindowEndAt(parallelItem: TaskConversationPa
     .sort((left, right) => right - left)[0];
 }
 
+function extractConversationMessageSessionId(item: TaskConversationListItem) {
+  if (item.role === "parallel" || item.role === "workflow") {
+    return undefined;
+  }
+
+  const raw = asRecord(item.raw);
+  const info = asRecord(raw?.info);
+  const candidates = [
+    asString(raw?.sourceSessionId),
+    asString(raw?.sessionId),
+    asString(info?.sessionId),
+    asString(info?.id),
+    asString(raw?.id),
+    item.key,
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    if (candidate.endsWith(":user-prompt")) {
+      return candidate.slice(0, -":user-prompt".length);
+    }
+
+    for (const marker of [":assistant:", ":tool:", ":tool-result:"]) {
+      const markerIndex = candidate.indexOf(marker);
+      if (markerIndex > 0) {
+        return candidate.slice(0, markerIndex);
+      }
+    }
+
+    return candidate;
+  }
+
+  return undefined;
+}
+
+function matchesParallelCandidateSessionId(sessionId: string, candidateSessionIds: Set<string>) {
+  if (candidateSessionIds.has(sessionId)) {
+    return true;
+  }
+
+  for (const candidateSessionId of candidateSessionIds) {
+    if (
+      sessionId.endsWith(`:${candidateSessionId}`) ||
+      candidateSessionId.endsWith(`:${sessionId}`)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function suppressTopLevelParallelCandidateMessages(
+  items: TaskConversationListItem[],
+  parallelItem: TaskConversationParallelItem,
+) {
+  const rawRun = asRecord(parallelItem.raw);
+  const candidateSessions = Array.isArray(rawRun?.candidateSessions)
+    ? rawRun.candidateSessions
+    : [];
+  const candidateSessionIds = new Set(
+    candidateSessions
+      .map((candidate) => asString(asRecord(candidate)?.sessionId))
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  if (candidateSessionIds.size === 0) {
+    return items;
+  }
+
+  return items.filter((item) => {
+    const sessionId = extractConversationMessageSessionId(item);
+    if (!sessionId) {
+      return true;
+    }
+
+    return !matchesParallelCandidateSessionId(sessionId, candidateSessionIds);
+  });
+}
+
 function insertParallelConversationItem(
   items: TaskConversationListItem[],
   parallelItem: TaskConversationParallelItem,
 ) {
-  const anchorIndex = findParallelConversationAnchorIndex(items, parallelItem);
   if (shouldHideUnadoptedParallelMessagesForRun(parallelItem)) {
+    const filteredItems = suppressTopLevelParallelCandidateMessages(items, parallelItem);
+    if (filteredItems !== items) {
+      items.splice(0, items.length, ...filteredItems);
+    }
+
+    const anchorIndex = findParallelConversationAnchorIndex(items, parallelItem);
+
     if (anchorIndex < 0) {
       items.unshift(parallelItem);
       return;
@@ -222,6 +311,8 @@ function insertParallelConversationItem(
     items.splice(anchorIndex + 1, nextUserIndex - (anchorIndex + 1), parallelItem);
     return;
   }
+
+  const anchorIndex = findParallelConversationAnchorIndex(items, parallelItem);
 
   if (anchorIndex >= 0) {
     const hasAdoptedCandidate = parallelItem.candidates?.some((candidate) => candidate.isAdopted);

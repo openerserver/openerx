@@ -6,12 +6,15 @@ export type ParallelCandidateSessionState = {
   items: TaskConversationMessageItem[];
   hasSettledReply: boolean;
   traceState: ParallelCandidateTraceState;
+  skipTraceLoad?: boolean;
 };
 
 type ParallelCandidateFallbackState = Pick<
   ParallelCandidateSessionState,
   "items" | "hasSettledReply"
 >;
+
+type ParallelCandidateDisplaySource = "phase-view" | "session";
 
 type SuccessfulTraceLoad = {
   ok: true;
@@ -61,45 +64,86 @@ export function hasDisplayableParallelCandidateItems(items: TaskConversationMess
 function buildParallelCandidateSessionFallbackTraceState(args: {
   traceState?: ParallelCandidateTraceState;
   reason: "empty-trace" | "trace-error";
+  displaySource: ParallelCandidateDisplaySource;
 }) {
+  const sourceLabel = args.displaySource === "phase-view" ? "阶段视图" : "会话消息";
+
   if (args.reason === "trace-error") {
     return {
       state: "stale" as const,
-      note: "执行追踪暂时不可用，当前已回退到会话消息展示候选回复。",
+      note: `执行追踪暂时不可用，当前继续展示来自${sourceLabel}的候选内容。`,
     };
   }
 
   return {
     state: args.traceState?.state ?? ("incomplete" as const),
-    note: "执行追踪暂未返回可展示回复，当前已回退到会话消息展示候选内容。",
+    note: `执行追踪暂未返回可展示回复，当前继续展示来自${sourceLabel}的候选内容。`,
   };
 }
 
+function hasTraceState(traceState?: ParallelCandidateTraceState | null) {
+  return Boolean(traceState?.state || traceState?.note);
+}
+
+function resolvePhaseBaselineTraceState(
+  displaySource: ParallelCandidateDisplaySource,
+  phaseBaseline?: ParallelCandidateSessionState | Pick<ParallelCandidateSessionState, "traceState">,
+) {
+  if (displaySource !== "phase-view") {
+    return undefined;
+  }
+
+  return hasTraceState(phaseBaseline?.traceState) ? phaseBaseline?.traceState : undefined;
+}
+
+function canDisplayParallelCandidateState(state?: ParallelCandidateFallbackState | null) {
+  if (!state) {
+    return false;
+  }
+
+  return hasDisplayableParallelCandidateItems(state.items) || state.hasSettledReply;
+}
+
 export function resolveParallelCandidateSessionStateFromSources(args: {
+  phaseBaseline?: ParallelCandidateFallbackState;
   cachedState?: ParallelCandidateSessionState;
   sessionFallback: ParallelCandidateFallbackState;
   silent?: boolean;
   traceLoad: SuccessfulTraceLoad | FailedTraceLoad;
 }): ParallelCandidateSessionState {
-  const canDisplaySessionFallback =
-    hasDisplayableParallelCandidateItems(args.sessionFallback.items) ||
-    args.sessionFallback.hasSettledReply;
+  const canDisplayPhaseBaseline = canDisplayParallelCandidateState(args.phaseBaseline);
+  const canDisplaySessionFallback = canDisplayParallelCandidateState(args.sessionFallback);
+  const preferredDisplayState = canDisplayPhaseBaseline
+    ? args.phaseBaseline!
+    : canDisplaySessionFallback
+      ? args.sessionFallback
+      : null;
+  const preferredDisplaySource: ParallelCandidateDisplaySource = canDisplayPhaseBaseline
+    ? "phase-view"
+    : "session";
+  const preferredPhaseBaselineTraceState = resolvePhaseBaselineTraceState(
+    preferredDisplaySource,
+    args.phaseBaseline,
+  );
 
   if (args.traceLoad.ok) {
     const hasDisplayableTraceItems = hasDisplayableParallelCandidateItems(args.traceLoad.traceItems);
     const hasSettledReply = traceHasSettledCandidateReply(args.traceLoad.trace);
 
-    if (canDisplaySessionFallback) {
+    if (preferredDisplayState) {
       return {
-        items: args.sessionFallback.items,
-        hasSettledReply: hasSettledReply || args.sessionFallback.hasSettledReply,
-        traceState:
-          hasDisplayableTraceItems || hasSettledReply
-            ? args.traceLoad.traceState
-            : buildParallelCandidateSessionFallbackTraceState({
-                traceState: args.traceLoad.traceState,
-                reason: "empty-trace",
-              }),
+        items: preferredDisplayState.items,
+        hasSettledReply: hasSettledReply || preferredDisplayState.hasSettledReply,
+        traceState: hasDisplayableTraceItems || hasSettledReply
+          ? (hasTraceState(args.traceLoad.traceState)
+              ? args.traceLoad.traceState
+              : (preferredPhaseBaselineTraceState ?? {}))
+          : (preferredPhaseBaselineTraceState ??
+            buildParallelCandidateSessionFallbackTraceState({
+              traceState: args.traceLoad.traceState,
+              reason: "empty-trace",
+              displaySource: preferredDisplaySource,
+            })),
       };
     }
 
@@ -110,13 +154,16 @@ export function resolveParallelCandidateSessionStateFromSources(args: {
     };
   }
 
-  if (canDisplaySessionFallback) {
+  if (preferredDisplayState) {
     return {
-      items: args.sessionFallback.items,
-      hasSettledReply: true,
-      traceState: buildParallelCandidateSessionFallbackTraceState({
-        reason: "trace-error",
-      }),
+      items: preferredDisplayState.items,
+      hasSettledReply: preferredDisplayState.hasSettledReply,
+      traceState:
+        preferredPhaseBaselineTraceState ??
+        buildParallelCandidateSessionFallbackTraceState({
+          reason: "trace-error",
+          displaySource: preferredDisplaySource,
+        }),
     };
   }
 

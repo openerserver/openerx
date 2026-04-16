@@ -76,6 +76,7 @@ export function useTreeBranches(
 ) {
   const sessionTree = ref<SessionTreeNode[]>([]);
   const sessionSummaries = ref<TaskSessionRecord[]>([]);
+  const currentSessionId = ref<string | null>(null);
   const currentPhaseId = ref<string | null>(null);
   const loading = ref(false);
   const error = ref<string | null>(null);
@@ -95,6 +96,7 @@ export function useTreeBranches(
     if (!currentTaskId || !currentRootNodeId) {
       sessionTree.value = [];
       sessionSummaries.value = [];
+      currentSessionId.value = null;
       currentPhaseId.value = null;
       error.value = null;
       return;
@@ -117,6 +119,7 @@ export function useTreeBranches(
         ? sessionContext.data.sessionLineage
         : [];
       sessionTree.value = mapLineageTree(nodes, currentRootNodeId);
+      currentSessionId.value = sessionContext.data.currentSessionId ?? null;
       currentPhaseId.value = sessionContext.data.currentPhaseId ?? null;
       sessionSummaries.value = Array.isArray(sessionContext.data.sessionSummaries)
         ? sessionContext.data.sessionSummaries
@@ -133,6 +136,7 @@ export function useTreeBranches(
       if (!silent) {
         sessionTree.value = [];
         sessionSummaries.value = [];
+        currentSessionId.value = null;
         currentPhaseId.value = null;
         error.value = nextError instanceof Error ? nextError.message : "加载分支拓扑失败";
       }
@@ -152,6 +156,7 @@ export function useTreeBranches(
   );
 
   return {
+    currentSessionId,
     currentPhaseId,
     flatNodes,
     sessionSummaries,

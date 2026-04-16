@@ -1,23 +1,109 @@
-import { flushPromises } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { effectScope, ref } from "vue";
+import type { TaskPhaseRecord } from "../../control-plane/web-ui/src/lib/api";
+import { normalizeSessionConversationItems } from "../../control-plane/web-ui/src/lib/message-normalize";
 import { useTaskMessageSnapshot } from "../../control-plane/web-ui/src/composables/useTaskMessageSnapshot";
 
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 const apiMocks = vi.hoisted(() => ({
-  getCurrentTaskRound: vi.fn(),
-  getTaskRounds: vi.fn(),
-  getTaskRoundMessages: vi.fn(),
+  getTaskPhases: vi.fn(),
+  getTaskPhaseView: vi.fn(),
 }));
 
 vi.mock("../../control-plane/web-ui/src/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../control-plane/web-ui/src/lib/api")>();
   return {
     ...actual,
-    getCurrentTaskRound: apiMocks.getCurrentTaskRound,
-    getTaskRounds: apiMocks.getTaskRounds,
-    getTaskRoundMessages: apiMocks.getTaskRoundMessages,
+    getTaskPhases: apiMocks.getTaskPhases,
+    getTaskPhaseView: apiMocks.getTaskPhaseView,
   };
 });
+
+function createPhase(overrides?: Partial<TaskPhaseRecord>): TaskPhaseRecord {
+  return {
+    id: "phase-1",
+    phaseIndex: 1,
+    phaseKind: "single",
+    triggerType: "continue",
+    status: "completed",
+    parentPhaseId: null,
+    resumedFromPhaseId: null,
+    awaitingAdoptionSince: null,
+    anchorSessionId: null,
+    coordinationKey: null,
+    candidateCount: null,
+    winnerSessionId: null,
+    judgeSessionId: null,
+    startedAt: "2026-04-13T08:00:00.000Z",
+    finishedAt: "2026-04-13T08:00:01.000Z",
+    createdAt: "2026-04-13T08:00:00.000Z",
+    updatedAt: "2026-04-13T08:00:01.000Z",
+    sessionIds: [],
+    ...overrides,
+  };
+}
+
+function createMessage(args: {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: string;
+}) {
+  return {
+    id: args.id,
+    sessionId: args.sessionId,
+    role: args.role,
+    status: "completed",
+    text: args.text,
+    parts: [],
+    createdAt: args.createdAt,
+    updatedAt: args.createdAt,
+  };
+}
+
+function createPhaseView(args: {
+  phase: TaskPhaseRecord;
+  currentSessionId?: string | null;
+  sessions?: unknown[];
+  messageGroups: Array<{
+    taskSessionId?: string | null;
+    runtimeSessionId?: string | null;
+    phaseRole?: string | null;
+    phaseItemIndex?: number | null;
+    candidateIndex?: number | null;
+    stepIndex?: number | null;
+    title?: string | null;
+    selectedModel?: string | null;
+    executionStatus?: string | null;
+    messages: unknown[];
+  }>;
+}) {
+  const messageCount = args.messageGroups.reduce(
+    (count, group) => count + (Array.isArray(group.messages) ? group.messages.length : 0),
+    0,
+  );
+  return {
+    data: {
+      phase: args.phase,
+      sessions: Array.isArray(args.sessions) ? args.sessions : [],
+      messageGroups: args.messageGroups,
+      meta: {
+        currentSessionId: args.currentSessionId ?? null,
+        currentPhaseId: args.phase.id,
+        latestPhaseId: args.phase.id,
+        phaseCount: 1,
+        sessionCount: Array.isArray(args.sessions) ? args.sessions.length : 0,
+        messageGroupCount: args.messageGroups.length,
+        messageCount,
+      },
+    },
+  };
+}
 
 describe("useTaskMessageSnapshot", () => {
   let scope: ReturnType<typeof effectScope> | null = null;
@@ -31,13 +117,19 @@ describe("useTaskMessageSnapshot", () => {
   async function mountSnapshot(options?: {
     sessionId?: string;
     includeLineage?: boolean;
+    currentSessionId?: string | null;
+    currentPhaseId?: string | null;
   }) {
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>(options?.sessionId);
+    const currentSessionId = ref<string | null>(options?.currentSessionId ?? null);
+    const currentPhaseId = ref<string | null>(options?.currentPhaseId ?? null);
     scope = effectScope();
     const state = scope.run(() =>
       useTaskMessageSnapshot(taskId, sessionId, {
         includeLineage: options?.includeLineage,
+        currentSessionId,
+        currentPhaseId,
       }),
     );
     if (!state) {
@@ -47,154 +139,226 @@ describe("useTaskMessageSnapshot", () => {
     await flushPromises();
     await flushPromises();
 
-    return state;
+    return {
+      currentPhaseId,
+      currentSessionId,
+      sessionId,
+      state,
+      taskId,
+    };
   }
 
-  it("uses current round and round messages when no session is selected", async () => {
-    apiMocks.getCurrentTaskRound.mockResolvedValue({
-      taskId: "task-1",
-      round: {
-        id: "task-session:task-1:ses-history",
-        taskId: "task-1",
-        sessionId: "task-session:task-1:ses-history",
-        kind: "continue",
-        source: "continue",
-        status: "completed",
-        promptText: "旧问题",
-        createdAt: "2026-04-13T08:00:00.000Z",
-        updatedAt: "2026-04-13T08:00:01.000Z",
-      },
+  it("uses explicit currentPhaseId and phase view when available", async () => {
+    const phase1 = createPhase({
+      id: "phase-1",
+      phaseIndex: 1,
+      sessionIds: ["task-session:task-1:ses-phase-1"],
     });
-    apiMocks.getTaskRoundMessages.mockResolvedValue({
-      taskId: "task-1",
-      round: {
-        id: "task-session:task-1:ses-history",
-        taskId: "task-1",
-        sessionId: "task-session:task-1:ses-history",
-        kind: "continue",
-        source: "continue",
-        status: "completed",
-        promptText: "旧问题",
-        createdAt: "2026-04-13T08:00:00.000Z",
-        updatedAt: "2026-04-13T08:00:01.000Z",
-      },
-      messages: [
-        {
-          id: "history-user",
-          roundId: "task-session:task-1:ses-history",
-          sessionId: "ses-history",
-          role: "user",
-          status: "completed",
-          text: "旧问题",
-          parts: [],
-          createdAt: "2026-04-13T08:00:00.000Z",
-          updatedAt: "2026-04-13T08:00:00.000Z",
-        },
-        {
-          id: "history-assistant",
-          roundId: "task-session:task-1:ses-history",
-          sessionId: "ses-history",
-          role: "assistant",
-          status: "completed",
-          text: "旧回复",
-          parts: [],
-          createdAt: "2026-04-13T08:00:01.000Z",
-          updatedAt: "2026-04-13T08:00:01.000Z",
-        },
-      ],
-      snapshotVersion: 19,
-      persistedThroughRevision: 11,
+    const phase2 = createPhase({
+      id: "phase-2",
+      phaseIndex: 2,
+      sessionIds: ["task-session:task-1:ses-phase-2"],
     });
-
-    const state = await mountSnapshot({ includeLineage: true });
-
-    expect(apiMocks.getCurrentTaskRound).toHaveBeenCalledWith("task-1");
-    expect(apiMocks.getTaskRounds).not.toHaveBeenCalled();
-    expect(apiMocks.getTaskRoundMessages).toHaveBeenCalledWith(
-      "task-1",
-      "task-session:task-1:ses-history",
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase1, phase2] });
+    apiMocks.getTaskPhaseView.mockResolvedValue(
+      createPhaseView({
+        phase: phase2,
+        currentSessionId: "ses-phase-2",
+        messageGroups: [
+          {
+            runtimeSessionId: "ses-phase-2",
+            phaseRole: "mainline",
+            phaseItemIndex: 0,
+            messages: [
+              createMessage({
+                id: "phase-2-user",
+                sessionId: "ses-phase-2",
+                role: "user",
+                text: "第二阶段问题",
+                createdAt: "2026-04-13T08:10:00.000Z",
+              }),
+              createMessage({
+                id: "phase-2-assistant",
+                sessionId: "ses-phase-2",
+                role: "assistant",
+                text: "第二阶段回复",
+                createdAt: "2026-04-13T08:10:01.000Z",
+              }),
+            ],
+          },
+        ],
+      }),
     );
+
+    const { state } = await mountSnapshot({
+      includeLineage: true,
+      currentPhaseId: "phase-2",
+      currentSessionId: "ses-phase-2",
+    });
+
+    expect(apiMocks.getTaskPhases).toHaveBeenCalledWith("task-1");
+    expect(apiMocks.getTaskPhaseView).toHaveBeenCalledWith("task-1", "phase-2");
     expect(state.sourceMessages.value).toEqual([
-      expect.objectContaining({ id: "history-user", role: "user" }),
-      expect.objectContaining({ id: "history-assistant", role: "assistant" }),
+      expect.objectContaining({ id: "phase-2-user", role: "user" }),
+      expect.objectContaining({ id: "phase-2-assistant", role: "assistant" }),
     ]);
-    expect(state.resolvedSessionId.value).toBe("ses-history");
+    expect(state.resolvedSessionId.value).toBe("ses-phase-2");
     expect(state.trace.value?.timelineMeta).toEqual(
       expect.objectContaining({
-        readSource: "task-domain-projection",
+        readSource: "task-phase-first",
         includeLineage: false,
         itemCount: 2,
-        snapshotVersion: 19,
-        persistedThroughRevision: 11,
+        snapshotVersion: 2,
+        persistedThroughRevision: 2,
         reconcileRequired: false,
       }),
     );
   });
 
-  it("keeps selected-session reads on the round messages API", async () => {
-    apiMocks.getCurrentTaskRound.mockRejectedValue(new Error("should not load current round"));
-    apiMocks.getTaskRounds.mockRejectedValue(new Error("should not load rounds"));
-    apiMocks.getTaskRoundMessages.mockResolvedValue({
-      taskId: "task-1",
-      round: {
-        id: "task-session:task-1:ses-child",
-        taskId: "task-1",
-        sessionId: "task-session:task-1:ses-child",
-        kind: "continue",
-        source: "continue",
-        status: "completed",
-        promptText: "继续",
-        createdAt: "2026-04-13T08:00:00.000Z",
-        updatedAt: "2026-04-13T08:00:01.000Z",
-      },
-      messages: [
-        {
-          id: "round-message-1",
-          roundId: "task-session:task-1:ses-child",
-          sessionId: "ses-child",
-          role: "assistant",
-          status: "completed",
-          text: "当前轮次回复",
-          parts: [],
-          createdAt: "2026-04-13T08:00:01.000Z",
-          updatedAt: "2026-04-13T08:00:01.000Z",
-        },
-      ],
-      snapshotVersion: 3,
-      persistedThroughRevision: 3,
+  it("falls back to the phase containing the selected session when currentPhaseId is absent", async () => {
+    const rootPhase = createPhase({
+      id: "phase-root",
+      phaseIndex: 1,
+      sessionIds: ["task-session:task-1:ses-root"],
     });
+    const childPhase = createPhase({
+      id: "phase-child",
+      phaseIndex: 2,
+      sessionIds: ["task-session:task-1:ses-child"],
+    });
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [rootPhase, childPhase] });
+    apiMocks.getTaskPhaseView.mockResolvedValue(
+      createPhaseView({
+        phase: childPhase,
+        currentSessionId: "ses-child",
+        messageGroups: [
+          {
+            runtimeSessionId: "ses-child",
+            phaseRole: "mainline",
+            phaseItemIndex: 0,
+            messages: [
+              createMessage({
+                id: "child-message-1",
+                sessionId: "ses-child",
+                role: "assistant",
+                text: "当前 phase 回复",
+                createdAt: "2026-04-13T08:10:01.000Z",
+              }),
+            ],
+          },
+        ],
+      }),
+    );
 
-    const state = await mountSnapshot({ sessionId: "ses-child" });
+    const { state } = await mountSnapshot({ sessionId: "ses-child" });
 
-    expect(apiMocks.getTaskRoundMessages).toHaveBeenCalledWith("task-1", "ses-child");
-    expect(apiMocks.getCurrentTaskRound).not.toHaveBeenCalled();
-    expect(apiMocks.getTaskRounds).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskPhaseView).toHaveBeenCalledWith("task-1", "phase-child");
     expect(state.resolvedSessionId.value).toBe("ses-child");
     expect(state.sourceMessages.value).toEqual([
       expect.objectContaining({
-        id: "round-message-1",
+        id: "child-message-1",
         role: "assistant",
-        text: "当前轮次回复",
+        text: "当前 phase 回复",
       }),
     ]);
     expect(state.trace.value?.timelineMeta).toMatchObject({
       includeLineage: false,
-      roundId: "task-session:task-1:ses-child",
-      snapshotVersion: 3,
-      persistedThroughRevision: 3,
+      snapshotVersion: 1,
+      persistedThroughRevision: 1,
     });
   });
 
-  it("returns an empty round-native snapshot when no current round exists", async () => {
-    apiMocks.getCurrentTaskRound.mockResolvedValue({
-      taskId: "task-1",
-      round: null,
+  it("derives liveSessionIds from phase-local non-candidate sessions", async () => {
+    const phase = createPhase({
+      id: "phase-chain",
+      phaseIndex: 2,
+      phaseKind: "sequential_chain",
+      sessionIds: ["session-main", "session-step-1", "session-candidate", "session-judge"],
+    });
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase] });
+    apiMocks.getTaskPhaseView.mockResolvedValue(
+      createPhaseView({
+        phase,
+        currentSessionId: "session-main",
+        sessions: [
+          {
+            id: "session-main",
+            phaseId: phase.id,
+            phaseRole: "mainline",
+            title: "Mainline",
+            isActive: false,
+            summary: null,
+            createdAt: null,
+            updatedAt: null,
+          },
+          {
+            id: "session-step-1",
+            phaseId: phase.id,
+            phaseRole: "step",
+            stepIndex: 0,
+            title: "Step 1",
+            isActive: false,
+            summary: null,
+            createdAt: null,
+            updatedAt: null,
+          },
+          {
+            id: "session-candidate",
+            phaseId: phase.id,
+            phaseRole: "candidate",
+            candidateIndex: 0,
+            title: "Candidate",
+            isActive: false,
+            summary: null,
+            createdAt: null,
+            updatedAt: null,
+          },
+          {
+            id: "session-judge",
+            phaseId: phase.id,
+            phaseRole: "judge",
+            title: "Judge",
+            isActive: false,
+            summary: null,
+            createdAt: null,
+            updatedAt: null,
+          },
+        ],
+        messageGroups: [
+          {
+            runtimeSessionId: "session-main",
+            phaseRole: "mainline",
+            phaseItemIndex: 0,
+            messages: [
+              createMessage({
+                id: "phase-chain-user",
+                sessionId: "session-main",
+                role: "user",
+                text: "顺序阶段问题",
+                createdAt: "2026-04-13T08:20:00.000Z",
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+
+    const { state } = await mountSnapshot({
+      currentPhaseId: "phase-chain",
+      currentSessionId: "session-main",
     });
 
-    const state = await mountSnapshot();
+    expect(state.phaseSlices.value).toHaveLength(1);
+    expect(state.phaseSlices.value[0]?.liveSessionIds).toEqual(["session-main", "session-step-1"]);
+  });
 
-    expect(apiMocks.getCurrentTaskRound).toHaveBeenCalledWith("task-1");
-    expect(apiMocks.getTaskRoundMessages).not.toHaveBeenCalled();
+  it("returns an empty phase-first snapshot when no phases exist", async () => {
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [] });
+
+    const { state } = await mountSnapshot();
+
+    expect(apiMocks.getTaskPhases).toHaveBeenCalledWith("task-1");
+    expect(apiMocks.getTaskPhaseView).not.toHaveBeenCalled();
     expect(state.sourceMessages.value).toEqual([]);
     expect(state.resolvedSessionId.value).toBeUndefined();
     expect(state.trace.value?.timelineMeta).toMatchObject({
@@ -205,251 +369,253 @@ describe("useTaskMessageSnapshot", () => {
     });
   });
 
-  it("keeps the previous round above the latest round after continue creates a new current round", async () => {
-    apiMocks.getCurrentTaskRound
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: {
-          id: "task-session:task-1:ses-round-1",
-          taskId: "task-1",
-          sessionId: "task-session:task-1:ses-round-1",
-          parentRoundId: "task-session:task-1:ses-root",
-          parentSessionId: "task-session:task-1:ses-root",
-          kind: "continue",
-          source: "continue",
-          status: "completed",
-          promptText: "第一轮问题",
-          createdAt: "2026-04-13T08:00:00.000Z",
-          updatedAt: "2026-04-13T08:00:01.000Z",
-        },
-      })
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: {
-          id: "task-session:task-1:ses-round-2",
-          taskId: "task-1",
-          sessionId: "task-session:task-1:ses-round-2",
-          parentRoundId: "task-session:task-1:ses-round-1",
-          parentSessionId: "task-session:task-1:ses-round-1",
-          kind: "continue",
-          source: "continue",
-          status: "running",
-          promptText: "第二轮问题",
-          createdAt: "2026-04-13T08:10:00.000Z",
-          updatedAt: "2026-04-13T08:10:01.000Z",
-        },
-      });
-    apiMocks.getTaskRoundMessages
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: {
-          id: "task-session:task-1:ses-round-1",
-          taskId: "task-1",
-          sessionId: "task-session:task-1:ses-round-1",
-          parentRoundId: "task-session:task-1:ses-root",
-          parentSessionId: "task-session:task-1:ses-root",
-          kind: "continue",
-          source: "continue",
-          status: "completed",
-          promptText: "第一轮问题",
-          createdAt: "2026-04-13T08:00:00.000Z",
-          updatedAt: "2026-04-13T08:00:01.000Z",
-        },
-        messages: [
-          {
-            id: "round-1-user",
-            roundId: "task-session:task-1:ses-round-1",
-            sessionId: "ses-round-1",
-            role: "user",
-            status: "completed",
-            text: "第一轮问题",
-            parts: [],
-            createdAt: "2026-04-13T08:00:00.000Z",
-            updatedAt: "2026-04-13T08:00:00.000Z",
-          },
-          {
-            id: "round-1-assistant",
-            roundId: "task-session:task-1:ses-round-1",
-            sessionId: "ses-round-1",
-            role: "assistant",
-            status: "completed",
-            text: "第一轮回复",
-            parts: [],
-            createdAt: "2026-04-13T08:00:01.000Z",
-            updatedAt: "2026-04-13T08:00:01.000Z",
-          },
-        ],
-        snapshotVersion: 11,
-        persistedThroughRevision: 11,
-      })
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: {
-          id: "task-session:task-1:ses-round-2",
-          taskId: "task-1",
-          sessionId: "task-session:task-1:ses-round-2",
-          parentRoundId: "task-session:task-1:ses-round-1",
-          parentSessionId: "task-session:task-1:ses-round-1",
-          kind: "continue",
-          source: "continue",
-          status: "running",
-          promptText: "第二轮问题",
-          createdAt: "2026-04-13T08:10:00.000Z",
-          updatedAt: "2026-04-13T08:10:01.000Z",
-        },
-        messages: [
-          {
-            id: "round-2-user",
-            roundId: "task-session:task-1:ses-round-2",
-            sessionId: "ses-round-2",
-            role: "user",
-            status: "completed",
-            text: "第二轮问题",
-            parts: [],
-            createdAt: "2026-04-13T08:10:00.000Z",
-            updatedAt: "2026-04-13T08:10:00.000Z",
-          },
-          {
-            id: "round-2-assistant",
-            roundId: "task-session:task-1:ses-round-2",
-            sessionId: "ses-round-2",
-            role: "assistant",
-            status: "streaming",
-            text: "第二轮回复",
-            parts: [],
-            createdAt: "2026-04-13T08:10:01.000Z",
-            updatedAt: "2026-04-13T08:10:01.000Z",
-          },
-        ],
-        snapshotVersion: 19,
-        persistedThroughRevision: 17,
-      });
+  it("keeps the previous phase above the latest phase after continue advances currentPhaseId", async () => {
+    const rootPhase = createPhase({
+      id: "phase-root",
+      phaseIndex: 1,
+      sessionIds: ["task-session:task-1:ses-root"],
+    });
+    const phase1 = createPhase({
+      id: "phase-1",
+      phaseIndex: 2,
+      parentPhaseId: "phase-root",
+      sessionIds: ["task-session:task-1:ses-round-1"],
+    });
+    const phase2 = createPhase({
+      id: "phase-2",
+      phaseIndex: 3,
+      parentPhaseId: "phase-1",
+      sessionIds: ["task-session:task-1:ses-round-2"],
+    });
+    apiMocks.getTaskPhases
+      .mockResolvedValueOnce({ data: [rootPhase, phase1] })
+      .mockResolvedValueOnce({ data: [rootPhase, phase1, phase2] });
+    apiMocks.getTaskPhaseView
+      .mockResolvedValueOnce(
+        createPhaseView({
+          phase: phase1,
+          currentSessionId: "ses-round-1",
+          messageGroups: [
+            {
+              runtimeSessionId: "ses-round-1",
+              phaseRole: "mainline",
+              phaseItemIndex: 0,
+              messages: [
+                createMessage({
+                  id: "phase-1-user",
+                  sessionId: "ses-round-1",
+                  role: "user",
+                  text: "第一阶段问题",
+                  createdAt: "2026-04-13T08:00:00.000Z",
+                }),
+                createMessage({
+                  id: "phase-1-assistant",
+                  sessionId: "ses-round-1",
+                  role: "assistant",
+                  text: "第一阶段回复",
+                  createdAt: "2026-04-13T08:00:01.000Z",
+                }),
+              ],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createPhaseView({
+          phase: phase2,
+          currentSessionId: "ses-round-2",
+          messageGroups: [
+            {
+              runtimeSessionId: "ses-round-2",
+              phaseRole: "mainline",
+              phaseItemIndex: 0,
+              messages: [
+                createMessage({
+                  id: "phase-2-user",
+                  sessionId: "ses-round-2",
+                  role: "user",
+                  text: "第二阶段问题",
+                  createdAt: "2026-04-13T08:10:00.000Z",
+                }),
+                createMessage({
+                  id: "phase-2-assistant",
+                  sessionId: "ses-round-2",
+                  role: "assistant",
+                  text: "第二阶段回复",
+                  createdAt: "2026-04-13T08:10:01.000Z",
+                }),
+              ],
+            },
+          ],
+        }),
+      );
 
-    const state = await mountSnapshot();
+    const mounted = await mountSnapshot();
 
-    await state.refresh(true);
+    await mounted.state.refresh(true);
     await flushPromises();
 
-    expect(state.sourceMessages.value.map((item) => (item as { id: string }).id)).toEqual([
-      "round-1-user",
-      "round-1-assistant",
-      "round-2-user",
-      "round-2-assistant",
+    expect(mounted.state.sourceMessages.value.map((item) => (item as { id: string }).id)).toEqual([
+      "phase-1-user",
+      "phase-1-assistant",
+      "phase-2-user",
+      "phase-2-assistant",
     ]);
-    expect(state.resolvedSessionId.value).toBe("ses-round-2");
-    expect(state.hasOlderHistory.value).toBe(true);
-    expect(state.trace.value?.timelineMeta).toMatchObject({
-      roundId: "task-session:task-1:ses-round-2",
-      snapshotVersion: 19,
-      persistedThroughRevision: 17,
+    expect(mounted.state.resolvedSessionId.value).toBe("ses-round-2");
+    expect(mounted.state.hasOlderHistory.value).toBe(true);
+    expect(mounted.state.trace.value?.timelineMeta).toMatchObject({
+      snapshotVersion: 4,
+      persistedThroughRevision: 4,
       itemCount: 4,
     });
   });
 
-  it("prepends older parent rounds when loading history upwards", async () => {
-    apiMocks.getCurrentTaskRound.mockResolvedValue({
-      taskId: "task-1",
-      round: {
-        id: "task-session:task-1:ses-round-2",
-        taskId: "task-1",
-        sessionId: "task-session:task-1:ses-round-2",
-        parentRoundId: "task-session:task-1:ses-round-1",
-        parentSessionId: "task-session:task-1:ses-round-1",
-        kind: "continue",
-        source: "continue",
-        status: "completed",
-        promptText: "第二轮问题",
-        createdAt: "2026-04-13T08:10:00.000Z",
-        updatedAt: "2026-04-13T08:10:01.000Z",
-      },
+  it("keeps parallel candidate replies out of the top-level snapshot", async () => {
+    const parallelPhase = createPhase({
+      id: "phase-parallel",
+      phaseIndex: 2,
+      phaseKind: "parallel",
+      status: "awaiting_adoption",
+      candidateCount: 2,
+      sessionIds: [
+        "task-session:task-1:candidate-a",
+        "task-session:task-1:candidate-b",
+      ],
     });
-    apiMocks.getTaskRoundMessages
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: {
-          id: "task-session:task-1:ses-round-2",
-          taskId: "task-1",
-          sessionId: "task-session:task-1:ses-round-2",
-          parentRoundId: "task-session:task-1:ses-round-1",
-          parentSessionId: "task-session:task-1:ses-round-1",
-          kind: "continue",
-          source: "continue",
-          status: "completed",
-          promptText: "第二轮问题",
-          createdAt: "2026-04-13T08:10:00.000Z",
-          updatedAt: "2026-04-13T08:10:01.000Z",
-        },
-        messages: [
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [parallelPhase] });
+    apiMocks.getTaskPhaseView.mockResolvedValue(
+      createPhaseView({
+        phase: parallelPhase,
+        currentSessionId: "candidate-a",
+        messageGroups: [
           {
-            id: "round-2-user",
-            roundId: "task-session:task-1:ses-round-2",
-            sessionId: "ses-round-2",
-            role: "user",
-            status: "completed",
-            text: "第二轮问题",
-            parts: [],
-            createdAt: "2026-04-13T08:10:00.000Z",
-            updatedAt: "2026-04-13T08:10:00.000Z",
+            runtimeSessionId: "candidate-a",
+            phaseRole: "candidate",
+            phaseItemIndex: 0,
+            candidateIndex: 0,
+            messages: [
+              createMessage({
+                id: "parallel-user",
+                sessionId: "candidate-a",
+                role: "user",
+                text: "并行分支问题",
+                createdAt: "2026-04-13T08:10:00.000Z",
+              }),
+              createMessage({
+                id: "parallel-assistant-a",
+                sessionId: "candidate-a",
+                role: "assistant",
+                text: "候选 A 回复",
+                createdAt: "2026-04-13T08:10:01.000Z",
+              }),
+            ],
           },
           {
-            id: "round-2-assistant",
-            roundId: "task-session:task-1:ses-round-2",
-            sessionId: "ses-round-2",
-            role: "assistant",
-            status: "completed",
-            text: "第二轮回复",
-            parts: [],
-            createdAt: "2026-04-13T08:10:01.000Z",
-            updatedAt: "2026-04-13T08:10:01.000Z",
-          },
-        ],
-        snapshotVersion: 8,
-        persistedThroughRevision: 8,
-      })
-      .mockResolvedValueOnce({
-        taskId: "task-1",
-        round: {
-          id: "task-session:task-1:ses-round-1",
-          taskId: "task-1",
-          sessionId: "task-session:task-1:ses-round-1",
-          parentRoundId: null,
-          parentSessionId: null,
-          kind: "continue",
-          source: "continue",
-          status: "completed",
-          promptText: "第一轮问题",
-          createdAt: "2026-04-13T08:00:00.000Z",
-          updatedAt: "2026-04-13T08:00:01.000Z",
-        },
-        messages: [
-          {
-            id: "round-1-user",
-            roundId: "task-session:task-1:ses-round-1",
-            sessionId: "ses-round-1",
-            role: "user",
-            status: "completed",
-            text: "第一轮问题",
-            parts: [],
-            createdAt: "2026-04-13T08:00:00.000Z",
-            updatedAt: "2026-04-13T08:00:00.000Z",
-          },
-          {
-            id: "round-1-assistant",
-            roundId: "task-session:task-1:ses-round-1",
-            sessionId: "ses-round-1",
-            role: "assistant",
-            status: "completed",
-            text: "第一轮回复",
-            parts: [],
-            createdAt: "2026-04-13T08:00:01.000Z",
-            updatedAt: "2026-04-13T08:00:01.000Z",
+            runtimeSessionId: "candidate-b",
+            phaseRole: "candidate",
+            phaseItemIndex: 1,
+            candidateIndex: 1,
+            messages: [
+              createMessage({
+                id: "parallel-assistant-b",
+                sessionId: "candidate-b",
+                role: "assistant",
+                text: "候选 B 回复",
+                createdAt: "2026-04-13T08:10:02.000Z",
+              }),
+            ],
           },
         ],
-        snapshotVersion: 5,
-        persistedThroughRevision: 5,
-      });
+      }),
+    );
 
-    const state = await mountSnapshot();
+    const { state } = await mountSnapshot();
+
+    expect(state.sourceMessages.value).toEqual([
+      expect.objectContaining({
+        id: "parallel-user",
+        role: "user",
+        text: "并行分支问题",
+      }),
+    ]);
+  });
+
+  it("prepends older parent phases when loading history upwards", async () => {
+    const phase1 = createPhase({
+      id: "phase-1",
+      phaseIndex: 1,
+      sessionIds: ["task-session:task-1:ses-round-1"],
+    });
+    const phase2 = createPhase({
+      id: "phase-2",
+      phaseIndex: 2,
+      parentPhaseId: "phase-1",
+      sessionIds: ["task-session:task-1:ses-round-2"],
+    });
+    apiMocks.getTaskPhases
+      .mockResolvedValueOnce({ data: [phase1, phase2] })
+      .mockResolvedValueOnce({ data: [phase1, phase2] });
+    apiMocks.getTaskPhaseView
+      .mockResolvedValueOnce(
+        createPhaseView({
+          phase: phase2,
+          currentSessionId: "ses-round-2",
+          messageGroups: [
+            {
+              runtimeSessionId: "ses-round-2",
+              phaseRole: "mainline",
+              phaseItemIndex: 0,
+              messages: [
+                createMessage({
+                  id: "phase-2-user",
+                  sessionId: "ses-round-2",
+                  role: "user",
+                  text: "第二阶段问题",
+                  createdAt: "2026-04-13T08:10:00.000Z",
+                }),
+                createMessage({
+                  id: "phase-2-assistant",
+                  sessionId: "ses-round-2",
+                  role: "assistant",
+                  text: "第二阶段回复",
+                  createdAt: "2026-04-13T08:10:01.000Z",
+                }),
+              ],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createPhaseView({
+          phase: phase1,
+          currentSessionId: "ses-round-1",
+          messageGroups: [
+            {
+              runtimeSessionId: "ses-round-1",
+              phaseRole: "mainline",
+              phaseItemIndex: 0,
+              messages: [
+                createMessage({
+                  id: "phase-1-user",
+                  sessionId: "ses-round-1",
+                  role: "user",
+                  text: "第一阶段问题",
+                  createdAt: "2026-04-13T08:00:00.000Z",
+                }),
+                createMessage({
+                  id: "phase-1-assistant",
+                  sessionId: "ses-round-1",
+                  role: "assistant",
+                  text: "第一阶段回复",
+                  createdAt: "2026-04-13T08:00:01.000Z",
+                }),
+              ],
+            },
+          ],
+        }),
+      );
+
+    const { state } = await mountSnapshot();
 
     expect(state.hasOlderHistory.value).toBe(true);
     expect(state.historyLoading.value).toBe(false);
@@ -463,15 +629,420 @@ describe("useTaskMessageSnapshot", () => {
     expect(state.historyLoading.value).toBe(false);
     expect(state.hasOlderHistory.value).toBe(false);
     expect(state.sourceMessages.value.map((item) => (item as { id: string }).id)).toEqual([
-      "round-1-user",
-      "round-1-assistant",
-      "round-2-user",
-      "round-2-assistant",
+      "phase-1-user",
+      "phase-1-assistant",
+      "phase-2-user",
+      "phase-2-assistant",
     ]);
-    expect(apiMocks.getTaskRoundMessages).toHaveBeenNthCalledWith(
-      2,
-      "task-1",
-      "task-session:task-1:ses-round-1",
+    expect(apiMocks.getTaskPhaseView).toHaveBeenNthCalledWith(2, "task-1", "phase-1");
+  });
+
+  it("raises the current phase snapshot revision floor from persisted acks", async () => {
+    const phase = createPhase({
+      id: "phase-1",
+      phaseIndex: 1,
+      sessionIds: ["task-session:task-1:ses-round-1"],
+    });
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase] });
+    apiMocks.getTaskPhaseView.mockResolvedValue(
+      createPhaseView({
+        phase,
+        currentSessionId: "ses-round-1",
+        messageGroups: [
+          {
+            taskSessionId: "task-session:task-1:ses-round-1",
+            runtimeSessionId: "ses-round-1",
+            phaseRole: "mainline",
+            phaseItemIndex: 0,
+            messages: [
+              createMessage({
+                id: "phase-1-assistant",
+                sessionId: "ses-round-1",
+                role: "assistant",
+                text: "第一阶段回复",
+                createdAt: "2026-04-13T08:00:01.000Z",
+              }),
+            ],
+          },
+        ],
+      }),
     );
+
+    const { state } = await mountSnapshot({
+      currentPhaseId: "phase-1",
+      currentSessionId: "ses-round-1",
+      sessionId: "ses-round-1",
+    });
+
+    expect(state.trace.value?.timelineMeta).toMatchObject({
+      snapshotVersion: 1,
+      persistedThroughRevision: 1,
+    });
+
+    state.applyPersistenceAck({
+      sessionId: "ses-round-1",
+      taskSessionId: "task-session:task-1:ses-round-1",
+      persistedThroughRevision: 8,
+      snapshotVersion: 8,
+    });
+
+    expect(state.trace.value?.timelineMeta).toMatchObject({
+      snapshotVersion: 8,
+      persistedThroughRevision: 8,
+    });
+  });
+
+  it("refreshes only the current loaded phase for message-only refreshes", async () => {
+    const phase = createPhase({
+      id: "phase-2",
+      phaseIndex: 2,
+      sessionIds: ["task-session:task-1:ses-round-2"],
+    });
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase] });
+    apiMocks.getTaskPhaseView
+      .mockResolvedValueOnce(
+        createPhaseView({
+          phase,
+          currentSessionId: "ses-round-2",
+          messageGroups: [
+            {
+              taskSessionId: "task-session:task-1:ses-round-2",
+              runtimeSessionId: "ses-round-2",
+              phaseRole: "mainline",
+              phaseItemIndex: 0,
+              messages: [
+                createMessage({
+                  id: "phase-2-assistant-v1",
+                  sessionId: "ses-round-2",
+                  role: "assistant",
+                  text: "初始回复",
+                  createdAt: "2026-04-13T08:10:01.000Z",
+                }),
+              ],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createPhaseView({
+          phase,
+          currentSessionId: "ses-round-2",
+          messageGroups: [
+            {
+              taskSessionId: "task-session:task-1:ses-round-2",
+              runtimeSessionId: "ses-round-2",
+              phaseRole: "mainline",
+              phaseItemIndex: 0,
+              messages: [
+                createMessage({
+                  id: "phase-2-assistant-v2",
+                  sessionId: "ses-round-2",
+                  role: "assistant",
+                  text: "局部刷新后的回复",
+                  createdAt: "2026-04-13T08:10:02.000Z",
+                }),
+              ],
+            },
+          ],
+        }),
+      );
+
+    const { state } = await mountSnapshot({
+      currentPhaseId: "phase-2",
+      currentSessionId: "ses-round-2",
+      sessionId: "ses-round-2",
+    });
+
+    apiMocks.getTaskPhases.mockClear();
+    apiMocks.getTaskPhaseView.mockClear();
+
+    await state.refreshCurrentPhase(true);
+    await flushPromises();
+
+    expect(apiMocks.getTaskPhases).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskPhaseView).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getTaskPhaseView).toHaveBeenCalledWith("task-1", "phase-2");
+    expect(state.sourceMessages.value).toEqual([
+      expect.objectContaining({
+        id: "phase-2-assistant-v2",
+        text: "局部刷新后的回复",
+      }),
+    ]);
+  });
+
+  it("absorbs current phase persisted overlay updates into the current phase slice", async () => {
+    const phase = createPhase({
+      id: "phase-1",
+      sessionIds: ["task-session:task-1:ses-round-1"],
+    });
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase] });
+    apiMocks.getTaskPhaseView.mockResolvedValue(
+      createPhaseView({
+        phase,
+        currentSessionId: "ses-round-1",
+        messageGroups: [
+          {
+            taskSessionId: "task-session:task-1:ses-round-1",
+            runtimeSessionId: "ses-round-1",
+            phaseRole: "mainline",
+            phaseItemIndex: 0,
+            messages: [
+              createMessage({
+                id: "phase-1-user",
+                sessionId: "ses-round-1",
+                role: "user",
+                text: "第一阶段问题",
+                createdAt: "2026-04-13T08:00:00.000Z",
+              }),
+              createMessage({
+                id: "phase-1-assistant",
+                sessionId: "ses-round-1",
+                role: "assistant",
+                text: "旧回复",
+                createdAt: "2026-04-13T08:00:01.000Z",
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+
+    const { state } = await mountSnapshot({
+      currentPhaseId: "phase-1",
+      currentSessionId: "ses-round-1",
+      sessionId: "ses-round-1",
+    });
+
+    state.applyPersistenceAck(
+      {
+        kind: "round-synced",
+        sessionId: "ses-round-1",
+        taskSessionId: "task-session:task-1:ses-round-1",
+        snapshotVersion: 9,
+        persistedThroughRevision: 9,
+      },
+      {
+        realtimeSourceMessagesByPhaseId: {
+          "phase-1": [
+            {
+              id: "phase-1-user-followup",
+              role: "user",
+              text: "继续排查第一阶段",
+              createdAt: "2026-04-13T08:00:02.000Z",
+            },
+            {
+              id: "phase-1-tool",
+              role: "tool",
+              parts: [
+                {
+                  type: "tool",
+                  toolName: "read_file",
+                  state: "completed",
+                  input: { filePath: "docs/phase-1.md" },
+                },
+              ],
+              createdAt: "2026-04-13T08:00:03.000Z",
+            },
+          ],
+        },
+        conversationItems: [
+          {
+            key: "phase-1-assistant",
+            role: "assistant",
+            text: "更新后的回复",
+            thinkingText: "先重新整理上下文",
+            toolCalls: [],
+            createdAt: "2026-04-13T08:00:01.000Z",
+            raw: null,
+            isStreaming: false,
+          },
+        ] as any,
+      },
+    );
+
+    const normalizedItems = normalizeSessionConversationItems(state.sourceMessages.value);
+    expect(normalizedItems.map((item) => item.key)).toEqual([
+      "phase-1-user",
+      "phase-1-assistant",
+      "phase-1-user-followup",
+      "phase-1-tool",
+    ]);
+    expect(normalizedItems.find((item) => item.key === "phase-1-assistant")).toMatchObject({
+      text: "更新后的回复",
+      thinkingText: "先重新整理上下文",
+    });
+  });
+
+  it("absorbs persisted updates into a non-current phase slice when an older-phase ack arrives", async () => {
+    const phase1 = createPhase({
+      id: "phase-1",
+      phaseIndex: 1,
+      sessionIds: ["task-session:task-1:ses-round-1"],
+      startedAt: "2026-04-13T08:00:00.000Z",
+      finishedAt: "2026-04-13T08:00:05.000Z",
+      createdAt: "2026-04-13T08:00:00.000Z",
+      updatedAt: "2026-04-13T08:00:05.000Z",
+    });
+    const phase2 = createPhase({
+      id: "phase-2",
+      phaseIndex: 2,
+      sessionIds: ["task-session:task-1:ses-round-2"],
+      startedAt: "2026-04-13T08:01:00.000Z",
+      finishedAt: "2026-04-13T08:01:05.000Z",
+      createdAt: "2026-04-13T08:01:00.000Z",
+      updatedAt: "2026-04-13T08:01:05.000Z",
+    });
+
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase1, phase2] });
+    apiMocks.getTaskPhaseView.mockImplementation(async (_taskId: string, phaseId: string) => {
+      if (phaseId === "phase-1") {
+        return createPhaseView({
+          phase: phase1,
+          currentSessionId: "ses-round-1",
+          messageGroups: [
+            {
+              taskSessionId: "task-session:task-1:ses-round-1",
+              runtimeSessionId: "ses-round-1",
+              phaseRole: "mainline",
+              phaseItemIndex: 0,
+              messages: [
+                createMessage({
+                  id: "phase-1-user",
+                  sessionId: "ses-round-1",
+                  role: "user",
+                  text: "上一阶段的问题",
+                  createdAt: "2026-04-13T08:00:00.000Z",
+                }),
+                createMessage({
+                  id: "phase-1-assistant",
+                  sessionId: "ses-round-1",
+                  role: "assistant",
+                  text: "旧阶段的旧回复",
+                  createdAt: "2026-04-13T08:00:01.000Z",
+                }),
+              ],
+            },
+          ],
+        });
+      }
+      return createPhaseView({
+        phase: phase2,
+        currentSessionId: "ses-round-2",
+        messageGroups: [
+          {
+            taskSessionId: "task-session:task-1:ses-round-2",
+            runtimeSessionId: "ses-round-2",
+            phaseRole: "mainline",
+            phaseItemIndex: 0,
+            messages: [
+              createMessage({
+                id: "phase-2-user",
+                sessionId: "ses-round-2",
+                role: "user",
+                text: "新阶段问题",
+                createdAt: "2026-04-13T08:01:00.000Z",
+              }),
+              createMessage({
+                id: "phase-2-assistant",
+                sessionId: "ses-round-2",
+                role: "assistant",
+                text: "新阶段回复",
+                createdAt: "2026-04-13T08:01:01.000Z",
+              }),
+            ],
+          },
+        ],
+      });
+    });
+
+    const { state } = await mountSnapshot({
+      currentPhaseId: "phase-2",
+      currentSessionId: "ses-round-2",
+      sessionId: "ses-round-2",
+    });
+
+    await state.loadOlderHistory();
+    await flushPromises();
+
+    expect(state.phaseSlices.value.map((slice) => slice.phase.id)).toEqual([
+      "phase-1",
+      "phase-2",
+    ]);
+
+    state.applyPersistenceAck(
+      {
+        kind: "round-synced",
+        phaseId: "phase-1",
+        sessionId: "ses-round-1",
+        taskSessionId: "task-session:task-1:ses-round-1",
+        snapshotVersion: 12,
+        persistedThroughRevision: 12,
+      },
+      {
+        realtimeSourceMessagesByPhaseId: {
+          "phase-1": [
+            {
+              id: "phase-1-user-late",
+              role: "user",
+              text: "历史阶段补充追问",
+              createdAt: "2026-04-13T08:00:04.000Z",
+            },
+          ],
+          "phase-2": [
+            {
+              id: "phase-2-user-live",
+              role: "user",
+              text: "当前阶段实时消息",
+              createdAt: "2026-04-13T08:01:02.000Z",
+            },
+          ],
+        },
+        conversationItems: [
+          {
+            key: "phase-1-assistant",
+            role: "assistant",
+            text: "旧阶段的新回复",
+            thinkingText: "重新推理",
+            toolCalls: [],
+            createdAt: "2026-04-13T08:00:01.000Z",
+            raw: null,
+            isStreaming: false,
+          },
+          {
+            key: "phase-2-assistant",
+            role: "assistant",
+            text: "当前阶段回复（不应落到历史阶段）",
+            toolCalls: [],
+            createdAt: "2026-04-13T08:01:01.000Z",
+            raw: null,
+            isStreaming: false,
+          },
+        ] as any,
+      },
+    );
+
+    const slices = state.phaseSlices.value;
+    const phase1Slice = slices.find((slice) => slice.phase.id === "phase-1");
+    const phase2Slice = slices.find((slice) => slice.phase.id === "phase-2");
+    if (!phase1Slice || !phase2Slice) {
+      throw new Error("expected both phase slices to be loaded");
+    }
+
+    const phase1Items = normalizeSessionConversationItems(phase1Slice.sourceMessages);
+    expect(phase1Items.map((item) => item.key)).toEqual([
+      "phase-1-user",
+      "phase-1-assistant",
+      "phase-1-user-late",
+    ]);
+    expect(phase1Items.find((item) => item.key === "phase-1-assistant")).toMatchObject({
+      text: "旧阶段的新回复",
+      thinkingText: "重新推理",
+    });
+
+    const phase2Items = normalizeSessionConversationItems(phase2Slice.sourceMessages);
+    expect(phase2Items.map((item) => item.key)).toEqual([
+      "phase-2-user",
+      "phase-2-assistant",
+    ]);
   });
 });

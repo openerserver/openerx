@@ -6,6 +6,11 @@ type PendingParallelMessageSuppressionGroup = {
   anchorSessionIds: Set<string>;
 };
 
+type PendingParallelMainlineGroup = {
+  createdAtMs: number | null;
+  mainlineRecord: TaskSessionLineageRecord;
+};
+
 type AdoptedParallelMessageSuppressionGroup = {
   suppressedSessionIds: Set<string>;
   winnerSessionIds: Set<string>;
@@ -44,6 +49,16 @@ function isPendingParallelCandidateSession(record: TaskSessionLineageRecord) {
   );
 }
 
+function isPendingParallelCompareCandidateSession(record: TaskSessionLineageRecord) {
+  return (
+    typeof record.candidateIndex === "number" ||
+    record.sessionKind === "candidate" ||
+    record.phaseRole === "candidate" ||
+    record.sessionKind === "judge" ||
+    record.phaseRole === "judge"
+  );
+}
+
 function isParallelAnchorSession(record: TaskSessionLineageRecord) {
   return !isPendingParallelCandidateSession(record) && record.sessionKind !== "primary";
 }
@@ -77,6 +92,133 @@ function isSessionIdInSuppressionSet(sessionId: string, idSet: Set<string>): boo
 
 function resolveParallelPhaseGroupKey(record: TaskSessionLineageRecord) {
   return asString(record.phaseId);
+}
+
+function compareLineageRecordCreatedAt(
+  left: TaskSessionLineageRecord,
+  right: TaskSessionLineageRecord,
+) {
+  return (toTimestampMs(left.createdAt) ?? Number.NEGATIVE_INFINITY) -
+    (toTimestampMs(right.createdAt) ?? Number.NEGATIVE_INFINITY);
+}
+
+function resolvePendingParallelMainlineRecordForGroup(
+  records: TaskSessionLineageRecord[],
+  group: TaskSessionLineageRecord[],
+  candidateRecords: TaskSessionLineageRecord[],
+  candidateCreatedAtMs: number | null,
+) {
+  const recordsByRuntimeSessionId = new Map(
+    records
+      .map((record) => {
+        const runtimeSessionId = asString(record.runtimeSessionId);
+        return runtimeSessionId ? ([runtimeSessionId, record] as const) : null;
+      })
+      .filter(
+        (
+          entry,
+        ): entry is readonly [string, TaskSessionLineageRecord] => Boolean(entry),
+      ),
+  );
+
+  for (const candidateRecord of candidateRecords) {
+    const parentRuntimeSessionId = asString(candidateRecord.parentRuntimeSessionId);
+    if (!parentRuntimeSessionId) {
+      continue;
+    }
+
+    const parentRecord = recordsByRuntimeSessionId.get(parentRuntimeSessionId);
+    if (parentRecord && !isPendingParallelCompareCandidateSession(parentRecord)) {
+      return parentRecord;
+    }
+  }
+
+  const inPhaseMainlineRecords = group
+    .filter((record) => !isPendingParallelCompareCandidateSession(record))
+    .sort(compareLineageRecordCreatedAt);
+  if (inPhaseMainlineRecords.length > 0) {
+    return inPhaseMainlineRecords.at(-1) ?? null;
+  }
+
+  const historicalMainlineRecords = records
+    .filter((record) => {
+      if (isPendingParallelCompareCandidateSession(record)) {
+        return false;
+      }
+
+      const recordCreatedAtMs = toTimestampMs(record.createdAt);
+      if (candidateCreatedAtMs == null || recordCreatedAtMs == null) {
+        return true;
+      }
+
+      return recordCreatedAtMs < candidateCreatedAtMs;
+    })
+    .sort(compareLineageRecordCreatedAt);
+  return historicalMainlineRecords.at(-1) ?? null;
+}
+
+export function resolvePendingParallelCompatMainlineRecord(
+  records: TaskSessionLineageRecord[],
+) {
+  const groups = new Map<string, TaskSessionLineageRecord[]>();
+
+  for (const record of records) {
+    const phaseId = resolveParallelPhaseGroupKey(record);
+    if (!phaseId) {
+      continue;
+    }
+
+    const existing = groups.get(phaseId) ?? [];
+    existing.push(record);
+    groups.set(phaseId, existing);
+  }
+
+  let selectedGroup: PendingParallelMainlineGroup | null = null;
+
+  for (const group of groups.values()) {
+    if (group.some((record) => asString(record.winnerSessionId))) {
+      continue;
+    }
+
+    const candidateRecords = group.filter(isPendingParallelCompareCandidateSession);
+    if (candidateRecords.length < 2) {
+      continue;
+    }
+
+    const createdAtValues = candidateRecords
+      .map((record) => toTimestampMs(record.createdAt))
+      .filter((value): value is number => value != null);
+    const createdAtMs = createdAtValues.length > 0 ? Math.min(...createdAtValues) : null;
+    const selectedCreatedAtMs = selectedGroup?.createdAtMs ?? Number.NEGATIVE_INFINITY;
+    const candidateCreatedAtMs = createdAtMs ?? Number.NEGATIVE_INFINITY;
+    if (selectedGroup && candidateCreatedAtMs < selectedCreatedAtMs) {
+      continue;
+    }
+
+    const mainlineRecord = resolvePendingParallelMainlineRecordForGroup(
+      records,
+      group,
+      candidateRecords,
+      createdAtMs,
+    );
+    if (!mainlineRecord) {
+      continue;
+    }
+
+    selectedGroup = {
+      createdAtMs,
+      mainlineRecord,
+    };
+  }
+
+  return selectedGroup?.mainlineRecord ?? null;
+}
+
+export function resolvePendingParallelCompatMainlineSessionId(
+  records: TaskSessionLineageRecord[],
+) {
+  const mainlineRecord = resolvePendingParallelCompatMainlineRecord(records);
+  return asString(mainlineRecord?.id) ?? asString(mainlineRecord?.runtimeSessionId) ?? null;
 }
 
 function resolveLatestPendingParallelMessageSuppressionGroup(

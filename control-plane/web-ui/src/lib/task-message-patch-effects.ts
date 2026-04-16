@@ -51,8 +51,6 @@ const TASK_DETAIL_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
   "flow-reconcile-required",
   "task-reconcile-required",
   "workflow-reconcile-required",
-  "session-created",
-  "session-updated",
   "task-updated",
   "task-completed",
   "task-failed",

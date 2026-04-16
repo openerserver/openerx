@@ -962,6 +962,37 @@ export interface TaskPhaseExecutionEnvelope {
   status?: string;
 }
 
+export interface TaskPhaseMessageGroupRecord {
+  taskSessionId?: string | null;
+  runtimeSessionId?: string | null;
+  phaseRole?: string | null;
+  phaseItemIndex?: number | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  title?: string | null;
+  selectedModel?: string | null;
+  executionStatus?: string | null;
+  timelineMeta?: Pick<ExecutionTraceTimelineMeta, "cacheState" | "complete" | "itemCount" | "reconcileRequired">;
+  messages: unknown[];
+}
+
+export interface TaskPhaseViewRecord {
+  phase: TaskPhaseRecord;
+  sessions: TaskSessionRecord[];
+  messageGroups: TaskPhaseMessageGroupRecord[];
+  meta: {
+    readSource?: string;
+    currentSessionId?: string | null;
+    currentPhaseId?: string | null;
+    latestSessionId?: string | null;
+    latestPhaseId?: string | null;
+    phaseCount?: number | null;
+    sessionCount?: number | null;
+    messageGroupCount?: number | null;
+    messageCount?: number | null;
+  };
+}
+
 export interface TaskExecutionRefreshTargets {
   workflow: boolean;
   flow: boolean;
@@ -2679,6 +2710,16 @@ export async function getCurrentTaskRound(taskId: string) {
 
 export async function getTaskRounds(taskId: string) {
   return request<TaskRoundListDto>(`/tasks/${taskId}/rounds`);
+}
+
+export async function getTaskPhases(taskId: string) {
+  return request<{ data: TaskPhaseRecord[] }>(`/tasks/${taskId}/phases`);
+}
+
+export async function getTaskPhaseView(taskId: string, phaseId: string) {
+  return request<{ data: TaskPhaseViewRecord }>(
+    `/tasks/${taskId}/phases/${encodeURIComponent(phaseId)}/view`,
+  );
 }
 
 export async function getTaskRoundMessages(taskId: string, roundId: string) {

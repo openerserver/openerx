@@ -32,6 +32,7 @@ function createTaskSessionRegistrarDeps(overrides: Record<string, unknown> = {})
     persistTaskSessionMessage: mock(async () => ({ ok: true, status: 201, data: {} })),
     postTaskSessionMessage: mock(async () => ({ ok: true, status: 201, data: {} })),
     listTaskPhases: mock(async () => ({ ok: true, status: 200, data: {} })),
+    getTaskPhaseView: mock(async () => ({ ok: true, status: 200, data: {} })),
     upsertTaskPhase: mock(async () => ({ ok: true, status: 201, data: {} })),
     adoptTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
     cancelTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
@@ -87,6 +88,44 @@ afterEach(() => {
 });
 
 describe("task session route registrar", () => {
+  test("phase view route is mounted and delegates to the phase reader", async () => {
+    const getTaskPhaseView = mock(async (args: unknown) => ({
+      ok: true as const,
+      status: 200 as const,
+      data: { routeScope: "phase-view", args },
+    }));
+
+    const { primaryHandler } = await setupTaskSessionRegistrar({
+      routeKeys: {
+        primary: "GET /:taskId/phases/:phaseId/view",
+      },
+      depsOverrides: { getTaskPhaseView },
+    });
+
+    const response = await invokeRouteHandler(
+      primaryHandler,
+      createRouteContext({
+        params: {
+          taskId: "task-1",
+          phaseId: "phase-2",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(getTaskPhaseView).toHaveBeenCalledWith({
+      taskId: "task-1",
+      phaseId: "phase-2",
+    });
+    expect(await response.json()).toEqual({
+      routeScope: "phase-view",
+      args: {
+        taskId: "task-1",
+        phaseId: "phase-2",
+      },
+    });
+  });
+
   test("phase adopt route is mounted and forwards parsed body to the phase adoption dependency", async () => {
     const adoptTaskPhase = mock(async (args: unknown) => ({
       ok: true as const,

@@ -97,6 +97,15 @@ export function registerTaskSessionRoutes(
       error?: string;
       data?: unknown;
     }>;
+    getTaskPhaseView: (args: {
+      taskId: string;
+      phaseId: string;
+    }) => Promise<{
+      ok: boolean;
+      status: number;
+      error?: string;
+      data?: unknown;
+    }>;
     upsertTaskPhase: (
       taskId: string,
       body: z.infer<typeof upsertTaskPhaseSchema>,
@@ -332,6 +341,18 @@ export function registerTaskSessionRoutes(
   taskRoutes.get("/:taskId/phases", async (c) => {
     const taskId = c.req.param("taskId");
     const result = await deps.listTaskPhases(taskId);
+    if (!result.ok) {
+      return c.json({ error: result.error }, result.status as 404 | 500);
+    }
+
+    return c.json(result.data, result.status as 200);
+  });
+
+  taskRoutes.get("/:taskId/phases/:phaseId/view", async (c) => {
+    const result = await deps.getTaskPhaseView({
+      taskId: c.req.param("taskId"),
+      phaseId: c.req.param("phaseId"),
+    });
     if (!result.ok) {
       return c.json({ error: result.error }, result.status as 404 | 500);
     }

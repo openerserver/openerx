@@ -1,6 +1,7 @@
 import { cpFetch } from "../../lib/control-plane-client";
 import {
   filterPendingParallelTaskConversationCompatMessages,
+  resolvePendingParallelCompatMainlineSessionId,
 } from "./task-session-parallel-compat";
 import {
   type TaskSessionLineageRecord,
@@ -141,7 +142,36 @@ function mapServiceTaskSessionMessages(messages: ServiceTaskSessionMessageRecord
   return messages.map((message) => buildLegacySessionMessage(message));
 }
 
+function extractServiceTaskSessionIdFromSyntheticMessageId(
+  message: ServiceTaskSessionMessageRecord,
+) {
+  const rawPayload = asRecord(message.rawPayload);
+  const rawInfo = asRecord(rawPayload?.info);
+  const candidateIds = [
+    asString(rawInfo?.id),
+    asString(rawPayload?.id),
+    asString(message.runtimeMessageId),
+    asString(message.id),
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidateId of candidateIds) {
+    const match = candidateId.match(
+      /^(.*):(synthetic-root-prompt|user-prompt|assistant|user|tool|system)(?::.*)?$/u,
+    );
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return undefined;
+}
+
 function extractServiceTaskSessionMessageSourceSessionId(message: ServiceTaskSessionMessageRecord) {
+  const syntheticSessionId = extractServiceTaskSessionIdFromSyntheticMessageId(message);
+  if (syntheticSessionId) {
+    return syntheticSessionId;
+  }
+
   const topLevelSessionId = asString(message.sessionId);
   if (topLevelSessionId) {
     return topLevelSessionId;
@@ -153,7 +183,8 @@ function extractServiceTaskSessionMessageSourceSessionId(message: ServiceTaskSes
     asString(rawInfo?.sessionID) ??
     asString(rawInfo?.sessionId) ??
     asString(rawPayload?.sessionID) ??
-    asString(rawPayload?.sessionId)
+    asString(rawPayload?.sessionId) ??
+    extractServiceTaskSessionIdFromSyntheticMessageId(message)
   );
 }
 
@@ -739,9 +770,13 @@ export async function fetchTaskConversationCompatMessages(
   const normalizedMeta = normalizeTaskSessionTimelineMeta(result.data?.meta);
   const cacheState = deriveTaskSessionMessageCacheState(normalizedMeta, messages.length);
   const complete = isTaskSessionMessageCacheComplete(normalizedMeta, messages.length);
+  const pendingParallelMainlineSessionId =
+    !options?.sessionId && options?.includeLineage !== false && lineageResult?.ok
+      ? resolvePendingParallelCompatMainlineSessionId(lineageResult.activeRecords)
+      : null;
   const publicSessionId = resolvePublicRuntimeSessionId(
     taskId,
-    options?.sessionId ?? result.data?.meta?.sessionId,
+    pendingParallelMainlineSessionId ?? options?.sessionId ?? result.data?.meta?.sessionId,
     lineageResult?.activeRecords,
   );
 

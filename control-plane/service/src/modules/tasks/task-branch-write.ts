@@ -408,17 +408,6 @@ export function createTaskBranchWriteApi(deps: {
       return { ok: false as const, status: 404 as const, error: "Task branch not found" };
     }
 
-    await deps.syncTaskBranchCompatTreeNode({
-      taskId,
-      runtimeSessionId: record.runtimeSessionId,
-      parentRuntimeSessionId: record.parentRuntimeSessionId ?? null,
-      forkedFromMessageId: record.forkedFromMessageId ?? null,
-      branchName: record.branchName ?? null,
-      sourceType: record.sourceType,
-      isActive: true,
-      archivedAt: null,
-    });
-
     await deps.upsertConversationSessionRecord({
       task,
       runtimeSessionId: record.runtimeSessionId,
@@ -437,7 +426,6 @@ export function createTaskBranchWriteApi(deps: {
       status: "running",
       sessionId: record.runtimeSessionId,
     });
-    await deps.upsertTaskTreeNode(taskSnapshot);
     await deps.syncTaskAggregateFromSnapshot(taskSnapshot);
 
     return {
