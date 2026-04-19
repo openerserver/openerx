@@ -121,14 +121,37 @@ export function applyRealtimeEventToLiveAssistantState(
   );
 }
 
+export type ReplayLiveAssistantStateScope = {
+  sessionId: string;
+  phaseId?: string | null;
+};
+
+function matchesScopePhase(
+  patchEvent: TaskMessagePatchEvent,
+  phaseId: string | null | undefined,
+): boolean {
+  if (!phaseId) {
+    return true;
+  }
+  if (!patchEvent.phaseId) {
+    return true;
+  }
+  return patchEvent.phaseId === phaseId;
+}
+
 export function replayTaskMessagePatchEvents(
   patchEvents: TaskMessagePatchEvent[],
-  sessionId: string,
+  scope: string | ReplayLiveAssistantStateScope,
 ): LiveAssistantState {
+  const { sessionId, phaseId = null }: ReplayLiveAssistantStateScope =
+    typeof scope === "string" ? { sessionId: scope } : scope;
   const state = createEmptyLiveAssistantState();
   const chronologicalEvents = patchEvents.slice().reverse();
 
   for (const patchEvent of chronologicalEvents) {
+    if (!matchesScopePhase(patchEvent, phaseId)) {
+      continue;
+    }
     const nextState = applyTaskMessagePatchEventToLiveAssistantState(
       state,
       patchEvent,
@@ -142,6 +165,65 @@ export function replayTaskMessagePatchEvents(
   }
 
   return state;
+}
+
+export function mergeLiveAssistantStates(
+  states: LiveAssistantState[],
+): LiveAssistantState {
+  const merged = createEmptyLiveAssistantState();
+
+  for (const state of states) {
+    for (const messageId of state.orderedAssistantMessageIds) {
+      if (!merged.orderedAssistantMessageIds.includes(messageId)) {
+        merged.orderedAssistantMessageIds.push(messageId);
+      }
+    }
+    for (const [messageId, meta] of state.metaById.entries()) {
+      merged.metaById.set(messageId, meta);
+    }
+    for (const [messageId, text] of state.textById.entries()) {
+      const currentText = merged.textById.get(messageId);
+      if (!currentText || text.length >= currentText.length) {
+        merged.textById.set(messageId, text);
+      }
+    }
+    for (const [messageId, thinkingText] of state.thinkingById.entries()) {
+      const currentThinkingText = merged.thinkingById.get(messageId);
+      if (!currentThinkingText || thinkingText.length >= currentThinkingText.length) {
+        merged.thinkingById.set(messageId, thinkingText);
+      }
+    }
+    for (const messageId of state.incompleteIds.values()) {
+      merged.incompleteIds.add(messageId);
+    }
+  }
+
+  return merged;
+}
+
+export type ReplayPhaseLiveAssistantStateOptions = {
+  phaseId?: string | null;
+  sessionIds: string[];
+};
+
+export function replayPhaseLiveAssistantState(
+  patchEvents: TaskMessagePatchEvent[],
+  options: ReplayPhaseLiveAssistantStateOptions,
+): LiveAssistantState {
+  const sessionIds = options.sessionIds.filter(
+    (sessionId): sessionId is string =>
+      typeof sessionId === "string" && sessionId.trim().length > 0,
+  );
+  if (sessionIds.length === 0) {
+    return createEmptyLiveAssistantState();
+  }
+
+  const uniqueSessionIds = Array.from(new Set(sessionIds));
+  const phaseId = options.phaseId ?? null;
+  const states = uniqueSessionIds.map((sessionId) =>
+    replayTaskMessagePatchEvents(patchEvents, { sessionId, phaseId }),
+  );
+  return mergeLiveAssistantStates(states);
 }
 
 export function replayLiveAssistantState(

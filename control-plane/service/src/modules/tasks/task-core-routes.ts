@@ -40,15 +40,20 @@ type RegisterTaskCoreRoutesDeps = {
   }) => Promise<unknown>;
 };
 
-async function loadTaskDeleteNodeIds(taskId: string) {
-  const [task] = await postgresSql<
+type SqlExecutor = typeof postgresSql;
+
+export async function loadTaskDeleteNodeIds(
+  taskId: string,
+  executor: SqlExecutor = postgresSql,
+) {
+  const [task] = await executor<
     Array<{ id: string; treeNodeId: string | null }>
   >`select id, tree_node_id as "treeNodeId" from tasks where id = ${taskId}`;
   if (!task) {
     return null;
   }
 
-  const sessionRows = await postgresSql<
+  const sessionRows = await executor<
     Array<{ id: string; treeNodeId: string | null; runtimeSessionId: string | null }>
   >`select id, tree_node_id as "treeNodeId", runtime_session_id as "runtimeSessionId" from task_sessions where task_id = ${taskId}`;
   const nodeIds = new Set<string>([task.id]);
@@ -74,50 +79,52 @@ async function loadTaskDeleteNodeIds(taskId: string) {
   return Array.from(nodeIds);
 }
 
-async function deleteTaskTreeBackedTask(taskId: string, nodeIdList: string[]) {
-  await postgresSql.begin(async (transaction) => {
-    const tx = transaction as unknown as typeof postgresSql;
+export async function deleteTaskTreeBackedTask(
+  taskId: string,
+  nodeIdList: string[],
+  executor: SqlExecutor = postgresSql,
+) {
+  const tx = executor;
 
-    await tx`DELETE FROM task_message_parts WHERE message_id IN (SELECT id FROM task_messages WHERE task_id = ${taskId})`;
-    await tx`DELETE FROM task_timeline_views WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_domain_events WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_usage_ledger_entries WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_artifacts WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_operations WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_message_parts WHERE message_id IN (SELECT id FROM task_messages WHERE task_id = ${taskId})`;
+  await tx`DELETE FROM task_timeline_views WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_domain_events WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_usage_ledger_entries WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_artifacts WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_operations WHERE task_id = ${taskId}`;
 
-    await tx`DELETE FROM task_messages WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_session_runs WHERE task_id = ${taskId}`;
-    await tx`UPDATE task_sessions SET parent_session_id = NULL, judge_session_id = NULL, winner_session_id = NULL, forked_from_message_id = NULL, phase_id = NULL WHERE task_id = ${taskId}`;
-    await tx`UPDATE task_execution_phases SET parent_phase_id = NULL, resumed_from_phase_id = NULL, anchor_session_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_snapshots WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_execution_phases WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_sessions WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_messages WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_session_runs WHERE task_id = ${taskId}`;
+  await tx`UPDATE task_sessions SET parent_session_id = NULL, judge_session_id = NULL, winner_session_id = NULL, forked_from_message_id = NULL, phase_id = NULL WHERE task_id = ${taskId}`;
+  await tx`UPDATE task_execution_phases SET parent_phase_id = NULL, resumed_from_phase_id = NULL, anchor_session_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_snapshots WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_execution_phases WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_sessions WHERE task_id = ${taskId}`;
 
-    await tx`DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ${taskId})`;
-    await tx`DELETE FROM task_workflow_runs WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ${taskId})`;
+  await tx`DELETE FROM task_workflow_runs WHERE task_id = ${taskId}`;
 
-    await tx`DELETE FROM task_operating_modes WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM boss_decisions WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM human_escalations WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM developer_change_requests WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM role_aggregate_conclusions WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM runtime_usage_ledger_steps WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM runtime_usage_ledgers WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM file_changes WHERE change_id IN (SELECT id FROM code_changes WHERE task_id = ${taskId})`;
-    await tx`DELETE FROM code_changes WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM task_operating_modes WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM boss_decisions WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM human_escalations WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM developer_change_requests WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM role_aggregate_conclusions WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM runtime_usage_ledger_steps WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM runtime_usage_ledgers WHERE task_id = ${taskId}`;
+  await tx`DELETE FROM file_changes WHERE change_id IN (SELECT id FROM code_changes WHERE task_id = ${taskId})`;
+  await tx`DELETE FROM code_changes WHERE task_id = ${taskId}`;
 
-    await tx`UPDATE tasks SET spawned_from_task_id = NULL WHERE spawned_from_task_id = ${taskId}`;
-    await tx`DELETE FROM tasks WHERE id = ${taskId}`;
+  await tx`UPDATE tasks SET spawned_from_task_id = NULL WHERE spawned_from_task_id = ${taskId}`;
+  await tx`DELETE FROM tasks WHERE id = ${taskId}`;
 
-    if (nodeIdList.length === 0) {
-      return;
-    }
+  if (nodeIdList.length === 0) {
+    return;
+  }
 
-    await tx`UPDATE project_tree_nodes SET parent_id = NULL, superseded_by = NULL WHERE parent_id = ANY(${nodeIdList}::text[]) OR superseded_by = ANY(${nodeIdList}::text[])`;
-    await tx`DELETE FROM project_tree_links WHERE source_node_id = ANY(${nodeIdList}::text[]) OR target_node_id = ANY(${nodeIdList}::text[])`;
-    await tx`DELETE FROM project_tree_branches WHERE task_node_id = ANY(${nodeIdList}::text[]) OR head_node_id = ANY(${nodeIdList}::text[])`;
-    await tx`DELETE FROM project_tree_nodes WHERE id = ANY(${nodeIdList}::text[])`;
-  });
+  await tx`UPDATE project_tree_nodes SET parent_id = NULL, superseded_by = NULL WHERE parent_id = ANY(${nodeIdList}::text[]) OR superseded_by = ANY(${nodeIdList}::text[])`;
+  await tx`DELETE FROM project_tree_links WHERE source_node_id = ANY(${nodeIdList}::text[]) OR target_node_id = ANY(${nodeIdList}::text[])`;
+  await tx`DELETE FROM project_tree_branches WHERE task_node_id = ANY(${nodeIdList}::text[]) OR head_node_id = ANY(${nodeIdList}::text[])`;
+  await tx`DELETE FROM project_tree_nodes WHERE id = ANY(${nodeIdList}::text[])`;
 }
 
 export function registerTaskCoreRoutes(taskRoutes: Hono<AppEnv>, deps: RegisterTaskCoreRoutesDeps) {
@@ -173,7 +180,10 @@ export function registerTaskCoreRoutes(taskRoutes: Hono<AppEnv>, deps: RegisterT
       return c.json({ error: "Task not found" }, 404);
     }
 
-    await deleteTaskTreeBackedTask(taskId, nodeIdList);
+    await postgresSql.begin(async (transaction) => {
+      const tx = transaction as unknown as SqlExecutor;
+      await deleteTaskTreeBackedTask(taskId, nodeIdList, tx);
+    });
     return c.json({ ok: true, id: taskId });
   });
 }

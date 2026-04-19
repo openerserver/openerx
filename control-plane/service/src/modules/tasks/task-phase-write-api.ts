@@ -16,7 +16,7 @@ import {
   taskSnapshots,
 } from "../../db/schema";
 import type { TaskTreeRecord } from "../project-tree/task-view";
-import { buildPublicTaskExecutionPhaseRecord } from "./task-phase-public-record";
+import { buildPublicTaskExecutionPhaseRecord, groupTaskSessionIdsByPhaseId } from "./task-phase-public-record";
 
 function asNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -326,16 +326,7 @@ export function createTaskPhaseWriteApi(deps: {
         })
       : [];
 
-    const sessionIdsByPhaseId = new Map<string, string[]>();
-    for (const session of phaseSessions) {
-      const phaseId = asNonEmptyString(session.phaseId);
-      if (!phaseId) {
-        continue;
-      }
-      const existing = sessionIdsByPhaseId.get(phaseId) ?? [];
-      existing.push(session.id);
-      sessionIdsByPhaseId.set(phaseId, existing);
-    }
+    const sessionIdsByPhaseId = groupTaskSessionIdsByPhaseId(phaseSessions);
 
     return {
       ok: true as const,
@@ -612,6 +603,73 @@ export function createTaskPhaseWriteApi(deps: {
     };
   }
 
+  async function pauseTaskPhase(args: { taskId: string; phaseId: string }) {
+    const task = await deps.loadTaskTreeBackedRecord(args.taskId);
+    if (!task) {
+      return { ok: false as const, status: 404 as const, error: "Task not found" };
+    }
+
+    const phase = await loadTaskExecutionPhase(args.taskId, args.phaseId);
+    if (!phase) {
+      return { ok: false as const, status: 404 as const, error: "Task phase not found" };
+    }
+    if (phase.status !== "running" && phase.status !== "pending") {
+      return { ok: false as const, status: 409 as const, error: "Task phase is not pausable" };
+    }
+
+    const sessions = await loadTaskPhaseSessions(args.taskId, args.phaseId);
+    const snapshot =
+      (await db.query.taskSnapshots.findFirst({ where: eq(taskSnapshots.taskId, args.taskId) })) ?? null;
+    const fallbackSessionId =
+      snapshot?.currentSessionId ??
+      phase.winnerSessionId ??
+      phase.anchorSessionId ??
+      sessions.at(0)?.id ??
+      null;
+    const now = new Date().toISOString();
+
+    await db
+      .update(taskExecutionPhases)
+      .set({
+        status: "paused",
+        lastHeartbeatAt: now,
+        updatedAt: now,
+      })
+      .where(and(eq(taskExecutionPhases.taskId, args.taskId), eq(taskExecutionPhases.id, args.phaseId)));
+
+    await db
+      .update(taskSessions)
+      .set({
+        executionStatus: "paused",
+        status: "paused",
+        updatedAt: now,
+      })
+      .where(and(eq(taskSessions.taskId, args.taskId), eq(taskSessions.phaseId, args.phaseId)));
+
+    await upsertTaskSnapshotPhaseState({
+      taskId: args.taskId,
+      projectId: task.projectId,
+      phaseId: args.phaseId,
+      phaseKind: phase.phaseKind,
+      phaseStatus: "paused",
+      currentSessionId: fallbackSessionId,
+      latestSessionId: snapshot?.latestSessionId ?? fallbackSessionId,
+      candidateCount: phase.candidateCount,
+    });
+
+    return {
+      ok: true as const,
+      status: 200 as const,
+      data: {
+        taskId: args.taskId,
+        phaseId: args.phaseId,
+        status: "paused",
+        currentSessionId: fallbackSessionId,
+        latestSessionId: snapshot?.latestSessionId ?? fallbackSessionId,
+      },
+    };
+  }
+
   async function resumeTaskPhase(args: { taskId: string; phaseId: string }) {
     const task = await deps.loadTaskTreeBackedRecord(args.taskId);
     if (!task) {
@@ -677,6 +735,7 @@ export function createTaskPhaseWriteApi(deps: {
     listTaskPhases,
     upsertTaskPhase,
     adoptTaskPhase,
+    pauseTaskPhase,
     cancelTaskPhase,
     resumeTaskPhase,
   };

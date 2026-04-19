@@ -25,13 +25,21 @@ function hasParallelCandidateTraceState(
   return Boolean(traceState?.state || traceState?.note);
 }
 
+function canDisplayProgressState(state?: Pick<ParallelCandidateSessionState, "items" | "hasSettledReply"> | null) {
+  if (!state) {
+    return false;
+  }
+
+  return hasDisplayableParallelCandidateItems(state.items) || state.hasSettledReply;
+}
+
 async function loadParallelCandidateSessionMessageFallback(
   currentTaskId: string,
   sessionId: string,
 ) {
   try {
     const response = await getTaskConversationMessages(currentTaskId, sessionId, {
-      includeLineage: false,
+      includeLineage: true,
     });
     const items = condenseParallelCandidateToolItems(
       normalizeSessionConversationItems(Array.isArray(response.data) ? response.data : []),
@@ -62,17 +70,17 @@ export async function loadParallelCandidateSessionState(args: {
     Boolean(phaseBaseline) &&
     (hasDisplayableParallelCandidateItems(phaseBaseline?.items ?? []) ||
       phaseBaseline?.hasSettledReply === true);
-  if (canDisplayPhaseBaseline && phaseBaseline?.skipTraceLoad === true) {
-    args.onProgress?.(phaseBaseline);
-    return phaseBaseline;
-  }
-
-  const sessionMessageFallbackPromise = canDisplayPhaseBaseline
-    ? Promise.resolve({
-        items: [] as TaskConversationMessageItem[],
-        hasSettledReply: false,
-      })
-    : loadParallelCandidateSessionMessageFallback(args.taskId, args.sessionId);
+  const cachedDisplayState = args.cachedState
+    ? {
+        items: args.cachedState.items,
+        hasSettledReply: args.cachedState.hasSettledReply,
+      }
+    : undefined;
+  const canDisplayCachedState = canDisplayProgressState(cachedDisplayState);
+  const sessionMessageFallbackPromise = loadParallelCandidateSessionMessageFallback(
+    args.taskId,
+    args.sessionId,
+  );
   const tracePromise = getTaskExecutionTraceView(args.taskId, args.sessionId, {
     includeLineage: false,
   })
@@ -83,7 +91,13 @@ export async function loadParallelCandidateSessionState(args: {
   const canDisplaySessionFallback =
     hasDisplayableParallelCandidateItems(sessionMessageFallback.items) ||
     sessionMessageFallback.hasSettledReply;
-  if (canDisplayPhaseBaseline && phaseBaseline) {
+  if (args.silent && canDisplayCachedState && args.cachedState) {
+    args.onProgress?.({
+      items: args.cachedState.items,
+      hasSettledReply: args.cachedState.hasSettledReply,
+      traceState: args.cachedState.traceState ?? {},
+    });
+  } else if (canDisplayPhaseBaseline && phaseBaseline) {
     args.onProgress?.({
       items: phaseBaseline.items,
       hasSettledReply: phaseBaseline.hasSettledReply,

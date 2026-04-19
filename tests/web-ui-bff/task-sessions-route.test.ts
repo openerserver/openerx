@@ -346,6 +346,252 @@ describe("task sessions route", () => {
     );
   });
 
+  test("keeps default sessions scoped to non-archived records but returns archived history when requested", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "history task",
+            status: "completed",
+            sessionId: "session-b",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-compare-root",
+                runtimeSessionId: "session-compare-root",
+                parentRuntimeSessionId: "session-root",
+                branchName: "compare root",
+                sourceType: "fork",
+                isActive: false,
+                archivedAt: "2026-03-14T10:08:00.000Z",
+                createdAt: "2026-03-14T10:01:00.000Z",
+                updatedAt: "2026-03-14T10:08:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-a",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "session-compare-root",
+                branchName: "候选 A",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 0,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                isActive: false,
+                archivedAt: "2026-03-14T10:08:00.000Z",
+                phaseId: "task-phase:phase-parallel",
+                createdAt: "2026-03-14T10:01:01.000Z",
+                updatedAt: "2026-03-14T10:08:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-b",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "session-compare-root",
+                branchName: "候选 B",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 1,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                isActive: true,
+                archivedAt: null,
+                phaseId: "task-phase:phase-parallel",
+                createdAt: "2026-03-14T10:01:02.000Z",
+                updatedAt: "2026-03-14T10:05:02.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const defaultResponse = await taskRoutes.request("http://localhost/task-1/sessions", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+    const historicalResponse = await taskRoutes.request(
+      "http://localhost/task-1/sessions?includeArchived=true",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
+      },
+    );
+
+    expect(defaultResponse.status).toBe(200);
+    expect(historicalResponse.status).toBe(200);
+
+    const defaultBody = (await defaultResponse.json()) as {
+      data: Array<{ id: string }>;
+      meta: { currentSessionId: string | null; currentPhaseId: string | null };
+    };
+    const historicalBody = (await historicalResponse.json()) as {
+      data: Array<{ id: string; candidateIndex?: number | null; executionModeSnapshot?: string | null }>;
+      meta: { currentSessionId: string | null; currentPhaseId: string | null };
+    };
+
+    expect(defaultBody.data.map((session) => session.id)).toEqual(["session-root", "session-b"]);
+    expect(defaultBody.meta).toEqual({
+      currentSessionId: "session-b",
+      currentPhaseId: "task-phase:phase-parallel",
+      latestPhaseId: "task-phase:phase-parallel",
+      phaseCount: 1,
+    });
+
+    expect(historicalBody.data.map((session) => session.id)).toEqual([
+      "session-root",
+      "session-compare-root",
+      "session-a",
+      "session-b",
+    ]);
+    expect(historicalBody.data.find((session) => session.id === "session-a")).toMatchObject({
+      candidateIndex: 0,
+      executionModeSnapshot: "parallel",
+    });
+    expect(historicalBody.meta.currentSessionId).toBe("session-b");
+    expect(historicalBody.meta.currentPhaseId).toBe("task-phase:phase-parallel");
+  });
+
+  test("rebuilds historical session-lineage trees when archived ancestors are requested", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-compare-root",
+                runtimeSessionId: "session-compare-root",
+                parentRuntimeSessionId: "session-root",
+                branchName: "compare root",
+                sourceType: "fork",
+                isActive: false,
+                archivedAt: "2026-03-14T10:08:00.000Z",
+                createdAt: "2026-03-14T10:01:00.000Z",
+                updatedAt: "2026-03-14T10:08:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-a",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "session-compare-root",
+                branchName: "候选 A",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 0,
+                isActive: false,
+                archivedAt: "2026-03-14T10:08:00.000Z",
+                createdAt: "2026-03-14T10:01:01.000Z",
+                updatedAt: "2026-03-14T10:08:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-b",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "session-compare-root",
+                branchName: "候选 B",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 1,
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:01:02.000Z",
+                updatedAt: "2026-03-14T10:05:02.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const defaultResponse = await taskRoutes.request("http://localhost/task-1/session-lineage", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+    const historicalResponse = await taskRoutes.request(
+      "http://localhost/task-1/session-lineage?includeArchived=true",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
+      },
+    );
+
+    expect(defaultResponse.status).toBe(200);
+    expect(historicalResponse.status).toBe(200);
+
+    const defaultBody = (await defaultResponse.json()) as {
+      data: Array<{ runtimeSessionId: string; children: Array<{ runtimeSessionId: string }> }>;
+    };
+    const historicalBody = (await historicalResponse.json()) as {
+      data: Array<{ runtimeSessionId: string; children: Array<{ runtimeSessionId: string; children: Array<{ runtimeSessionId: string }> }> }>;
+    };
+
+    expect(defaultBody.data.map((node) => node.runtimeSessionId)).toEqual([
+      "session-root",
+      "session-b",
+    ]);
+    expect(historicalBody.data).toEqual([
+      expect.objectContaining({
+        runtimeSessionId: "session-root",
+        children: [
+          expect.objectContaining({
+            runtimeSessionId: "session-compare-root",
+            children: [
+              expect.objectContaining({ runtimeSessionId: "session-a" }),
+              expect.objectContaining({ runtimeSessionId: "session-b" }),
+            ],
+          }),
+        ],
+      }),
+    ]);
+  });
+
   test("marks the task session as active when it matches the persisted sessionId", async () => {
     setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/project-tree/tasks/task-1") {
@@ -408,8 +654,8 @@ describe("task sessions route", () => {
       ],
       meta: {
         currentSessionId: "session-1",
-        currentPhaseId: "phase-root",
-        latestPhaseId: "phase-root",
+        currentPhaseId: null,
+        latestPhaseId: null,
         phaseCount: 1,
       },
     });
@@ -539,7 +785,7 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-1",
           taskSessionId: "task-session:task-1:session-1",
-          phaseId: "task-session:task-1:session-1",
+          phaseId: null,
           title: "finished task — 分析现状",
           isActive: true,
           summary: { additions: 0, deletions: 0, files: 0 },
@@ -554,9 +800,9 @@ describe("task sessions route", () => {
       ],
       meta: {
         currentSessionId: "session-1",
-        currentPhaseId: "task-session:task-1:session-1",
-        latestPhaseId: "task-session:task-1:session-1",
-        phaseCount: 1,
+        currentPhaseId: null,
+        latestPhaseId: null,
+        phaseCount: 0,
       },
     });
   });
@@ -649,8 +895,8 @@ describe("task sessions route", () => {
       ],
       meta: {
         currentSessionId: "session-b",
-        currentPhaseId: "phase-parallel-1",
-        latestPhaseId: "phase-parallel-1",
+        currentPhaseId: null,
+        latestPhaseId: null,
         phaseCount: 1,
       },
     });
@@ -930,16 +1176,16 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-root",
           taskSessionId: "task-session:task-1:session-root",
-          phaseId: "ts-root",
+          phaseId: null,
           title: "main",
           isActive: true,
         }),
       ],
       meta: {
         currentSessionId: "session-root",
-        currentPhaseId: "ts-root",
-        latestPhaseId: "ts-root",
-        phaseCount: 1,
+        currentPhaseId: null,
+        latestPhaseId: null,
+        phaseCount: 0,
       },
     });
   });
@@ -1008,16 +1254,16 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-root",
           taskSessionId: "task-session:task-1:session-root",
-          phaseId: "task-session:task-1:session-root",
+          phaseId: null,
           title: "main",
           isActive: true,
         }),
       ],
       meta: {
         currentSessionId: "session-root",
-        currentPhaseId: "task-session:task-1:session-root",
-        latestPhaseId: "task-session:task-1:session-root",
-        phaseCount: 1,
+        currentPhaseId: null,
+        latestPhaseId: null,
+        phaseCount: 0,
       },
     });
   });

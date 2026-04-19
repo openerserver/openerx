@@ -381,7 +381,7 @@ function resolveCurrentTaskSessionId(
 function resolveTaskSessionPhaseId<
   TSession extends { id: string; phaseId?: string | null; coordinationKey?: string | null },
 >(session?: TSession | null) {
-  return asNonEmptyString(session?.phaseId) ?? session?.id ?? null;
+  return asNonEmptyString(session?.phaseId) ?? null;
 }
 
 function findTaskSessionByIdentifier<
@@ -846,6 +846,9 @@ function normalizeTaskSessionMessageRecord(
 async function loadTaskSessionMessagesInternal(
   taskId: string,
   sessionId: string,
+  options?: {
+    sortMode?: "timeline" | "session";
+  },
 ): Promise<TaskSessionMessageRecord[]> {
   const canonicalMessages = await db
     .select(CANONICAL_TASK_MESSAGE_COLUMNS)
@@ -864,12 +867,13 @@ async function loadTaskSessionMessagesInternal(
       : [];
 
   if (canonicalMessages.length > 0) {
-    return sortSingleTaskSessionMessageRecords(
-      attachTaskSessionMessageParts(
-        canonicalMessages.map((message) => normalizeTaskSessionMessageRecord(message)),
-        canonicalParts.map((part) => normalizeTaskSessionMessagePart(part)),
-      ),
+    const hydratedMessages = attachTaskSessionMessageParts(
+      canonicalMessages.map((message) => normalizeTaskSessionMessageRecord(message)),
+      canonicalParts.map((part) => normalizeTaskSessionMessagePart(part)),
     );
+    return options?.sortMode === "session"
+      ? sortTaskSessionMessageRecordsForSessionRead(hydratedMessages)
+      : sortSingleTaskSessionMessageRecords(hydratedMessages);
   }
 
   return [];
@@ -1806,6 +1810,37 @@ function sortSingleTaskSessionMessageRecords(
     .map((entry) => entry.message);
 }
 
+function sortTaskSessionMessageRecordsForSessionRead(
+  messages: TaskSessionMessageRecord[],
+) {
+  return messages
+    .map((message, index) => ({
+      message,
+      index,
+      messageIndex:
+        typeof message.messageIndex === "number" && Number.isFinite(message.messageIndex)
+          ? message.messageIndex
+          : Number.MAX_SAFE_INTEGER,
+      createdAt: Date.parse(message.createdAt ?? ""),
+    }))
+    .sort((left, right) => {
+      if (left.messageIndex !== right.messageIndex) {
+        return left.messageIndex - right.messageIndex;
+      }
+
+      const leftCreatedAt = Number.isNaN(left.createdAt) ? Number.MAX_SAFE_INTEGER : left.createdAt;
+      const rightCreatedAt = Number.isNaN(right.createdAt)
+        ? Number.MAX_SAFE_INTEGER
+        : right.createdAt;
+      if (leftCreatedAt !== rightCreatedAt) {
+        return leftCreatedAt - rightCreatedAt;
+      }
+
+      return left.index - right.index;
+    })
+    .map((entry) => entry.message);
+}
+
 function sortTaskSessionMessageRecordsChronologically(
   messages: LoadedTaskSessionMessageRecord[],
   sessionIds: string[],
@@ -2241,9 +2276,12 @@ export function createTaskSessionReadApi(deps: {
   async function loadTaskConversationMessageSets(
     taskId: string,
     scopeRecords: TaskSessionReadSessionRecord[],
+    sortMode: "timeline" | "session",
   ) {
     return Promise.all(
-      scopeRecords.map((record) => loadTaskSessionMessagesInternal(taskId, record.id)),
+      scopeRecords.map((record) =>
+        loadTaskSessionMessagesInternal(taskId, record.id, { sortMode }),
+      ),
     );
   }
 
@@ -2371,7 +2409,9 @@ export function createTaskSessionReadApi(deps: {
         includeLineage: args.includeLineage,
       }),
       args.selectedSessionId
-        ? loadTaskSessionMessagesInternal(args.taskId, args.selectedSessionId)
+        ? loadTaskSessionMessagesInternal(args.taskId, args.selectedSessionId, {
+            sortMode: "session",
+          })
         : Promise.resolve([]),
       args.selectedSessionId
         ? loadTaskSessionOperationsInternal(args.taskId, args.selectedSessionId)
@@ -2665,7 +2705,9 @@ export function createTaskSessionReadApi(deps: {
           executionStatus: session.executionStatus,
           itemCount: timelineItemCountsBySessionId.get(session.id) ?? 0,
         }),
-        messages: await loadTaskSessionMessagesInternal(taskId, session.id),
+        messages: await loadTaskSessionMessagesInternal(taskId, session.id, {
+          sortMode: "session",
+        }),
       })),
     );
 
@@ -2759,7 +2801,9 @@ export function createTaskSessionReadApi(deps: {
 
     const [snapshot, rawData] = await Promise.all([
       loadTaskSnapshot(taskId),
-      loadTaskSessionMessagesInternal(taskId, sessionId),
+      loadTaskSessionMessagesInternal(taskId, sessionId, {
+        sortMode: "session",
+      }),
     ]);
     const data = hydrateTaskConversationShellMessages({
       messages: rawData,
@@ -2817,6 +2861,7 @@ export function createTaskSessionReadApi(deps: {
     const messageSets = await loadTaskConversationMessageSets(
       args.taskId,
       conversationScope.scopeRecords,
+      conversationScope.isTaskWideConversation ? "timeline" : "session",
     );
     const normalizedMessageSets = normalizeTaskConversationMessageSets({
       isTaskWideConversation: conversationScope.isTaskWideConversation,
@@ -3024,7 +3069,7 @@ export function createTaskSessionReadApi(deps: {
         .where(and(...filters))
         .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt)),
       scopeRecords.length > 0
-        ? loadTaskConversationMessageSets(args.taskId, scopeRecords)
+        ? loadTaskConversationMessageSets(args.taskId, scopeRecords, "timeline")
         : Promise.resolve([] as LoadedTaskSessionMessageRecord[][]),
     ]);
 

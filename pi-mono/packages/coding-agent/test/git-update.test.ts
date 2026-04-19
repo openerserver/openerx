@@ -33,7 +33,7 @@ function initGitRepo(repoDir: string): void {
 	// We set it manually instead.
 	try {
 		git(["symbolic-ref", "HEAD", "refs/heads/main"], repoDir);
-	} catch (e) {
+	} catch (_e) {
 		// If symbolic-ref fails, it might be a very old git.
 		// As a fallback, create a dummy commit and then rename the branch.
 		git(["commit", "--allow-empty", "-m", "init"], repoDir);

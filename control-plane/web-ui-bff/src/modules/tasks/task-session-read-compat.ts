@@ -1,3 +1,13 @@
+/**
+ * Compat-only read-path helpers for the legacy session-keyed round facade.
+ *
+ * Phase-first migration (checklist §5.3 / §10.2) routes TaskDetail primary reads through
+ * `/phases` + `/phases/:phaseId/view`. The helpers in this module exist only to keep the
+ * `/current-round`, `/rounds`, and `/rounds/:roundId/messages` facades alive for legacy
+ * clients; new code must not reach into them for phase-first responsibilities. Any
+ * patches added here should be evaluated against the retirement plan in
+ * `docs/task-detail/task-detail-phase-first-migration-checklist.md` §10.4 before landing.
+ */
 import { cpFetch } from "../../lib/control-plane-client";
 import {
   filterPendingParallelTaskConversationCompatMessages,

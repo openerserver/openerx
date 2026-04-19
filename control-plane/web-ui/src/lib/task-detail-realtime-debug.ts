@@ -188,6 +188,7 @@ export function summarizeTaskRefreshRequest(
   return {
     eventId: request.eventId,
     reason: request.reason,
+    phaseId: request.phaseId,
     targets: request.targets,
     shouldBumpTraceRefreshKey: request.shouldBumpTraceRefreshKey,
   };

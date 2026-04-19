@@ -1,14 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { runCleanupStatements } from "./test-env";
 
 const BFF_URL = process.env.TEST_BFF_URL || "http://127.0.0.1:4098";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 
 interface LoginResult {
   token: string;
@@ -84,18 +79,13 @@ afterAll(async () => {
     return;
   }
 
-  const { execSync } = await import("node:child_process");
   const statements = createdUsers.flatMap((user) => [
     `DELETE FROM audit_events WHERE target='${user.username}' OR user_id='${user.id}';`,
     `DELETE FROM project_roles WHERE user_id='${user.id}';`,
     `DELETE FROM users WHERE id='${user.id}';`,
   ]);
 
-  try {
-    execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
-  } catch {
-    console.warn("Cleanup failed for user-management.test.ts (bff)");
-  }
+  runCleanupStatements(statements, "user-management.test.ts (bff)");
 });
 
 describe("Admin user management (BFF)", () => {

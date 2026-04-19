@@ -2,7 +2,7 @@ import { effectScope, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTaskMemberViewFeature } from "./useTaskMemberViewFeature";
 
-const getTaskMemberViewMock = vi.fn();
+const getTaskMemberViewMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", () => ({
   getTaskMemberView: getTaskMemberViewMock,

@@ -32,9 +32,11 @@
    作用：现网总入口。最适合先看 TaskDetailV3 的页面装配、主聊天 persisted/realtime 协调、用户动作写链、runtime 镜像写链，以及前端 action -> BFF route -> service API -> 表/投影矩阵。
 2. [taskdetail-v3-page-dataflow.md](taskdetail-v3-page-dataflow.md)
    作用：现网页面装配视角。适合补齐 page model、main pane、sidebar、conversation、parallel、workflow 的数据流分工。
-3. [task-detail-continue-sequence-diagrams.md](task-detail-continue-sequence-diagrams.md)
+3. [task-detail-running-status-guide.md](task-detail-running-status-guide.md)
+   作用：现网状态判断视角。适合确认“为什么页面现在会显示或不显示执行中”，以及 service/BFF/web-ui 三层的 authority 和收紧规则。
+4. [task-detail-continue-sequence-diagrams.md](task-detail-continue-sequence-diagrams.md)
    作用：现网时序视角。适合确认 single continue、parallel continue、sequential-chain 在当前实现里的真实链路，而不是目标链路。
-4. [task-detail-realtime-persisted-coordination-plan.md](task-detail-realtime-persisted-coordination-plan.md)
+5. [task-detail-realtime-persisted-coordination-plan.md](task-detail-realtime-persisted-coordination-plan.md)
    作用：现网与目标之间的桥接文档。前半部分解释当前主聊天 persisted/realtime authority 如何切换，后半部分解释还要继续收口的 contract 边界。
 
 ### 2.2 第二层：再看目标
@@ -68,13 +70,14 @@
 如果不是完整通读，而是带着具体问题来找资料，可以按下面跳转：
 
 1. 想查“某个页面动作最后写到了哪里”：先看 [task-detail-display-write-logic.md](task-detail-display-write-logic.md)。
-2. 想查“当前 continue 为什么会这样工作”：先看 [task-detail-continue-sequence-diagrams.md](task-detail-continue-sequence-diagrams.md)。
-3. 想查“为什么主聊天要区分 persisted 和 realtime authority”：先看 [task-detail-realtime-persisted-coordination-plan.md](task-detail-realtime-persisted-coordination-plan.md)。
-4. 想查“目标模块以后应该怎么拆”：先看 [task-detail-continue-target-module-architecture.md](task-detail-continue-target-module-architecture.md)。
-5. 想查“realtime DTO 最终应该长什么样”：先看 [task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md)。
-6. 想查“下一步还剩哪些收口项”：先看 [task-detail-unified-implementation-roadmap.md](task-detail-unified-implementation-roadmap.md)。
-7. 想查“顺序错乱和重复显示的根因，以及新的 authority 应放在哪里”：先看 [../task-domain/task-phase-first-task-detail-design.md](../task-domain/task-phase-first-task-detail-design.md)。
-8. 想直接按层拆任务：先看 [task-detail-phase-first-migration-checklist.md](task-detail-phase-first-migration-checklist.md)。
+2. 想查“为什么页面还显示执行中，或者为什么现在不再显示执行中”：先看 [task-detail-running-status-guide.md](task-detail-running-status-guide.md)。
+3. 想查“当前 continue 为什么会这样工作”：先看 [task-detail-continue-sequence-diagrams.md](task-detail-continue-sequence-diagrams.md)。
+4. 想查“为什么主聊天要区分 persisted 和 realtime authority”：先看 [task-detail-realtime-persisted-coordination-plan.md](task-detail-realtime-persisted-coordination-plan.md)。
+5. 想查“目标模块以后应该怎么拆”：先看 [task-detail-continue-target-module-architecture.md](task-detail-continue-target-module-architecture.md)。
+6. 想查“realtime DTO 最终应该长什么样”：先看 [task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md)。
+7. 想查“下一步还剩哪些收口项”：先看 [task-detail-unified-implementation-roadmap.md](task-detail-unified-implementation-roadmap.md)。
+8. 想查“顺序错乱和重复显示的根因，以及新的 authority 应放在哪里”：先看 [../task-domain/task-phase-first-task-detail-design.md](../task-domain/task-phase-first-task-detail-design.md)。
+9. 想直接按层拆任务：先看 [task-detail-phase-first-migration-checklist.md](task-detail-phase-first-migration-checklist.md)。
 
 ## 4. 扩展专题
 

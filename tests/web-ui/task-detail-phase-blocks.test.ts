@@ -142,6 +142,88 @@ describe("task detail phase blocks", () => {
     expect(blocks[0]?.items.map((item) => item.role)).toEqual(["user", "parallel", "assistant"]);
   });
 
+  it("projects execution-context wrappers into workflow items while keeping the original task on the user track", () => {
+    const fullPrompt = [
+      "Execution context:",
+      "- task: task-1",
+      "",
+      "请只完成当前阶段的目标。",
+      "",
+      "Pre-execution assessment from the configured review agent:",
+      "",
+      "先梳理需求，再决定是否进入编码。",
+      "",
+      "Original task:",
+      "",
+      "/start-work 请先梳理需求和边界条件，再实现功能代码。",
+    ].join("\n");
+    const processedUserInput = [
+      "Pre-execution assessment from the configured review agent:",
+      "",
+      "先梳理需求，再决定是否进入编码。",
+      "",
+      "Original task:",
+      "",
+      "/start-work 请先梳理需求和边界条件，再实现功能代码。",
+    ].join("\n");
+
+    const blocks = buildTaskDetailPhaseBlocks({
+      phaseSlices: [
+        {
+          phase: {
+            id: "phase-review-wrapped",
+            phaseIndex: 1,
+            phaseKind: "single",
+            triggerType: "execute",
+            status: "completed",
+            startedAt: "2026-04-19T09:18:16.353Z",
+          } as any,
+          sourceMessages: [
+            {
+              id: "user-review-wrapped-1",
+              role: "user",
+              text: fullPrompt,
+              textContent: fullPrompt,
+              summaryText: fullPrompt,
+              userInputText: processedUserInput,
+              finalSentText: processedUserInput,
+              createdAt: "2026-04-19T09:18:16.353Z",
+              info: {
+                id: "user-review-wrapped-1",
+                role: "user",
+                time: {
+                  created: "2026-04-19T09:18:16.353Z",
+                  completed: "2026-04-19T09:18:16.353Z",
+                },
+              },
+              parts: [{ type: "text", text: fullPrompt }],
+            },
+          ],
+        },
+      ],
+      parallelConversationItems: [],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.items.map((item) => item.role)).toEqual(["user", "workflow"]);
+    expect(blocks[0]?.items[0]).toMatchObject({
+      role: "user",
+      userInputText: "/start-work 请先梳理需求和边界条件，再实现功能代码。",
+    });
+    expect(blocks[0]?.items[1]).toMatchObject({
+      role: "workflow",
+      steps: [
+        {
+          items: [
+            {
+              text: "- task: task-1\n\nPre-execution assessment from the configured review agent:\n\n先梳理需求，再决定是否进入编码。",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("overlays current phase with live conversation items that are newer than the persisted slice", () => {
     const blocks = buildTaskDetailPhaseBlocks({
       currentPhaseId: "phase-2",

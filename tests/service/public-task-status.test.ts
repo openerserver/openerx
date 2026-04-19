@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   mapLifecycleStatusToPublicTaskStatus,
+  normalizeAuthoritativeTaskStatusValue,
   normalizePublicTaskStatusValue,
   resolvePublicTaskStatus,
 } from "../../control-plane/service/src/modules/tasks/public-task-status";
@@ -22,6 +23,14 @@ describe("public task status", () => {
     expect(mapLifecycleStatusToPublicTaskStatus("active")).toBe("running");
     expect(mapLifecycleStatusToPublicTaskStatus("archived")).toBe("cancelled");
     expect(mapLifecycleStatusToPublicTaskStatus("draft")).toBe("pending");
+  });
+
+  test("accepts only explicit terminal statuses as authoritative overrides", () => {
+    expect(normalizeAuthoritativeTaskStatusValue("completed")).toBe("completed");
+    expect(normalizeAuthoritativeTaskStatusValue("failed")).toBe("failed");
+    expect(normalizeAuthoritativeTaskStatusValue("cancelled")).toBe("cancelled");
+    expect(normalizeAuthoritativeTaskStatusValue("running")).toBeNull();
+    expect(normalizeAuthoritativeTaskStatusValue("awaiting_adoption")).toBeNull();
   });
 
   test("prefers normalized execution status, then fallback status, then lifecycle", () => {
@@ -48,5 +57,13 @@ describe("public task status", () => {
         lifecycleStatus: "active",
       }),
     ).toBe("running");
+
+    expect(
+      resolvePublicTaskStatus({
+        authoritativeStatus: "completed",
+        currentExecutionStatus: "running",
+        lifecycleStatus: "active",
+      }),
+    ).toBe("completed");
   });
 });

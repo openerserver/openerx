@@ -187,8 +187,8 @@ web-ui 层负责把 TaskDetail 从“round snapshot + parallel projector + realt
 4. 当前 phase 的 live assistant / pending assistant 以及 realtime user/tool message patch 已开始直接并入 current phase block，不再只靠旧扁平主聊天路径或整段 snapshot refresh 才能看到最新内容。进一步地，`useTaskDetailParallelFlow()` 现已把 phase block overlay 从“只认 current phase”扩成“按 phaseId 分发”：已加载的非 current phase 也会基于该 phase 对应 session 的 patch history 回放 live assistant state，并把 phase-scoped user/tool patch 一并合进自己的 block。最新一刀又把 `useTaskMessageSnapshot.loadPhaseSlice()` 的 phase view sessions 下沉成 `liveSessionIds`，`useTaskDetailParallelFlow()` 会优先按这组 phase-local session ids 回放并合并 live assistant state，不再主要依赖 `resolvedSessionId` / 单 session phase 的前端启发式；因此 sequential-chain 这类一个 phase 对应多个 mainline/step session 的场景也能把 live overlay 收回自己的 block。
 5. `useTaskMessageSnapshot()` 的 message-only refresh 已优先收成 current phase 局部 refresh；`task.message.persisted` / `task.round.synced` 的 ack 也会抬高目标 phase 的本地 revision floor，并把那次 ack 对应 phase 的 realtime user/tool patch 与已知 assistant 更新直接吸收进对应 phase slice——无论目标 phase 是不是当前 phase。现在这条 ack 吸收链已不再依赖 current-session `storeLatestPersistenceAck` 过滤，而是由 `useTaskDetailCoreContext` 直接顺序消费 task 级 persistence patch feed，并把事件原始 `phaseId` 原样传给 snapshot；当前 phase 已本地追平最新 `round-synced` ack 且没有 reconcileRequired 时，前端会直接跳过那次冗余 message-only refresh，继续减少必须整段 message snapshot 重拉才能完成 authority 切换的依赖。
 6. 当前 parallel phase 的 candidate baseline 已开始直接来自 `/phases/:phaseId/view` 的 `messageGroups`，并且 phase baseline 存在时不再优先拿 compat session fallback 覆盖显示；phase DTO 现已把 per-candidate `timelineMeta(cacheState/complete/itemCount)` 一并带下，前端 baseline 可直接推导 trace-specific timeline completeness。对于 phase DTO 已给出可展示内容且 candidate session 已终态的场景，前端也会直接短路 compat trace fetch；running / pending / paused 这类 non-terminal candidate 的 traceState 说明也已优先从 phase baseline 直接给出。最新一刀又把这层逻辑从 `buildPhaseParallelCandidateStates()` 里抽成更明确的 `buildPhaseParallelCandidateBaselines()`：phase view 的 candidate items / hasSettledReply / traceState / skipTraceLoad 现在先作为 baseline 独立产出，再由 `useTaskDetailParallelFlow()` 接线到并行候选可视状态。这样 parallel card 首帧就能直接吃到 phase baseline 的 traceState，不必再等 compat trace fallback 或 session fallback 跑完才显示 `incomplete/stale`。旧 trace/session 读路由继续保留，但职责已进一步退为补充 `reconcileRequired`、极端 timeline gap、补缺和失败兜底。
-7. 页面测试、组件测试以及 snapshot/flow/source-policy 单测已覆盖 phase slice 驱动的主面板 phase block 路径，证明当前页面能按 phase 顺序渲染多个 block，且 parallel candidate 交互、current-phase live assistant、current-phase realtime user/tool patch、phase-local message refresh/ack floor 都可用；`useTaskMessageSnapshot` 的 snapshot test 已补上 non-current phase ack 能直接把 overlay 吸收进历史 phase slice 且不再回流到当前 phase 的断言，`useTaskDetailCoreContext` 也新增了 task 级 patch feed 回归，明确验证“旧 phase 的 round-synced 不会因为 current-session store 过滤而丢失”；现在 `task-detail-phase-blocks` / `useTaskDetailParallelFlow` 也已补上非 current phase live assistant overlay 的回归，并新增 `liveSessionIds` / 多 session live overlay merge 的定向回归，以及 phase candidate baseline 提取与 parallel flow baseline traceState 接线的定向回归。最新一轮 TaskDetail 广义回归共 8 个文件、99 个测试通过。
-8. 未完成项：parallel candidate 的最终展示仍保留一层 compat trace/source-policy 补强，但主要已收窄到 phase baseline 缺失、`reconcileRequired` / projection 未追平这类 trace-only 信号，以及失败兜底场景；phase-local persisted patch / update ownership 现已对所有已加载 phase slice 成立（不再只限 current phase），同一条 patch 只会落到 ack 对应的 phase 里，且跨 phase key 会在吸收前显式回避，避免历史 phase 的消息被误拷贝到别的 phase。live authority 这一侧剩余的债也进一步具体化了：TaskDetail phase blocks 已能按 phase 复用 session-scoped live replay，phase slice 也已拿到更稳定的 `liveSessionIds`，但共享 live assistant state manager 仍然是 `taskId + sessionId` 键空间，`assistant-progress` / `assistant-delta` / `assistant-completed` 仍未在共享层直接 phase-key 化；后续若要彻底 phase-local 化，还需要把这层 contract 继续推到 manager / patch consumer，而不是只停留在页面组合层。
+7. 页面测试、组件测试以及 snapshot/flow/source-policy 单测已覆盖 phase slice 驱动的主面板 phase block 路径，证明当前页面能按 phase 顺序渲染多个 block，且 parallel candidate 交互、current-phase live assistant、current-phase realtime user/tool patch、phase-local message refresh/ack floor 都可用；`useTaskMessageSnapshot` 的 snapshot test 已补上 non-current phase ack 能直接把 overlay 吸收进历史 phase slice 且不再回流到当前 phase 的断言，`useTaskDetailCoreContext` 也新增了 task 级 patch feed 回归，明确验证“旧 phase 的 round-synced 不会因为 current-session store 过滤而丢失”；现在 `task-detail-phase-blocks` / `useTaskDetailParallelFlow` 也已补上非 current phase live assistant overlay 的回归，并新增 `liveSessionIds` / 多 session live overlay merge 的定向回归，以及 phase candidate baseline 提取与 parallel flow baseline traceState 接线的定向回归。最新一刀再补了共享 manager 层的 `replayPhaseLiveAssistantState` / `replaceLiveAssistantStateFromPhaseHistory` 单测和 `useTaskDetailParallelFlow` 按 phase 维度 dispatch 的定向回归。
+8. 未完成项：parallel candidate 的最终展示仍保留一层 compat trace/source-policy 补强，但主要已收窄到 phase baseline 缺失、`reconcileRequired` / projection 未追平这类 trace-only 信号，以及失败兜底场景；phase-local persisted patch / update ownership 现已对所有已加载 phase slice 成立（不再只限 current phase），同一条 patch 只会落到 ack 对应的 phase 里，且跨 phase key 会在吸收前显式回避，避免历史 phase 的消息被误拷贝到别的 phase。live authority 这一侧的剩余债也又落了一刀：共享 `task-live-assistant-state-manager.ts` 已新增 `replaceLiveAssistantStateFromPhaseHistory({ taskId, phaseId, sessionIds, patchEvents })`，底层用新的 `replayPhaseLiveAssistantState()` 按 `phaseId` 过滤 patch event、按 `sessionIds` 逐个回放后合并；老的 session-only cache 路径保持不动，互不污染。`useTaskMessagePatchConsumer()` 相应暴露了 `getPhaseLiveAssistantState({ taskId, phaseId, sessionIds })`，`useTaskDetailParallelFlow()` 已切到这条 phase API，不再在页面层自己写多 session replay + merge；`assistant-progress` / `assistant-delta` / `assistant-completed` 只要事件带 `phaseId`，就会在共享层按 phase 过滤，跨 phase 回放污染从 TaskDetail 主路径彻底下线。
 
 建议起点文件：
 
@@ -217,11 +217,11 @@ web-ui 层负责把 TaskDetail 从“round snapshot + parallel projector + realt
 4. adoption 后无需手动刷新即可自动收敛。
 5. 页面测试覆盖 `currentPhaseId != currentSessionId`、realtime 乱序、candidate 完成先于 phase update 到达等场景。
 
-当前进展（2026-04-16）：
+当前进展（2026-04-17）：
 
-1. 页面级回归已覆盖 TaskDetailV3 phase block 主路径，并保留 parallel/history/current-session 相关断言；当前 `TaskDetailV3.test.ts` 文件内 68 个回归测试通过。
+1. 页面级回归已覆盖 TaskDetailV3 phase block 主路径，并保留 parallel/history/current-session 相关断言；本轮又补了 realtime 乱序场景下的页面级回归，验证“较旧 `task.phase.updated` 晚到”不会盖过更新的 `task.round.synced` message refresh。
 2. 底层针对性验证已覆盖 `task-message-patch-event`、`useTaskDetailParallelFlow`、`task-detail-phase-blocks` 三层，共 26 个单测通过，已证明 current-phase realtime user/tool patch 会被过滤后直接并入 phase block。
-3. 仍需补的验收空白：基于真实 `useTaskMessageSnapshot` phase slice 装载链的更大范围整页断言，以及 message persisted / round synced 后更完整的 phase-local patch/update ownership 断言。
+3. 6.5 item 5 的页面级验收已补齐：`currentPhaseId != currentSessionId`、realtime 乱序、candidate 完成先于 phase update 到达三类场景均已有回归；若后续要再加浏览器级端到端顺序扰动验证，可作为增强项单列，不再阻塞当前 phase-first 主线收口。
 
 ## 7. 兼容清理清单
 
@@ -244,3 +244,39 @@ web-ui 层负责把 TaskDetail 从“round snapshot + parallel projector + realt
 ## 9. 一句话结论
 
 这次改造的关键不是继续修 projector，而是让 service、BFF、web-ui 三层都围绕 `phaseId` 说同一种语言。只有这样，TaskDetail 的顺序和归属才能真正稳定。
+
+## 10. 当前剩余工作（2026-04-17 update）
+
+截至本轮推进，phase-first 主链各层的剩余债已经收敛到下面几个可直接定位的明确事项。已完成项不再重复罗列，只列剩余工作以便逐项 hard-cut。
+
+### 10.1 Service 层
+
+1. §4.2 写链审计：逐入口对照 `task_execution_phases` / `task_sessions.phaseId` / `task_snapshots.currentPhaseId` 的先后次序，明确禁止依赖后续修补；起点 [../../control-plane/service/src/modules/tasks/task-phase-write-api.ts](../../control-plane/service/src/modules/tasks/task-phase-write-api.ts)、[../../control-plane/service/src/modules/tasks/task-session-write-api.ts](../../control-plane/service/src/modules/tasks/task-session-write-api.ts)、[../../control-plane/service/src/modules/tasks/task-aggregate-sync.ts](../../control-plane/service/src/modules/tasks/task-aggregate-sync.ts)。
+2. §4.3 phase-keyed read-model helpers：最小身份合约 helper `buildPublicTaskExecutionPhaseSummary` 已落地，下一步是基于此构建按 `phaseIndex` 排序、按 `phaseId` 读 sessions/messages 的 helper，退出“上层通过 session lineage 反推 parallel group”的依赖。
+3. §4.4 realtime 事件：为 TaskDetail 主路径补齐/对齐 `task.phase.*` 事件，并在 `task.message.*` 上携带 `phaseId`；禁止 `session.activated` 事件继续承担 phase 级语义。
+4. §4.5 service 验收：single / parallel pending / adopted / continue-after-adopt / cancel / resume 的单测覆盖；加上 `currentPhaseId != currentSessionId` 的合法数据断言。
+
+### 10.2 BFF 层
+
+1. §5.3 兼容隔离：`/current-round`、`/rounds*` 已加 compat-only 注释；BFF `routes.ts` 里两处 `session.activated` 广播也已加 compat-only 注释，说明不再承担 phase 级刷新主语义；**`task-round-facade.ts` / `task-session-read-compat.ts` / `task-session-parallel-compat.ts` 三个 compat 模块已落 module-level JSDoc，明确 phase-first 主路径不得通过它们扩展**；下一步要做的是把目前仍通过这些 helper 给新页面打补丁的入口（比如 adopted 并行 mainline 推断）下线，或把它们的消费者替换成 `/phases*` DTO。
+2. §5.4 realtime 出口：BFF 对外转发的 `task.message.updated` / `task.message.delta` / `task.message.persisted` / `task.snapshot.updated` 已按主路径携带 `phaseId`；并且 route-driven 的 phase 生命周期入口已补齐 `task.phase.completed` / `task.phase.cancelled` / `task.phase.resumed` 广播（adopt / cancel / resume / terminate 成功路径）。显式 `POST /:taskId/phases` 与共享 `upsertTaskPhase()` helper 已收口成统一写路径：phase 新建会发 `task.phase.created`，常规更新会发 `task.phase.updated`，而 `status=failed|paused` 的写入会提升成 `task.phase.failed` / `task.phase.paused`。本轮进一步把 agent-control 的 `POST /api/agents/:agentRunId/pause|resume` 接到当前 phase：BFF 通过 `/sessions` + `/phases` 反查当前 `phaseId`，service 新增 `POST /api/tasks/:taskId/phases/:phaseId/pause`，pause/resume 成功后分别发 `task.phase.paused` / `task.phase.resumed`。默认 web-ui runner 现已覆盖 `task.phase.created|paused|resumed|failed` 的 patch event 映射、refresh policy 与 refresh controller flow-only 语义；`TaskDetailV3` 页面也已覆盖 phase lifecycle 的 flow-only 刷新、`task.round.synced` 在 `currentPhaseId != currentSessionId` 时的 phase-local message refresh，以及“candidate 先完成、phase update 后到”时 compare 状态不会回退。本轮又补齐 realtime 乱序根因修复：TaskDetail refresh boundary 不再按 patch 到达顺序取最新事件，而是按 `event.ts` 选择最新逻辑 refresh 请求，从而避免晚到的旧 `task.phase.updated` 盖过更新的 `task.round.synced`。当前剩余工作收窄为：决定 task snapshot 的 `currentExecutionStatus` 是否继续沿用现有契约把 `paused` 折叠成 `running`（当前 phase/session 已保留 paused，但 snapshot `ExecutionStatus` 尚不区分 paused）。
+3. §5.5 BFF 验收：`/phases` + `/phases/:phaseId/view` 能独立驱动 TaskDetail 的端到端验证；adopted parallel DTO 不会重复下发 winner。
+
+### 10.3 Web-UI 层
+
+1. §6.4 item 4：移除“收到 session.activated 后再猜是否全局刷新主聊天”的主路径依赖（当前 `web-ui/src/**` 已无此路径，`web-ui-bff/src/modules/tasks/routes.ts` 仍在发 `session.activated`，需与 §5.4 一起收口）。
+2. §6.5 item 5：真实页面覆盖 `currentPhaseId != currentSessionId`、realtime 乱序、candidate 完成先于 phase update 到达的端到端页面回归。**进度**：默认 web-ui runner 已补 unit/controller 回归，覆盖 `task.phase.created|paused|resumed|failed` 的 patch event 映射、refresh policy 与 refresh controller flow-only 分发；`TaskDetailV3.test.ts` 现已补页面级 realtime 回归，验证 `task.phase.created|updated|paused|resumed|failed` 会刷新 task/branch compare 状态但不会误触发 persisted message reload，并补了 `task.round.synced` 在 `currentPhaseId != currentSessionId` 时走 `refreshCurrentPhase(phaseId)` 的页面级回归、“candidate 先完成、phase update 后到”时 compare 卡片不会回退已完成状态，以及“较旧 `task.phase.updated` 晚到”不会盖过更新的 `task.round.synced` message refresh。item 5 的页面级验收已补齐；若后续要继续增强，可再单列浏览器级端到端顺序扰动验证，但它已不再是当前 phase-first blocker。
+3. 将 TaskDetail 页面入口的主刷新从 `refreshMessages()` 彻底切到 `phaseTimeline.refreshPhase(phaseId)`（`useTaskDetailCoreContext` 已暴露 `phaseTimeline`）。**进度**：`useTaskConversationActions` 已退役 `refreshMessages` prop（代码本来就不消费，纯死参数），`useTaskDetailPageModel.ts` 不再向 `actionArgs` 注入该参数；`useTaskDetailCoreContext` 的导出名已从 `refreshMessages` 重命名为 `refreshCurrentPhaseMessages`（语义=`messageSnapshot.refreshCurrentPhase ?? messageSnapshot.refresh`），页面模型同步换名并在传给 snapshot coordinator 时显式做 alias。剩下一个主入口是 `useTaskDetailSnapshotCoordinator` 内部仍持有 `refreshMessages(silent, phaseId)` —— 这是协调器粒度手柄（非页面入口），继续保留；真正要做的是 §6.5 item 5 的真实页面端到端回归，以及 §4.4 的 `task.phase.*` 事件主链正式接入后把页面上的兜底全局刷新彻底退出。
+
+### 10.4 兼容清理（§7）
+
+1. 删除或降级 current-round 主链依赖（BFF 侧注释已降级，真正下线需等页面侧最后一条消费路径退出）。
+2. 删除 parallel projector 中只服务 compat 读链的 suppression 逻辑（`task-detail-parallel-conversation-projector.ts` 内 `suppressTopLevelParallelCandidateMessages`）。
+3. 删除从 session activation 推断 phase 刷新的补丁桥接。
+4. 为保留的 compat route 补上显式历史注记（`/current-round` / `/rounds*` 已完成；其它 compat facade 需同步）。
+
+### 10.5 进度自检口径
+
+1. 已完成项全部写入 commit + 单测；pre-existing 失败测试经 `git stash` 对照确认与本次无关。
+2. 剩余项逐条在 10.1-10.4 可定位到具体模块或路由，不再以"projector 再修一轮"为目标推进。
+3. 测试基线：`control-plane/web-ui` 源测试当前 **97/97 文件、621/623 用例通过**，2 条 `it.skip` 为 phase-first 已退役的 round-facade 直读断言（见 `useTaskMessageStore.test.ts` retirement 注释）。切分 20 批量修复 `vi.mock` 提升错（解冻 8 个文件共 28 个用例）；切分 21 收敛最后 4 处语义漂移（model option provider-qualified 契约 / round-facade 直读断言退役 / `shouldRefreshPersistedMessages` 按 phase-first ack-driven 新语义调整）。`TaskDetailV3` 的 `strips legacy session query params from the V3 route on load` 与 `MultiTaskMonitor` 的布局断言在并行模式下偶发 flakiness（router/layout timing 依赖，非 phase-first 逻辑回归）；两者独跑稳定通过。

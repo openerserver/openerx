@@ -1,5 +1,5 @@
 import { computed, type Ref } from "vue";
-import { type ExecutionMode, type TaskWorkflowViewModel } from "../lib/api";
+import { type ExecutionMode, type Task, type TaskWorkflowViewModel } from "../lib/api";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { resolveWorkflowStageLabel } from "../lib/task-workflow-display-policy";
 import {
@@ -13,11 +13,19 @@ export function useTaskDetailTaskDerivedState(args: {
   task: Ref<TreeTask | null | undefined>;
   taskLoading: Ref<boolean>;
   taskLoadError: Ref<string | null | undefined>;
+  currentPhaseId?: Ref<string | null>;
 }) {
   const pageLoading = computed(() => args.taskLoading.value && !args.task.value);
   const loadError = computed(() => args.taskLoadError.value || "");
   const taskDisplayStatus = computed(() => resolveTaskDisplayStatus(args.task.value));
-  const isExecuting = computed(() => args.task.value?.status === "running" && !args.task.value?.finishedAt);
+  const isExecuting = computed(() => {
+    const task = args.task.value;
+    if (!task || task.status !== "running" || task.finishedAt) {
+      return false;
+    }
+
+    return hasExplicitTaskExecutionEvidence(task, args.currentPhaseId?.value ?? null);
+  });
   const canTerminateExecution = computed(() => isExecuting.value && Boolean(args.task.value?.agentRunId));
 
   const taskFailureReason = computed(() => {
@@ -45,6 +53,33 @@ export function useTaskDetailTaskDerivedState(args: {
     taskDisplayStatus,
     taskFailureReason,
   };
+}
+
+function hasExplicitTaskExecutionEvidence(task: Task, currentPhaseId?: string | null) {
+  if (typeof task.agentRunId === "string" && task.agentRunId.trim().length > 0) {
+    return true;
+  }
+
+  if (typeof task.currentRunId === "string" && task.currentRunId.trim().length > 0) {
+    return true;
+  }
+
+  if (
+    typeof task.currentRunStatus === "string" &&
+    ["running", "paused", "awaiting_adoption"].includes(task.currentRunStatus)
+  ) {
+    return true;
+  }
+
+  if (typeof task.activeCandidateCount === "number" && task.activeCandidateCount > 0) {
+    return true;
+  }
+
+  if (typeof task.currentRunCandidateCount === "number" && task.currentRunCandidateCount > 0) {
+    return true;
+  }
+
+  return typeof currentPhaseId === "string" && currentPhaseId.trim().length > 0;
 }
 
 export function useTaskDetailWorkflowDerivedState(args: {

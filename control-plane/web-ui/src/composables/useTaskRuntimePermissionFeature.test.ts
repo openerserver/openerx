@@ -1,8 +1,8 @@
 import { ref } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const useTaskRuntimePermissionViewMock = vi.fn();
-const useTaskRuntimePermissionActionsMock = vi.fn();
+const useTaskRuntimePermissionViewMock = vi.hoisted(() => vi.fn());
+const useTaskRuntimePermissionActionsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./useTaskRuntimePermissionView", () => ({
   useTaskRuntimePermissionView: useTaskRuntimePermissionViewMock,

@@ -53,7 +53,7 @@ export function useTaskDetailPageModel() {
     phaseSlices,
     projectId,
     realtimeConnected,
-    refreshMessages,
+    refreshCurrentPhaseMessages,
     refreshSessions,
     refreshTask,
     seedPendingAssistantDraft,
@@ -80,6 +80,7 @@ export function useTaskDetailPageModel() {
     task,
     taskLoading,
     taskLoadError,
+    currentPhaseId,
   });
 
   const workflowFeature = useTaskWorkflowFeature({
@@ -216,7 +217,6 @@ export function useTaskDetailPageModel() {
       clearPendingAssistantDraft,
       refreshTask,
       refreshSessions,
-      refreshMessages,
       refreshTaskSnapshot: (options?: TaskDetailSnapshotRefreshOptions) =>
         refreshTaskSnapshot(options),
       reconcileExecutionEnvelope: (envelope?: TaskExecutionReconcileEnvelope | null) =>
@@ -241,7 +241,7 @@ export function useTaskDetailPageModel() {
     projectId,
     selectedSessionId,
     bumpConversationFocus,
-    refreshMessages,
+    refreshMessages: refreshCurrentPhaseMessages,
     refreshFlowSnapshot: compareFlow.refreshFlowSnapshot,
     refreshWorkflowSnapshot,
     loadInitialFlowSnapshot: compareFlow.loadInitialFlowSnapshot,

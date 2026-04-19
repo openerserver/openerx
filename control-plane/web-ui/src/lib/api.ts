@@ -1384,12 +1384,19 @@ export interface MemberCandidate {
 
 const TASK_LIST_LIMIT = 200;
 
+export interface TaskListResponse {
+  data: Task[];
+  totalCount?: number;
+  limit?: number;
+  truncated?: boolean;
+}
+
 export async function listTasks(projectId?: string, status?: string) {
   const params = new URLSearchParams();
   if (projectId) params.set("projectId", projectId);
   if (status) params.set("status", status);
   params.set("limit", String(TASK_LIST_LIMIT));
-  return request<{ data: Task[] }>(`/tasks?${params.toString()}`);
+  return request<TaskListResponse>(`/tasks?${params.toString()}`);
 }
 
 export { TASK_LIST_LIMIT };
@@ -2600,7 +2607,7 @@ export async function getTaskTreeMeta(taskId: string): Promise<TaskTreeTaskMeta>
 
 export async function getTaskTreeSessionContext(taskId: string) {
   const sessionsResponse = await request<ServiceTaskSessionListResponse>(
-    `/tasks/${encodeURIComponent(taskId)}/sessions`,
+    `/tasks/${encodeURIComponent(taskId)}/sessions?includeArchived=true`,
   );
   const { runtimeSessionIdByIdentifier } = normalizeTaskSessionListResponse(sessionsResponse);
 
@@ -2681,8 +2688,14 @@ export async function getTaskConversationMessages(
   sessionId: string,
   options?: { includeLineage?: boolean },
 ): Promise<TaskConversationMessagesResponse> {
+  const query = new URLSearchParams();
+  query.set("sessionId", sessionId);
+  if (typeof options?.includeLineage === "boolean") {
+    query.set("includeLineage", String(options.includeLineage));
+  }
+
   return request<TaskConversationMessagesResponse>(
-    `/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(sessionId)}/messages${buildTaskConversationMessagesQuery(options)}`,
+    `/tasks/${encodeURIComponent(taskId)}/query/normalized-conversation?${query.toString()}`,
   );
 }
 
@@ -2701,6 +2714,13 @@ export async function getTaskMessages(
   );
 }
 
+/**
+ * @deprecated Compat-only. TaskDetail's main timeline is now phase-first (§7.1 of
+ * docs/task-detail/task-detail-phase-first-migration-checklist.md); callers should
+ * use `getTaskPhases` + `getTaskPhaseView` instead. This helper is retained purely
+ * for legacy round-based code paths and must not be reintroduced into the main page
+ * model.
+ */
 export async function getCurrentTaskRound(taskId: string) {
   return request<{
     taskId: string;
@@ -2708,6 +2728,10 @@ export async function getCurrentTaskRound(taskId: string) {
   }>(`/tasks/${taskId}/current-round`);
 }
 
+/**
+ * @deprecated Compat-only. Round listing no longer drives the main timeline; use
+ * `getTaskPhases` for the phase-first baseline.
+ */
 export async function getTaskRounds(taskId: string) {
   return request<TaskRoundListDto>(`/tasks/${taskId}/rounds`);
 }
@@ -3635,6 +3659,15 @@ export async function archiveProject(projectId: string) {
   return request<{ ok: boolean; id: string; status: string }>(`/projects/${projectId}/archive`, {
     method: "PATCH",
   });
+}
+
+export async function deleteProject(projectId: string) {
+  return request<{ ok: boolean; id: string; deletedTaskCount?: number }>(
+    `/projects/${projectId}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 export async function executeTask(

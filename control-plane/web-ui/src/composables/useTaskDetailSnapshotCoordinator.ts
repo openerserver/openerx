@@ -16,7 +16,7 @@ export function useTaskDetailSnapshotCoordinator(args: {
   projectId: Ref<string | null | undefined>;
   selectedSessionId?: Ref<string | undefined>;
   bumpConversationFocus?: (sessionId?: string) => void;
-  refreshMessages: (silent?: boolean) => void | Promise<void>;
+  refreshMessages: (silent?: boolean, phaseId?: string) => void | Promise<void>;
   refreshFlowSnapshot: () => void | Promise<void>;
   refreshWorkflowSnapshot: () => void | Promise<void>;
   loadInitialFlowSnapshot: () => void | Promise<void>;
@@ -31,7 +31,7 @@ export function useTaskDetailSnapshotCoordinator(args: {
     args.resetFlowSnapshotState();
   }
 
-  async function refreshMessageSnapshot() {
+  async function refreshMessageSnapshot(phaseId?: string) {
     if (!args.taskId.value) {
       return;
     }
@@ -40,15 +40,18 @@ export function useTaskDetailSnapshotCoordinator(args: {
     try {
       traceTaskDetailRealtime("snapshot-coordinator:refresh-messages", {
         taskId: args.taskId.value,
+        phaseId,
       }, { taskId: args.taskId.value });
-      await args.refreshMessages(true);
+      await args.refreshMessages(true, phaseId);
       traceTaskDetailRealtime("snapshot-coordinator:refresh-messages-complete", {
         taskId: args.taskId.value,
+        phaseId,
         durationMs: measureTaskRealtimeDuration(startedAt),
       }, { taskId: args.taskId.value });
     } catch {
       traceTaskDetailRealtime("snapshot-coordinator:refresh-messages-failed", {
         taskId: args.taskId.value,
+        phaseId,
         durationMs: measureTaskRealtimeDuration(startedAt),
       }, { level: "warn", taskId: args.taskId.value });
       // Keep current page state when a silent refresh fails.

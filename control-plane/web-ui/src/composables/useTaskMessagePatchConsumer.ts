@@ -33,6 +33,14 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
     return getRelevantTaskPatchEvents(taskId);
   }
 
+  function getPhaseTaskPatchEvents(taskId: string, phaseId: string | null | undefined) {
+    const events = getRelevantTaskPatchEvents(taskId);
+    if (!phaseId) {
+      return events;
+    }
+    return events.filter((event) => !event.phaseId || event.phaseId === phaseId);
+  }
+
   function getLatestTaskPatchEvent(taskId: string) {
     return getLatestRelevantTaskPatchEvent(taskId);
   }
@@ -43,6 +51,19 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
       sessionId,
       getTaskPatchEvents(taskId),
     );
+  }
+
+  function getPhaseLiveAssistantState(options: {
+    taskId: string;
+    phaseId: string | null | undefined;
+    sessionIds: string[];
+  }) {
+    return liveAssistantStateManager.replaceLiveAssistantStateFromPhaseHistory({
+      taskId: options.taskId,
+      phaseId: options.phaseId,
+      sessionIds: options.sessionIds,
+      patchEvents: getTaskPatchEvents(options.taskId),
+    });
   }
 
   function replaceLiveAssistantStateFromHistory({
@@ -145,8 +166,10 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
     taskPatchEventSignature,
     realtimeConnected,
     getTaskPatchEvents,
+    getPhaseTaskPatchEvents,
     getLatestTaskPatchEvent,
     getLiveAssistantState,
+    getPhaseLiveAssistantState,
     replaceLiveAssistantStateFromHistory,
     consumePendingTaskPatchEvents,
     reset,

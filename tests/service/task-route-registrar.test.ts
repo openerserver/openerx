@@ -35,6 +35,7 @@ function createTaskSessionRegistrarDeps(overrides: Record<string, unknown> = {})
     getTaskPhaseView: mock(async () => ({ ok: true, status: 200, data: {} })),
     upsertTaskPhase: mock(async () => ({ ok: true, status: 201, data: {} })),
     adoptTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
+    pauseTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
     cancelTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
     resumeTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
     activateTaskSession: mock(async () => ({ ok: true, status: 200, data: {} })),
@@ -163,6 +164,42 @@ describe("task session route registrar", () => {
       taskId: "task-1",
       phaseId: "phase-1",
       winnerSessionId: "session-2",
+    });
+  });
+
+  test("phase pause route is mounted and delegates to the phase pause dependency", async () => {
+    const pauseTaskPhase = mock(async (args: unknown) => ({
+      ok: true as const,
+      status: 200 as const,
+      data: args,
+    }));
+
+    const { primaryHandler } = await setupTaskSessionRegistrar({
+      routeKeys: {
+        primary: "POST /:taskId/phases/:phaseId/pause",
+      },
+      depsOverrides: { pauseTaskPhase },
+    });
+
+    const response = await invokeRouteHandler(
+      primaryHandler,
+      createRouteContext({
+        params: {
+          taskId: "task-1",
+          phaseId: "phase-1",
+        },
+        validJson: {},
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(pauseTaskPhase).toHaveBeenCalledWith({
+      taskId: "task-1",
+      phaseId: "phase-1",
+    });
+    expect(await response.json()).toEqual({
+      taskId: "task-1",
+      phaseId: "phase-1",
     });
   });
 

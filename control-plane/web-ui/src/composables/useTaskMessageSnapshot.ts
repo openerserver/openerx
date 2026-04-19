@@ -92,9 +92,14 @@ export function useTaskMessageSnapshot(
   let refreshGeneration = 0;
   let lastContextKey = "";
 
-  const activeSessionId = computed(
-    () => resolvedSessionId.value ?? options?.currentSessionId?.value ?? sessionId.value,
-  );
+  const activeSessionId = computed(() => {
+    const explicitSessionId =
+      typeof sessionId.value === "string" && sessionId.value.trim().length > 0
+        ? sessionId.value
+        : undefined;
+
+    return explicitSessionId ?? resolvedSessionId.value ?? options?.currentSessionId?.value ?? undefined;
+  });
   const hasOlderHistory = computed(() => {
     const oldestLoadedPhaseId = phaseOrder.value[0];
     if (!oldestLoadedPhaseId) {
@@ -248,6 +253,39 @@ export function useTaskMessageSnapshot(
     return indexByKey;
   }
 
+  function normalizeComparableUserMessageText(item: TaskConversationMessageItem) {
+    const text = item.userInputText ?? item.finalSentText ?? item.text;
+    return typeof text === "string" ? text.replace(/\s+/gu, " ").trim() : "";
+  }
+
+  function findEquivalentUserMessageIndex(messages: unknown[], incoming: TaskConversationMessageItem) {
+    if (incoming.role !== "user" || !incoming.createdAt) {
+      return undefined;
+    }
+
+    const incomingText = normalizeComparableUserMessageText(incoming);
+    if (!incomingText) {
+      return undefined;
+    }
+
+    for (let index = 0; index < messages.length; index += 1) {
+      const existing = normalizeSessionConversationItems([messages[index]])[0];
+      if (!existing || existing.role !== "user") {
+        continue;
+      }
+
+      if (existing.createdAt !== incoming.createdAt) {
+        continue;
+      }
+
+      if (normalizeComparableUserMessageText(existing) === incomingText) {
+        return index;
+      }
+    }
+
+    return undefined;
+  }
+
   function shouldAbsorbAckOwnedMessage(args: {
     ack?: TaskMessageSnapshotPersistenceAck | null;
     messageKey: string;
@@ -370,10 +408,14 @@ export function useTaskMessageSnapshot(
     );
   }
 
-  function resolveLocalPhaseRefreshTargetId() {
-    const explicitPhaseId = options?.currentPhaseId?.value;
+  function resolveLocalPhaseRefreshTargetId(explicitPhaseId?: string) {
     if (explicitPhaseId && phaseSlices.has(explicitPhaseId)) {
       return explicitPhaseId;
+    }
+
+    const focusPhaseId = options?.currentPhaseId?.value;
+    if (focusPhaseId && phaseSlices.has(focusPhaseId)) {
+      return focusPhaseId;
     }
 
     if (anchorPhaseId.value && phaseSlices.has(anchorPhaseId.value)) {
@@ -435,6 +477,11 @@ export function useTaskMessageSnapshot(
       if (typeof existingIndex === "number") {
         nextSourceMessages[existingIndex] = sourceMessage;
         changed = true;
+        return;
+      }
+
+      const equivalentUserIndex = findEquivalentUserMessageIndex(nextSourceMessages, normalized);
+      if (typeof equivalentUserIndex === "number") {
         return;
       }
 
@@ -733,6 +780,52 @@ export function useTaskMessageSnapshot(
         phases: nextState.phases,
         slice: nextState.anchorPhase,
       });
+
+      // When the anchor is a running parallel phase with no source messages, the user
+      // messages that initiated the run live in the most recent single phase before it.
+      // Back-fill those phases now (after the stale-generation check) so the conversation
+      // context is visible without the user having to manually load older history.
+      if (
+        nextState.anchorPhase.sourceMessages.length === 0 &&
+        nextState.anchorPhase.phase.phaseKind === "parallel"
+      ) {
+        const anchorPhaseArrayIndex = nextState.phases.findIndex(
+          (p) => p.id === nextState.anchorPhase.phase.id,
+        );
+        let lastSinglePhaseArrayIndex = -1;
+        for (let i = anchorPhaseArrayIndex - 1; i >= 0; i--) {
+          if (nextState.phases[i].phaseKind === "single") {
+            lastSinglePhaseArrayIndex = i;
+            break;
+          }
+        }
+        if (lastSinglePhaseArrayIndex >= 0) {
+          let addedAny = false;
+          for (let i = lastSinglePhaseArrayIndex; i < anchorPhaseArrayIndex; i++) {
+            if (currentRefreshGeneration !== refreshGeneration) break;
+            const priorSlice = await loadPhaseSlice({
+              taskId: currentTaskId,
+              phaseId: nextState.phases[i].id,
+            });
+            phaseSlices.set(priorSlice.phase.id, priorSlice);
+            phaseSlicesVersion.value += 1;
+            if (!phaseOrder.value.includes(priorSlice.phase.id)) {
+              phaseOrder.value = [priorSlice.phase.id, ...phaseOrder.value];
+            }
+            addedAny = true;
+          }
+          if (addedAny) {
+            // Re-sort phaseOrder by phaseIndex to maintain chronological order.
+            phaseOrder.value = phaseOrder.value.slice().sort((a, b) => {
+              const ai = phaseIndexById.value.get(a) ?? 0;
+              const bi = phaseIndexById.value.get(b) ?? 0;
+              return ai - bi;
+            });
+            syncDerivedState(currentTaskId, requestedSessionId);
+          }
+        }
+      }
+
       traceTaskDetailRealtime(
         "snapshot:refresh-complete",
         {
@@ -779,11 +872,11 @@ export function useTaskMessageSnapshot(
     }
   }
 
-  async function refreshCurrentPhase(silent = false) {
+  async function refreshCurrentPhase(silent = false, explicitPhaseId?: string) {
     const currentRefreshGeneration = ++refreshGeneration;
     const currentTaskId = taskId.value;
     const requestedSessionId = sessionId.value;
-    const targetPhaseId = resolveLocalPhaseRefreshTargetId();
+    const targetPhaseId = resolveLocalPhaseRefreshTargetId(explicitPhaseId);
     const startedAt = performance.now();
 
     if (!currentTaskId) {

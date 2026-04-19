@@ -36,6 +36,7 @@ const PHASE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
 const TASK_DETAIL_MESSAGE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
   "round-synced",
   "message-reconcile-required",
+  "task-reconcile-required",
   "tool-message",
   "user-message",
 ]);

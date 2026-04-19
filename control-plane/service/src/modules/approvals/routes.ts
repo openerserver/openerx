@@ -23,15 +23,6 @@ function toAuditRiskLevel(
 approvalRoutes.use("*", authMiddleware);
 
 const approvalStatusSchema = z.enum(["pending", "approved", "rejected", "expired"]);
-const sqliteDateTimePattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
-
-function parseApprovalTimestamp(value: string) {
-  if (sqliteDateTimePattern.test(value)) {
-    return new Date(`${value.replace(" ", "T")}Z`);
-  }
-  return new Date(value);
-}
-
 // GET /api/approvals?status=pending
 approvalRoutes.get("/", requireRole("developer"), async (c) => {
   const status = c.req.query("status");
@@ -81,7 +72,7 @@ approvalRoutes.post(
     }
 
     // Check if expired
-    if (parseApprovalTimestamp(ticket.expiresAt) < new Date()) {
+    if (new Date(ticket.expiresAt) < new Date()) {
       await db
         .update(approvalTickets)
         .set({ status: "expired", resolvedAt: new Date().toISOString() })

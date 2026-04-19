@@ -49,6 +49,8 @@ const cancelTaskPhaseSchema = z.object({
   terminateRunningSessions: z.boolean().optional(),
 });
 
+const pauseTaskPhaseSchema = z.object({}).passthrough();
+
 const resumeTaskPhaseSchema = z.object({
   mode: z.enum(["reuse"]).default("reuse"),
 });
@@ -119,6 +121,15 @@ export function registerTaskSessionRoutes(
       taskId: string;
       phaseId: string;
       winnerSessionId: string;
+    }) => Promise<{
+      ok: boolean;
+      status: number;
+      error?: string;
+      data?: unknown;
+    }>;
+    pauseTaskPhase: (args: {
+      taskId: string;
+      phaseId: string;
     }) => Promise<{
       ok: boolean;
       status: number;
@@ -381,6 +392,22 @@ export function registerTaskSessionRoutes(
       });
       if (!result.ok) {
         return c.json({ error: result.error }, result.status as 400 | 404 | 409 | 500);
+      }
+
+      return c.json(result.data, result.status as 200);
+    },
+  );
+
+  taskRoutes.post(
+    "/:taskId/phases/:phaseId/pause",
+    zValidator("json", pauseTaskPhaseSchema),
+    async (c) => {
+      const result = await deps.pauseTaskPhase({
+        taskId: c.req.param("taskId"),
+        phaseId: c.req.param("phaseId"),
+      });
+      if (!result.ok) {
+        return c.json({ error: result.error }, result.status as 404 | 409 | 500);
       }
 
       return c.json(result.data, result.status as 200);

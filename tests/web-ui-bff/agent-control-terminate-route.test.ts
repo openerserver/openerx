@@ -329,6 +329,101 @@ describe("agent control routes", () => {
 
   test("recovers persisted run metadata before pausing when runtime registry misses", async () => {
     persistedSummaryState.sessionId = "task-session:task-1:session-1";
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, { method?: string; body?: unknown } | undefined];
+
+      if (url === "/api/agent-runs/run-missing/summary") {
+        return {
+          ok: true,
+          data: {
+            agentRunId: "run-missing",
+            taskId: persistedSummaryState.taskId,
+            taskTitle: "Task 1",
+            projectId: persistedSummaryState.projectId,
+            projectName: "Project 1",
+            agentType: "Agent",
+            status: persistedSummaryState.status,
+            sessionId: persistedSummaryState.sessionId,
+            subSessionId: persistedSummaryState.subSessionId,
+            modelUsed: persistedSummaryState.modelUsed,
+            startedAt: persistedSummaryState.startedAt,
+            finishedAt: null,
+            lastActivityAt: null,
+            durationMs: null,
+            tokenUsed: 0,
+            blockerType: null,
+            blockerLabel: "",
+            riskLevel: null,
+            guidanceCount: 0,
+            resultSummary: null,
+            result: null,
+            error: null,
+            longSummary: null,
+            latestEvents: [],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-1",
+                runtimeSessionId: "session-1",
+                phaseId: "phase-1",
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/phases" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "phase-1",
+                phaseKind: "single",
+                triggerType: "execute",
+                currentSessionId: "task-session:task-1:session-1",
+                latestSessionId: "task-session:task-1:session-1",
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/phases/phase-1/pause" && options?.method === "POST") {
+        return {
+          ok: true,
+          data: {
+            taskId: "task-1",
+            phaseId: "phase-1",
+            status: "paused",
+            currentSessionId: "task-session:task-1:session-1",
+            latestSessionId: "task-session:task-1:session-1",
+          },
+        };
+      }
+
+      if (url === `/api/tasks/${persistedSummaryState.taskId}`) {
+        return {
+          ok: true,
+          data: {
+            id: persistedSummaryState.taskId,
+            title: "Task 1",
+            prompt: "Resume task",
+            projectId: persistedSummaryState.projectId,
+            strategy: null,
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
 
     const { agentControlRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
@@ -360,18 +455,131 @@ describe("agent control routes", () => {
         status: "paused",
       }),
     );
-    expect(broadcastMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "agent.paused",
-        agentRunId: "run-missing",
-        sessionId: "session-1",
-      }),
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/phases/phase-1/pause",
+      expect.objectContaining({ authorization: "Bearer test", method: "POST", body: {} }),
+    );
+    const broadcastCalls = broadcastMock.mock.calls.map((call) => call[0]);
+    expect(broadcastCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "task.phase.paused",
+          taskId: "task-1",
+          phaseId: "phase-1",
+          sessionId: "task-session:task-1:session-1",
+          data: expect.objectContaining({
+            phaseId: "phase-1",
+            status: "paused",
+            phaseKind: "single",
+            triggerType: "execute",
+          }),
+        }),
+        expect.objectContaining({
+          type: "agent.paused",
+          agentRunId: "run-missing",
+          sessionId: "session-1",
+        }),
+      ]),
     );
   });
 
   test("recovers persisted paused run metadata before resuming when runtime registry misses", async () => {
     persistedSummaryState.status = "paused";
     persistedSummaryState.sessionId = "task-session:task-1:session-1";
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, { method?: string; body?: unknown } | undefined];
+
+      if (url === "/api/agent-runs/run-missing/summary") {
+        return {
+          ok: true,
+          data: {
+            agentRunId: "run-missing",
+            taskId: persistedSummaryState.taskId,
+            taskTitle: "Task 1",
+            projectId: persistedSummaryState.projectId,
+            projectName: "Project 1",
+            agentType: "Agent",
+            status: persistedSummaryState.status,
+            sessionId: persistedSummaryState.sessionId,
+            subSessionId: persistedSummaryState.subSessionId,
+            modelUsed: persistedSummaryState.modelUsed,
+            startedAt: persistedSummaryState.startedAt,
+            finishedAt: null,
+            lastActivityAt: null,
+            durationMs: null,
+            tokenUsed: 0,
+            blockerType: null,
+            blockerLabel: "",
+            riskLevel: null,
+            guidanceCount: 0,
+            resultSummary: null,
+            result: null,
+            error: null,
+            longSummary: null,
+            latestEvents: [],
+          },
+        };
+      }
+
+      if (url === `/api/tasks/${persistedSummaryState.taskId}`) {
+        return {
+          ok: true,
+          data: {
+            id: persistedSummaryState.taskId,
+            title: "Task 1",
+            prompt: "Resume task",
+            projectId: persistedSummaryState.projectId,
+            strategy: null,
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-1",
+                runtimeSessionId: "session-1",
+                phaseId: "phase-1",
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/phases" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "phase-1",
+                phaseKind: "single",
+                triggerType: "execute",
+                currentSessionId: "task-session:task-1:session-1",
+                latestSessionId: "task-session:task-1:session-1",
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/phases/phase-1/resume" && options?.method === "POST") {
+        return {
+          ok: true,
+          data: {
+            taskId: "task-1",
+            phaseId: "phase-1",
+            status: "running",
+            currentSessionId: "task-session:task-1:session-1",
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
 
     const { agentControlRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
@@ -404,12 +612,35 @@ describe("agent control routes", () => {
         status: "running",
       }),
     );
-    expect(broadcastMock).toHaveBeenCalledWith(
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/phases/phase-1/resume",
       expect.objectContaining({
-        type: "agent.resumed",
-        agentRunId: "run-missing",
-        sessionId: "session-1",
+        authorization: "Bearer test",
+        method: "POST",
+        body: { mode: "reuse" },
       }),
+    );
+    const broadcastCalls = broadcastMock.mock.calls.map((call) => call[0]);
+    expect(broadcastCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "task.phase.resumed",
+          taskId: "task-1",
+          phaseId: "phase-1",
+          sessionId: "task-session:task-1:session-1",
+          data: expect.objectContaining({
+            phaseId: "phase-1",
+            status: "running",
+            phaseKind: "single",
+            triggerType: "execute",
+          }),
+        }),
+        expect.objectContaining({
+          type: "agent.resumed",
+          agentRunId: "run-missing",
+          sessionId: "session-1",
+        }),
+      ]),
     );
   });
 

@@ -11,6 +11,18 @@ function buildAssistantItem(text: string) {
   } as any;
 }
 
+function buildUserItem(text: string) {
+  return {
+    key: `user-${text}`,
+    role: "user",
+    text,
+    userInputText: text,
+    toolCalls: [],
+    raw: null,
+    createdAt: "2026-04-16T03:44:35.000Z",
+  } as any;
+}
+
 describe("task-detail-parallel-source-policy", () => {
   it("prefers phase-view baseline display over session fallback when both are available", () => {
     expect(
@@ -117,6 +129,43 @@ describe("task-detail-parallel-source-policy", () => {
         state: "incomplete",
         note: "当前候选仍在执行，阶段视图里的候选内容可能还不完整。",
       },
+    });
+  });
+
+  it("merges session fallback user prompts into the phase baseline items", () => {
+    expect(
+      resolveParallelCandidateSessionStateFromSources({
+        phaseBaseline: {
+          items: [buildAssistantItem("phase baseline reply")],
+          hasSettledReply: true,
+        },
+        sessionFallback: {
+          items: [buildUserItem("pi-monorepo 项目 是什么？")],
+          hasSettledReply: false,
+        },
+        traceLoad: {
+          ok: true,
+          trace: {
+            taskId: "task-1",
+            sessionId: "session-a",
+            latestResponse: "trace reply",
+            messages: [],
+            timeline: [],
+            segments: [],
+            hookExecutions: [],
+            followupExecutions: [],
+          } as any,
+          traceItems: [buildAssistantItem("trace reply")],
+          traceState: {},
+        },
+      }),
+    ).toMatchObject({
+      items: [
+        buildAssistantItem("phase baseline reply"),
+        buildUserItem("pi-monorepo 项目 是什么？"),
+      ],
+      hasSettledReply: true,
+      traceState: {},
     });
   });
 

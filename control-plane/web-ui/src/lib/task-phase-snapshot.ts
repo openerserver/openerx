@@ -23,63 +23,63 @@ function toTimestampMs(value: unknown) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+function resolveMessageGroupOrderIndex(group: TaskPhaseMessageGroupRecord) {
+  if (typeof group.phaseItemIndex === "number") {
+    return group.phaseItemIndex;
+  }
+
+  if (typeof group.candidateIndex === "number") {
+    return group.candidateIndex;
+  }
+
+  if (typeof group.stepIndex === "number") {
+    return group.stepIndex;
+  }
+
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function compareMessageGroups(left: TaskPhaseMessageGroupRecord, right: TaskPhaseMessageGroupRecord) {
+  const leftIndex = resolveMessageGroupOrderIndex(left);
+  const rightIndex = resolveMessageGroupOrderIndex(right);
+  if (leftIndex !== rightIndex) {
+    return leftIndex - rightIndex;
+  }
+
+  const leftTitle = left.title?.trim() ?? "";
+  const rightTitle = right.title?.trim() ?? "";
+  if (leftTitle !== rightTitle) {
+    return leftTitle.localeCompare(rightTitle, "zh-CN");
+  }
+
+  return 0;
+}
+
 function collectMainlinePhaseMessages(groups: TaskPhaseMessageGroupRecord[]) {
   return groups
+    .slice()
+    .sort(compareMessageGroups)
     .filter((group) => group.phaseRole !== "candidate" && group.phaseRole !== "judge")
     .flatMap((group) => (Array.isArray(group.messages) ? group.messages : []));
 }
 
 function buildParallelAnchorMessage(groups: TaskPhaseMessageGroupRecord[]) {
-  const candidateMessages = groups
+  const orderedCandidateGroups = groups
     .filter((group) => group.phaseRole === "candidate")
-    .flatMap((group) =>
-      (Array.isArray(group.messages) ? group.messages : []).map((message) => ({
-        message,
-        group,
-      })),
-    )
-    .filter(({ message }) => asString(asRecord(message)?.role) === "user")
-    .sort((left, right) => {
-      const leftTime = toTimestampMs(asRecord(left.message)?.createdAt) ?? Number.MAX_SAFE_INTEGER;
-      const rightTime = toTimestampMs(asRecord(right.message)?.createdAt) ?? Number.MAX_SAFE_INTEGER;
-      if (leftTime !== rightTime) {
-        return leftTime - rightTime;
-      }
+    .slice()
+    .sort(compareMessageGroups);
 
-      const leftIndex =
-        typeof left.group.phaseItemIndex === "number"
-          ? left.group.phaseItemIndex
-          : Number.MAX_SAFE_INTEGER;
-      const rightIndex =
-        typeof right.group.phaseItemIndex === "number"
-          ? right.group.phaseItemIndex
-          : Number.MAX_SAFE_INTEGER;
-      return leftIndex - rightIndex;
-    });
-
-  return candidateMessages[0]?.message ?? null;
-}
-
-function sortMessages(messages: unknown[]) {
-  return messages.slice().sort((left, right) => {
-    const leftRecord = asRecord(left);
-    const rightRecord = asRecord(right);
-    const leftTime = toTimestampMs(leftRecord?.createdAt) ?? Number.MAX_SAFE_INTEGER;
-    const rightTime = toTimestampMs(rightRecord?.createdAt) ?? Number.MAX_SAFE_INTEGER;
-    if (leftTime !== rightTime) {
-      return leftTime - rightTime;
+  for (const group of orderedCandidateGroups) {
+    const candidateMessages = Array.isArray(group.messages) ? group.messages : [];
+    const anchorMessage = candidateMessages.find(
+      (message) => asString(asRecord(message)?.role) === "user",
+    );
+    if (anchorMessage) {
+      return anchorMessage;
     }
+  }
 
-    const leftRole = asString(leftRecord?.role) ?? "assistant";
-    const rightRole = asString(rightRecord?.role) ?? "assistant";
-    if (leftRole !== rightRole) {
-      return leftRole === "user" ? -1 : 1;
-    }
-
-    const leftId = asString(leftRecord?.id) ?? "";
-    const rightId = asString(rightRecord?.id) ?? "";
-    return leftId.localeCompare(rightId);
-  });
+  return null;
 }
 
 export function buildTaskPhaseSnapshotMessages(args: {
@@ -102,7 +102,7 @@ export function buildTaskPhaseSnapshotMessages(args: {
     messages.push(...collectMainlinePhaseMessages(entry.messageGroups));
   }
 
-  return sortMessages(messages);
+  return messages;
 }
 
 export function resolveTaskSnapshotPhaseAnchor(args: {
@@ -112,11 +112,18 @@ export function resolveTaskSnapshotPhaseAnchor(args: {
 }) {
   const explicitPhaseId = asString(args.currentPhaseId);
   if (explicitPhaseId) {
-    return args.phases.find((phase) => phase.id === explicitPhaseId) ?? null;
+    const matchedByPhaseId = args.phases.find((phase) => phase.id === explicitPhaseId);
+    if (matchedByPhaseId) return matchedByPhaseId;
+    // explicitPhaseId present but no direct phase match — fall through to session-based lookup
+    // (handles stale IDs and legacy composite key formats)
   }
 
-  const requestedSessionId = asString(args.requestedSessionId);
-  if (requestedSessionId) {
+  // Try session-based matching: first treat currentPhaseId as a session composite key (if set
+  // but unmatched above), then try requestedSessionId explicitly.
+  const sessionCandidates = [explicitPhaseId, asString(args.requestedSessionId)].filter(
+    (c): c is string => Boolean(c),
+  );
+  for (const candidate of sessionCandidates) {
     const matchingPhase = args.phases
       .slice()
       .reverse()
@@ -126,16 +133,14 @@ export function resolveTaskSnapshotPhaseAnchor(args: {
               const normalizedSessionId = asString(sessionId);
               return Boolean(
                 normalizedSessionId &&
-                  (normalizedSessionId === requestedSessionId ||
-                    normalizedSessionId.endsWith(`:${requestedSessionId}`) ||
-                    requestedSessionId.endsWith(`:${normalizedSessionId}`)),
+                  (normalizedSessionId === candidate ||
+                    normalizedSessionId.endsWith(`:${candidate}`) ||
+                    candidate.endsWith(`:${normalizedSessionId}`)),
               );
             })
           : false,
       );
-    if (matchingPhase) {
-      return matchingPhase;
-    }
+    if (matchingPhase) return matchingPhase;
   }
 
   return args.phases.at(-1) ?? null;

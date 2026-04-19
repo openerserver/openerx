@@ -2,7 +2,7 @@ import { zValidator } from "@hono/zod-validator";
 import { and, asc, desc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { db } from "../../db";
+import { db, postgresSql } from "../../db";
 import { findUniqueConstraintMatch } from "../../db/unique-conflict";
 import {
   type ProjectSettings,
@@ -43,6 +43,7 @@ import { loadTaskTreeRecords } from "../project-tree/task-view";
 import { normalizeApiTimestamp, normalizeApiTimestampFields } from "../shared/api-timestamp";
 import { resolvePublicTaskStatus } from "../tasks/public-task-status";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
+import { deleteTaskTreeBackedTask, loadTaskDeleteNodeIds } from "../tasks/task-core-routes";
 import { validateConfiguredModelRoute } from "../../lib/configured-model-routes";
 
 export const projectRoutes = new Hono<AppEnv>();
@@ -100,6 +101,8 @@ const ROLE_HIERARCHY: Record<Role, number> = {
   developer: 2,
   viewer: 1,
 };
+
+type SqlExecutor = typeof postgresSql;
 
 const createProjectSchema = z.object({
   orgId: z.string().min(1),
@@ -1907,6 +1910,92 @@ function paginateOverviewItems(items: OverviewItem[], page: number, pageSize: nu
   return items.slice(start, start + pageSize);
 }
 
+export async function deleteProjectCascade(projectId: string, userId: string) {
+  return postgresSql.begin(async (transaction) => {
+    const tx = transaction as unknown as SqlExecutor;
+    const [project] = await tx<
+      Array<{ id: string; orgId: string; name: string | null; status: string | null }>
+    >`SELECT id, org_id as "orgId", name, status FROM projects WHERE id = ${projectId}`;
+
+    if (!project) {
+      return null;
+    }
+
+    const taskRows = await tx<Array<{ id: string }>>`
+      SELECT id
+      FROM tasks
+      WHERE project_id = ${projectId}
+    `;
+    const taskIds = taskRows.map((item) => item.id);
+
+    for (const taskId of taskIds) {
+      const nodeIdList = await loadTaskDeleteNodeIds(taskId, tx);
+      if (!nodeIdList) {
+        continue;
+      }
+
+      await deleteTaskTreeBackedTask(taskId, nodeIdList, tx);
+    }
+
+    if (taskIds.length > 0) {
+      await tx`DELETE FROM approval_tickets WHERE task_id = ANY(${taskIds}::text[])`;
+    }
+
+    await tx`DELETE FROM workflow_template_stages WHERE template_id IN (SELECT id FROM workflow_templates WHERE project_id = ${projectId})`;
+    await tx`DELETE FROM role_agent_bindings WHERE project_id = ${projectId} OR role_agent_id IN (SELECT id FROM role_agents WHERE project_id = ${projectId})`;
+    await tx`DELETE FROM role_agent_project_overrides WHERE project_id = ${projectId} OR role_agent_id IN (SELECT id FROM role_agents WHERE project_id = ${projectId})`;
+    await tx`DELETE FROM role_agents WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM workflow_templates WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM policy_templates WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM paid_execution_leases WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM project_model_fund_ledger WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM project_model_funds WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM budget_configs WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM runtime_usage_ledger_steps WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM runtime_usage_ledgers WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM runtime_usage_baselines WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM cost_records WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM audit_events WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM repository_credentials WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM repositories WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM project_roles WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM environments WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM project_tree_links WHERE source_project_id = ${projectId} OR target_project_id = ${projectId}`;
+    await tx`DELETE FROM project_tree_branches WHERE project_id = ${projectId} OR task_node_id IN (SELECT id FROM project_tree_nodes WHERE project_id = ${projectId}) OR head_node_id IN (SELECT id FROM project_tree_nodes WHERE project_id = ${projectId})`;
+    await tx`UPDATE project_tree_nodes SET parent_id = NULL WHERE parent_id IN (SELECT id FROM project_tree_nodes WHERE project_id = ${projectId})`;
+    await tx`UPDATE project_tree_nodes SET superseded_by = NULL WHERE superseded_by IN (SELECT id FROM project_tree_nodes WHERE project_id = ${projectId})`;
+    await tx`DELETE FROM project_tree_nodes WHERE project_id = ${projectId}`;
+    await tx`DELETE FROM projects WHERE id = ${projectId}`;
+
+    const now = new Date().toISOString();
+    const detail = JSON.stringify({
+      deletedProjectId: projectId,
+      deletedProjectName: project.name,
+      deletedProjectStatus: project.status ?? null,
+      deletedTaskCount: taskIds.length,
+      orgId: project.orgId,
+    });
+    await tx`
+      INSERT INTO audit_events (id, ts, user_id, event_type, action, target, detail, risk_level)
+      VALUES (
+        ${crypto.randomUUID()},
+        ${now},
+        ${userId},
+        'project.deleted',
+        'delete_project',
+        ${projectId},
+        ${detail}::jsonb,
+        'high'
+      )
+    `;
+
+    return {
+      id: projectId,
+      deletedTaskCount: taskIds.length,
+    };
+  });
+}
+
 // GET /api/projects/overview
 projectRoutes.get("/overview", async (c) => {
   const user = c.get("user");
@@ -2602,6 +2691,18 @@ projectRoutes.patch(
     return c.json({ ok: true, id: projectId, status: "archived" });
   },
 );
+
+projectRoutes.delete("/:projectId", requireRole("org_admin"), async (c) => {
+  const projectId = c.req.param("projectId");
+  const user = c.get("user");
+
+  const deleted = await deleteProjectCascade(projectId, user.sub);
+  if (!deleted) {
+    return c.json({ error: "Project not found" }, 404);
+  }
+
+  return c.json({ ok: true, id: deleted.id, deletedTaskCount: deleted.deletedTaskCount });
+});
 
 // GET /api/projects/:projectId/workflow-template
 projectRoutes.get(

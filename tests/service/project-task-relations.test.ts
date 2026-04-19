@@ -1,26 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   buildDeleteByIdsStatements,
   buildTaskNodeDefensiveCleanupStatements,
   buildTaskProjectionCleanupStatements,
+  runPostgresCleanupStatements,
 } from "./service-teardown-helpers";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const DATABASE_URL =
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "postgres://127.0.0.1:5432/openerx";
-const DATABASE_DIALECT =
-  process.env.TEST_DATABASE_DIALECT ||
-  process.env.DATABASE_DIALECT ||
-  (/^(postgres|postgresql):\/\//i.test(DATABASE_URL) ? "postgres" : "sqlite");
 
 const createdTaskIds: string[] = [];
 const relationIds: string[] = [];
@@ -109,41 +98,21 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const taskDependencyCleanupStatements =
-    DATABASE_DIALECT === "postgres" ? buildTaskProjectionCleanupStatements(createdTaskIds) : [];
-  const relationCleanupStatements =
-    DATABASE_DIALECT === "postgres"
-      ? [
-          ...buildDeleteByIdsStatements("project_tree_links", relationIds),
-          ...createdTaskIds.map(
-            (id) =>
-              `DELETE FROM project_tree_links WHERE source_node_id='${id}' OR target_node_id='${id}';`,
-          ),
-          ...buildTaskNodeDefensiveCleanupStatements(createdTaskIds),
-        ]
-      : [];
   const statements = [
-    ...taskDependencyCleanupStatements,
+    ...buildTaskProjectionCleanupStatements(createdTaskIds),
     ...buildDeleteByIdsStatements("tasks", createdTaskIds),
-    ...relationCleanupStatements,
+    ...buildDeleteByIdsStatements("project_tree_links", relationIds),
+    ...createdTaskIds.map(
+      (id) => `DELETE FROM project_tree_links WHERE source_node_id='${id}' OR target_node_id='${id}';`,
+    ),
+    ...buildTaskNodeDefensiveCleanupStatements(createdTaskIds),
   ];
 
   if (statements.length === 0) {
     return;
   }
 
-  const { execSync } = await import("node:child_process");
-  try {
-    if (DATABASE_DIALECT === "postgres") {
-      execSync(`psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "${statements.join(" ")}"`, {
-        timeout: 5000,
-      });
-    } else {
-      execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
-    }
-  } catch {
-    console.warn("Cleanup failed for project-task-relations.test.ts");
-  }
+  runPostgresCleanupStatements(statements, "project-task-relations.test.ts");
 });
 
 describe("project tree task links", () => {

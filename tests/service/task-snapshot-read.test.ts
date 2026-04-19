@@ -176,6 +176,6 @@ describe("task snapshot read", () => {
     }
     expect(result.data.data?.currentStatus).toBe("completed");
     expect(result.data.data?.currentPhaseId).toBe("phase-current");
-    expect(result.data.data?.latestPhaseId).toBe("task-session:task-1:latest");
+    expect(result.data.data?.latestPhaseId).toBeNull();
   });
 });

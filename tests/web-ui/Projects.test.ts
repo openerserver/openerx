@@ -22,7 +22,9 @@ const messageMocks = vi.hoisted(() => ({
 const apiMocks = vi.hoisted(() => ({
   archiveProject: vi.fn(),
   createProject: vi.fn(),
+  deleteProject: vi.fn(),
   listOrgs: vi.fn(),
+  listProjects: vi.fn(),
   listProjectOverview: vi.fn(),
   updateProject: vi.fn(),
 }));
@@ -139,26 +141,70 @@ vi.mock("ant-design-vue", async () => {
 
   const ATable = defineComponent({
     name: "ATable",
-    props: ["dataSource", "columns"],
+    props: ["dataSource", "columns", "rowSelection"],
     setup(props, { slots }) {
       return () => {
         const rows = (props.dataSource as Array<Record<string, unknown>> | undefined) ?? [];
+        const rowSelection = props.rowSelection as
+          | {
+              selectedRowKeys?: Array<string | number>;
+              onChange?: (
+                keys: Array<string | number>,
+                rows: Array<Record<string, unknown>>,
+              ) => void;
+              getCheckboxProps?: (record: Record<string, unknown>) => { disabled?: boolean };
+            }
+          | undefined;
+        const selectedKeys = new Set(
+          (rowSelection?.selectedRowKeys ?? []).map((key) => String(key)),
+        );
         return h(
           "div",
           { "data-component": "ATable" },
-          rows.flatMap((record) =>
-            ((props.columns as Array<Record<string, unknown>> | undefined) ?? []).map((column) =>
-              h(
-                "div",
-                {
-                  class: "table-cell",
-                  "data-column-key": String(column.key ?? column.dataIndex ?? ""),
-                  "data-record-id": String(record.id ?? ""),
-                },
-                slots.bodyCell ? slots.bodyCell({ column, record }) : undefined,
-              ),
-            ),
-          ),
+          rows.flatMap((record) => {
+            const recordId = String(record.id ?? "");
+            const checkboxProps = rowSelection?.getCheckboxProps?.(record) ?? {};
+            const selectionControls = rowSelection
+              ? [
+                  h("input", {
+                    type: "checkbox",
+                    "data-testid": `select-row-${recordId}`,
+                    checked: selectedKeys.has(recordId),
+                    disabled: Boolean(checkboxProps.disabled),
+                    onChange: (event: Event) => {
+                      const checked = (event.target as HTMLInputElement).checked;
+                      const nextKeys = new Set(selectedKeys);
+                      if (checked) {
+                        nextKeys.add(recordId);
+                      } else {
+                        nextKeys.delete(recordId);
+                      }
+                      const orderedKeys = Array.from(nextKeys);
+                      rowSelection.onChange?.(
+                        orderedKeys,
+                        rows.filter((item) => orderedKeys.includes(String(item.id ?? ""))),
+                      );
+                    },
+                  }),
+                ]
+              : [];
+
+            return [
+              ...selectionControls,
+              ...(((props.columns as Array<Record<string, unknown>> | undefined) ?? []).map(
+                (column) =>
+                  h(
+                    "div",
+                    {
+                      class: "table-cell",
+                      "data-column-key": String(column.key ?? column.dataIndex ?? ""),
+                      "data-record-id": recordId,
+                    },
+                    slots.bodyCell ? slots.bodyCell({ column, record }) : undefined,
+                  ),
+              ) as Array<ReturnType<typeof h>>),
+            ];
+          }),
         );
       };
     },
@@ -254,6 +300,26 @@ async function mountPage() {
 beforeEach(() => {
   vi.clearAllMocks();
 
+  apiMocks.listProjects.mockResolvedValue([
+    {
+      id: "proj-default",
+      orgId: "org-default",
+      name: "Default Project",
+      slug: "default-project",
+    },
+    {
+      id: "proj-alpha-api",
+      orgId: "org-default",
+      name: "Alpha API",
+      slug: "alpha-api",
+    },
+    {
+      id: "proj-alpha-web",
+      orgId: "org-default",
+      name: "Alpha Web",
+      slug: "alpha-web",
+    },
+  ]);
   apiMocks.listOrgs.mockResolvedValue([
     {
       id: "org-default",
@@ -361,6 +427,11 @@ beforeEach(() => {
     name: "Created Project",
     slug: "created-project",
   } satisfies Project);
+  apiMocks.deleteProject.mockResolvedValue({
+    ok: true,
+    id: "proj-default",
+    deletedTaskCount: 0,
+  });
   apiMocks.updateProject.mockResolvedValue({
     id: "proj-default",
     orgId: "org-default",
@@ -489,5 +560,32 @@ describe("Projects page", () => {
         projectGroupLabel: null,
       },
     });
+  });
+
+  it("supports selecting multiple projects and deleting them together", async () => {
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper) as {
+      runProjectDeletion: (projectIds: string[]) => Promise<void>;
+    };
+
+    const rowCheckboxes = wrapper.findAll("tbody .ant-checkbox-input");
+    expect(rowCheckboxes.length).toBeGreaterThanOrEqual(2);
+
+    await rowCheckboxes[0]?.setValue(true);
+    await flushPromises();
+    await rowCheckboxes[1]?.setValue(true);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("已选 2 个项目");
+
+  await setupState.runProjectDeletion(["proj-default", "proj-alpha-api"]);
+  await flushPromises();
+    await flushPromises();
+
+    expect(apiMocks.deleteProject).toHaveBeenCalledTimes(2);
+    expect(apiMocks.deleteProject).toHaveBeenNthCalledWith(1, "proj-default");
+    expect(apiMocks.deleteProject).toHaveBeenNthCalledWith(2, "proj-alpha-api");
+    expect(apiMocks.listProjects).toHaveBeenCalled();
+    expect(wrapper.text()).not.toContain("已选 2 个项目");
   });
 });

@@ -252,9 +252,14 @@ describe("task detail refresh policy", () => {
     expect(getTaskDetailRefreshRequest(event)).toBeNull();
   });
 
-  it("refreshes flow for phase lifecycle events without forcing message reload", () => {
-    const event = createPatchEvent("phase-resumed", {
-      rawEventKind: "task.phase.resumed",
+  it.each([
+    ["phase-created", "task.phase.created"],
+    ["phase-paused", "task.phase.paused"],
+    ["phase-resumed", "task.phase.resumed"],
+    ["phase-failed", "task.phase.failed"],
+  ] as const)("refreshes flow for %s events without forcing message reload", (kind, rawEventKind) => {
+    const event = createPatchEvent(kind, {
+      rawEventKind,
       phaseId: "phase-2",
     });
 
@@ -262,7 +267,8 @@ describe("task detail refresh policy", () => {
     expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
     expect(getTaskDetailRefreshRequest(event)).toEqual({
       eventId: "event-1",
-      reason: "phase-resumed",
+      reason: kind,
+      phaseId: "phase-2",
       targets: {
         workflow: false,
         flow: true,
@@ -270,6 +276,18 @@ describe("task detail refresh policy", () => {
       },
       shouldBumpTraceRefreshKey: false,
     });
+  });
+
+  it("forwards phaseId from round-synced events so phase-local reconcile can target the right phase", () => {
+    const event = createPatchEvent("round-synced", {
+      rawEventKind: "task.round.synced",
+      phaseId: "phase-7",
+    });
+
+    const request = getTaskDetailRefreshRequest(event);
+    expect(request).not.toBeNull();
+    expect(request?.phaseId).toBe("phase-7");
+    expect(request?.targets.messages).toBe(true);
   });
 
   it("bumps the trace refresh key for hook and followup events", () => {

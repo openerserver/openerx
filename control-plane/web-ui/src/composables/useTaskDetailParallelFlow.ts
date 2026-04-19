@@ -2,7 +2,6 @@ import { computed, ref, type Ref, watch } from "vue";
 import type { ProjectionRunRecord, TaskAgentRunRecord, TaskSessionRecord } from "../lib/api";
 import { getTaskAgentRuns, getTaskPhaseView, getTaskPhases } from "../lib/api";
 import {
-  createEmptyLiveAssistantState,
   normalizeSessionConversationItems,
   type LiveAssistantState,
   type TaskConversationListItem,
@@ -35,6 +34,41 @@ import { resolveNextSelectedSessionId } from "../lib/task-detail-parallel-runtim
 import { useTaskMessagePatchConsumer } from "./useTaskMessagePatchConsumer";
 import type { TreeTask } from "./useProjectTreeTask";
 import type { TreeSessionNodeRecord } from "./useTreeBranches";
+
+function serializeComparableFlowValue(value: unknown) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
+}
+
+function areComparableFlowValuesEqual(left: unknown, right: unknown) {
+  return serializeComparableFlowValue(left) === serializeComparableFlowValue(right);
+}
+
+function hasDisplayableCandidateItems(items: TaskConversationMessageItem[]) {
+  return items.some((item) => {
+    if (item.role === "assistant") {
+      return Boolean(item.text?.trim() || item.thinkingText?.trim() || item.toolCalls.length > 0);
+    }
+    if (item.role === "user") {
+      return Boolean(item.userInputText?.trim() || item.finalSentText?.trim() || item.text?.trim());
+    }
+    if (item.role === "tool") {
+      return Boolean(item.text?.trim() || item.toolCalls.length > 0);
+    }
+    return Boolean(item.text?.trim());
+  });
+}
+
+function hasDisplayableCandidateState(state?: ParallelCandidateSessionState | null) {
+  if (!state) {
+    return false;
+  }
+
+  return state.hasSettledReply || hasDisplayableCandidateItems(state.items);
+}
 
 export function useTaskDetailParallelFlow(args: {
   currentPhaseId: Ref<string | null>;
@@ -93,6 +127,7 @@ export function useTaskDetailParallelFlow(args: {
   const {
     taskPatchEventSignature,
     getLiveAssistantState,
+    getPhaseLiveAssistantState,
     getTaskPatchEvents,
   } = useTaskMessagePatchConsumer(
     computed(() => (args.taskId.value ? [args.taskId.value] : [])),
@@ -187,38 +222,6 @@ export function useTaskDetailParallelFlow(args: {
     return [];
   }
 
-  function mergeLiveAssistantStates(states: LiveAssistantState[]) {
-    const merged = createEmptyLiveAssistantState();
-
-    for (const state of states) {
-      for (const messageId of state.orderedAssistantMessageIds) {
-        if (!merged.orderedAssistantMessageIds.includes(messageId)) {
-          merged.orderedAssistantMessageIds.push(messageId);
-        }
-      }
-      for (const [messageId, meta] of state.metaById.entries()) {
-        merged.metaById.set(messageId, meta);
-      }
-      for (const [messageId, text] of state.textById.entries()) {
-        const currentText = merged.textById.get(messageId);
-        if (!currentText || text.length >= currentText.length) {
-          merged.textById.set(messageId, text);
-        }
-      }
-      for (const [messageId, thinkingText] of state.thinkingById.entries()) {
-        const currentThinkingText = merged.thinkingById.get(messageId);
-        if (!currentThinkingText || thinkingText.length >= currentThinkingText.length) {
-          merged.thinkingById.set(messageId, thinkingText);
-        }
-      }
-      for (const messageId of state.incompleteIds.values()) {
-        merged.incompleteIds.add(messageId);
-      }
-    }
-
-    return merged;
-  }
-
   function isMessageConversationItem(
     item: TaskConversationListItem,
   ): item is TaskConversationMessageItem {
@@ -251,9 +254,11 @@ export function useTaskDetailParallelFlow(args: {
         buildTaskConversationRenderState({
           persistedItems,
           workflowItems: [],
-          liveAssistantState: mergeLiveAssistantStates(
-            liveSessionIds.map((sessionId) => getLiveAssistantState(currentTaskId, sessionId)),
-          ),
+          liveAssistantState: getPhaseLiveAssistantState({
+            taskId: currentTaskId,
+            phaseId: slice.phase.id,
+            sessionIds: liveSessionIds,
+          }),
           authority: "realtime",
           pendingAssistantDraft: null,
           activeSessionId: liveSessionIds[0],
@@ -281,6 +286,15 @@ export function useTaskDetailParallelFlow(args: {
     sessionId: string,
     nextState: ParallelCandidateSessionState,
   ) {
+    const currentState: ParallelCandidateSessionState = {
+      items: parallelCandidateItems.value[sessionId] ?? [],
+      hasSettledReply: parallelCandidateSettledReply.value[sessionId] === true,
+      traceState: parallelCandidateTraceStates.value[sessionId] ?? {},
+    };
+    if (areComparableFlowValuesEqual(currentState, nextState)) {
+      return;
+    }
+
     parallelCandidateItems.value = {
       ...parallelCandidateItems.value,
       [sessionId]: nextState.items,
@@ -298,26 +312,55 @@ export function useTaskDetailParallelFlow(args: {
   function applyPhaseParallelCandidateBaselines(
     candidateBaselines: Record<string, ParallelCandidateSessionState>,
   ) {
-    phaseParallelCandidateBaselines.value = candidateBaselines;
+    const previousBaselines = phaseParallelCandidateBaselines.value;
+    if (!areComparableFlowValuesEqual(previousBaselines, candidateBaselines)) {
+      phaseParallelCandidateBaselines.value = candidateBaselines;
+    }
+
     const entries = Object.entries(candidateBaselines);
     if (entries.length === 0) {
       return;
     }
 
-    parallelCandidateItems.value = {
-      ...parallelCandidateItems.value,
-      ...Object.fromEntries(entries.map(([sessionId, state]) => [sessionId, state.items])),
-    };
-    parallelCandidateSettledReply.value = {
-      ...parallelCandidateSettledReply.value,
-      ...Object.fromEntries(
-        entries.map(([sessionId, state]) => [sessionId, state.hasSettledReply]),
-      ),
-    };
-    parallelCandidateTraceStates.value = {
-      ...parallelCandidateTraceStates.value,
-      ...Object.fromEntries(entries.map(([sessionId, state]) => [sessionId, state.traceState])),
-    };
+    let nextItems = parallelCandidateItems.value;
+    let nextSettledReply = parallelCandidateSettledReply.value;
+    let nextTraceStates = parallelCandidateTraceStates.value;
+    let hasDisplayStateChanges = false;
+
+    for (const [sessionId, baselineState] of entries) {
+      const currentState: ParallelCandidateSessionState = {
+        items: parallelCandidateItems.value[sessionId] ?? [],
+        hasSettledReply: parallelCandidateSettledReply.value[sessionId] === true,
+        traceState: parallelCandidateTraceStates.value[sessionId] ?? {},
+      };
+      const previousBaselineState = previousBaselines[sessionId];
+      const shouldSeedBaseline =
+        !hasDisplayableCandidateState(currentState) ||
+        (previousBaselineState != null && areComparableFlowValuesEqual(currentState, previousBaselineState));
+
+      if (!shouldSeedBaseline || areComparableFlowValuesEqual(currentState, baselineState)) {
+        continue;
+      }
+
+      if (!hasDisplayStateChanges) {
+        nextItems = { ...parallelCandidateItems.value };
+        nextSettledReply = { ...parallelCandidateSettledReply.value };
+        nextTraceStates = { ...parallelCandidateTraceStates.value };
+        hasDisplayStateChanges = true;
+      }
+
+      nextItems[sessionId] = baselineState.items;
+      nextSettledReply[sessionId] = baselineState.hasSettledReply;
+      nextTraceStates[sessionId] = baselineState.traceState;
+    }
+
+    if (!hasDisplayStateChanges) {
+      return;
+    }
+
+    parallelCandidateItems.value = nextItems;
+    parallelCandidateSettledReply.value = nextSettledReply;
+    parallelCandidateTraceStates.value = nextTraceStates;
   }
 
   const parallelCandidateLiveStates = computed<Record<string, LiveAssistantState>>(() => {
@@ -495,12 +538,15 @@ export function useTaskDetailParallelFlow(args: {
       );
       applyPhaseParallelCandidateBaselines(buildPhaseParallelCandidateBaselines({ phaseViews }));
 
-      phaseParallelRuns.value = buildPhaseParallelRuns({
+      const nextPhaseParallelRuns = buildPhaseParallelRuns({
         phases,
         phaseViews,
         agentRuns: taskAgentRuns.value,
         configuredCandidates: args.configuredCandidates.value,
       });
+      if (!areComparableFlowValuesEqual(phaseParallelRuns.value, nextPhaseParallelRuns)) {
+        phaseParallelRuns.value = nextPhaseParallelRuns;
+      }
     } catch {
       if (!silent) {
         phaseParallelRuns.value = [];
@@ -591,7 +637,10 @@ export function useTaskDetailParallelFlow(args: {
   async function refreshTaskRunSummaries(currentTaskId: string, silent = false) {
     try {
       const agentRunsResponse = await getTaskAgentRuns(currentTaskId);
-      taskAgentRuns.value = Array.isArray(agentRunsResponse.data) ? agentRunsResponse.data : [];
+      const nextTaskAgentRuns = Array.isArray(agentRunsResponse.data) ? agentRunsResponse.data : [];
+      if (!areComparableFlowValuesEqual(taskAgentRuns.value, nextTaskAgentRuns)) {
+        taskAgentRuns.value = nextTaskAgentRuns;
+      }
     } catch {
       if (!silent) {
         taskAgentRuns.value = [];

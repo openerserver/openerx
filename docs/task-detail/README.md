@@ -22,8 +22,9 @@
 1. [task-detail-navigation-index.md](task-detail-navigation-index.md)
 2. [task-detail-display-write-logic.md](task-detail-display-write-logic.md)
 3. [taskdetail-v3-page-dataflow.md](taskdetail-v3-page-dataflow.md)
-4. [task-detail-continue-sequence-diagrams.md](task-detail-continue-sequence-diagrams.md)
-5. [task-page-session-message-display-guide.md](task-page-session-message-display-guide.md)
+4. [task-detail-running-status-guide.md](task-detail-running-status-guide.md)
+5. [task-detail-continue-sequence-diagrams.md](task-detail-continue-sequence-diagrams.md)
+6. [task-page-session-message-display-guide.md](task-page-session-message-display-guide.md)
 
 ### 2.2 目标设计
 

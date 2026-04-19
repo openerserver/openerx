@@ -63,7 +63,7 @@ describe("useTaskDetailSnapshotCoordinator", () => {
 
     await coordinator.refreshMessageSnapshot();
 
-    expect(refreshMessages).toHaveBeenCalledWith(true);
+    expect(refreshMessages).toHaveBeenCalledWith(true, undefined);
     expect(refreshFlowSnapshot).not.toHaveBeenCalled();
     expect(refreshWorkflowSnapshot).not.toHaveBeenCalled();
   });
@@ -79,7 +79,7 @@ describe("useTaskDetailSnapshotCoordinator", () => {
     });
 
     expect(refreshWorkflowSnapshot).toHaveBeenCalledTimes(1);
-    expect(refreshMessages).toHaveBeenCalledWith(true);
+    expect(refreshMessages).toHaveBeenCalledWith(true, undefined);
     expect(refreshFlowSnapshot).not.toHaveBeenCalled();
   });
 

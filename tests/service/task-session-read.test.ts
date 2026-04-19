@@ -564,6 +564,112 @@ describe("task session read API", () => {
     });
   });
 
+  test("getTaskPhaseView keeps phase-first messages in messageIndex order when createdAt drifts", async () => {
+    const sessionId = "task-session:task-1:session-mainline";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: sessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "session-mainline",
+          phaseId: "phase-single",
+          coordinationKey: "phase-single",
+          phaseRole: "mainline",
+          phaseItemIndex: 0,
+          createdAt: "2026-04-16T10:00:00.000Z",
+          updatedAt: "2026-04-16T10:00:10.000Z",
+        },
+      ],
+      phaseRows: [
+        {
+          id: "phase-single",
+          taskId: "task-1",
+          projectId: "project-1",
+          phaseIndex: 1,
+          phaseKind: "single",
+          triggerType: "execute",
+          status: "completed",
+          createdAt: "2026-04-16T10:00:00.000Z",
+          updatedAt: "2026-04-16T10:00:10.000Z",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: sessionId,
+        currentPhaseId: "phase-single",
+        latestSessionId: sessionId,
+        latestPhaseId: "phase-single",
+      },
+      messageRowsByCall: [
+        [
+          {
+            id: `${sessionId}:assistant`,
+            taskId: "task-1",
+            sessionId,
+            runtimeMessageId: "runtime-assistant-1",
+            role: "assistant",
+            messageIndex: 1,
+            seq: 1,
+            textContent: "assistant reply",
+            textPreview: "assistant reply",
+            rawPayload: {
+              info: {
+                id: "runtime-assistant-1",
+                role: "assistant",
+                time: { created: "2026-04-16T10:00:00.000Z" },
+              },
+            },
+            createdAt: "2026-04-16T10:00:00.000Z",
+            updatedAt: "2026-04-16T10:00:00.000Z",
+          },
+          {
+            id: `${sessionId}:user`,
+            taskId: "task-1",
+            sessionId,
+            runtimeMessageId: "runtime-user-1",
+            role: "user",
+            messageIndex: 0,
+            seq: 0,
+            textContent: "user prompt",
+            textPreview: "user prompt",
+            rawPayload: {
+              info: {
+                id: "runtime-user-1",
+                role: "user",
+                time: { created: "2026-04-16T10:00:05.000Z" },
+              },
+            },
+            createdAt: "2026-04-16T10:00:05.000Z",
+            updatedAt: "2026-04-16T10:00:05.000Z",
+          },
+        ],
+      ],
+      partRowsByCall: [[]],
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.getTaskPhaseView("task-1", "phase-single");
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(
+      response.data.data.messageGroups[0]?.messages.map((message) => ({
+        runtimeMessageId: message.runtimeMessageId,
+        role: message.role,
+      })),
+    ).toEqual([
+      { runtimeMessageId: "runtime-user-1", role: "user" },
+      { runtimeMessageId: "runtime-assistant-1", role: "assistant" },
+    ]);
+  });
+
   test("maps snapshot currentSessionId runtime ids back to canonical task-session ids", async () => {
     const sessionId = "task-session:task-1:session-1";
     const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
@@ -1384,7 +1490,7 @@ describe("task session read API", () => {
     ]);
   });
 
-  test("listTaskSessionMessages keeps user prompts ahead of same-timestamp assistant replies", async () => {
+  test("listTaskSessionMessages prefers messageIndex when prompt timestamps drift after replies", async () => {
     const sessionId = "task-session:task-1:session-1";
     const sessionRecord = {
       id: sessionId,
@@ -1399,34 +1505,34 @@ describe("task session read API", () => {
       winnerSession: sessionRecord,
       messageRows: [
         {
-          id: `${sessionId}:assistant`,
-          taskId: "task-1",
-          sessionId,
-          runtimeMessageId: "runtime-assistant-1",
-          role: "assistant",
-          messageIndex: 0,
-          textContent: "assistant reply",
-          rawPayload: {
-            info: {
-              id: "runtime-assistant-1",
-              role: "assistant",
-              time: { created: "2026-03-27T10:00:00.000Z" },
-            },
-          },
-          createdAt: "2026-03-27T10:00:00.000Z",
-        },
-        {
           id: `${sessionId}:user`,
           taskId: "task-1",
           sessionId,
           runtimeMessageId: "runtime-user-1",
           role: "user",
-          messageIndex: 1,
+          messageIndex: 0,
           textContent: "user prompt",
           rawPayload: {
             info: {
               id: "runtime-user-1",
               role: "user",
+              time: { created: "2026-03-27T10:00:05.000Z" },
+            },
+          },
+          createdAt: "2026-03-27T10:00:05.000Z",
+        },
+        {
+          id: `${sessionId}:assistant`,
+          taskId: "task-1",
+          sessionId,
+          runtimeMessageId: "runtime-assistant-1",
+          role: "assistant",
+          messageIndex: 1,
+          textContent: "assistant reply",
+          rawPayload: {
+            info: {
+              id: "runtime-assistant-1",
+              role: "assistant",
               time: { created: "2026-03-27T10:00:00.000Z" },
             },
           },

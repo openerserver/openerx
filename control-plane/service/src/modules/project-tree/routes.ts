@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
-import { listTaskTreeRecords, loadTaskTreeRecord } from "./task-view";
+import { listTaskTreeRecordPage, loadTaskTreeRecord } from "./task-view";
 
 export const projectTreeRoutes = new Hono<AppEnv>();
 
@@ -10,16 +10,19 @@ projectTreeRoutes.get("/tasks", async (c) => {
   const projectId = c.req.query("projectId");
   const status = c.req.query("status");
   const repoId = c.req.query("repoId");
-  const limit = Math.min(Number(c.req.query("limit") || 50), 200);
+  const requestedLimit = Number(c.req.query("limit") || "50");
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(requestedLimit, 200))
+    : 50;
 
-  const data = await listTaskTreeRecords({
+  const result = await listTaskTreeRecordPage({
     projectId: projectId || undefined,
     status: status || undefined,
     repoId: repoId || undefined,
     limit,
   });
 
-  return c.json({ data });
+  return c.json(result);
 });
 
 projectTreeRoutes.get("/tasks/:taskId", async (c) => {

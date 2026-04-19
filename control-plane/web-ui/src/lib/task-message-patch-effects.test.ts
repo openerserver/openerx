@@ -186,7 +186,7 @@ describe("task message patch effects", () => {
     ).toMatchObject({
       updatesLiveAssistantState: false,
       shouldRefreshCanonicalMessages: true,
-      shouldRefreshTaskDetailMessages: false,
+      shouldRefreshTaskDetailMessages: true,
       shouldScheduleTaskDetailRefresh: true,
       shouldBumpTaskDetailTraceRefreshKey: false,
       shouldRefreshMonitorSummary: true,

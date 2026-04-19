@@ -294,11 +294,16 @@ describe("useMultiTaskMessageStore", () => {
       }),
     ];
 
+    // Phase-first migration: realtime assistant completion no longer forces a persisted
+    // refresh on its own. The persisted baseline is absorbed when the paired
+    // `task.message.persisted` / `task.round.synced` ack arrives; until then the realtime
+    // overlay is authoritative. See
+    // `docs/task-detail/task-detail-phase-first-migration-checklist.md` §6.4.
     expect(store.consumeMonitoredTaskPatchEvents(() => "session-1")).toEqual([
       {
         taskId: "task-1",
         sessionId: "session-1",
-        shouldRefreshPersistedMessages: true,
+        shouldRefreshPersistedMessages: false,
         shouldRefreshSummary: false,
       },
     ]);
@@ -383,13 +388,12 @@ describe("useMultiTaskMessageStore", () => {
       {
         taskId: "task-1",
         sessionId: "session-1",
-        shouldRefreshPersistedMessages: true,
+        shouldRefreshPersistedMessages: false,
         shouldRefreshSummary: true,
       },
     ]);
     expect(calls).toEqual([
       "summary:task-1",
-      "messages:task-1:session-1",
       "rebuild:task-1",
     ]);
   });

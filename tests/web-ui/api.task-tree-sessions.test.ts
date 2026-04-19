@@ -335,7 +335,7 @@ describe("task message/session projection", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions") {
+      if (url === "/api/tasks/task-1/sessions?includeArchived=true") {
         return {
           ok: true,
           status: 200,
@@ -354,6 +354,10 @@ describe("task message/session projection", () => {
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/sessions?includeArchived=true",
+      expect.anything(),
+    );
     expect(messagesResponse.meta?.sessionId).toBe("ses-child");
     expect(sessionContext.data.currentSessionId).toBe("ses-child");
     expect(sessionContext.data.sessionLineage).toEqual([

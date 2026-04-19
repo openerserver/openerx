@@ -40,7 +40,17 @@ export function useTaskConversationActions(args: {
   clearPendingAssistantDraft: (sessionId?: string) => void;
   refreshTask: (silent?: boolean) => void | Promise<void>;
   refreshSessions: (silent?: boolean) => void | Promise<void>;
-  refreshMessages: (silent?: boolean) => void | Promise<void>;
+  /**
+   * Phase-first migration: previously the conversation actions asked for a global
+   * message-list refresh via `refreshMessages`. Under phase-first the persisted baseline
+   * is absorbed through `phaseTimeline.refreshPhase(phaseId)` (exposed by
+   * `useTaskDetailCoreContext`) and ack-driven reconciliation inside the snapshot
+   * coordinator. The prop has therefore been retired from this action surface; callers
+   * that need a phase-local refresh should go through
+   * `refreshTaskSnapshot({ messages: true })` (which already routes through the
+   * phase-aware coordinator) or the phase timeline directly. See
+   * `docs/task-detail/task-detail-phase-first-migration-checklist.md` §10.3.
+   */
   refreshTaskSnapshot: (options?: {
     workflow?: boolean;
     flow?: boolean;

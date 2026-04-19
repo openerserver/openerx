@@ -95,7 +95,6 @@ describe("useTaskConversationFeature", () => {
           clearPendingAssistantDraft: vi.fn(),
           refreshTask: vi.fn(async () => undefined),
           refreshSessions: vi.fn(async () => undefined),
-          refreshMessages: vi.fn(async () => undefined),
           refreshTaskSnapshot: vi.fn(async () => undefined),
           seedPendingAssistantDraft: vi.fn(),
         },

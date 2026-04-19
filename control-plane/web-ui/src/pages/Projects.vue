@@ -144,10 +144,35 @@
       </template>
     </a-alert>
 
+    <a-card v-if="canDeleteProject" size="small" style="margin-bottom: 16px">
+      <a-flex justify="space-between" align="center" wrap="wrap" gap="middle">
+        <a-typography-text type="secondary">
+          {{
+            selectedProjectIds.length > 0
+              ? `已选 ${selectedProjectIds.length} 个项目，可批量删除`
+              : "勾选项目后可批量删除"
+          }}
+        </a-typography-text>
+        <a-space wrap>
+          <a-button
+            danger
+            :disabled="selectedProjectIds.length === 0"
+            :loading="deletingProjects"
+            data-testid="bulk-delete-projects"
+            @click="handleBulkDeleteClick"
+          >删除所选项目</a-button>
+          <a-button v-if="selectedProjectIds.length > 0" @click="clearSelectedProjectIds">
+            清空选择
+          </a-button>
+        </a-space>
+      </a-flex>
+    </a-card>
+
     <!-- 总览表格 -->
     <a-table
       :data-source="overviewRows"
       :columns="columns"
+      :row-selection="rowSelection"
       :loading="overviewLoading"
       :pagination="{
         current: pagination.page,
@@ -275,6 +300,9 @@
                     @click="handleArchiveClick(record)"
                   >
                     <span style="color: #ff4d4f">归档项目</span>
+                  </a-menu-item>
+                  <a-menu-item v-if="canDeleteProject" @click="handleDeleteClick(record)">
+                    <span style="color: #ff4d4f">删除项目</span>
                   </a-menu-item>
                 </a-menu>
               </template>
@@ -422,6 +450,7 @@ import {
   type ProjectSettings,
   archiveProject,
   createProject,
+  deleteProject,
   listOrgs,
   listProjectOverview,
   updateProject,
@@ -446,6 +475,9 @@ const onlyManaged = ref(false);
 
 const overviewLoading = ref(false);
 const overviewRows = ref<ProjectOverviewItem[]>([]);
+const deletingProjects = ref(false);
+const pendingDeleteProjectIds = ref<string[]>([]);
+const selectedProjectIds = ref<string[]>([]);
 const summary = ref<{
   totalProjects: number;
   pendingConfigCount: number;
@@ -508,6 +540,22 @@ const columns = [
 const canCreateProject = computed(
   () => authStore.user?.role === "platform_admin" || authStore.user?.role === "org_admin",
 );
+const canDeleteProject = computed(() => canCreateProject.value);
+const rowSelection = computed(() => {
+  if (!canDeleteProject.value) {
+    return undefined;
+  }
+
+  return {
+    selectedRowKeys: selectedProjectIds.value,
+    onChange: (keys: Array<string | number>) =>
+      handleProjectSelectionChange(keys.map((key) => String(key))),
+    getCheckboxProps: (record: ProjectOverviewItem) => ({
+      disabled:
+        deletingProjects.value || pendingDeleteProjectIds.value.includes(String(record.id ?? "")),
+    }),
+  };
+});
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -534,6 +582,7 @@ async function loadOverview() {
     summary.value = res.summary;
     pagination.value.total = res.total;
     pagination.value.page = res.page;
+    syncSelectedProjectIds();
   } catch (e) {
     message.error(`加载项目总览失败: ${e}`);
   } finally {
@@ -549,13 +598,29 @@ function resetFilters() {
   selectedSortBy.value = "last_activity_desc";
   onlyManaged.value = false;
   pagination.value.page = 1;
+  clearSelectedProjectIds();
   loadOverview();
 }
 
 function handleTableChange(pag: { current?: number; pageSize?: number }) {
   if (pag.current) pagination.value.page = pag.current;
   if (pag.pageSize) pagination.value.pageSize = pag.pageSize;
+  clearSelectedProjectIds();
   loadOverview();
+}
+
+function handleProjectSelectionChange(keys: string[]) {
+  const visibleIds = new Set(overviewRows.value.map((item) => item.id));
+  selectedProjectIds.value = Array.from(new Set(keys.filter((key) => visibleIds.has(key))));
+}
+
+function clearSelectedProjectIds() {
+  selectedProjectIds.value = [];
+}
+
+function syncSelectedProjectIds() {
+  const visibleIds = new Set(overviewRows.value.map((item) => item.id));
+  selectedProjectIds.value = selectedProjectIds.value.filter((key) => visibleIds.has(key));
 }
 
 async function loadOrgs() {
@@ -656,6 +721,117 @@ function handleArchive(record: ProjectOverviewItem) {
       }
     },
   });
+}
+
+function resolveProjectDeleteTargets(projectIds: string[]) {
+  const overviewMap = new Map(overviewRows.value.map((item) => [item.id, item] as const));
+  return projectIds
+    .map((projectId) => overviewMap.get(projectId))
+    .filter((item): item is ProjectOverviewItem => Boolean(item));
+}
+
+function buildDeleteProjectMessage(targets: ProjectOverviewItem[]) {
+  if (targets.length === 1) {
+    return `删除后会同时移除项目「${targets[0].name}」下的任务、会话、仓库、凭证和项目树数据，且不可恢复。`;
+  }
+
+  const names = targets
+    .slice(0, 3)
+    .map((item) => `「${item.name}」`)
+    .join("、");
+  const suffix = targets.length > 3 ? ` 等 ${targets.length} 个项目` : "";
+  return `删除后会同时移除 ${names}${suffix} 下的任务、会话、仓库、凭证和项目树数据，且不可恢复。`;
+}
+
+function normalizeDeleteError(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error);
+}
+
+async function runProjectDeletion(projectIds: string[]) {
+  if (projectIds.length === 0) {
+    return;
+  }
+
+  deletingProjects.value = true;
+  pendingDeleteProjectIds.value = [...projectIds];
+  const visibleIds = new Set(overviewRows.value.map((item) => item.id));
+  const deletedOnCurrentPage = projectIds.filter((projectId) => visibleIds.has(projectId)).length;
+
+  try {
+    const results = await Promise.allSettled(projectIds.map((projectId) => deleteProject(projectId)));
+    const succeededIds: string[] = [];
+    const failedMessages: string[] = [];
+
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        succeededIds.push(projectIds[index] ?? "");
+        continue;
+      }
+
+      failedMessages.push(normalizeDeleteError(result.reason));
+    }
+
+    if (succeededIds.length > 0) {
+      if (deletedOnCurrentPage >= overviewRows.value.length && pagination.value.page > 1) {
+        pagination.value.page -= 1;
+      }
+      selectedProjectIds.value = selectedProjectIds.value.filter(
+        (projectId) => !succeededIds.includes(projectId),
+      );
+      await Promise.all([loadOverview(), projectStore.loadProjects()]);
+      message.success(
+        succeededIds.length === 1 ? "项目已删除" : `已删除 ${succeededIds.length} 个项目`,
+      );
+    }
+
+    if (failedMessages.length > 0) {
+      message.error(
+        failedMessages.length === 1
+          ? `删除失败: ${failedMessages[0]}`
+          : `有 ${failedMessages.length} 个项目删除失败，请重试`,
+      );
+    }
+  } finally {
+    deletingProjects.value = false;
+    pendingDeleteProjectIds.value = [];
+  }
+}
+
+function confirmDeleteProjects(projectIds: string[]) {
+  if (!canDeleteProject.value) {
+    message.error("仅组织管理员可以删除项目");
+    return;
+  }
+
+  const targets = resolveProjectDeleteTargets(projectIds);
+  if (targets.length === 0) {
+    message.warning("请先选择要删除的项目");
+    return;
+  }
+
+  Modal.confirm({
+    title: targets.length === 1 ? "确认删除项目？" : `确认删除 ${targets.length} 个项目？`,
+    content: buildDeleteProjectMessage(targets),
+    okText: targets.length === 1 ? "确认删除" : `删除 ${targets.length} 个项目`,
+    okType: "danger",
+    cancelText: "取消",
+    async onOk() {
+      await runProjectDeletion(targets.map((item) => item.id));
+    },
+  });
+}
+
+function handleBulkDeleteClick() {
+  confirmDeleteProjects(selectedProjectIds.value);
+}
+
+function handleDeleteClick(record: Record<string, unknown>) {
+  if (isProjectOverviewItem(record)) {
+    confirmDeleteProjects([record.id]);
+  }
 }
 
 function autoSlug() {

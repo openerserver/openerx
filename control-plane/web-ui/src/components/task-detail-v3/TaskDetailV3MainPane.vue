@@ -196,6 +196,10 @@ const ExecutionModeModal = defineAsyncComponent(
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .task-detail-v3-phase-blocks__history {
@@ -245,5 +249,14 @@ const ExecutionModeModal = defineAsyncComponent(
 
 .runtime-permission-card__actions {
   margin-top: 10px;
+}
+
+@media (max-width: 1200px), (max-height: 720px) {
+  .task-detail-v3-phase-blocks {
+    flex: 0 0 auto;
+    min-height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
 }
 </style>

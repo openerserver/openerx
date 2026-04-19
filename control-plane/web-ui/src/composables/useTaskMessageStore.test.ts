@@ -12,11 +12,15 @@ import { useTaskMessageStore } from "./useTaskMessageStore";
 const apiMocks = vi.hoisted(() => ({
   getCurrentTaskRound: vi.fn(),
   getTaskRoundMessages: vi.fn(),
+  getTaskPhases: vi.fn(),
+  getTaskPhaseView: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
   getCurrentTaskRound: apiMocks.getCurrentTaskRound,
   getTaskRoundMessages: apiMocks.getTaskRoundMessages,
+  getTaskPhases: apiMocks.getTaskPhases,
+  getTaskPhaseView: apiMocks.getTaskPhaseView,
 }));
 
 const realtimeStoreMock = reactive({
@@ -35,6 +39,7 @@ function createEvent(overrides: Partial<RealtimeEvent>): RealtimeEvent {
     ts: overrides.ts ?? "2026-04-08T03:18:17.218Z",
     projectId: overrides.projectId,
     taskId: overrides.taskId ?? "task-1",
+    phaseId: overrides.phaseId,
     sessionId: overrides.sessionId ?? "session-1",
     agentRunId: overrides.agentRunId,
     data: overrides.data ?? {},
@@ -101,6 +106,8 @@ describe("useTaskMessageStore", () => {
     realtimeStoreMock.events = [];
     apiMocks.getCurrentTaskRound.mockReset();
     apiMocks.getTaskRoundMessages.mockReset();
+    apiMocks.getTaskPhases.mockReset();
+    apiMocks.getTaskPhaseView.mockReset();
     apiMocks.getCurrentTaskRound.mockResolvedValue({
       taskId: "task-1",
       round: createRound(),
@@ -111,6 +118,15 @@ describe("useTaskMessageStore", () => {
       messages: [],
       snapshotVersion: 0,
       persistedThroughRevision: 0,
+    });
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [] });
+    apiMocks.getTaskPhaseView.mockResolvedValue({
+      data: {
+        phase: null,
+        sessions: [],
+        messageGroups: [],
+        meta: {},
+      },
     });
   });
 
@@ -201,6 +217,51 @@ describe("useTaskMessageStore", () => {
     expect(store.latestTaskRefreshRequest.value).toEqual({
       eventId: "event-1",
       reason: "round-synced",
+      targets: {
+        workflow: false,
+        flow: false,
+        messages: true,
+      },
+      shouldBumpTraceRefreshKey: false,
+    });
+  });
+
+  it("prefers the newest refresh boundary by event timestamp when an older flow event arrives later", async () => {
+    const { store } = mountStore();
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-phase-old-arrived-late",
+        ts: "2026-04-08T03:18:16.000Z",
+        type: "task.phase.updated",
+        taskId: "task-1",
+        phaseId: "phase-1",
+        data: {
+          phaseId: "phase-1",
+        },
+      }),
+      createEvent({
+        id: "event-round-synced-newer",
+        ts: "2026-04-08T03:18:17.000Z",
+        type: "task.round.synced",
+        taskId: "task-1",
+        phaseId: "phase-1",
+        data: {
+          roundId: "task-session:task-1:session-1",
+          taskSessionId: "task-session:task-1:session-1",
+          messageId: "assistant-1",
+          snapshotVersion: 8,
+          persistedThroughRevision: 8,
+        },
+      }),
+    ];
+
+    await nextTick();
+
+    expect(store.latestTaskRefreshRequest.value).toEqual({
+      eventId: "event-round-synced-newer",
+      reason: "round-synced",
+      phaseId: "phase-1",
       targets: {
         workflow: false,
         flow: false,
@@ -613,6 +674,101 @@ describe("useTaskMessageStore", () => {
     ).toBe(false);
   });
 
+  it("shows a pending assistant immediately after switching to a fresh session", async () => {
+    const phase = {
+      id: "phase-1",
+      phaseIndex: 1,
+      phaseKind: "single",
+      triggerType: "continue",
+      status: "running",
+      parentPhaseId: null,
+      resumedFromPhaseId: null,
+      awaitingAdoptionSince: null,
+      anchorSessionId: null,
+      coordinationKey: null,
+      candidateCount: null,
+      winnerSessionId: null,
+      judgeSessionId: null,
+      startedAt: "2026-04-08T03:18:17.218Z",
+      finishedAt: null,
+      createdAt: "2026-04-08T03:18:17.218Z",
+      updatedAt: "2026-04-08T03:18:17.218Z",
+      sessionIds: ["task-session:task-1:session-1"],
+    };
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase] });
+    apiMocks.getTaskPhaseView.mockResolvedValue({
+      data: {
+        phase,
+        sessions: [],
+        messageGroups: [
+          {
+            taskSessionId: "task-session:task-1:session-1",
+            runtimeSessionId: "session-1",
+            phaseRole: "mainline",
+            phaseItemIndex: 0,
+            messages: [
+              {
+                id: "user-1",
+                sessionId: "session-1",
+                role: "user",
+                status: "completed",
+                text: "follow up prompt",
+                parts: [],
+                createdAt: "2026-04-08T03:18:17.218Z",
+                updatedAt: "2026-04-08T03:18:17.218Z",
+              },
+            ],
+          },
+        ],
+        meta: {
+          currentSessionId: "session-1",
+          currentPhaseId: "phase-1",
+          latestPhaseId: "phase-1",
+          phaseCount: 1,
+          sessionCount: 0,
+          messageGroupCount: 1,
+          messageCount: 1,
+        },
+      },
+    });
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    scope = effectScope();
+    const state = scope.run(() => {
+      const snapshot = useTaskMessageSnapshot(taskId, sessionId);
+      const store = useTaskMessageStore(taskId, snapshot.activeSessionId, {
+        sourceMessages: snapshot.sourceMessages,
+        snapshotRevision: computed(() => getTaskMessageSnapshotRevision(snapshot.trace.value)),
+      });
+
+      return {
+        sessionId,
+        snapshot,
+        store,
+      };
+    });
+    if (!state) {
+      throw new Error("expected task conversation state");
+    }
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await nextTick();
+
+    state.sessionId.value = "session-2";
+    state.store.seedPendingAssistantDraft("session-2");
+    await nextTick();
+
+    expect(state.snapshot.activeSessionId.value).toBe("session-2");
+    expect(
+      state.store.conversationItems.value.some(
+        (item) =>
+          item.role === "assistant" && item.key.startsWith("pending-assistant:session-2:"),
+      ),
+    ).toBe(true);
+  });
+
   it("builds workflow-aware conversation list items inside the store", async () => {
     const persistedItems = ref<TaskConversationMessageItem[]>([
       createConversationItem({ key: "user-1", role: "user", text: "prompt" }),
@@ -693,7 +849,14 @@ describe("useTaskMessageStore", () => {
     ).toBe(false);
   });
 
-  it("loads persisted messages through the round facade for the selected session", async () => {
+  // Phase-first migration: `getTaskRoundMessages` / `getCurrentTaskRound` are compat-only
+  // entries (see `docs/task-detail/task-detail-phase-first-migration-checklist.md` §10.4).
+  // The persisted-baseline path now flows through `getTaskPhases` / `getTaskPhaseView`, so
+  // these legacy round-facade assertions no longer describe a reachable code path. The
+  // behavioural coverage they provided is carried by `useTaskMessageSnapshot.test.ts`
+  // and `useTaskDetailCoreContext.test.ts` (phase-first ack ownership). Keeping the tests
+  // skipped instead of deleted documents the retirement surface for §7 compat cleanup.
+  it.skip("loads persisted messages through the round facade for the selected session", async () => {
     apiMocks.getTaskRoundMessages.mockResolvedValueOnce({
       taskId: "task-1",
       round: createRound(),
@@ -761,7 +924,11 @@ describe("useTaskMessageStore", () => {
     });
   });
 
-  it("keeps realtime overlay until the persisted snapshot catches up to the latest ack", async () => {
+  // Phase-first migration: same retirement rationale as the test above — the
+  // `getTaskRoundMessages`-driven overlay catch-up assertion no longer maps to the primary
+  // read path. Phase-first overlay/ack ownership is exercised by the snapshot and core
+  // context tests.
+  it.skip("keeps realtime overlay until the persisted snapshot catches up to the latest ack", async () => {
     apiMocks.getTaskRoundMessages
       .mockResolvedValueOnce({
         taskId: "task-1",

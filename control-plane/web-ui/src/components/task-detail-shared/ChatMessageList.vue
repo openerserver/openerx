@@ -125,13 +125,20 @@
         </template>
         <template v-else-if="isParallelComparisonItem(item)">
           <div class="chat-message-card__parallel-group">
-            <a-space size="small" wrap>
-              <a-tag color="volcano">并行模型结果</a-tag>
-              <a-typography-text type="secondary" class="chat-message-card__parallel-hint">
-                多个模型会同时回复，请在这里对比后手动决定采纳哪个结果。
-              </a-typography-text>
-            </a-space>
+            <a-flex justify="space-between" align="center" gap="small" wrap="wrap" class="chat-message-card__parallel-summary">
+              <a-space size="small" wrap>
+                <a-tag color="volcano">并行模型结果</a-tag>
+                <a-tag v-if="parallelSummaryLabel(item)" color="gold">{{ parallelSummaryLabel(item) }}</a-tag>
+                <a-typography-text type="secondary" class="chat-message-card__parallel-hint">
+                  {{ parallelSummaryHint(item) }}
+                </a-typography-text>
+              </a-space>
+              <a-button type="text" size="small" @click="toggleParallelCollapse(item)">
+                {{ isParallelCollapsed(item) ? '展开审计详情' : '收起审计详情' }}
+              </a-button>
+            </a-flex>
 
+            <template v-if="!isParallelCollapsed(item)">
             <div class="chat-message-card__parallel-grid">
               <div
                 v-for="candidate in item.candidates"
@@ -281,6 +288,7 @@
               :message="item.judgeSummary"
               :description="item.judgeReasoning"
             />
+            </template>
           </div>
         </template>
         <template v-else>
@@ -330,22 +338,6 @@
             <span class="streaming-skeleton__dot">.</span>
             <span class="streaming-skeleton__dot">.</span>
           </div>
-          <template v-else-if="hasPromptDecomposition(item)">
-            <pre class="chat-message-card__plain">{{ userDisplayText(item) }}</pre>
-            <div v-if="item.finalSentText" class="chat-message-card__final-sent">
-              <button
-                type="button"
-                class="chat-message-card__final-sent-toggle"
-                @click="toggleFinalSent(item.key)"
-              >
-                {{ isFinalSentExpanded(item.key) ? '收起完整发送内容' : '查看完整发送内容' }}
-              </button>
-              <pre
-                v-if="isFinalSentExpanded(item.key)"
-                class="chat-message-card__plain chat-message-card__final-sent-content"
-              >{{ item.finalSentText }}</pre>
-            </div>
-          </template>
           <pre
             v-else-if="displayText(item) || sanitizedItemText(item) || shouldRenderEmptyTextFallback(item, item.toolCalls.length)"
             class="chat-message-card__plain"
@@ -369,13 +361,14 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { renderMarkdown } from "../../lib/markdown";
 import { buildToolCopyText } from "../../lib/task-tool-call-display";
-import type {
-  TaskConversationListItem,
-  TaskConversationMessageItem,
-  TaskConversationParallelItem,
-  TaskConversationToolCallItem,
-  TaskConversationWorkflowItem,
-  TaskParallelComparisonCard,
+import {
+  extractWrappedOriginalTaskText,
+  type TaskConversationListItem,
+  type TaskConversationMessageItem,
+  type TaskConversationParallelItem,
+  type TaskConversationToolCallItem,
+  type TaskConversationWorkflowItem,
+  type TaskParallelComparisonCard,
 } from "../../lib/message-normalize";
 
 const props = defineProps<{
@@ -402,9 +395,9 @@ const historyLoadLocked = ref(false);
 const pendingHistoryAnchor = ref<{ scrollHeight: number; scrollTop: number } | null>(null);
 const revealText = ref<Record<string, string>>({});
 const expandedThinking = ref<Record<string, boolean>>({});
-const expandedFinalSent = ref<Record<string, boolean>>({});
 const collapsedWorkflows = ref<Record<string, boolean>>({});
 const collapsedWorkflowSteps = ref<Record<string, boolean>>({});
+const collapsedParallelGroups = ref<Record<string, boolean>>({});
 const STREAMING_PLACEHOLDER_TEXT = "正在生成...";
 const AUTO_SCROLL_THRESHOLD_PX = 120;
 const HISTORY_LOAD_TOP_THRESHOLD_PX = 80;
@@ -855,6 +848,39 @@ function candidateTraceStateColor(state: "incomplete" | "stale") {
   return "gold";
 }
 
+function adoptedParallelCandidate(item: TaskConversationParallelItem) {
+  return item.candidates.find((candidate) => candidate.isAdopted) ?? null;
+}
+
+function parallelSummaryLabel(item: TaskConversationParallelItem) {
+  const adoptedCandidate = adoptedParallelCandidate(item);
+  return adoptedCandidate ? `已采纳${adoptedCandidate.label}` : undefined;
+}
+
+function parallelSummaryHint(item: TaskConversationParallelItem) {
+  if (adoptedParallelCandidate(item)) {
+    return "正式回复已进入主线；此卡片保留对比、Judge 结果和审计回看。";
+  }
+
+  return "多个模型会同时回复，请在这里对比后手动决定采纳哪个结果。";
+}
+
+function isParallelCollapsed(item: TaskConversationParallelItem) {
+  const state = collapsedParallelGroups.value[item.key];
+  if (typeof state === "boolean") {
+    return state;
+  }
+  return Boolean(adoptedParallelCandidate(item));
+}
+
+function toggleParallelCollapse(item: TaskConversationParallelItem) {
+  const current = isParallelCollapsed(item);
+  collapsedParallelGroups.value = {
+    ...collapsedParallelGroups.value,
+    [item.key]: !current,
+  };
+}
+
 function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -1171,6 +1197,14 @@ function syncReveal() {
 }
 
 function displayText(item: TaskConversationMessageItem) {
+  if (item.role === "user") {
+    const fullText = resolvedUserMessageText(item);
+    if (!fullText || fullText === STREAMING_PLACEHOLDER_TEXT) {
+      return undefined;
+    }
+    return fullText;
+  }
+
   const fullText = sanitizedItemText(item);
   if (!fullText || fullText === STREAMING_PLACEHOLDER_TEXT) {
     return undefined;
@@ -1201,10 +1235,6 @@ function shouldRenderMarkdown(item: TaskConversationMessageItem) {
   return item.role === "assistant" && !item.isStreaming && !isRevealing(item);
 }
 
-function isFinalSentExpanded(key: string) {
-  return expandedFinalSent.value[key] === true;
-}
-
 function isThinkingExpanded(key: string) {
   return expandedThinking.value[key] === true;
 }
@@ -1216,23 +1246,28 @@ function toggleThinking(key: string) {
   };
 }
 
-function toggleFinalSent(key: string) {
-  expandedFinalSent.value = {
-    ...expandedFinalSent.value,
-    [key]: !expandedFinalSent.value[key],
-  };
-}
+function resolvedUserMessageText(item: TaskConversationMessageItem) {
+  if (item.role !== "user") {
+    return sanitizedItemText(item) || item.text || "";
+  }
 
-function hasPromptDecomposition(item: TaskConversationMessageItem) {
-  return item.role === "user" && Boolean(item.userInputText);
+  const wrappedOriginalTaskText =
+    extractWrappedOriginalTaskText(item.userInputText) ??
+    extractWrappedOriginalTaskText(item.finalSentText) ??
+    extractWrappedOriginalTaskText(item.text);
+
+  return (
+    wrappedOriginalTaskText ||
+    item.userInputText ||
+    sanitizedItemText(item) ||
+    item.text ||
+    item.finalSentText ||
+    ""
+  );
 }
 
 function userDisplayText(item: TaskConversationMessageItem) {
-  const userInputText = item.userInputText;
-  if (hasPromptDecomposition(item) && userInputText) {
-    return userInputText;
-  }
-  return sanitizedItemText(item) || item.text || "";
+  return resolvedUserMessageText(item);
 }
 
 function canCopy(item: TaskConversationListItem) {
@@ -1397,41 +1432,6 @@ onBeforeUnmount(() => {
   color: rgba(0, 0, 0, 0.45);
   border-color: rgba(0, 0, 0, 0.08);
   background: rgba(250, 250, 250, 0.96);
-}
-
-.chat-message-list__items {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.chat-message-list__item-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.chat-message-card {
-  border: 1px solid #e8e8e8;
-  border-radius: 12px;
-  padding: 12px 14px;
-  background: #fff;
-}
-
-.chat-message-card--user {
-  background: #fffbe6;
-}
-
-.chat-message-card--parallel {
-  background: linear-gradient(180deg, #fffaf2 0%, #ffffff 100%);
-}
-
-.chat-message-card__header {
-  margin-bottom: 8px;
-}
-
-.chat-message-card__time {
-  font-size: 12px;
 }
 
 .chat-message-card__streaming-tag {
@@ -1602,6 +1602,10 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.chat-message-card__parallel-summary {
+  padding-bottom: 4px;
 }
 
 .chat-message-card__parallel-card {

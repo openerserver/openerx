@@ -1,8 +1,3 @@
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 export const TEST_APP_URL = process.env.TEST_APP_URL;
 
 export function resolveBffUrl() {
@@ -22,25 +17,9 @@ export function resolveServiceUrl() {
   );
 }
 
-function resolveDatabaseDialect() {
-  const explicit = process.env.TEST_DATABASE_DIALECT || process.env.DATABASE_DIALECT;
-  if (explicit === "postgres" || explicit === "sqlite") {
-    return explicit;
-  }
-
-  const databaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
-  return databaseUrl && /^(postgres|postgresql):\/\//i.test(databaseUrl) ? "postgres" : "sqlite";
-}
-
 function resolveDatabaseUrl() {
   return (
     process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "postgres://127.0.0.1:5432/openerx"
-  );
-}
-
-function resolveSqliteDbPath() {
-  return (
-    process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db")
   );
 }
 
@@ -59,31 +38,14 @@ function extractDeleteTableName(statement: string) {
 
 async function loadExistingTableNames(): Promise<Set<string> | null> {
   try {
-    if (resolveDatabaseDialect() === "postgres") {
-      const result = Bun.spawnSync(
-        [
-          "psql",
-          resolveDatabaseUrl(),
-          "-At",
-          "-c",
-          "SELECT tablename FROM pg_tables WHERE schemaname='public'",
-        ],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      if (result.exitCode !== 0) {
-        return null;
-      }
-      const stdout = Buffer.from(result.stdout).toString();
-      return new Set(
-        stdout
-          .split(/\r?\n/)
-          .map((value) => value.trim())
-          .filter(Boolean),
-      );
-    }
-
     const result = Bun.spawnSync(
-      ["sqlite3", resolveSqliteDbPath(), "SELECT name FROM sqlite_master WHERE type='table'"],
+      [
+        "psql",
+        resolveDatabaseUrl(),
+        "-At",
+        "-c",
+        "SELECT tablename FROM pg_tables WHERE schemaname='public'",
+      ],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (result.exitCode !== 0) {
@@ -151,12 +113,7 @@ export async function runCleanupStatements(statements: string[], label: string) 
       return;
     }
 
-    if (resolveDatabaseDialect() === "postgres") {
-      await Bun.$`psql ${resolveDatabaseUrl()} -v ON_ERROR_STOP=1 -c ${filteredStatements.join(" ")}`;
-      return;
-    }
-
-    await Bun.$`sqlite3 ${resolveSqliteDbPath()} ${filteredStatements.join(" ")}`;
+    await Bun.$`psql ${resolveDatabaseUrl()} -v ON_ERROR_STOP=1 -c ${filteredStatements.join(" ")}`;
   } catch {
     console.warn(`Cleanup failed for ${label}`);
   }

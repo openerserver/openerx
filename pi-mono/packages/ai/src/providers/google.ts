@@ -152,10 +152,8 @@ function summarizeGoogleThinkingConfig(thinkingConfig?: ThinkingConfig) {
 	return {
 		thinkingIncludeThoughts:
 			typeof thinkingConfig.includeThoughts === "boolean" ? thinkingConfig.includeThoughts : undefined,
-		thinkingLevel:
-			typeof thinkingConfig.thinkingLevel === "string" ? thinkingConfig.thinkingLevel : undefined,
-		thinkingBudget:
-			typeof thinkingConfig.thinkingBudget === "number" ? thinkingConfig.thinkingBudget : undefined,
+		thinkingLevel: typeof thinkingConfig.thinkingLevel === "string" ? thinkingConfig.thinkingLevel : undefined,
+		thinkingBudget: typeof thinkingConfig.thinkingBudget === "number" ? thinkingConfig.thinkingBudget : undefined,
 	};
 }
 

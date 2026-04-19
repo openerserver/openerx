@@ -1,3 +1,13 @@
+/**
+ * Compat-only round facade.
+ *
+ * Phase-first migration (checklist §5.3 / §10.2) replaces round-level DTOs with
+ * `task.phase.*` realtime contract + `/phases` / `/phases/:phaseId/view` BFF routes.
+ * This module is retained for legacy consumers of `/current-round`, `/rounds`, and
+ * `/rounds/:roundId/messages` only. Do **not** consume its output from any new
+ * TaskDetail primary-path logic; instead go through the phase-keyed DTOs. See
+ * `docs/task-detail/task-detail-phase-first-migration-checklist.md`.
+ */
 import { fetchTaskSessionCachedCompatMessages } from "./task-session-read-compat";
 import { resolvePendingParallelCompatMainlineRecord } from "./task-session-parallel-compat";
 import {

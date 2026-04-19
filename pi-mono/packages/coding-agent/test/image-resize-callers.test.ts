@@ -2,10 +2,9 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import * as imageResize from "../src/utils/image-resize.js";
 import { processFileArguments } from "../src/cli/file-processor.js";
 import { createReadTool } from "../src/core/tools/read.js";
+import * as imageResize from "../src/utils/image-resize.js";
 
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";

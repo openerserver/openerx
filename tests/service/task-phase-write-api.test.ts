@@ -412,4 +412,109 @@ describe("task phase write api", () => {
       activeCandidateCount: 0,
     });
   });
+
+  test("pauseTaskPhase marks phase, sessions, and snapshot as paused", async () => {
+    const phase = {
+      id: "phase-1",
+      taskId: "task-1",
+      projectId: "project-1",
+      parentPhaseId: null,
+      phaseIndex: 1,
+      phaseKind: "single",
+      triggerType: "execute",
+      status: "running",
+      resumedFromPhaseId: null,
+      awaitingAdoptionSince: null,
+      cancelRequestedAt: null,
+      cancelledAt: null,
+      terminalReason: null,
+      lastHeartbeatAt: null,
+      anchorSessionId: "task-session:task-1:session-1",
+      anchorMessageId: null,
+      coordinationKey: null,
+      candidateCount: 1,
+      winnerSessionId: null,
+      judgeSessionId: null,
+      requestedModel: null,
+      effectiveModel: null,
+      resultSummary: null,
+      errorText: null,
+      startedAt: "2026-04-17T09:00:00.000Z",
+      finishedAt: null,
+      createdAt: "2026-04-17T09:00:00.000Z",
+      updatedAt: "2026-04-17T09:00:00.000Z",
+    };
+
+    const { createTaskPhaseWriteApi, insertCalls, updateCalls } = await loadTaskPhaseWriteModule({
+      phaseFindFirstResults: [phase],
+      phaseSessions: [
+        {
+          id: "task-session:task-1:session-1",
+          taskId: "task-1",
+          phaseId: "phase-1",
+          createdAt: "2026-04-17T09:00:00.000Z",
+          status: "running",
+          executionStatus: "running",
+          latestRunId: "run-1",
+          headMessageId: "msg-1",
+          finishedAt: null,
+        },
+      ],
+      existingSnapshot: {
+        taskId: "task-1",
+        lifecycleStatus: "active",
+        currentExecutionStatus: "running",
+        currentSessionId: "task-session:task-1:session-1",
+        latestSessionId: "task-session:task-1:session-1",
+        latestResultSummary: null,
+        latestErrorText: null,
+        activeCandidateCount: 1,
+        totalChainSteps: 0,
+        completedChainSteps: 0,
+      },
+    });
+    const api = createTaskPhaseWriteApi({
+      loadTaskTreeBackedRecord: mock(async () => ({
+        id: "task-1",
+        projectId: "project-1",
+      } as never)),
+    });
+
+    const result = await api.pauseTaskPhase({
+      taskId: "task-1",
+      phaseId: "phase-1",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      taskId: "task-1",
+      phaseId: "phase-1",
+      status: "paused",
+      currentSessionId: "task-session:task-1:session-1",
+    });
+
+    const phaseUpdate = updateCalls.find((call) => call.table === "task_execution_phases");
+    expect(phaseUpdate?.payload).toMatchObject({
+      status: "paused",
+      updatedAt: expect.any(String),
+      lastHeartbeatAt: expect.any(String),
+    });
+    const sessionUpdate = updateCalls.find((call) => call.table === "task_sessions");
+    expect(sessionUpdate?.payload).toMatchObject({
+      status: "paused",
+      executionStatus: "paused",
+      updatedAt: expect.any(String),
+    });
+
+    const snapshotInsert = insertCalls.filter((call) => call.table === "task_snapshots").at(-1)?.payload;
+    expect(snapshotInsert).toMatchObject({
+      taskId: "task-1",
+      currentExecutionMode: "single",
+      currentExecutionStatus: "running",
+      currentPhaseId: "phase-1",
+      currentSessionId: "task-session:task-1:session-1",
+      latestSessionId: "task-session:task-1:session-1",
+      activeCandidateCount: 0,
+    });
+  });
 });

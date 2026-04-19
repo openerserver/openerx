@@ -229,9 +229,29 @@ export function useTaskMessageStore(
     consumePendingTaskPatchEvents,
   } = useTaskMessagePatchConsumer(taskIds);
   const latestTaskPatchEvent = computed(() => getLatestTaskPatchEvent(taskId.value));
-  const latestTaskRefreshRequest = computed(() =>
-    getTaskDetailRefreshRequest(latestTaskPatchEvent.value),
-  );
+  const latestTaskRefreshRequest = computed(() => {
+    const currentTaskId = taskId.value;
+    if (!currentTaskId) {
+      return null;
+    }
+
+    let latestRefreshRequest = null;
+    let latestRefreshEventTs = "";
+    for (const patchEvent of getTaskPatchEvents(currentTaskId)) {
+      const refreshRequest = getTaskDetailRefreshRequest(patchEvent);
+      if (!refreshRequest) {
+        continue;
+      }
+
+      const eventTs = typeof patchEvent.eventTs === "string" ? patchEvent.eventTs : "";
+      if (!latestRefreshRequest || eventTs > latestRefreshEventTs) {
+        latestRefreshRequest = refreshRequest;
+        latestRefreshEventTs = eventTs;
+      }
+    }
+
+    return latestRefreshRequest;
+  });
   const sourceMessages = computed(() => options?.sourceMessages?.value ?? []);
   const persistedItems = computed(() => {
     if (options?.persistedItems) {

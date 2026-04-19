@@ -1752,6 +1752,15 @@ projectRoutes.patch("/:projectId/archive", async (c) => {
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
 });
 
+projectRoutes.delete("/:projectId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const result = await cpFetch<Record<string, unknown>>(`/api/projects/${projectId}`, {
+    method: "DELETE",
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
+});
+
 // GET /api/projects?orgId=
 projectRoutes.get("/", async (c) => {
   const orgId = c.req.query("orgId") || "";

@@ -4,12 +4,12 @@ import type { TaskExecutionTrace, TaskSessionRecord } from "../lib/api";
 import type { TaskConversationListItem } from "../lib/message-normalize";
 import { useTaskConversationActions } from "./useTaskConversationActions";
 
-const continueTaskMock = vi.fn();
-const forkTaskSessionMock = vi.fn();
-const terminateTaskExecutionMock = vi.fn();
-const messageSuccessMock = vi.fn();
-const messageErrorMock = vi.fn();
-const messageWarningMock = vi.fn();
+const continueTaskMock = vi.hoisted(() => vi.fn());
+const forkTaskSessionMock = vi.hoisted(() => vi.fn());
+const terminateTaskExecutionMock = vi.hoisted(() => vi.fn());
+const messageSuccessMock = vi.hoisted(() => vi.fn());
+const messageErrorMock = vi.hoisted(() => vi.fn());
+const messageWarningMock = vi.hoisted(() => vi.fn());
 
 vi.mock("ant-design-vue", () => ({
   message: {
@@ -92,17 +92,6 @@ describe("useTaskConversationActions", () => {
     const clearPendingAssistantDraft = vi.fn();
     const refreshTask = vi.fn(async () => undefined);
     const refreshSessions = vi.fn(async () => undefined);
-    const refreshMessages = vi.fn(async () => {
-      const nextSessionId = selectedSessionId.value;
-      if (!nextSessionId) {
-        return;
-      }
-
-      messageTrace.value = {
-        ...(messageTrace.value ?? {}),
-        sessionId: nextSessionId,
-      } as TaskExecutionTrace;
-    });
     const refreshTaskSnapshot = vi.fn(async () => undefined);
     const reconcileExecutionEnvelope = vi.fn(async (envelope?: Record<string, unknown> | null) => {
       const nextSessionId =
@@ -135,7 +124,6 @@ describe("useTaskConversationActions", () => {
         clearPendingAssistantDraft,
         refreshTask,
         refreshSessions,
-        refreshMessages,
         refreshTaskSnapshot,
         reconcileExecutionEnvelope,
         handleSwitchRound,
@@ -158,7 +146,6 @@ describe("useTaskConversationActions", () => {
       baseConversationItems,
       messageTrace,
       clearPendingAssistantDraft,
-      refreshMessages,
       refreshTask,
       refreshSessions,
       refreshTaskSnapshot,

@@ -149,7 +149,7 @@ async function createAuthedTaskRoutesApp(role: string = "platform_admin") {
 describe("task list snapshot routes", () => {
   test("merges task snapshots into list response", async () => {
     cpFetchMock.mockImplementation(async (path: string) => {
-      if (path === "/api/project-tree/tasks?projectId=proj-1") {
+      if (path === "/api/project-tree/tasks?projectId=proj-1&limit=200") {
         return {
           ok: true,
           status: 200,
@@ -167,6 +167,9 @@ describe("task list snapshot routes", () => {
                 createdAt: "2026-03-22T09:00:00.000Z",
               },
             ],
+            totalCount: 1,
+            limit: 200,
+            truncated: false,
           },
         };
       }
@@ -228,6 +231,9 @@ describe("task list snapshot routes", () => {
         }),
       }),
     ]);
+    expect(payload.totalCount).toBe(1);
+    expect(payload.limit).toBe(200);
+    expect(payload.truncated).toBe(false);
   });
 
   test("merges task snapshot into detail response", async () => {

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TreeTask } from "./useProjectTreeTask";
 import { useTaskRuntimePermissionView } from "./useTaskRuntimePermissionView";
 
-const listTaskRuntimePermissionsMock = vi.fn();
+const listTaskRuntimePermissionsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", () => ({
   listTaskRuntimePermissions: listTaskRuntimePermissionsMock,

@@ -3,16 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyLiveAssistantState } from "../lib/message-normalize";
 import { useTaskDetailParallelFlow } from "./useTaskDetailParallelFlow";
 
-const patchConsumerState = {
+const patchConsumerState = vi.hoisted(() => ({
   taskPatchEventSignature: "signature-0",
   patchEventsByTaskId: {} as Record<string, any[]>,
-};
+}));
 
-const getTaskAgentRunsMock = vi.fn();
-const getTaskConversationMessagesMock = vi.fn();
-const getTaskExecutionTraceViewMock = vi.fn();
-const getTaskPhasesMock = vi.fn();
-const getTaskPhaseViewMock = vi.fn();
+const getTaskAgentRunsMock = vi.hoisted(() => vi.fn());
+const getTaskConversationMessagesMock = vi.hoisted(() => vi.fn());
+const getTaskExecutionTraceViewMock = vi.hoisted(() => vi.fn());
+const getTaskPhasesMock = vi.hoisted(() => vi.fn());
+const getTaskPhaseViewMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", () => ({
   getTaskAgentRuns: getTaskAgentRunsMock,
@@ -464,7 +464,13 @@ describe("useTaskDetailParallelFlow", () => {
     };
     patchConsumerState.taskPatchEventSignature = "signature-1";
 
-    expect(flow.phaseBlocks.value[0]?.items.map((item) => item.key)).toEqual(["phase-1-user"]);
+    // Phase-first design: each loaded phase slice absorbs its own phaseId-scoped patches,
+    // regardless of whether it is the current focus phase. phase-1's tool patch lands in
+    // phase-1's block, and phase-2 absorbs its own user/tool patches.
+    expect(flow.phaseBlocks.value[0]?.items.map((item) => item.key)).toEqual([
+      "phase-1-user",
+      "phase-1-tool",
+    ]);
     expect(flow.phaseBlocks.value[1]?.items.map((item) => item.key)).toEqual([
       "phase-2-user",
       "phase-2-user-followup",

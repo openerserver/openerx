@@ -2,9 +2,9 @@ import { effectScope, ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useTaskRuntimePermissionActions } from "./useTaskRuntimePermissionActions";
 
-const replyTaskRuntimePermissionMock = vi.fn();
-const messageSuccessMock = vi.fn();
-const messageErrorMock = vi.fn();
+const replyTaskRuntimePermissionMock = vi.hoisted(() => vi.fn());
+const messageSuccessMock = vi.hoisted(() => vi.fn());
+const messageErrorMock = vi.hoisted(() => vi.fn());
 
 vi.mock("ant-design-vue", () => ({
   message: {

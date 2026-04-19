@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { RealtimeEvent } from "../stores/realtime";
 import {
   applyRealtimeEventToLiveAssistantState,
+  mergeLiveAssistantStates,
   replayLiveAssistantState,
+  replayPhaseLiveAssistantState,
+  replayTaskMessagePatchEvents,
 } from "./task-live-message-state";
 import { createEmptyLiveAssistantState } from "./message-normalize";
+import type { TaskMessagePatchEvent } from "./task-message-patch-event";
 
 function createEvent(overrides: Partial<RealtimeEvent>): RealtimeEvent {
   return {
@@ -264,5 +268,180 @@ describe("task live message state", () => {
     expect(state.orderedAssistantMessageIds).toEqual(["assistant-1"]);
     expect(state.textById.get("assistant-1")).toBe("，世界");
     expect(state.incompleteIds.has("assistant-1")).toBe(true);
+  });
+});
+
+function createAssistantPatchEvent(
+  overrides: Partial<TaskMessagePatchEvent> & Pick<TaskMessagePatchEvent, "kind" | "eventId">,
+): TaskMessagePatchEvent {
+  const { eventId, kind, ...rest } = overrides;
+  return {
+    eventId,
+    kind,
+    taskId: overrides.taskId ?? "task-1",
+    sessionId: overrides.sessionId ?? "session-1",
+    rawEventKind: overrides.rawEventKind ?? "task.message.updated",
+    ...rest,
+  } as TaskMessagePatchEvent;
+}
+
+describe("task live message state phase replay", () => {
+  it("replayTaskMessagePatchEvents filters by phaseId when scope provides one", () => {
+    const events: TaskMessagePatchEvent[] = [
+      createAssistantPatchEvent({
+        eventId: "event-phase-b-delta",
+        kind: "assistant-delta",
+        rawEventKind: "task.message.delta",
+        messageId: "assistant-2",
+        textDelta: "b-text",
+        phaseId: "phase-b",
+        sessionId: "session-1",
+      }),
+      createAssistantPatchEvent({
+        eventId: "event-phase-a-delta",
+        kind: "assistant-delta",
+        rawEventKind: "task.message.delta",
+        messageId: "assistant-1",
+        textDelta: "a-text",
+        phaseId: "phase-a",
+        sessionId: "session-1",
+      }),
+      createAssistantPatchEvent({
+        eventId: "event-phase-a-start",
+        kind: "assistant-progress",
+        messageId: "assistant-1",
+        createdAt: "2026-04-17T01:00:00.000Z",
+        phaseId: "phase-a",
+        sessionId: "session-1",
+      }),
+    ];
+
+    const stateA = replayTaskMessagePatchEvents(events, {
+      sessionId: "session-1",
+      phaseId: "phase-a",
+    });
+    expect(stateA.orderedAssistantMessageIds).toEqual(["assistant-1"]);
+    expect(stateA.textById.get("assistant-1")).toBe("a-text");
+    expect(stateA.textById.has("assistant-2")).toBe(false);
+  });
+
+  it("replayTaskMessagePatchEvents keeps events without phaseId as legacy compatible", () => {
+    const events: TaskMessagePatchEvent[] = [
+      createAssistantPatchEvent({
+        eventId: "event-delta",
+        kind: "assistant-delta",
+        rawEventKind: "task.message.delta",
+        messageId: "assistant-1",
+        textDelta: "legacy",
+        sessionId: "session-1",
+      }),
+      createAssistantPatchEvent({
+        eventId: "event-start",
+        kind: "assistant-progress",
+        messageId: "assistant-1",
+        createdAt: "2026-04-17T01:00:00.000Z",
+        sessionId: "session-1",
+      }),
+    ];
+
+    const state = replayTaskMessagePatchEvents(events, {
+      sessionId: "session-1",
+      phaseId: "phase-a",
+    });
+    expect(state.textById.get("assistant-1")).toBe("legacy");
+  });
+
+  it("replayPhaseLiveAssistantState merges across multiple phase sessions", () => {
+    const events: TaskMessagePatchEvent[] = [
+      createAssistantPatchEvent({
+        eventId: "event-session-2-delta",
+        kind: "assistant-delta",
+        rawEventKind: "task.message.delta",
+        messageId: "assistant-2",
+        textDelta: "second",
+        phaseId: "phase-a",
+        sessionId: "session-2",
+      }),
+      createAssistantPatchEvent({
+        eventId: "event-session-2-start",
+        kind: "assistant-progress",
+        messageId: "assistant-2",
+        createdAt: "2026-04-17T01:00:10.000Z",
+        phaseId: "phase-a",
+        sessionId: "session-2",
+      }),
+      createAssistantPatchEvent({
+        eventId: "event-session-1-delta",
+        kind: "assistant-delta",
+        rawEventKind: "task.message.delta",
+        messageId: "assistant-1",
+        textDelta: "first",
+        phaseId: "phase-a",
+        sessionId: "session-1",
+      }),
+      createAssistantPatchEvent({
+        eventId: "event-session-1-start",
+        kind: "assistant-progress",
+        messageId: "assistant-1",
+        createdAt: "2026-04-17T01:00:00.000Z",
+        phaseId: "phase-a",
+        sessionId: "session-1",
+      }),
+    ];
+
+    const merged = replayPhaseLiveAssistantState(events, {
+      phaseId: "phase-a",
+      sessionIds: ["session-1", "session-2"],
+    });
+
+    expect(merged.orderedAssistantMessageIds).toEqual(["assistant-1", "assistant-2"]);
+    expect(merged.textById.get("assistant-1")).toBe("first");
+    expect(merged.textById.get("assistant-2")).toBe("second");
+  });
+
+  it("replayPhaseLiveAssistantState ignores patches belonging to a different phase", () => {
+    const events: TaskMessagePatchEvent[] = [
+      createAssistantPatchEvent({
+        eventId: "event-phase-b-delta",
+        kind: "assistant-delta",
+        rawEventKind: "task.message.delta",
+        messageId: "assistant-2",
+        textDelta: "b-text",
+        phaseId: "phase-b",
+        sessionId: "session-1",
+      }),
+      createAssistantPatchEvent({
+        eventId: "event-phase-a-delta",
+        kind: "assistant-delta",
+        rawEventKind: "task.message.delta",
+        messageId: "assistant-1",
+        textDelta: "a-text",
+        phaseId: "phase-a",
+        sessionId: "session-1",
+      }),
+    ];
+
+    const merged = replayPhaseLiveAssistantState(events, {
+      phaseId: "phase-a",
+      sessionIds: ["session-1"],
+    });
+
+    expect(merged.orderedAssistantMessageIds).toEqual(["assistant-1"]);
+    expect(merged.textById.get("assistant-1")).toBe("a-text");
+    expect(merged.textById.has("assistant-2")).toBe(false);
+  });
+
+  it("mergeLiveAssistantStates keeps the longest streaming text per message", () => {
+    const first = createEmptyLiveAssistantState();
+    first.orderedAssistantMessageIds.push("assistant-1");
+    first.textById.set("assistant-1", "short");
+
+    const second = createEmptyLiveAssistantState();
+    second.orderedAssistantMessageIds.push("assistant-1");
+    second.textById.set("assistant-1", "short+more");
+
+    const merged = mergeLiveAssistantStates([first, second]);
+    expect(merged.orderedAssistantMessageIds).toEqual(["assistant-1"]);
+    expect(merged.textById.get("assistant-1")).toBe("short+more");
   });
 });

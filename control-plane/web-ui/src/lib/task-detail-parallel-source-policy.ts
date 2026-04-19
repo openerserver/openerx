@@ -104,6 +104,25 @@ function canDisplayParallelCandidateState(state?: ParallelCandidateFallbackState
   return hasDisplayableParallelCandidateItems(state.items) || state.hasSettledReply;
 }
 
+function mergePhaseBaselineWithSessionContext(args: {
+  phaseBaseline: ParallelCandidateFallbackState;
+  sessionFallback: ParallelCandidateFallbackState;
+}) {
+  const existingKeys = new Set(args.phaseBaseline.items.map((item) => item.key));
+  const sessionUserItems = args.sessionFallback.items.filter(
+    (item) => item.role === "user" && !existingKeys.has(item.key),
+  );
+
+  if (sessionUserItems.length === 0) {
+    return args.phaseBaseline;
+  }
+
+  return {
+    items: [...args.phaseBaseline.items, ...sessionUserItems],
+    hasSettledReply: args.phaseBaseline.hasSettledReply || args.sessionFallback.hasSettledReply,
+  } satisfies ParallelCandidateFallbackState;
+}
+
 export function resolveParallelCandidateSessionStateFromSources(args: {
   phaseBaseline?: ParallelCandidateFallbackState;
   cachedState?: ParallelCandidateSessionState;
@@ -114,7 +133,10 @@ export function resolveParallelCandidateSessionStateFromSources(args: {
   const canDisplayPhaseBaseline = canDisplayParallelCandidateState(args.phaseBaseline);
   const canDisplaySessionFallback = canDisplayParallelCandidateState(args.sessionFallback);
   const preferredDisplayState = canDisplayPhaseBaseline
-    ? args.phaseBaseline!
+    ? mergePhaseBaselineWithSessionContext({
+        phaseBaseline: args.phaseBaseline!,
+        sessionFallback: args.sessionFallback,
+      })
     : canDisplaySessionFallback
       ? args.sessionFallback
       : null;

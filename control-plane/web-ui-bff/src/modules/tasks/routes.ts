@@ -515,6 +515,27 @@ async function upsertTaskSessionLineageRecord(
   );
 }
 
+async function deactivateActiveTaskSessionLineageRecords(
+  taskId: string,
+  authorization: string,
+) {
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  if (!lineageResult.ok) {
+    return;
+  }
+
+  for (const record of lineageResult.records) {
+    if (record.archivedAt || !record.isActive) {
+      continue;
+    }
+
+    await upsertTaskSessionLineageRecord(taskId, authorization, {
+      runtimeSessionId: record.runtimeSessionId,
+      isActive: false,
+    });
+  }
+}
+
 async function upsertTaskPhase(
   taskId: string,
   authorization: string,
@@ -527,6 +548,13 @@ async function upsertTaskPhase(
   });
 
   if (result.ok && result.data) {
+    if (isTaskPhaseRecord(result.data)) {
+      broadcastTaskPhaseWriteEvent({
+        taskId,
+        phase: result.data,
+        statusCode: result.status,
+      });
+    }
     return result.data;
   }
 
@@ -5192,6 +5220,95 @@ function asNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function isTaskPhaseRecord(value: unknown): value is TaskPhaseRecord {
+  const record = asRecord(value);
+  return (
+    record !== null &&
+    typeof record.id === "string" &&
+    typeof record.phaseKind === "string" &&
+    typeof record.triggerType === "string" &&
+    typeof record.status === "string"
+  );
+}
+
+function broadcastTaskPhaseLifecycleEvent(args: {
+  type:
+    | "task.phase.created"
+    | "task.phase.updated"
+    | "task.phase.paused"
+    | "task.phase.failed"
+    | "task.phase.cancelled"
+    | "task.phase.completed"
+    | "task.phase.resumed";
+  taskId: string;
+  phaseId: string;
+  projectId?: string;
+  sessionId?: string;
+  data?: Record<string, unknown>;
+}) {
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: args.type,
+    ts: new Date().toISOString(),
+    taskId: args.taskId,
+    projectId: args.projectId,
+    sessionId: args.sessionId,
+    phaseId: args.phaseId,
+    data: {
+      phaseId: args.phaseId,
+      ...(args.data ?? {}),
+    },
+  });
+}
+
+function selectTaskPhaseWriteEventType(args: {
+  phase: TaskPhaseRecord;
+  statusCode: number;
+}) {
+  if (args.phase.status === "paused") {
+    return "task.phase.paused" as const;
+  }
+  if (args.phase.status === "failed") {
+    return "task.phase.failed" as const;
+  }
+  if (args.statusCode === 201) {
+    return "task.phase.created" as const;
+  }
+  return "task.phase.updated" as const;
+}
+
+function broadcastTaskPhaseWriteEvent(args: {
+  taskId: string;
+  phase: TaskPhaseRecord;
+  statusCode: number;
+  projectId?: string;
+}) {
+  broadcastTaskPhaseLifecycleEvent({
+    type: selectTaskPhaseWriteEventType({ phase: args.phase, statusCode: args.statusCode }),
+    taskId: args.taskId,
+    projectId: args.projectId,
+    phaseId: args.phase.id,
+    data: {
+      status: args.phase.status,
+      phaseKind: args.phase.phaseKind,
+      triggerType: args.phase.triggerType,
+      ...(args.phase.parentPhaseId ? { parentPhaseId: args.phase.parentPhaseId } : {}),
+      ...(args.phase.resumedFromPhaseId
+        ? { resumedFromPhaseId: args.phase.resumedFromPhaseId }
+        : {}),
+      ...(typeof args.phase.candidateCount === "number"
+        ? { candidateCount: args.phase.candidateCount }
+        : {}),
+      ...(args.phase.winnerSessionId ? { winnerSessionId: args.phase.winnerSessionId } : {}),
+      ...(args.phase.judgeSessionId ? { judgeSessionId: args.phase.judgeSessionId } : {}),
+      ...(args.phase.startedAt ? { startedAt: args.phase.startedAt } : {}),
+      ...(args.phase.finishedAt ? { finishedAt: args.phase.finishedAt } : {}),
+      ...(args.phase.createdAt ? { createdAt: args.phase.createdAt } : {}),
+      ...(args.phase.updatedAt ? { updatedAt: args.phase.updatedAt } : {}),
+    },
+  });
+}
+
 async function resolveParentPhaseId(
   taskId: string,
   authorization: string,
@@ -6093,6 +6210,8 @@ async function finalizePhaseFirstCandidateAdoption(args: {
     };
   }
 
+  await deactivateActiveTaskSessionLineageRecords(args.taskId, args.authorization);
+
   await recordAgentAudit({
     projectId: args.task.projectId,
     taskId: args.taskId,
@@ -6106,6 +6225,23 @@ async function finalizePhaseFirstCandidateAdoption(args: {
       hasResult: Boolean(args.winnerResult),
     },
     riskLevel: "low",
+  });
+
+  broadcastTaskPhaseLifecycleEvent({
+    type: "task.phase.completed",
+    taskId: args.taskId,
+    projectId: args.task.projectId,
+    phaseId: args.phaseId,
+    sessionId: args.winnerRuntimeSessionId,
+    data: {
+      status: "completed",
+      terminalReason: "winner_adopted",
+      adoptedManually: true,
+      winnerCandidateIndex: args.winnerCandidateIndex,
+      winnerSessionId: args.winnerSessionId,
+      currentSessionId: args.winnerRuntimeSessionId,
+      currentTaskSessionId: args.winnerSessionId,
+    },
   });
 
   wsBroadcaster.broadcast({
@@ -6719,10 +6855,15 @@ taskRoutes.get("/", async (c) => {
   const projectId = c.req.query("projectId") || "";
   const status = c.req.query("status") || "";
   const repoId = c.req.query("repoId") || "";
+  const requestedLimit = Number(c.req.query("limit") || "200");
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(requestedLimit, 200))
+    : 200;
   const params = new URLSearchParams();
   if (projectId) params.set("projectId", projectId);
   if (status) params.set("status", status);
   if (repoId) params.set("repoId", repoId);
+  params.set("limit", String(limit));
 
   const authorization = authHeader(c);
   const [result, snapshotsResult] = await Promise.all([
@@ -6732,7 +6873,7 @@ taskRoutes.get("/", async (c) => {
     fetchTaskProjectionSnapshots(authorization, {
       projectId: projectId || undefined,
       status: status || undefined,
-      limit: 200,
+      limit,
     }),
   ]);
   if (!result.ok) {
@@ -7341,6 +7482,9 @@ const taskPhaseResumeSchema = z.object({
 });
 
 taskRoutes.get("/:taskId/phases", async (c) => {
+  // Phase-first primary read. Together with `/:taskId/phases/:phaseId/view`,
+  // this is the canonical main-path baseline driving TaskDetail's ordered
+  // phase timeline. See docs/task-detail/task-detail-phase-first-migration-checklist.md §5.2.
   const taskId = c.req.param("taskId");
   const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/phases`, {
     authorization: authHeader(c),
@@ -7350,6 +7494,11 @@ taskRoutes.get("/:taskId/phases", async (c) => {
 });
 
 taskRoutes.get("/:taskId/phases/:phaseId/view", async (c) => {
+  // Phase-first primary read. Returns the authoritative phase-scoped view
+  // (message groups + candidate baselines + per-candidate timeline meta) used
+  // as the main-path baseline for rendering a single phase block. Callers
+  // must not fall back to `/current-round` or `/rounds/:roundId/messages`
+  // on the main path.
   const taskId = c.req.param("taskId");
   const phaseId = c.req.param("phaseId");
   const result = await cpFetch(
@@ -7371,6 +7520,14 @@ taskRoutes.post("/:taskId/phases", async (c) => {
     authorization: authHeader(c),
   });
 
+  if (result.ok && isTaskPhaseRecord(result.data)) {
+    broadcastTaskPhaseWriteEvent({
+      taskId,
+      phase: result.data,
+      statusCode: result.status,
+    });
+  }
+
   return c.json(
     result.data,
     result.ok ? (result.status as 200 | 201) : (result.status as 400 | 401 | 404 | 502),
@@ -7390,6 +7547,23 @@ taskRoutes.post(
       authHeader(c),
       body.reason ?? "user_cancelled",
     );
+
+    if (result.ok) {
+      const payload = asRecord(result.data);
+      const currentSessionId = asNonEmptyString(payload?.currentSessionId);
+      const terminalReason = asNonEmptyString(payload?.terminalReason);
+      broadcastTaskPhaseLifecycleEvent({
+        type: "task.phase.cancelled",
+        taskId,
+        phaseId,
+        sessionId: currentSessionId,
+        data: {
+          status: asNonEmptyString(payload?.status) ?? "cancelled",
+          ...(currentSessionId ? { currentSessionId } : {}),
+          ...(terminalReason ? { terminalReason } : {}),
+        },
+      });
+    }
 
     return c.json(
       result.data,
@@ -7480,6 +7654,20 @@ async function executeTaskTermination(args: {
     executionMode: taskResult.data.executionMode ?? null,
   });
 
+  if (args.phaseId) {
+    broadcastTaskPhaseLifecycleEvent({
+      type: "task.phase.cancelled",
+      taskId: args.taskId,
+      phaseId: args.phaseId,
+      projectId: taskResult.data.projectId,
+      sessionId: resolvedSessionId,
+      data: {
+        status,
+        ...(resolvedSessionId ? { currentSessionId: resolvedSessionId } : {}),
+      },
+    });
+  }
+
   return {
     status: 200 as const,
     body: {
@@ -7512,6 +7700,20 @@ taskRoutes.post(
     const taskId = c.req.param("taskId");
     const phaseId = c.req.param("phaseId");
     const result = await resumeTaskPhase(taskId, phaseId, authHeader(c));
+
+    if (result.ok) {
+      const payload = asRecord(result.data);
+      const currentSessionId = asNonEmptyString(payload?.currentSessionId);
+      broadcastTaskPhaseLifecycleEvent({
+        type: "task.phase.resumed",
+        taskId,
+        phaseId,
+        sessionId: currentSessionId,
+        data: {
+          status: asNonEmptyString(payload?.status) ?? "running",
+        },
+      });
+    }
 
     return c.json(
       result.data,
@@ -7564,6 +7766,11 @@ taskRoutes.post("/:taskId/phases/:phaseId/candidates/:index/adopt", async (c) =>
   const winnerRecord = adoptionContext.context.phaseGroup.find(
     (record) => record.runtimeSessionId === adoptionContext.context.winnerRuntimeSessionId,
   );
+  // Compat-only broadcast. Phase-first migration (checklist §5.4 / §6.4 item 4) declares that
+  // `session.activated` no longer carries phase-level refresh authority on the TaskDetail
+  // primary path — TaskDetail consumes `task.phase.*` for that. Kept here to avoid breaking
+  // legacy subscribers (branch switcher, older project overview widgets) until those
+  // consumers are fully migrated.
   wsBroadcaster.broadcast({
     id: crypto.randomUUID(),
     type: "session.activated",
@@ -7749,6 +7956,11 @@ taskRoutes.get("/:taskId/graph", async (c) => {
 });
 
 taskRoutes.get("/:taskId/current-round", async (c) => {
+  // Compat-only route. TaskDetail's phase-first main path uses
+  // `/:taskId/phases` + `/:taskId/phases/:phaseId/view`. This endpoint is
+  // retained for legacy integrations and must not be reintroduced as the
+  // primary driver of the main timeline. See
+  // docs/task-detail/task-detail-phase-first-migration-checklist.md §7.4.
   const result = await queryCurrentTaskRound({
     taskId: c.req.param("taskId"),
     authorization: authHeader(c),
@@ -7762,6 +7974,9 @@ taskRoutes.get("/:taskId/current-round", async (c) => {
 });
 
 taskRoutes.get("/:taskId/rounds", async (c) => {
+  // Compat-only route. Round listing no longer drives the phase-first TaskDetail
+  // main path; keep this route for legacy integrations but do not reintroduce
+  // it as a primary data source.
   const result = await queryTaskRounds({
     taskId: c.req.param("taskId"),
     authorization: authHeader(c),
@@ -7775,6 +7990,8 @@ taskRoutes.get("/:taskId/rounds", async (c) => {
 });
 
 taskRoutes.get("/:taskId/rounds/:roundId/messages", async (c) => {
+  // Compat-only route: round-level message fetch is superseded by
+  // `/:taskId/phases/:phaseId/view` in the phase-first main path.
   const result = await queryTaskRoundMessages({
     taskId: c.req.param("taskId"),
     roundId: c.req.param("roundId"),
@@ -7922,10 +8139,19 @@ taskRoutes.get("/:taskId/pipeline", async (c) => {
 // BRANCH ROUTES — Expose task branch and lineage views
 // ═══════════════════════════════════════════════════════════════════
 
+function shouldIncludeArchivedTaskSessions(c: Parameters<typeof taskRoutes.get>[1] extends (
+  ...args: infer T
+) => unknown
+  ? T[0]
+  : never) {
+  return c.req.query("includeArchived") === "true";
+}
+
 // GET /api/tasks/:taskId/branches — List task branches
 taskRoutes.get("/:taskId/branches", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
+  const includeArchived = shouldIncludeArchivedTaskSessions(c);
 
   // Get task to find its sessionId
   const taskResult = await cpFetch<{ sessionId?: string; title?: string; status?: string }>(
@@ -7938,19 +8164,20 @@ taskRoutes.get("/:taskId/branches", async (c) => {
   }
 
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
-  const lineageRecords = lineageResult.activeRecords;
+  const lineageRecords = includeArchived ? lineageResult.records : lineageResult.activeRecords;
 
   const runtimeMap = await fetchRuntimeSessionMap(100);
 
   if (lineageRecords.length > 0) {
     const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
+    const activeNormalizedRecords = normalizedRecords.filter((record) => !record.archivedAt);
     await persistLineageRepairsAndBroadcast({
       taskId,
       records: repaired,
       authorization,
     });
     const effectiveCurrentRecord = resolveEffectiveCurrentTaskSessionRecord(
-      normalizedRecords,
+      activeNormalizedRecords.length > 0 ? activeNormalizedRecords : normalizedRecords,
       taskResult.data?.sessionId,
     );
 
@@ -7984,6 +8211,7 @@ taskRoutes.get("/:taskId/branches", async (c) => {
 taskRoutes.get(":taskId/sessions", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
+  const includeArchived = shouldIncludeArchivedTaskSessions(c);
 
   const taskResult = await cpFetch<{ sessionId?: string; title?: string; status?: string }>(
     `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
@@ -7995,18 +8223,19 @@ taskRoutes.get(":taskId/sessions", async (c) => {
   }
 
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
-  const lineageRecords = lineageResult.activeRecords;
+  const lineageRecords = includeArchived ? lineageResult.records : lineageResult.activeRecords;
   const runtimeMap = await fetchRuntimeSessionMap(100);
 
   if (lineageRecords.length > 0) {
     const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
+    const activeNormalizedRecords = normalizedRecords.filter((record) => !record.archivedAt);
     await persistLineageRepairsAndBroadcast({
       taskId,
       records: repaired,
       authorization,
     });
     const effectiveCurrentRecord = resolveEffectiveCurrentTaskSessionRecord(
-      normalizedRecords,
+      activeNormalizedRecords.length > 0 ? activeNormalizedRecords : normalizedRecords,
       taskResult.data?.sessionId,
     );
 
@@ -8028,18 +8257,16 @@ taskRoutes.get(":taskId/sessions", async (c) => {
       }
     }
 
-    const resolvePhaseId = (record: (typeof normalizedRecords)[number]) => {
-      const persistedPhaseId = asNonEmptyString(record.phaseId);
-      if (persistedPhaseId) {
-        return publicTaskSessionIdByIdentifier.get(persistedPhaseId) ?? persistedPhaseId;
-      }
+    const resolvePersistedPhaseId = (record: (typeof normalizedRecords)[number]) => {
+      return asNonEmptyString(record.phaseId) ?? null;
+    };
 
-      return (
-        asNonEmptyString(record.id) ??
-        (asNonEmptyString(record.runtimeSessionId)
-          ? buildPublicTaskSessionId(taskId, record.runtimeSessionId)
-          : null)
-      );
+    const resolveCanonicalPhaseId = (record: (typeof normalizedRecords)[number]) => {
+      const persistedPhaseId = asNonEmptyString(record.phaseId);
+      if (persistedPhaseId?.startsWith("task-phase:")) {
+        return persistedPhaseId;
+      }
+      return null;
     };
 
     const sessions = normalizedRecords.map((record) => {
@@ -8047,7 +8274,7 @@ taskRoutes.get(":taskId/sessions", async (c) => {
       return {
         id: record.runtimeSessionId,
         taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
-        phaseId: resolvePhaseId(record),
+        phaseId: resolvePersistedPhaseId(record),
         phaseRole: record.phaseRole ?? null,
         phaseItemIndex: record.phaseItemIndex ?? null,
         title: record.branchName ?? runtime?.title ?? "",
@@ -8080,7 +8307,9 @@ taskRoutes.get(":taskId/sessions", async (c) => {
       return Number.isNaN(updatedAt) ? Number.NEGATIVE_INFINITY : updatedAt;
     };
 
-    const latestRecord = normalizedRecords.reduce<(typeof normalizedRecords)[number] | null>(
+    const metaRecords = activeNormalizedRecords.length > 0 ? activeNormalizedRecords : normalizedRecords;
+
+    const latestRecord = metaRecords.reduce<(typeof normalizedRecords)[number] | null>(
       (latest, record) => {
         if (!latest) {
           return record;
@@ -8092,7 +8321,7 @@ taskRoutes.get(":taskId/sessions", async (c) => {
     );
     const currentRecord =
       effectiveCurrentRecord ??
-      normalizedRecords.find(
+      metaRecords.find(
         (record) =>
           record.runtimeSessionId === taskResult.data?.sessionId ||
           record.id === taskResult.data?.sessionId,
@@ -8106,8 +8335,8 @@ taskRoutes.get(":taskId/sessions", async (c) => {
           asNonEmptyString(currentRecord?.id) ??
           asNonEmptyString(taskResult.data?.sessionId) ??
           null,
-        currentPhaseId: currentRecord ? resolvePhaseId(currentRecord) : null,
-        latestPhaseId: latestRecord ? resolvePhaseId(latestRecord) : null,
+        currentPhaseId: currentRecord ? resolveCanonicalPhaseId(currentRecord) : null,
+        latestPhaseId: latestRecord ? resolveCanonicalPhaseId(latestRecord) : null,
         phaseCount: new Set(
           sessions
             .map((session) => asNonEmptyString(session.phaseId))
@@ -9109,6 +9338,10 @@ async function executeTaskBranchActivation(args: {
     return { status: activation.status, body: { error: activation.error } };
   }
 
+  // Compat-only broadcast. Phase-first migration (checklist §5.4 / §6.4 item 4) declares that
+  // `session.activated` no longer carries phase-level refresh authority on the TaskDetail
+  // primary path. Legacy branch switcher and older project views still listen for it; once
+  // those consumers are migrated this emission should be removed.
   wsBroadcaster.broadcast({
     id: crypto.randomUUID(),
     type: "session.activated",
@@ -9155,9 +9388,10 @@ async function executeTaskBranchArchive(args: {
 taskRoutes.get(":taskId/branch-lineage", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
+  const includeArchived = shouldIncludeArchivedTaskSessions(c);
 
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
-  const lineageRecords = lineageResult.activeRecords;
+  const lineageRecords = includeArchived ? lineageResult.records : lineageResult.activeRecords;
 
   if (lineageRecords.length === 0) {
     return c.json({ data: [] });
@@ -9196,9 +9430,10 @@ taskRoutes.get(":taskId/branch-lineage", async (c) => {
 taskRoutes.get(":taskId/session-lineage", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
+  const includeArchived = shouldIncludeArchivedTaskSessions(c);
 
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
-  const lineageRecords = lineageResult.activeRecords;
+  const lineageRecords = includeArchived ? lineageResult.records : lineageResult.activeRecords;
 
   if (lineageRecords.length === 0) {
     return c.json({ data: [] });

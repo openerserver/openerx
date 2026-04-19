@@ -383,14 +383,13 @@ Control Plane 继续作为独立 HTTP 服务存在：
 - 已引入 `postgres.js` 与 `drizzle-orm/postgres-js`，控制面运行时只保留 PostgreSQL 主路径。
 - `db/index.ts`、`schema.ts`、`migrate.ts`、`seed.ts` 已收口为 PostgreSQL 实现；`runtime-schema.ts`、`sqlite-client.ts`、`sqlite-config.ts`、`schema.sqlite.ts` 已退出运行时代码。
 - 已将启动期补表逻辑转为正式 schema 与 migration，新增 PostgreSQL 索引迁移 `drizzle-pg/0002_purple_lorna_dane.sql`。
-- 已补齐离线 SQLite 快照迁移链路：`db:export:sqlite`、`db:transform:sqlite-export`、`db:import:pg`、`db:validate:pg`、`db:migrate:sqlite-snapshot`。
-- 2026-03-21 起，SQLite 快照迁移链已进一步收口：`transform-export` 会把 legacy `tasks` / `sessions` 事实合成到 `project_tree_nodes` / `project_tree_branches`，`tasks` / `sessions` 不再作为 PostgreSQL 导入目标表前提。
+- 已移除仓库内残留的 SQLite 快照迁移脚本、旧 Drizzle SQLite 目录，以及测试和运维中的 SQLite 依赖。
 - 已完成一次真实 SQLite 快照演练，产物落在 `tmp/sqlite-pg-migration-phase1/`，演练链路覆盖导出、规范化、导入和一致性校验。
 - 已在 PostgreSQL 唯一路径下完成根级 typecheck、app health check、BFF execution 相关回归，以及完整 service test 回归。
 
 当前判定：
 
-- PostgreSQL 已是唯一标准运行数据库，SQLite 仅保留为离线历史数据迁移输入。
+- PostgreSQL 已是唯一标准运行数据库；SQLite 已退出当前仓库的运行、测试与运维入口。
 - Phase 1 的代码收口、运维脚本补齐和验证闭环均已完成。
 
 ### Phase 1 收尾 Checklist
@@ -688,8 +687,8 @@ SQLite -> PostgreSQL 已经解决了最关键的文件锁与运行时写入扩�
 2. 导出并快照 SQLite 数据，记录输入文件路径和校验值，保留为只读证据。
 3. 创建一个新的干净 PostgreSQL 目标库，例如 `openerx_pg_cutover_<timestamp>`。
 4. 在目标库上执行基线 migration：`cd control-plane/service && DATABASE_URL=postgres://127.0.0.1:5432/<target_db> bun run db:migrate`。
-5. 在同一目标库上执行完整快照迁移：`DATABASE_URL=postgres://127.0.0.1:5432/<target_db> bun run db:migrate:sqlite-snapshot`，或在仓库根目录执行 `DATABASE_URL=postgres://127.0.0.1:5432/<target_db> bun run db:migrate:sqlite-snapshot`。
-6. 检查迁移产物中的 `run-summary.json` 与 `validation-report.json`，确认关键表行数、主键和外键校验全部通过。
+5. 使用仓库外部的一次性迁移工具或人工导入方案完成历史 SQLite 快照到目标库的导入；当前仓库已不再保留该离线迁移脚本链。
+6. 检查导入产物中的校验报告，确认关键表行数、主键和外键校验全部通过。
 7. 按当前标准拓扑启动 `service + bff + ui + runtime`，并让它们共同指向目标 PostgreSQL 库。
 8. 分别执行健康检查与 smoke check，至少覆盖：Control Plane、BFF、登录、项目列表、任务列表、dashboard。
 9. 执行至少一组真实执行集成验证，确认运行时 `:4096` 依赖、执行落库、治理统计与审计链路正常。

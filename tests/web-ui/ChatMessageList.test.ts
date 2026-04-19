@@ -58,6 +58,26 @@ describe("ChatMessageList tool cards", () => {
     });
   });
 
+  it("does not surface mirrored thinking text as a visible assistant reply", () => {
+    const items = normalizeSessionConversationItems([
+      {
+        info: {
+          id: "assistant-thinking-mirror-1",
+          role: "assistant",
+          time: { created: "2026-04-10T10:00:00.000Z" },
+        },
+        text: "先确认当前任务状态。",
+        parts: [{ type: "thinking", text: "先确认当前任务状态。" }],
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      thinkingText: "先确认当前任务状态。",
+      text: undefined,
+    });
+  });
+
   it("renders assistant thinking inside a collapsible section", async () => {
     const items: TaskConversationMessageItem[] = [
       {
@@ -105,6 +125,47 @@ describe("ChatMessageList tool cards", () => {
     expect(wrapper.text()).toContain("收起思考过程");
     expect(wrapper.text()).toContain("Confirming task execution");
     expect(wrapper.text()).toContain("准备展示最终回复。");
+  });
+
+  it("renders original user input directly without an expand toggle", () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-user-final-sent-1",
+        role: "user",
+        text: "简短输入",
+        userInputText: "简短输入",
+        finalSentText: "简短输入\n补充上下文",
+        toolCalls: [],
+        createdAt: "2026-04-10T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    expect(wrapper.find(".chat-message-card__plain").text()).toBe("简短输入");
+    expect(wrapper.text()).not.toContain("补充上下文");
+    expect(wrapper.text()).not.toContain("查看完整发送内容");
+    expect(wrapper.text()).not.toContain("收起完整发送内容");
   });
 
   it("does not render empty-text fallback for assistant messages with thinking only", () => {

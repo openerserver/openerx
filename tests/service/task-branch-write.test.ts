@@ -51,17 +51,20 @@ async function loadTaskBranchWriteModule() {
   );
 }
 
-function createTaskRecord(overrides?: Partial<{ sessionId: string | null }>) {
+function createTaskRecord(
+  overrides?: Partial<{ sessionId: string | null; status: string; finishedAt: string | null }>,
+) {
   return {
     id: "task-1",
     projectId: "project-1",
     title: "Task title",
     prompt: "Task prompt",
-    status: "pending",
+    status: overrides?.status ?? "pending",
     sessionId: overrides?.sessionId ?? null,
     workingBranch: null,
     createdAt: "2026-03-24T00:00:00.000Z",
     updatedAt: "2026-03-24T00:00:00.000Z",
+    finishedAt: overrides?.finishedAt ?? null,
   } as never;
 }
 
@@ -287,6 +290,51 @@ describe("task branch write", () => {
     );
     expect(upsertTaskTreeNode).not.toHaveBeenCalled();
     expect(syncTaskAggregateFromSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  test("upsertTaskBranch keeps terminal tasks passive and does not rewrite the parent snapshot to running", async () => {
+    const { createTaskBranchWriteApi } = await loadTaskBranchWriteModule();
+    const syncTaskBranchCompatTreeNode = mock(async () => "task_session:task-1:fork-session-1");
+    const upsertConversationSessionRecord = mock(async () => undefined);
+    const buildTaskTreeSnapshotFromRecord = mock(
+      (_task: unknown, updates: Record<string, unknown>) => updates as TaskTreeSnapshot,
+    );
+    const upsertTaskTreeNode = mock(async () => undefined);
+    const syncTaskAggregateFromSnapshot = mock(async () => undefined);
+
+    const api = createTaskBranchWriteApi({
+      loadTaskTreeBackedRecord: mock(async () =>
+        createTaskRecord({ status: "completed", finishedAt: "2026-03-24T00:10:00.000Z" }),
+      ),
+      resolveTaskBranchCompatRecord: mock(async () => null),
+      resolveTaskBranchCompatRecordByRuntimeSessionId: mock(async () => null),
+      syncTaskBranchCompatTreeNode,
+      archiveTaskBranchCompatTreeNode: mock(async () => undefined),
+      upsertConversationSessionRecord,
+      upsertConversationMessageRecord: mock(async () => ({ seq: 1 })),
+      buildTaskTreeSnapshotFromRecord,
+      upsertTaskTreeNode,
+      syncTaskAggregateFromSnapshot,
+    });
+
+    const result = await api.upsertTaskBranch("task-1", {
+      runtimeSessionId: "fork-session-1",
+      parentRuntimeSessionId: "root-session-1",
+      branchName: "feature/fork",
+      sourceType: "fork",
+      isActive: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(syncTaskBranchCompatTreeNode).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeSessionId: "fork-session-1", isActive: false }),
+    );
+    expect(upsertConversationSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeSessionId: "fork-session-1", isActive: false }),
+    );
+    expect(buildTaskTreeSnapshotFromRecord).not.toHaveBeenCalled();
+    expect(upsertTaskTreeNode).not.toHaveBeenCalled();
+    expect(syncTaskAggregateFromSnapshot).not.toHaveBeenCalled();
   });
 
   test("upsertTaskBranch treats implicit root session placeholders as a first explicit create", async () => {
@@ -603,6 +651,77 @@ describe("task branch write", () => {
         isActive: true,
         archivedAt: null,
       }),
+    );
+  });
+
+  test("persistTaskBranchMessage forces terminal parallel candidates inactive", async () => {
+    const { createTaskBranchWriteApi } = await loadTaskBranchWriteModule();
+    const syncTaskBranchCompatTreeNode = mock(async () => "task_session:task-1:candidate-session-1");
+    const upsertConversationSessionRecord = mock(async () => undefined);
+    const upsertConversationMessageRecord = mock(async () => ({
+      messageId: "task-session-message:task-session:task-1:candidate-session-1:msg-3",
+      sessionId: "task-session:task-1:candidate-session-1",
+      seq: 3,
+    }));
+
+    const api = createTaskBranchWriteApi({
+      loadTaskTreeBackedRecord: mock(async () =>
+        createTaskRecord({
+          sessionId: "candidate-session-1",
+          status: "completed",
+          finishedAt: "2026-03-24T00:10:00.000Z",
+        }),
+      ),
+      resolveTaskBranchCompatRecord: mock(async () => null),
+      resolveTaskBranchCompatRecordByRuntimeSessionId: mock(async () => ({
+        runtimeSessionId: "candidate-session-1",
+        parentRuntimeSessionId: "root-session-1",
+        forkedFromMessageId: null,
+        branchName: "候选 A",
+        sourceType: "parallel",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        phaseId: "phase-1",
+        phaseRole: "candidate",
+        phaseItemIndex: 0,
+        candidateIndex: 0,
+        stepIndex: null,
+        selectedModel: "github-copilot:gpt-5-mini",
+        operationId: null,
+        isActive: true,
+      })),
+      syncTaskBranchCompatTreeNode,
+      archiveTaskBranchCompatTreeNode: mock(async () => undefined),
+      upsertConversationSessionRecord,
+      upsertConversationMessageRecord,
+      buildTaskTreeSnapshotFromRecord: mock(
+        (_task: unknown, updates: Record<string, unknown>) => updates as TaskTreeSnapshot,
+      ),
+      upsertTaskTreeNode: mock(async () => undefined),
+      syncTaskAggregateFromSnapshot: mock(async () => undefined),
+    });
+
+    const result = await api.persistTaskBranchMessage("task-1", {
+      runtimeSessionId: "candidate-session-1",
+      message: {
+        info: {
+          id: "msg-3",
+          role: "assistant",
+          time: {
+            created: "2026-03-24T00:00:02.000Z",
+            completed: "2026-03-24T00:00:03.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "candidate should stay settled" }],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(syncTaskBranchCompatTreeNode).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeSessionId: "candidate-session-1", isActive: false }),
+    );
+    expect(upsertConversationSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeSessionId: "candidate-session-1", isActive: false }),
     );
   });
 

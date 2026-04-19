@@ -128,7 +128,7 @@ function buildResolvedParallelRuns(args: {
   const phaseParallelRuns = Array.isArray(args.phaseParallelRuns)
     ? args.phaseParallelRuns.filter((run) => run.candidateSessions.length >= 2)
     : [];
-  const shouldUsePhaseAuthority = args.phaseAuthorityLoaded === true;
+  const shouldUsePhaseAuthority = args.phaseAuthorityLoaded === true && phaseParallelRuns.length > 0;
   const summaryParallelRuns =
     shouldUsePhaseAuthority || phaseParallelRuns.length > 0
       ? []

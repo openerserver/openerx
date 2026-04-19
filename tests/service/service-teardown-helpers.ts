@@ -1,5 +1,28 @@
+import { execSync } from "node:child_process";
+
 function escapeSqlLiteral(value: string) {
   return `'${value.replace(/'/g, "''")}'`;
+}
+
+export function resolvePostgresTestDatabaseUrl() {
+  return process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "postgres://127.0.0.1:5432/openerx";
+}
+
+export function runPostgresCleanupStatements(statements: string[], label: string) {
+  if (statements.length === 0) {
+    return;
+  }
+
+  try {
+    execSync(
+      `psql "${resolvePostgresTestDatabaseUrl()}" -v ON_ERROR_STOP=1 -c "${statements.join(" ")}"`,
+      {
+        timeout: 5000,
+      },
+    );
+  } catch {
+    console.warn(`Cleanup failed for ${label}`);
+  }
 }
 
 export type DbCleanupExecutor = (query: string, params: unknown[]) => Promise<void> | void;

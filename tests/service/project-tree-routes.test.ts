@@ -144,7 +144,7 @@ afterAll(async () => {
     ]);
     await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
     await safeSql(
-      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
+      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL, phase_id = NULL WHERE task_id = $1",
       [taskId],
     );
     await safeSql(
@@ -155,6 +155,7 @@ afterAll(async () => {
     );
     await safeSql("DELETE FROM task_messages WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_session_runs WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_execution_phases WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
@@ -692,6 +693,171 @@ describe("project tree routes", () => {
     expect(filteredTask).toBeDefined();
     expect(filteredTask).not.toHaveProperty("executionPlan");
     expect(filteredTask).not.toHaveProperty("parallelRunHistory");
+  });
+
+  test("returns pagination metadata when task list is truncated by limit", async () => {
+    await createTask(`tree-list-meta-a-${Date.now()}`);
+    await createTask(`tree-list-meta-b-${Date.now()}`);
+
+    const list = await authedRequest<{
+      data: Array<{ id: string; title: string }>;
+      totalCount: number;
+      limit: number;
+      truncated: boolean;
+    }>(`/api/project-tree/tasks?projectId=${PROJECT_ID}&limit=1`);
+
+    expect(list.status).toBe(200);
+    expect(list.data.limit).toBe(1);
+    expect(list.data.data).toHaveLength(1);
+    expect(list.data.totalCount).toBeGreaterThanOrEqual(2);
+    expect(list.data.truncated).toBe(true);
+  });
+
+  test("prefers terminal parallel phase state over a stale running snapshot", async () => {
+    const task = await createTask(`tree-phase-terminal-${Date.now()}`);
+
+    const rootSessionId = taskSessionId(task.id, "root-session");
+    const winnerSessionId = taskSessionId(task.id, "session-a");
+    const loserSessionId = taskSessionId(task.id, "session-b");
+    const phaseId = `task-phase:${task.id}:parallel-terminal`;
+    const rootRuntimeSessionId = `root-${task.id}`;
+    const winnerRuntimeSessionId = `winner-${task.id}`;
+    const loserRuntimeSessionId = `loser-${task.id}`;
+
+    await sql.unsafe(
+      `UPDATE tasks
+       SET lifecycle_status = 'active',
+           activated_at = $2,
+           updated_at = $3
+       WHERE id = $1`,
+      [task.id, "2026-04-18T09:00:00.000Z", "2026-04-18T09:10:00.000Z"],
+    );
+
+    await sql.unsafe(
+      `INSERT INTO task_sessions (
+        id, task_id, project_id, parent_session_id, root_session_id, session_kind, trigger_type,
+        execution_mode_snapshot, runtime_session_id, branch_name, status, execution_status,
+        depth, sort_key, created_at, updated_at, last_activity_at
+      ) VALUES
+        ($1, $2, $3, NULL, $1, 'primary', 'execute', 'parallel', $4, 'main', 'running', 'running', 0, '0000', $7, $8, $8),
+        ($5, $2, $3, $1, $1, 'candidate', 'execute', 'parallel', $6, 'Candidate A', 'running', 'complete', 1, '0000.0001', $7, $8, $8),
+        ($9, $2, $3, $1, $1, 'candidate', 'execute', 'parallel', $10, 'Candidate B', 'running', 'running', 1, '0000.0002', $7, $8, $8)`,
+      [
+        rootSessionId,
+        task.id,
+        PROJECT_ID,
+        rootRuntimeSessionId,
+        winnerSessionId,
+        winnerRuntimeSessionId,
+        "2026-04-18T09:00:00.000Z",
+        "2026-04-18T09:10:00.000Z",
+        loserSessionId,
+        loserRuntimeSessionId,
+      ],
+    );
+
+    await sql.unsafe(
+      `INSERT INTO task_execution_phases (
+        id, task_id, project_id, phase_index, phase_kind, trigger_type, status,
+        candidate_count, winner_session_id, started_at, finished_at, created_at, updated_at,
+        terminal_reason
+      ) VALUES (
+        $1, $2, $3, 1, 'parallel', 'execute', 'completed', 2, $4, $5, $6, $5, $6, 'winner_adopted'
+      ) ON CONFLICT (id) DO UPDATE SET
+        status = EXCLUDED.status,
+        candidate_count = EXCLUDED.candidate_count,
+        winner_session_id = EXCLUDED.winner_session_id,
+        finished_at = EXCLUDED.finished_at,
+        updated_at = EXCLUDED.updated_at,
+        terminal_reason = EXCLUDED.terminal_reason`,
+      [
+        phaseId,
+        task.id,
+        PROJECT_ID,
+        winnerSessionId,
+        "2026-04-18T09:00:00.000Z",
+        "2026-04-18T09:10:00.000Z",
+      ],
+    );
+
+    await sql.unsafe(
+      `UPDATE task_sessions
+       SET phase_id = $2,
+           phase_role = CASE
+             WHEN id = $3 THEN 'candidate'
+             WHEN id = $4 THEN 'candidate'
+             ELSE phase_role
+           END,
+           phase_item_index = CASE
+             WHEN id = $3 THEN 0
+             WHEN id = $4 THEN 1
+             ELSE phase_item_index
+           END,
+           candidate_index = CASE
+             WHEN id = $3 THEN 0
+             WHEN id = $4 THEN 1
+             ELSE candidate_index
+           END,
+           winner_session_id = $3,
+           result_text = CASE WHEN id = $3 THEN 'winner result' ELSE result_text END,
+           result_summary = CASE WHEN id = $3 THEN 'winner result' ELSE result_summary END
+       WHERE id IN ($1, $3, $4)`,
+      [rootSessionId, phaseId, winnerSessionId, loserSessionId],
+    );
+
+    await sql.unsafe(
+      `UPDATE task_snapshots
+       SET lifecycle_status = 'active',
+           current_execution_mode = 'parallel',
+           current_execution_status = 'running',
+           current_phase_id = $2,
+           latest_phase_id = $2,
+           current_session_id = $3,
+           latest_session_id = $4,
+           latest_result_summary = 'winner result',
+           active_candidate_count = 0,
+           last_activity_at = $5,
+           updated_at = $5
+       WHERE task_id = $1`,
+      [task.id, phaseId, loserSessionId, winnerSessionId, "2026-04-18T09:10:00.000Z"],
+    );
+
+    const detail = await authedRequest<{
+      id: string;
+      status: string;
+      sessionId: string | null;
+      currentRunStatus: string | null;
+      result: string | null;
+    }>(`/api/project-tree/tasks/${task.id}`);
+
+    expect(detail.status).toBe(200);
+    expect(detail.data).toMatchObject({
+      id: task.id,
+      status: "completed",
+      sessionId: winnerRuntimeSessionId,
+      currentRunStatus: "completed",
+      result: "winner result",
+    });
+
+    const running = await authedRequest<{
+      data: Array<{ id: string; status: string }>;
+    }>(`/api/project-tree/tasks?projectId=${PROJECT_ID}&status=running`);
+
+    expect(running.status).toBe(200);
+    expect(running.data.data.some((entry) => entry.id === task.id)).toBe(false);
+
+    const completed = await authedRequest<{
+      data: Array<{ id: string; status: string; sessionId: string | null }>;
+    }>(`/api/project-tree/tasks?projectId=${PROJECT_ID}&status=completed`);
+
+    expect(completed.status).toBe(200);
+    expect(completed.data.data).toContainEqual(
+      expect.objectContaining({
+        id: task.id,
+        status: "completed",
+        sessionId: winnerRuntimeSessionId,
+      }),
+    );
   });
 
   test("does not recover execution fields from legacy aggregate strategy json", async () => {

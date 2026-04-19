@@ -4,10 +4,10 @@ import type { TaskPhaseRecord } from "../lib/api";
 import { normalizeSessionConversationItems } from "../lib/message-normalize";
 import { useTaskMessageSnapshot } from "./useTaskMessageSnapshot";
 
-const apiMocks = {
+const apiMocks = vi.hoisted(() => ({
   getTaskPhases: vi.fn(),
   getTaskPhaseView: vi.fn(),
-};
+}));
 
 vi.mock("../lib/api", () => ({
   getTaskPhases: apiMocks.getTaskPhases,
@@ -354,6 +354,88 @@ describe("useTaskMessageSnapshot", () => {
     expect(state.trace.value?.timelineMeta).toMatchObject({
       snapshotVersion: 9,
       persistedThroughRevision: 9,
+    });
+  });
+
+  it("dedupes equivalent parallel fan-out user prompts while absorbing current phase ack updates", async () => {
+    const phase = createPhase({
+      id: "phase-1",
+      sessionIds: ["task-session:task-1:ses-round-1"],
+    });
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase] });
+    apiMocks.getTaskPhaseView.mockResolvedValue(
+      createPhaseView({
+        phase,
+        currentSessionId: "ses-round-1",
+        messageGroups: [],
+      }),
+    );
+
+    const { state } = await mountSnapshot();
+
+    state.applyPersistenceAck(
+      {
+        kind: "round-synced",
+        sessionId: "ses-round-1",
+        taskSessionId: "task-session:task-1:ses-round-1",
+        snapshotVersion: 12,
+        persistedThroughRevision: 12,
+      },
+      {
+        realtimeSourceMessagesByPhaseId: {
+          "phase-1": [
+            {
+              id: "task-session-message:task-session:task-1:ses-round-1:model-a:user-prompt",
+              sessionId: "task-session:task-1:ses-round-1",
+              role: "user",
+              text: "pi-monorepo 项目 是什么？",
+              userInputText: "pi-monorepo 项目 是什么？",
+              finalSentText: "pi-monorepo 项目 是什么？",
+              createdAt: "2026-04-16T03:44:35.409Z",
+              info: {
+                id: "task-session-message:task-session:task-1:ses-round-1:model-a:user-prompt",
+                role: "user",
+                time: {
+                  created: "2026-04-16T03:44:35.409Z",
+                  completed: "2026-04-16T03:44:35.409Z",
+                },
+              },
+              parts: [{ type: "text", text: "pi-monorepo 项目 是什么？" }],
+            },
+            {
+              id: "task-session-message:task-session:task-1:ses-round-1:model-b:user-prompt",
+              sessionId: "task-session:task-1:ses-round-1",
+              role: "user",
+              text: "pi-monorepo 项目 是什么？",
+              userInputText: "pi-monorepo 项目 是什么？",
+              finalSentText: "pi-monorepo 项目 是什么？",
+              createdAt: "2026-04-16T03:44:35.409Z",
+              info: {
+                id: "task-session-message:task-session:task-1:ses-round-1:model-b:user-prompt",
+                role: "user",
+                time: {
+                  created: "2026-04-16T03:44:35.409Z",
+                  completed: "2026-04-16T03:44:35.409Z",
+                },
+              },
+              parts: [{ type: "text", text: "pi-monorepo 项目 是什么？" }],
+            },
+          ],
+        },
+        conversationItems: [],
+      },
+    );
+
+    const normalizedItems = normalizeSessionConversationItems(state.sourceMessages.value);
+    expect(normalizedItems.map((item) => item.key)).toEqual([
+      "task-session-message:task-session:task-1:ses-round-1:model-a:user-prompt",
+    ]);
+    expect(normalizedItems[0]).toMatchObject({
+      role: "user",
+      text: "pi-monorepo 项目 是什么？",
+      userInputText: "pi-monorepo 项目 是什么？",
+      finalSentText: "pi-monorepo 项目 是什么？",
+      createdAt: "2026-04-16T03:44:35.409Z",
     });
   });
 

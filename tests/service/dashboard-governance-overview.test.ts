@@ -1,30 +1,17 @@
-import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import postgres from "../../control-plane/service/node_modules/postgres";
 import {
+  resolvePostgresTestDatabaseUrl,
   runDeleteByIds,
   runTaskNodeDefensiveCleanup,
   runTaskProjectionCleanup,
 } from "./service-teardown-helpers";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const rawDatabaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
-const DATABASE_URL = /^(postgres|postgresql):\/\//i.test(rawDatabaseUrl)
-  ? rawDatabaseUrl
-  : "postgres://127.0.0.1:5432/openerx";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const USE_POSTGRES = /^(postgres|postgresql):\/\//i.test(DATABASE_URL);
-
-const sqlite = USE_POSTGRES ? null : new Database(DB_PATH, { create: false, strict: true });
-const sql = USE_POSTGRES ? postgres(DATABASE_URL, { max: 1, prepare: false }) : null;
+const sql = postgres(resolvePostgresTestDatabaseUrl(), { max: 1, prepare: false });
 const createdTaskIds: string[] = [];
 const createdLedgerIds: string[] = [];
 const createdAuditIds: string[] = [];
@@ -37,12 +24,7 @@ function toPostgresPlaceholders(query: string) {
 }
 
 async function writeDb(query: string, params: unknown[]) {
-  if (sql) {
-    await sql.unsafe(toPostgresPlaceholders(query), params as never[]);
-    return;
-  }
-
-  sqlite?.query(query).run(...params);
+  await sql.unsafe(toPostgresPlaceholders(query), params as never[]);
 }
 
 interface GovernanceOverviewResponse {
@@ -230,7 +212,7 @@ async function insertAudit(args: {
       "paid_execution",
       args.action,
       args.taskId,
-      sql && args.detail ? args.detail : args.detail ? JSON.stringify(args.detail) : null,
+      args.detail ?? null,
       "high",
     ],
   );
@@ -257,10 +239,7 @@ afterAll(async () => {
   await runDeleteByIds(writeDb, "tasks", createdTaskIds);
   await runTaskNodeDefensiveCleanup(writeDb, createdTaskIds);
 
-  sqlite?.close();
-  if (sql) {
-    await sql.end();
-  }
+  await sql.end();
 });
 
 describe("dashboard governance overview route", () => {

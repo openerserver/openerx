@@ -8,7 +8,7 @@ echo "=== Opener-X VM Setup ==="
 # ── 1. System packages ──────────────────────────────────────────────
 
 apt-get update
-apt-get install -y curl unzip git nginx certbot python3-certbot-nginx sqlite3 jq
+apt-get install -y curl unzip git nginx certbot python3-certbot-nginx postgresql-client jq
 
 # ── 2. Install Bun runtime ──────────────────────────────────────────
 
@@ -51,8 +51,9 @@ cat > /opt/openerx/.env <<'ENVEOF'
 NODE_ENV=production
 
 # Control Plane
+DATABASE_DIALECT=postgres
 PORT=4097
-DATABASE_URL=/opt/openerx/data/openerx.db
+DATABASE_URL=postgres://openerx:CHANGE_ME@127.0.0.1:5432/openerx
 JWT_SECRET=CHANGE_ME_TO_A_RANDOM_64_CHAR_SECRET
 
 # BFF

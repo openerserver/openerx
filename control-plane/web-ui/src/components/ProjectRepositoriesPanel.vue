@@ -13,12 +13,40 @@
       message="你可以查看仓库信息，但只有项目管理员才能管理仓库。"
     />
 
+    <div
+      v-if="canManage"
+      style="margin-bottom: 16px; padding: 12px 16px; border: 1px solid #f0f0f0; border-radius: 8px; background: #fafafa"
+    >
+      <a-flex justify="space-between" align="center" wrap="wrap" gap="middle">
+        <a-typography-text type="secondary">
+          {{
+            selectedRepoIds.length > 0
+              ? `已选 ${selectedRepoIds.length} 个仓库，可批量删除`
+              : "勾选仓库后可批量删除"
+          }}
+        </a-typography-text>
+        <a-space wrap>
+          <a-button
+            danger
+            :disabled="selectedRepoIds.length === 0"
+            :loading="deletingRepositories"
+            data-testid="bulk-delete-repositories"
+            @click="handleBulkDeleteClick"
+          >删除所选仓库</a-button>
+          <a-button v-if="selectedRepoIds.length > 0" @click="clearSelectedRepoIds">
+            清空选择
+          </a-button>
+        </a-space>
+      </a-flex>
+    </div>
+
     <a-empty v-if="!loading && repos.length === 0" description="暂无仓库，点击「添加仓库」开始配置" />
 
     <a-table
       v-else
       :data-source="repos"
       :columns="columns"
+      :row-selection="rowSelection"
       :loading="loading"
       :pagination="false"
       row-key="id"
@@ -30,9 +58,12 @@
         </template>
 
         <template v-if="column.key === 'remoteUrl'">
-          <a-typography-text copyable style="max-width: 360px; display: inline-block" :ellipsis="true">
-            {{ record.remoteUrl }}
-          </a-typography-text>
+          <a-typography-text
+            :content="record.remoteUrl"
+            copyable
+            style="max-width: 360px; display: inline-block"
+            :ellipsis="true"
+          />
         </template>
 
         <template v-if="column.key === 'status'">
@@ -52,7 +83,12 @@
               cancel-text="取消"
               @confirm="handleArchive(record.id)"
             >
-              <a-button danger type="link" size="small" :loading="archivingId === record.id">归档</a-button>
+              <a-button
+                danger
+                type="link"
+                size="small"
+                :loading="pendingDeleteRepoIds.includes(record.id)"
+              >归档</a-button>
             </a-popconfirm>
           </a-space>
           <span v-else>-</span>
@@ -141,7 +177,8 @@ const props = defineProps<{
 const authStore = useAuthStore();
 const loading = ref(false);
 const saving = ref(false);
-const archivingId = ref<string | null>(null);
+const selectedRepoIds = ref<string[]>([]);
+const pendingDeleteRepoIds = ref<string[]>([]);
 const repos = ref<Repository[]>([]);
 const showModal = ref(false);
 const editingId = ref("");
@@ -160,6 +197,24 @@ const canManage = computed(() => {
   return authStore.user?.projects?.some(
     (p) => p.id === props.projectId && p.role === "project_admin",
   );
+});
+
+const deletingRepositories = computed(() => pendingDeleteRepoIds.value.length > 0);
+const rowSelection = computed(() => {
+  if (!canManage.value) {
+    return undefined;
+  }
+
+  const pendingIds = new Set(pendingDeleteRepoIds.value);
+
+  return {
+    selectedRowKeys: selectedRepoIds.value,
+    onChange: (keys: Array<string | number>) =>
+      handleRepositorySelectionChange(keys.map((key) => String(key))),
+    getCheckboxProps: (record: Repository) => ({
+      disabled: pendingIds.has(record.id),
+    }),
+  };
 });
 
 const columns = [
@@ -197,11 +252,26 @@ function formatTime(ts?: string) {
   return new Date(ts).toLocaleString();
 }
 
+function handleRepositorySelectionChange(keys: string[]) {
+  const visibleIds = new Set(repos.value.map((repo) => repo.id));
+  selectedRepoIds.value = Array.from(new Set(keys.filter((key) => visibleIds.has(key))));
+}
+
+function clearSelectedRepoIds() {
+  selectedRepoIds.value = [];
+}
+
+function syncSelectedRepoIds() {
+  const visibleIds = new Set(repos.value.map((repo) => repo.id));
+  selectedRepoIds.value = selectedRepoIds.value.filter((key) => visibleIds.has(key));
+}
+
 async function fetchRepos() {
   loading.value = true;
   try {
     const result = await listRepositories(props.projectId);
     repos.value = result.data;
+    syncSelectedRepoIds();
   } catch (e) {
     message.error("加载仓库列表失败");
   } finally {
@@ -277,19 +347,94 @@ async function handleSubmit() {
 }
 
 async function handleArchive(repoId: string) {
-  archivingId.value = repoId;
-  try {
-    await archiveRepository(repoId, props.projectId);
-    message.success("仓库已归档");
-    await fetchRepos();
-  } catch (e: unknown) {
-    message.error((e as Error).message || "归档失败");
-  } finally {
-    archivingId.value = null;
+  await runRepositoryDeletion([repoId]);
+}
+
+function normalizeDeleteError(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
+
+  return String(error);
+}
+
+async function runRepositoryDeletion(repoIds: string[]) {
+  if (repoIds.length === 0) {
+    return;
+  }
+
+  pendingDeleteRepoIds.value = [...repoIds];
+  try {
+    const results = await Promise.allSettled(
+      repoIds.map((repoId) => archiveRepository(repoId, props.projectId)),
+    );
+    const succeededIds: string[] = [];
+    const failedIds: string[] = [];
+    const failedMessages: string[] = [];
+
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        succeededIds.push(repoIds[index] ?? "");
+        continue;
+      }
+
+      failedIds.push(repoIds[index] ?? "");
+      failedMessages.push(normalizeDeleteError(result.reason));
+    }
+
+    if (succeededIds.length > 0) {
+      await fetchRepos();
+      message.success(
+        succeededIds.length === 1 ? "仓库已删除" : `已删除 ${succeededIds.length} 个仓库`,
+      );
+    }
+
+    selectedRepoIds.value = failedIds;
+    syncSelectedRepoIds();
+
+    if (failedMessages.length > 0) {
+      message.error(
+        failedMessages.length === 1
+          ? `删除失败: ${failedMessages[0]}`
+          : `有 ${failedMessages.length} 个仓库删除失败，请重试`,
+      );
+    }
+  } finally {
+    pendingDeleteRepoIds.value = [];
+  }
+}
+
+async function handleBulkDeleteClick() {
+  if (!canManage.value) {
+    message.error("仅项目管理员可以删除仓库");
+    return;
+  }
+
+  if (selectedRepoIds.value.length === 0) {
+    message.warning("请先选择要删除的仓库");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    selectedRepoIds.value.length === 1
+      ? "确定删除所选仓库？该操作会将仓库归档，后续任务将无法再选择它。"
+      : `确定删除所选的 ${selectedRepoIds.value.length} 个仓库？该操作会将它们归档，后续任务将无法再选择。`,
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  await runRepositoryDeletion([...selectedRepoIds.value]);
 }
 
 onMounted(fetchRepos);
 
-watch(() => props.projectId, fetchRepos);
+watch(
+  () => props.projectId,
+  () => {
+    clearSelectedRepoIds();
+    void fetchRepos();
+  },
+);
 </script>

@@ -100,6 +100,36 @@ describe("task message patch event", () => {
     });
   });
 
+  it("does not treat thinking-only assistant snapshots as visible reply text", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          data: {
+            message: {
+              id: "assistant-1",
+              role: "assistant",
+              text: "先分析上下文",
+              time: {
+                created: "2026-04-08T03:18:17.218Z",
+              },
+              parts: [
+                {
+                  type: "thinking",
+                  text: "先分析上下文",
+                },
+              ],
+            },
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "assistant-progress",
+      messageId: "assistant-1",
+      initialText: undefined,
+      initialThinkingText: "先分析上下文",
+    });
+  });
+
   it("maps a text delta into an assistant patch", () => {
     expect(
       toTaskMessagePatchEvent(
@@ -360,19 +390,25 @@ describe("task message patch event", () => {
     ).toMatchObject({ kind: "session-created" });
   });
 
-  it("maps phase lifecycle events and keeps the phase id", () => {
+  it.each([
+    ["task.phase.created", "phase-created", "running"],
+    ["task.phase.paused", "phase-paused", "paused"],
+    ["task.phase.resumed", "phase-resumed", "running"],
+    ["task.phase.completed", "phase-completed", "completed"],
+    ["task.phase.failed", "phase-failed", "failed"],
+  ] as const)("maps %s lifecycle events and keeps the phase id", (type, kind, status) => {
     expect(
       toTaskMessagePatchEvent(
         createEvent({
-          type: "task.phase.completed",
+          type,
           phaseId: "phase-2",
           data: {
-            status: "completed",
+            status,
           },
         }),
       ),
     ).toMatchObject({
-      kind: "phase-completed",
+      kind,
       phaseId: "phase-2",
     });
   });

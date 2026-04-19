@@ -73,6 +73,29 @@ beforeEach(() => {
 });
 
 describe("project tree proxy routes", () => {
+  test("forwards project deletion to control plane", async () => {
+    cpFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { ok: true, id: "proj-1", deletedTaskCount: 3 },
+    });
+
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
+    const response = await projectRoutes.request("http://localhost/proj-1", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer tree-token" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(cpFetchMock).toHaveBeenCalledWith("/api/projects/proj-1", {
+      method: "DELETE",
+      authorization: "Bearer tree-token",
+    });
+    expect(await response.json()).toEqual({ ok: true, id: "proj-1", deletedTaskCount: 3 });
+  });
+
   test("forwards tree query params to control plane", async () => {
     cpFetchMock.mockResolvedValue({
       ok: true,

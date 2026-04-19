@@ -851,7 +851,7 @@ await db.insert(projectTreeNodes).values({
 #### Phase E. 验证结果
 
 1. 已运行 `db:migrate:pg`，确认 `0011_drop_task_sessions.sql` 在真实本地 PostgreSQL 环境可落地。
-2. 已在干净目标库 `openerx_sqlite_recheck_20260321` 上执行 `db:migrate:sqlite-snapshot` 并完成校验；产物位于 `tmp/sqlite-pg-migration/run-2026-03-21T08-51-09.715Z/`。
+2. 已在干净目标库 `openerx_sqlite_recheck_20260321` 上完成一次历史 SQLite 快照导入演练并完成校验；对应仓库内命令链现已退休，历史产物位于 `tmp/sqlite-pg-migration/run-2026-03-21T08-51-09.715Z/`。
 3. 更宽 service regression 已覆盖 task tree、workflow lazy migration、runtime usage ledger、session lineage/tree 相关主路径，未发现 `task_sessions` 隐藏依赖；`role-workflow-storage.test.ts` 已切到 tree-first detail 读面后恢复通过。
 4. targeted 前端/UI regression 已补齐 `bun run test:ui:file -- tests/web-ui/TaskDetail.test.ts`、`bun run test:ui:file -- tests/web-ui/TaskConversationTrace.test.ts`、`bun run test:ui:file -- tests/web-ui/MultiTaskMonitor.test.ts` 与现有 Chat Settings Vitest 用例；Playwright `test:e2e:chat-settings` 已修复登录后侧边栏菜单重挂载导致的点击超时并重新通过；随后补跑的全量 `test:ui` 也已全部通过，确认当前 tree-first / legacy task table 退场没有残留独立 UI 回归。
 

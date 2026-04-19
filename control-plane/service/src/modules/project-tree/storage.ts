@@ -402,10 +402,22 @@ async function deactivateSiblingTaskBranchCompatNodes(args: {
   taskPath: string;
   now: string;
   isActive?: boolean;
+  excludeNodeIds?: readonly string[];
 }) {
   if (!args.isActive) {
     return;
   }
+
+  const excludeNodeIds = (args.excludeNodeIds ?? []).filter(
+    (nodeId): nodeId is string => typeof nodeId === "string" && nodeId.trim().length > 0,
+  );
+  const excludeNodeClause =
+    excludeNodeIds.length > 0
+      ? sql`AND id NOT IN (${sql.join(
+          excludeNodeIds.map((nodeId) => sql`${nodeId}`),
+          sql`, `,
+        )})`
+      : sql``;
 
   await db.execute(sql`
     UPDATE project_tree_nodes
@@ -414,6 +426,7 @@ async function deactivateSiblingTaskBranchCompatNodes(args: {
     WHERE project_id = ${args.projectId}
       AND node_type = 'session'
       AND path <@ CAST(${args.taskPath} AS ltree)
+      ${excludeNodeClause}
   `);
 }
 
@@ -444,6 +457,43 @@ function buildTaskBranchCompatNodeUpsertValues(args: {
     updatedAt: args.now,
     archivedAt: args.input.archivedAt ?? null,
   };
+}
+
+function readTaskBranchCompatContentJson(value: unknown) {
+  const record =
+    value && typeof value === "object" ? (value as Record<string, unknown>) : ({} as Record<string, unknown>);
+
+  return {
+    sourceType: typeof record.sourceType === "string" ? record.sourceType : null,
+    parentRuntimeSessionId:
+      typeof record.parentRuntimeSessionId === "string" ? record.parentRuntimeSessionId : null,
+    forkedFromMessageId:
+      typeof record.forkedFromMessageId === "string" ? record.forkedFromMessageId : null,
+  };
+}
+
+function needsTaskBranchCompatNodeUpdate(args: {
+  existing: typeof projectTreeNodes.$inferSelect;
+  values: ReturnType<typeof buildTaskBranchCompatNodeUpsertValues>;
+}) {
+  const existingContentJson = readTaskBranchCompatContentJson(args.existing.contentJson);
+  const nextContentJson = readTaskBranchCompatContentJson(args.values.contentJson);
+
+  return (
+    args.existing.parentId !== args.values.parentId ||
+    args.existing.path !== args.values.path ||
+    args.existing.depth !== args.values.depth ||
+    args.existing.contentText !== args.values.contentText ||
+    existingContentJson.sourceType !== nextContentJson.sourceType ||
+    existingContentJson.parentRuntimeSessionId !== nextContentJson.parentRuntimeSessionId ||
+    existingContentJson.forkedFromMessageId !== nextContentJson.forkedFromMessageId ||
+    args.existing.refType !== args.values.refType ||
+    args.existing.refId !== args.values.refId ||
+    args.existing.runtimeSessionId !== args.values.runtimeSessionId ||
+    (args.existing.branchName ?? null) !== (args.values.branchName ?? null) ||
+    Boolean(args.existing.isActive) !== Boolean(args.values.isActive) ||
+    (args.existing.archivedAt ?? null) !== (args.values.archivedAt ?? null)
+  );
 }
 
 async function updateExistingTaskBranchCompatNode(args: {
@@ -549,6 +599,7 @@ export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompa
     taskPath: taskNode.path,
     now,
     isActive: args.isActive,
+    excludeNodeIds: existing ? [existing.id] : [],
   });
 
   const values = buildTaskBranchCompatNodeUpsertValues({
@@ -562,6 +613,10 @@ export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompa
   });
 
   if (existing) {
+    if (!needsTaskBranchCompatNodeUpdate({ existing, values })) {
+      return nodeId;
+    }
+
     await updateExistingTaskBranchCompatNode({ nodeId, values });
     return nodeId;
   }

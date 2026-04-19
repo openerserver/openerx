@@ -5,6 +5,7 @@ import {
   type LiveAssistantState,
   type TaskConversationListItem,
   type TaskConversationMessageItem,
+  type TaskParallelComparisonCard,
   type TaskConversationParallelItem,
 } from "./message-normalize";
 import {
@@ -78,6 +79,61 @@ function resolveParallelRunConversationAnchorCreatedAt(
   return run.startedAt ?? run.finishedAt;
 }
 
+function resolveParallelRunAnchorUserMessage(
+  run: ProjectionRunRecord,
+  baseConversationItems: TaskConversationListItem[],
+  parallelCandidateItems: Record<string, TaskConversationMessageItem[]>,
+) {
+  const anchorMessage =
+    typeof run.anchorMessageId === "string"
+      ? baseConversationItems.find((item) => {
+          if (item.role !== "user") {
+            return false;
+          }
+
+          const raw = asRecord(item.raw);
+          const info = asRecord(raw?.info);
+          const messageId = asString(info?.id) ?? asString(raw?.id) ?? item.key;
+          return messageId === run.anchorMessageId;
+        })
+      : undefined;
+
+  if (anchorMessage?.role === "user") {
+    return anchorMessage;
+  }
+
+  const parallelExecutionFinishedAtMs = toTimestampMs(run.finishedAt);
+
+  return (
+    run.candidateSessions
+      .flatMap((candidate) => {
+        const candidateStartedAtMs = toTimestampMs(candidate.startedAt ?? run.startedAt);
+        return candidate.sessionId
+          ? (parallelCandidateItems[candidate.sessionId] ?? []).filter((item) => {
+              if (item.role !== "user") {
+                return false;
+              }
+
+              const itemCreatedAtMs = toTimestampMs(item.createdAt);
+              if (itemCreatedAtMs == null) {
+                return false;
+              }
+              if (candidateStartedAtMs != null && itemCreatedAtMs < candidateStartedAtMs) {
+                return false;
+              }
+              if (parallelExecutionFinishedAtMs != null && itemCreatedAtMs > parallelExecutionFinishedAtMs) {
+                return false;
+              }
+
+              return true;
+            })
+          : [];
+      })
+      .sort((left, right) => (toTimestampMs(left.createdAt) ?? 0) - (toTimestampMs(right.createdAt) ?? 0))[0] ??
+    null
+  );
+}
+
 export function buildParallelConversationItems(args: {
   visibleParallelRuns: ProjectionRunRecord[];
   currentParallelRunId?: string;
@@ -114,6 +170,11 @@ export function buildParallelConversationItems(args: {
         ? `Judge 推荐 ${winnerLabel}，得分 ${run.judgeResult.scores.map((score) => Number(score).toFixed(1)).join(" / ")}`
         : `Judge 推荐 ${winnerLabel}`
       : undefined;
+    const anchorUserMessage = resolveParallelRunAnchorUserMessage(
+      run,
+      args.baseConversationItems,
+      args.parallelCandidateItems,
+    );
 
     items.push({
       key: `parallel-${run.parallelRunId}`,
@@ -126,12 +187,82 @@ export function buildParallelConversationItems(args: {
       candidates: cards,
       judgeSummary,
       judgeReasoning: run.judgeResult?.reasoning,
-      raw: run,
+      raw: {
+        ...run,
+        ...(anchorUserMessage ? { anchorUserMessage } : {}),
+      },
       toolCalls: [],
     });
   }
 
   return items;
+}
+
+function hasDisplayableAssistantContent(item: TaskConversationMessageItem) {
+  return Boolean(item.text?.trim() || item.thinkingText?.trim() || item.toolCalls.length > 0);
+}
+
+function resolveAdoptedParallelCandidate(parallelItem: TaskConversationParallelItem) {
+  return parallelItem.candidates.find((candidate) => candidate.isAdopted) ?? null;
+}
+
+function resolveAdoptedParallelReplySources(candidate: TaskParallelComparisonCard) {
+  return candidate.items.filter(
+    (item): item is TaskConversationMessageItem =>
+      item.role === "assistant" && hasDisplayableAssistantContent(item),
+  );
+}
+
+export function buildAdoptedParallelReplyItems(
+  parallelItem: TaskConversationParallelItem,
+): TaskConversationMessageItem[] {
+  const adoptedCandidate = resolveAdoptedParallelCandidate(parallelItem);
+  if (!adoptedCandidate) {
+    return [];
+  }
+
+  const sources = resolveAdoptedParallelReplySources(adoptedCandidate);
+  if (sources.length === 0) {
+    return [];
+  }
+
+  return sources.map((source) => ({
+    ...source,
+    key: `parallel-adopted:${parallelItem.key}:${source.key}`,
+    role: "assistant",
+    model: source.model ?? adoptedCandidate.model,
+    status: source.status ?? "completed",
+    toolCalls: source.toolCalls.map((toolCall) => ({ ...toolCall })),
+    raw: {
+      synthetic: true,
+      source: "parallel-adopted-mainline",
+      parallelItemKey: parallelItem.key,
+      candidateKey: adoptedCandidate.key,
+      candidateLabel: adoptedCandidate.label,
+      originalMessageKey: source.key,
+      originalRaw: source.raw,
+    },
+    isStreaming: false,
+  }));
+}
+
+function hasExistingAssistantBetweenIndices(
+  items: TaskConversationListItem[],
+  startIndex: number,
+  endIndex: number,
+) {
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const item = items[index];
+    if (item?.role !== "assistant") {
+      continue;
+    }
+
+    if (hasDisplayableAssistantContent(item)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function shouldHideUnadoptedParallelMessagesForRun(parallelItem: TaskConversationParallelItem) {
@@ -237,7 +368,7 @@ function matchesParallelCandidateSessionId(sessionId: string, candidateSessionId
   return false;
 }
 
-function suppressTopLevelParallelCandidateMessages(
+export function suppressTopLevelParallelCandidateMessages(
   items: TaskConversationListItem[],
   parallelItem: TaskConversationParallelItem,
 ) {
@@ -278,7 +409,7 @@ function insertParallelConversationItem(
     const anchorIndex = findParallelConversationAnchorIndex(items, parallelItem);
 
     if (anchorIndex < 0) {
-      items.unshift(parallelItem);
+      items.push(parallelItem);
       return;
     }
 
@@ -317,7 +448,17 @@ function insertParallelConversationItem(
   if (anchorIndex >= 0) {
     const hasAdoptedCandidate = parallelItem.candidates?.some((candidate) => candidate.isAdopted);
     if (hasAdoptedCandidate) {
-      items.splice(anchorIndex + 1, 0, parallelItem);
+      const nextUserIndex = findNextUserConversationIndex(items, anchorIndex);
+      const adoptedReplyItems = buildAdoptedParallelReplyItems(parallelItem);
+      const shouldInjectAdoptedReply =
+        adoptedReplyItems.length > 0 &&
+        !hasExistingAssistantBetweenIndices(items, anchorIndex + 1, nextUserIndex);
+      items.splice(
+        anchorIndex + 1,
+        0,
+        parallelItem,
+        ...(shouldInjectAdoptedReply ? adoptedReplyItems : []),
+      );
       return;
     }
 

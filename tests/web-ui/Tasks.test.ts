@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 import type { Task } from "../../control-plane/web-ui/src/lib/api";
 import Tasks from "../../control-plane/web-ui/src/pages/Tasks.vue";
+import { useAuthStore } from "../../control-plane/web-ui/src/stores/auth";
 import { useProjectStore } from "../../control-plane/web-ui/src/stores/project";
 
 const routerMocks = vi.hoisted(() => ({
@@ -92,29 +93,82 @@ vi.mock("ant-design-vue", () => {
 
   const ATable = defineComponent({
     name: "ATable",
-    props: ["dataSource", "columns"],
-    setup(props, { slots }) {
+    props: ["dataSource", "columns", "pagination", "rowSelection"],
+    emits: ["change"],
+    setup(props, { slots, emit }) {
       return () => {
         const dataSource = (props.dataSource as Record<string, unknown>[] | undefined) ?? [];
-        if (dataSource.length === 0) {
-          return h("div", { "data-component": "ATable" }, slots.emptyText ? slots.emptyText() : []);
-        }
+        const pagination =
+          props.pagination && typeof props.pagination === "object"
+            ? (props.pagination as {
+                current?: number;
+                pageSize?: number;
+                total?: number;
+                showSizeChanger?: boolean;
+                pageSizeOptions?: string[];
+                showTotal?: (total: number, range: [number, number]) => string;
+              })
+            : undefined;
+        const pageSize = Math.max(Number(pagination?.pageSize ?? dataSource.length ?? 1), 1);
+        const current = Math.max(Number(pagination?.current ?? 1), 1);
+        const total = Number(pagination?.total ?? dataSource.length);
+        const startIndex = Math.max(0, (current - 1) * pageSize);
+        const visibleRows = dataSource.slice(startIndex, startIndex + pageSize);
+        const rangeStart = total === 0 ? 0 : startIndex + 1;
+        const rangeEnd = total === 0 ? 0 : Math.min(total, startIndex + visibleRows.length);
+        const summary =
+          typeof pagination?.showTotal === "function"
+            ? pagination.showTotal(total, [rangeStart, rangeEnd])
+            : "";
+        const pageSizeOptions = pagination?.pageSizeOptions ?? ["10", "20", "50", "100"];
+
         return h(
           "div",
           { "data-component": "ATable" },
-          dataSource.flatMap((record) =>
-            ((props.columns as Record<string, unknown>[] | undefined) ?? []).map((column) =>
-              h(
-                "div",
-                {
-                  class: "table-cell",
-                  "data-column-key": String(column.key ?? column.dataIndex ?? ""),
-                  "data-record-id": String(record.id ?? ""),
-                },
-                slots.bodyCell ? slots.bodyCell({ column, record }) : undefined,
-              ),
-            ),
-          ),
+          [
+            visibleRows.length === 0
+              ? slots.emptyText
+                ? slots.emptyText()
+                : []
+              : visibleRows.flatMap((record) =>
+                  ((props.columns as Record<string, unknown>[] | undefined) ?? []).map((column) =>
+                    h(
+                      "div",
+                      {
+                        class: "table-cell",
+                        "data-column-key": String(column.key ?? column.dataIndex ?? ""),
+                        "data-record-id": String(record.id ?? ""),
+                      },
+                      slots.bodyCell ? slots.bodyCell({ column, record }) : undefined,
+                    ),
+                  ),
+                ),
+            pagination
+              ? h("div", { "data-component": "ATablePagination" }, [
+                  summary
+                    ? h("div", { "data-role": "pagination-total" }, summary)
+                    : null,
+                  pagination.showSizeChanger
+                    ? h(
+                        "select",
+                        {
+                          "data-role": "page-size",
+                          value: String(pageSize),
+                          onChange: (event: Event) => {
+                            emit("change", {
+                              current: 1,
+                              pageSize: Number((event.target as HTMLSelectElement).value),
+                            });
+                          },
+                        },
+                        pageSizeOptions.map((option) =>
+                          h("option", { key: option, value: option }, option),
+                        ),
+                      )
+                    : null,
+                ])
+              : null,
+          ],
         );
       };
     },
@@ -239,15 +293,30 @@ function makeTask(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function mountPage(tasks = [makeTask()]) {
+async function mountPage(
+  tasks = [makeTask()],
+  listResponse: Partial<{ totalCount: number; limit: number; truncated: boolean }> = {},
+) {
   const pinia = createPinia();
   setActivePinia(pinia);
+
+  const authStore = useAuthStore();
+  authStore.user = {
+    id: "user-1",
+    username: "admin",
+    role: "admin",
+  } as never;
 
   const projectStore = useProjectStore();
   projectStore.projects = [{ id: "proj-1", orgId: "org-1", name: "Default", slug: "default" }];
   projectStore.currentProjectId = "proj-1";
 
-  apiMocks.listTasks.mockResolvedValue({ data: tasks });
+  apiMocks.listTasks.mockResolvedValue({
+    data: tasks,
+    totalCount: listResponse.totalCount ?? tasks.length,
+    limit: listResponse.limit ?? TASK_LIST_LIMIT,
+    truncated: listResponse.truncated ?? false,
+  });
   apiMocks.listRepositories.mockResolvedValue({ data: [] });
   apiMocks.listCredentials.mockResolvedValue({ data: [] });
   apiMocks.listCommands.mockResolvedValue({ data: [] });
@@ -354,15 +423,83 @@ describe("Tasks page", () => {
     expect(apiMocks.getTask).not.toHaveBeenCalled();
   });
 
-  it("shows truncation warning when task count hits backend limit", async () => {
-    const tasks = Array.from({ length: TASK_LIST_LIMIT }, (_, index) =>
+  it("shows true total count when backend reports a truncated task window", async () => {
+    const tasks = Array.from({ length: 50 }, (_, index) =>
+      makeTask({ id: `task-${index}`, title: `Task ${index}` }),
+    );
+
+    const wrapper = await mountPage(tasks, {
+      totalCount: 80,
+      limit: 50,
+      truncated: true,
+    });
+
+    expect(apiMocks.listTasks).toHaveBeenCalledWith("proj-1", undefined);
+    expect(wrapper.text()).toContain("共 80 个任务，当前窗口显示 50 个");
+    expect(wrapper.text()).toContain("当前窗口显示 50 / 共 80 条任务");
+    const pagination = wrapper.getComponent({ name: "ATable" }).props("pagination") as {
+      total: number;
+      showTotal: (total: number, range: [number, number]) => string;
+    };
+    expect(pagination.total).toBe(50);
+    expect(pagination.showTotal(pagination.total, [1, 20])).toContain(
+      "第 1-20 条，共 50 条，任务总数 80 条",
+    );
+  });
+
+  it("updates the table page size when the user switches the per-page selector", async () => {
+    const tasks = Array.from({ length: 30 }, (_, index) =>
       makeTask({ id: `task-${index}`, title: `Task ${index}` }),
     );
 
     const wrapper = await mountPage(tasks);
 
-    expect(apiMocks.listTasks).toHaveBeenCalledWith("proj-1");
-    expect(wrapper.text()).toContain(`当前仅显示最近 ${TASK_LIST_LIMIT} 条任务`);
+    const table = wrapper.getComponent({ name: "ATable" });
+    let pagination = table.props("pagination") as {
+      current: number;
+      pageSize: number;
+      total: number;
+      showSizeChanger: boolean;
+    };
+
+    expect(pagination.current).toBe(1);
+    expect(pagination.pageSize).toBe(20);
+    expect(pagination.total).toBe(30);
+    expect(pagination.showSizeChanger).toBe(true);
+
+    table.vm.$emit("change", { current: 1, pageSize: 10 });
+    await flushPromises();
+
+    pagination = table.props("pagination") as {
+      current: number;
+      pageSize: number;
+      total: number;
+      showTotal: (total: number, range: [number, number]) => string;
+    };
+
+    expect(pagination.current).toBe(1);
+    expect(pagination.pageSize).toBe(10);
+    expect(pagination.showTotal(pagination.total, [1, 10])).toContain("第 1-10 条，共 30 条");
+  });
+
+  it("refetches the task list with the selected status filter", async () => {
+    const wrapper = await mountPage([makeTask({ id: "task-running", status: "running" })]);
+
+    apiMocks.listTasks.mockResolvedValueOnce({
+      data: [makeTask({ id: "task-done", status: "completed", title: "Completed task" })],
+      totalCount: 1,
+      limit: TASK_LIST_LIMIT,
+      truncated: false,
+    });
+
+    const state = getSetupState(wrapper) as {
+      setStatusFilter: (value: unknown) => void;
+    };
+    state.setStatusFilter("completed");
+    await flushPromises();
+
+    expect(apiMocks.listTasks).toHaveBeenLastCalledWith("proj-1", "completed");
+    expect(wrapper.text()).toContain("当前状态共 1 个任务");
   });
 
   it("filters task list by search keyword", async () => {
@@ -375,9 +512,8 @@ describe("Tasks page", () => {
     await searchInput.setValue("beta");
     await flushPromises();
 
-    const rowTexts = wrapper.findAll("tbody tr").map((node) => node.text().replace(/\s+/g, ""));
-    expect(rowTexts.some((text) => text.includes("Betatask"))).toBe(true);
-    expect(rowTexts.some((text) => text.includes("Alphatask"))).toBe(false);
+    const state = getSetupState(wrapper) as { filteredTasks: Task[] };
+    expect(state.filteredTasks.map((task) => task.id)).toEqual(["task-beta"]);
   });
 
   it("starts pending task through preflight and returns the settled snapshot", async () => {
@@ -564,6 +700,61 @@ describe("Tasks page", () => {
     await flushPromises();
 
     expect(apiMocks.deleteTask).toHaveBeenCalledWith("task-run");
+  });
+
+  it("clears existing selection after single-row delete succeeds", async () => {
+    const wrapper = await mountPage([
+      makeTask({ id: "task-1", title: "Task 1" }),
+      makeTask({ id: "task-2", title: "Task 2" }),
+    ]);
+
+    const state = getSetupState(wrapper) as {
+      selectedTaskIds: string[];
+      handleDelete: (taskId: string) => Promise<void>;
+      handleTaskSelectionChange: (keys: string[]) => void;
+    };
+
+    state.handleTaskSelectionChange(["task-2"]);
+    await flushPromises();
+
+    expect(state.selectedTaskIds).toEqual(["task-2"]);
+
+    await state.handleDelete("task-1");
+    await flushPromises();
+
+    expect(state.selectedTaskIds).toEqual([]);
+  });
+
+  it("supports selecting multiple tasks and deleting them together", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const wrapper = await mountPage([
+      makeTask({ id: "task-1", title: "Task 1" }),
+      makeTask({ id: "task-2", title: "Task 2" }),
+    ]);
+
+    const table = wrapper.getComponent({ name: "ATable" });
+    expect(table.props("rowSelection")).toBeTruthy();
+    expect(wrapper.text()).toContain("勾选任务后可批量删除");
+
+    const state = getSetupState(wrapper) as {
+      selectedTaskIds: string[];
+      handleTaskSelectionChange: (keys: string[]) => void;
+      handleBulkDeleteClick: () => Promise<void>;
+    };
+
+    state.handleTaskSelectionChange(["task-1", "task-2"]);
+    await flushPromises();
+
+    expect(state.selectedTaskIds).toEqual(["task-1", "task-2"]);
+    expect(wrapper.text()).toContain("已选 2 个任务，可批量删除");
+
+    await state.handleBulkDeleteClick();
+    await flushPromises();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(apiMocks.deleteTask).toHaveBeenNthCalledWith(1, "task-1");
+    expect(apiMocks.deleteTask).toHaveBeenNthCalledWith(2, "task-2");
+    expect(apiMocks.listTasks).toHaveBeenCalled();
   });
 
   it("loads built-in task templates when localStorage is empty", async () => {

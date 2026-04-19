@@ -40,6 +40,7 @@ const FLOW_REFRESH_REASONS = new Set<TaskMessagePatchEvent["kind"]>([
 export type TaskDetailRefreshRequest = {
   eventId: string;
   reason: TaskMessagePatchEvent["kind"];
+  phaseId?: string;
   targets: TaskDetailRefreshTargets;
   shouldBumpTraceRefreshKey: boolean;
 };
@@ -78,6 +79,7 @@ export function getTaskDetailRefreshRequest(
   return {
     eventId: patchEvent.eventId,
     reason: patchEvent.kind,
+    phaseId: patchEvent.phaseId,
     targets: getTaskDetailRefreshTargets(
       patchEvent.kind,
       effects.shouldRefreshTaskDetailMessages,

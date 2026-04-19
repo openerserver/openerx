@@ -113,6 +113,31 @@ interface AgentOpsQueueItemResponse {
   actionPermissions?: AgentRunSummaryResponse["actionPermissions"];
 }
 
+interface TaskSessionPhaseReference {
+  id: string;
+  runtimeSessionId?: string | null;
+  phaseId?: string | null;
+}
+
+interface TaskPhaseReference {
+  id: string;
+  phaseKind: string;
+  triggerType: string;
+  currentSessionId?: string | null;
+  latestSessionId?: string | null;
+}
+
+interface RuntimeRunTaskPhaseContext {
+  taskId: string;
+  projectId: string;
+  phaseId: string;
+  phaseKind: string;
+  triggerType: string;
+  taskSessionId: string | null;
+  currentSessionId: string | null;
+  latestSessionId: string | null;
+}
+
 type RuntimeRunRecoveryFailure = {
   status: 404 | 409;
   code: "AGENT_RUN_SUMMARY_NOT_FOUND" | "AGENT_RUN_SUMMARY_INCOMPLETE";
@@ -356,6 +381,200 @@ function readErrorMessage(data: unknown, fallback: string) {
   }
 
   return fallback;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asNonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readDataRecords(value: unknown) {
+  const root = asRecord(value);
+  const items = Array.isArray(root?.data) ? root.data : [];
+  return items
+    .map((item) => asRecord(item))
+    .filter((item): item is Record<string, unknown> => item !== null);
+}
+
+function matchesTaskSessionReference(
+  taskId: string,
+  runtimeSessionId: string,
+  session: TaskSessionPhaseReference,
+) {
+  return (
+    session.runtimeSessionId === runtimeSessionId ||
+    session.id === runtimeSessionId ||
+    session.id === `task-session:${taskId}:${runtimeSessionId}`
+  );
+}
+
+function broadcastTaskPhaseAgentLifecycleEvent(args: {
+  type: "task.phase.paused" | "task.phase.resumed";
+  taskId: string;
+  projectId: string;
+  phaseId: string;
+  sessionId?: string | null;
+  data?: Record<string, unknown>;
+}) {
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: args.type,
+    ts: new Date().toISOString(),
+    taskId: args.taskId,
+    projectId: args.projectId,
+    sessionId: args.sessionId ?? undefined,
+    phaseId: args.phaseId,
+    data: {
+      phaseId: args.phaseId,
+      ...(args.data ?? {}),
+    },
+  });
+}
+
+async function resolveRuntimeRunTaskPhaseContext(
+  c: Parameters<typeof authHeader>[0],
+  run?: RuntimeRun,
+): Promise<RuntimeRunTaskPhaseContext | null> {
+  const taskId = run?.taskId;
+  const runtimeSessionId = run?.subSessionId;
+  const projectId = run?.projectId;
+  if (!taskId || !runtimeSessionId || !projectId) {
+    return null;
+  }
+
+  const authorization = authHeader(c);
+  const [sessionsResult, phasesResult] = await Promise.all([
+    cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/sessions`, { authorization }),
+    cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/phases`, { authorization }),
+  ]);
+  if (!sessionsResult.ok || !phasesResult.ok) {
+    return null;
+  }
+
+  const sessions = readDataRecords(sessionsResult.data).map(
+    (record) =>
+      ({
+        id: asNonEmptyString(record.id) ?? "",
+        runtimeSessionId: asNonEmptyString(record.runtimeSessionId) ?? null,
+        phaseId: asNonEmptyString(record.phaseId) ?? null,
+      }) satisfies TaskSessionPhaseReference,
+  );
+  const session = sessions.find(
+    (candidate) => candidate.id && matchesTaskSessionReference(taskId, runtimeSessionId, candidate),
+  );
+  const phaseId = asNonEmptyString(session?.phaseId);
+  if (!phaseId) {
+    return null;
+  }
+
+  const phases = readDataRecords(phasesResult.data).map(
+    (record) =>
+      ({
+        id: asNonEmptyString(record.id) ?? "",
+        phaseKind: asNonEmptyString(record.phaseKind) ?? "",
+        triggerType: asNonEmptyString(record.triggerType) ?? "",
+        currentSessionId: asNonEmptyString(record.currentSessionId) ?? null,
+        latestSessionId: asNonEmptyString(record.latestSessionId) ?? null,
+      }) satisfies TaskPhaseReference,
+  );
+  const phase = phases.find((candidate) => candidate.id === phaseId);
+  if (!phase || !phase.phaseKind || !phase.triggerType) {
+    return null;
+  }
+
+  return {
+    taskId,
+    projectId,
+    phaseId,
+    phaseKind: phase.phaseKind,
+    triggerType: phase.triggerType,
+    taskSessionId: session?.id ?? null,
+    currentSessionId: phase.currentSessionId ?? session?.id ?? null,
+    latestSessionId: phase.latestSessionId ?? session?.id ?? null,
+  };
+}
+
+async function syncPausedTaskPhaseForRun(
+  c: Parameters<typeof authHeader>[0],
+  run?: RuntimeRun,
+) {
+  const phaseContext = await resolveRuntimeRunTaskPhaseContext(c, run);
+  if (!phaseContext) {
+    return;
+  }
+
+  const result = await cpFetch(
+    `/api/tasks/${encodeURIComponent(phaseContext.taskId)}/phases/${encodeURIComponent(phaseContext.phaseId)}/pause`,
+    {
+      method: "POST",
+      authorization: authHeader(c),
+      body: {},
+    },
+  );
+  if (!result.ok) {
+    return;
+  }
+
+  const payload = asRecord(result.data);
+  const currentSessionId = asNonEmptyString(payload?.currentSessionId) ?? phaseContext.currentSessionId;
+  const latestSessionId = asNonEmptyString(payload?.latestSessionId) ?? phaseContext.latestSessionId;
+  broadcastTaskPhaseAgentLifecycleEvent({
+    type: "task.phase.paused",
+    taskId: phaseContext.taskId,
+    projectId: phaseContext.projectId,
+    phaseId: phaseContext.phaseId,
+    sessionId: currentSessionId ?? phaseContext.taskSessionId,
+    data: {
+      status: asNonEmptyString(payload?.status) ?? "paused",
+      phaseKind: phaseContext.phaseKind,
+      triggerType: phaseContext.triggerType,
+      ...(currentSessionId ? { currentSessionId } : {}),
+      ...(latestSessionId ? { latestSessionId } : {}),
+    },
+  });
+}
+
+async function syncResumedTaskPhaseForRun(
+  c: Parameters<typeof authHeader>[0],
+  run?: RuntimeRun,
+) {
+  const phaseContext = await resolveRuntimeRunTaskPhaseContext(c, run);
+  if (!phaseContext) {
+    return;
+  }
+
+  const result = await cpFetch(
+    `/api/tasks/${encodeURIComponent(phaseContext.taskId)}/phases/${encodeURIComponent(phaseContext.phaseId)}/resume`,
+    {
+      method: "POST",
+      authorization: authHeader(c),
+      body: { mode: "reuse" },
+    },
+  );
+  if (!result.ok) {
+    return;
+  }
+
+  const payload = asRecord(result.data);
+  const currentSessionId = asNonEmptyString(payload?.currentSessionId) ?? phaseContext.currentSessionId;
+  broadcastTaskPhaseAgentLifecycleEvent({
+    type: "task.phase.resumed",
+    taskId: phaseContext.taskId,
+    projectId: phaseContext.projectId,
+    phaseId: phaseContext.phaseId,
+    sessionId: currentSessionId ?? phaseContext.taskSessionId,
+    data: {
+      status: asNonEmptyString(payload?.status) ?? "running",
+      phaseKind: phaseContext.phaseKind,
+      triggerType: phaseContext.triggerType,
+      ...(currentSessionId ? { currentSessionId } : {}),
+    },
+  });
 }
 
 function normalizeLatestEvents(summary: Partial<AgentRunSummaryResponse>) {
@@ -1162,6 +1381,7 @@ agentControlRoutes.post("/:agentRunId/pause", async (c) => {
           riskLevel: "medium",
         }),
       ]);
+      await syncPausedTaskPhaseForRun(c, run).catch(() => undefined);
     }
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
@@ -1214,6 +1434,7 @@ agentControlRoutes.post("/:agentRunId/resume", async (c) => {
           riskLevel: "low",
         }),
       ]);
+      await syncResumedTaskPhaseForRun(c, currentRun).catch(() => undefined);
     }
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),

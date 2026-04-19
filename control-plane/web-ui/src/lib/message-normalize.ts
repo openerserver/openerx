@@ -167,6 +167,38 @@ export function hasCompletedTimestamp(value: unknown): boolean {
   return (typeof value === "string" && value.length > 0) || typeof value === "number";
 }
 
+function normalizeWrappedPromptText(text?: string | null): string | undefined {
+  if (typeof text !== "string") {
+    return undefined;
+  }
+
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  return normalized || undefined;
+}
+
+export function extractWrappedOriginalTaskText(text?: string | null): string | undefined {
+  const normalized = normalizeWrappedPromptText(text);
+  if (!normalized || !normalized.includes("Original task:")) {
+    return undefined;
+  }
+
+  if (
+    !normalized.includes("Execution context:") &&
+    !normalized.includes("Pre-execution assessment from the configured review agent:")
+  ) {
+    return undefined;
+  }
+
+  const marker = "Original task:";
+  const markerIndex = normalized.lastIndexOf(marker);
+  if (markerIndex < 0) {
+    return undefined;
+  }
+
+  const extracted = normalized.slice(markerIndex + marker.length).trim();
+  return extracted || undefined;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Realtime event accessors                                           */
 /* ------------------------------------------------------------------ */
@@ -289,11 +321,67 @@ export function messageInfo(message: unknown) {
   return asRecord(asRecord(message)?.info);
 }
 
+function normalizePersistedPartType(value: string | undefined): string | undefined {
+  switch (value) {
+    case "toolCall":
+    case "tool-call":
+    case "tool_call":
+      return "tool";
+    case "toolResult":
+    case "tool-result":
+    case "tool_result":
+      return "tool-result";
+    default:
+      return value;
+  }
+}
+
+function normalizePersistedMessagePart(
+  part: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!part) {
+    return null;
+  }
+
+  const payload = asRecord(part.jsonPayload);
+  const normalizedType =
+    asString(part.type) ??
+    asString(payload?.type) ??
+    normalizePersistedPartType(asString(part.partType));
+  const text =
+    asString(part.text) ??
+    asString(part.content) ??
+    asString(part.textContent) ??
+    asString(part.contentText) ??
+    asString(payload?.text) ??
+    asString(payload?.content) ??
+    asString(payload?.textContent) ??
+    asString(payload?.contentText);
+  const state = asRecord(part.state) ?? asRecord(payload?.state);
+  const input = asRecord(part.input) ?? asRecord(payload?.input);
+
+  return {
+    ...part,
+    ...(payload ?? {}),
+    ...(normalizedType ? { type: normalizedType } : {}),
+    ...(text
+      ? {
+          text,
+          content: asString(part.content) ?? asString(payload?.content) ?? text,
+          textContent: asString(part.textContent) ?? asString(payload?.textContent) ?? text,
+          contentText: asString(part.contentText) ?? asString(payload?.contentText) ?? text,
+        }
+      : {}),
+    ...(state ? { state } : {}),
+    ...(input ? { input } : {}),
+  };
+}
+
 function messageParts(message: unknown): Array<Record<string, unknown>> {
   const parts = asRecord(message)?.parts;
   return Array.isArray(parts)
     ? parts
-        .map((part) => asRecord(part))
+        .map((part) => normalizePersistedMessagePart(asRecord(part)))
         .filter((part): part is Record<string, unknown> => Boolean(part))
     : [];
 }
@@ -347,6 +435,27 @@ function normalizeText(parts: Array<Record<string, unknown>>): string | undefine
 
 function normalizeThinkingText(parts: Array<Record<string, unknown>>): string | undefined {
   return normalizePartText(parts, new Set(["thinking", "reasoning"]));
+}
+
+function hasTypedThinkingPart(parts: Array<Record<string, unknown>>) {
+  return parts.some((part) => {
+    const partType = asString(part.type);
+    return partType === "thinking" || partType === "reasoning";
+  });
+}
+
+function hasDisplayTextPart(parts: Array<Record<string, unknown>>) {
+  return parts.some((part) => {
+    const partType = asString(part.type);
+    return !partType || partType === "text";
+  });
+}
+
+function shouldSuppressAssistantTextFallback(
+  role: string,
+  parts: Array<Record<string, unknown>>,
+) {
+  return role === "assistant" && hasTypedThinkingPart(parts) && !hasDisplayTextPart(parts);
 }
 
 function normalizePreviewText(value: unknown, maxLength = 320): string | undefined {
@@ -480,7 +589,8 @@ function buildReadPreview(output: unknown) {
   const rawContent =
     extractTaggedContent(outputText, "content") ??
     extractTaggedContent(outputText, "entries") ??
-    structuredPreview?.rawContent;
+    structuredPreview?.rawContent ??
+    extractReadOutputText(output);
 
   return {
     filePath:
@@ -882,14 +992,17 @@ export function normalizeMessage(
   const toolCalls = normalizeToolCalls(parts);
   const isStreaming = role === "assistant" && liveState.incompleteIds.has(key);
   const persistedThinkingText = normalizeThinkingText(parts);
+  const suppressAssistantTextFallback = shouldSuppressAssistantTextFallback(role, parts);
   const persistedText =
     normalizeText(parts) ??
-    asString(record?.textContent) ??
-    asString(record?.contentText) ??
-    asString(record?.summaryText) ??
-    asString(record?.text) ??
-    asString(record?.content) ??
-    asString(info?.preview);
+    (suppressAssistantTextFallback
+      ? undefined
+      : asString(record?.textContent) ??
+        asString(record?.contentText) ??
+        asString(record?.summaryText) ??
+        asString(record?.text) ??
+        asString(record?.content) ??
+        asString(info?.preview));
   const liveText = liveState.textById.get(key);
   const liveThinkingText = liveState.thinkingById.get(key);
   const text =
@@ -912,6 +1025,15 @@ export function normalizeMessage(
     asString(record?.errorText) ??
     asString(info?.error) ??
     asString(asRecord(info?.error)?.message);
+  const rawUserInputText = asString(record?.userInputText);
+  const rawFinalSentText = asString(record?.finalSentText);
+  const normalizedUserInputText =
+    role === "user"
+      ? extractWrappedOriginalTaskText(rawUserInputText) ??
+        extractWrappedOriginalTaskText(rawFinalSentText) ??
+        extractWrappedOriginalTaskText(text) ??
+        rawUserInputText
+      : rawUserInputText;
 
   if (
     !text &&
@@ -931,8 +1053,8 @@ export function normalizeMessage(
     errorText,
     thinkingText,
     text,
-    userInputText: asString(record?.userInputText),
-    finalSentText: asString(record?.finalSentText),
+    userInputText: normalizedUserInputText,
+    finalSentText: rawFinalSentText,
     toolCalls,
     createdAt:
       parseTimestamp(asRecord(info?.time)?.created) ??

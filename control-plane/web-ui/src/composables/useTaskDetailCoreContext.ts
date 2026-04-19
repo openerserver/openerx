@@ -6,6 +6,7 @@ import { useTaskDetailTaskStatusSync } from "./useTaskDetailTaskStatusSync";
 import { useTaskMessagePatchConsumer } from "./useTaskMessagePatchConsumer";
 import { useTaskMessageSnapshot } from "./useTaskMessageSnapshot";
 import { useTaskMessageStore } from "./useTaskMessageStore";
+import { useTaskPhaseTimeline } from "./useTaskPhaseTimeline";
 import { useTreeBranches } from "./useTreeBranches";
 
 export function useTaskDetailCoreContext(taskId: Ref<string>) {
@@ -129,7 +130,26 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
 
   const latestPersistenceAck = computed(() => storeLatestPersistenceAck?.value ?? null);
   const lastObservedTaskPatchEventId = ref<string | null>(null);
-  const refreshMessages = messageSnapshot.refreshCurrentPhase ?? messageSnapshot.refresh;
+  /**
+   * Phase-first primary refresh handle: resolves to `messageSnapshot.refreshCurrentPhase`
+   * (phase-aware) and falls back to the full snapshot `refresh` only when the snapshot
+   * module hasn't yet exposed the phase-aware variant. Consumers on the TaskDetail
+   * primary path can also use `phaseTimeline.refreshPhase(phaseId, silent)` for
+   * explicit phase-local refreshes (see
+   * `docs/task-detail/task-detail-phase-first-migration-checklist.md` §10.3).
+   */
+  const refreshCurrentPhaseMessages =
+    messageSnapshot.refreshCurrentPhase ?? messageSnapshot.refresh;
+  const phaseTimeline = useTaskPhaseTimeline({
+    snapshot: {
+      phaseSlices: messageSnapshot.phaseSlices,
+      loading: messageSnapshot.loading,
+      error: messageSnapshot.error,
+      refresh: messageSnapshot.refresh,
+      refreshCurrentPhase: messageSnapshot.refreshCurrentPhase,
+    },
+    currentPhaseId,
+  });
   const locallySatisfiedMessageRefreshEventId = computed(() => {
     if (latestTaskRefreshRequest.value?.reason !== "round-synced") {
       return null;
@@ -230,9 +250,10 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     messagesError: messageSnapshot.error,
     messagesLoading: messageSnapshot.loading,
     needsMessagePollingFallback,
+    phaseTimeline,
     projectId,
     realtimeConnected,
-    refreshMessages,
+    refreshCurrentPhaseMessages,
     refreshSessions,
     refreshTask,
     seedPendingAssistantDraft,

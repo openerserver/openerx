@@ -1,5 +1,16 @@
 // ── Realtime Event Types ────────────────────────────────────────────
 
+/**
+ * Public realtime event contract for TaskDetail clients.
+ *
+ * The `task.phase.*` family is the **primary** phase-first contract for the
+ * TaskDetail main path: clients must treat these events as the authoritative
+ * trigger for phase-local refreshes and phase-block state updates. Legacy
+ * events (`session.activated`, round-level signals, etc.) remain supported for
+ * compat consumers but must not be used as the primary driver of phase refresh
+ * logic. See docs/task-detail/task-detail-phase-first-migration-checklist.md
+ * §5.4.
+ */
 export type RealtimeEventType =
   | "session.created"
   | "session.updated"

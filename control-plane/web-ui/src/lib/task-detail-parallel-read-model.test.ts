@@ -287,4 +287,53 @@ describe("buildTaskDetailParallelReadModel", () => {
     ]);
     expect(readModel.sessionTreeFallbackRunSessionKey).toBe("");
   });
+
+  it("keeps summary-backed parallel history visible when phase authority loads without parallel phases", () => {
+    const readModel = buildTaskDetailParallelReadModel({
+      agentRuns: [],
+      baseConversationItems: [],
+      configuredCandidates: buildConfiguredCandidates(),
+      flatNodes: [],
+      phaseAuthorityLoaded: true,
+      phaseParallelRuns: [],
+      selectedSessionId: undefined,
+      selectedSessionNode: null,
+      task: {
+        id: "task-1",
+        sessionId: "mainline-session",
+        status: "completed",
+        executionMode: "single",
+      } as any,
+      taskNodeId: "task-root-node",
+      taskSessionSummaries: [
+        buildSummary({
+          id: "candidate-old-1",
+          title: "旧候选 1",
+          phaseId: "phase-old",
+          candidateIndex: 0,
+          winnerSessionId: "candidate-old-2",
+          createdAt: "2026-04-12T09:00:00.000Z",
+          updatedAt: "2026-04-12T09:05:00.000Z",
+        }),
+        buildSummary({
+          id: "candidate-old-2",
+          title: "旧候选 2",
+          phaseId: "phase-old",
+          candidateIndex: 1,
+          winnerSessionId: "candidate-old-2",
+          createdAt: "2026-04-12T09:00:30.000Z",
+          updatedAt: "2026-04-12T09:05:30.000Z",
+          selectedModel: "gpt-5.4",
+        }),
+      ],
+    });
+
+    expect(readModel.resolvedParallelRuns.map((run) => run.parallelRunId)).toEqual([
+      "task-session:phase-old",
+    ]);
+    expect(readModel.visibleParallelRuns.map((run) => run.parallelRunId)).toEqual([
+      "task-session:phase-old",
+    ]);
+    expect(readModel.currentParallelRunId).toBe("task-session:phase-old");
+  });
 });

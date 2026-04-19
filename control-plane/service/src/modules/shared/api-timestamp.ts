@@ -1,4 +1,3 @@
-const sqliteDateTimePattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
 type TimestampLike = string | null | undefined;
 
 export function normalizeApiTimestamp(value: TimestampLike) {
@@ -6,8 +5,7 @@ export function normalizeApiTimestamp(value: TimestampLike) {
     return value ?? null;
   }
 
-  const candidate = sqliteDateTimePattern.test(value) ? `${value.replace(" ", "T")}Z` : value;
-  const timestamp = new Date(candidate);
+  const timestamp = new Date(value);
 
   return Number.isNaN(timestamp.getTime()) ? value : timestamp.toISOString();
 }

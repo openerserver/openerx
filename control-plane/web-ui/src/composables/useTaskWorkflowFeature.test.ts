@@ -196,7 +196,7 @@ describe("useTaskWorkflowFeature", () => {
     await feature.loadModels();
 
     expect(feature.modelOptions.value).toEqual([
-      { value: "model-a", label: "model-a (Model A / Provider A)" },
+      { value: "Provider A:model-a", label: "model-a (Model A / Provider A)" },
     ]);
 
     feature.handleChooseMode();

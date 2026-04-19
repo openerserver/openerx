@@ -185,6 +185,44 @@ describe("project tree storage", () => {
     });
   });
 
+  test("skips rewriting existing active session nodes when lineage and state are unchanged", async () => {
+    const { upsertTaskBranchCompatTreeNode, updatedNodeValues } =
+      await loadProjectTreeStorageModule({
+        existingNode: {
+          id: "task_session:task-1:fork-session-1",
+          parentId: "task_session:task-1:root-session-1",
+          path: "project_project_1.task_task_1.session_task_session_task_1_root_session_1.session_task_session_task_1_fork_session_1",
+          depth: 3,
+          contentText: "feature/fork",
+          contentJson: {
+            sourceType: "fork",
+            parentRuntimeSessionId: "root-session-1",
+            forkedFromMessageId: null,
+          },
+          refType: "conversation_session",
+          refId: "task_session:task-1:fork-session-1",
+          runtimeSessionId: "fork-session-1",
+          branchName: "feature/fork",
+          createdAt: "2026-03-24T00:00:00.000Z",
+          isActive: true,
+          archivedAt: null,
+        },
+      });
+
+    const nodeId = await upsertTaskBranchCompatTreeNode({
+      taskId: "task-1",
+      runtimeSessionId: "fork-session-1",
+      parentRuntimeSessionId: "root-session-1",
+      branchName: "feature/fork",
+      sourceType: "fork",
+      isActive: true,
+      archivedAt: null,
+    });
+
+    expect(nodeId).toBe("task_session:task-1:fork-session-1");
+    expect(updatedNodeValues).toHaveLength(0);
+  });
+
   test("archives session nodes without rewriting lineage-only whitelist content_json", async () => {
     const { archiveTaskBranchCompatTreeNode, updatedNodeValues } =
       await loadProjectTreeStorageModule({

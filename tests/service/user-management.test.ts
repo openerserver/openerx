@@ -1,14 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { runPostgresCleanupStatements } from "./service-teardown-helpers";
 
 const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 
 interface LoginResult {
   token: string;
@@ -94,11 +89,7 @@ afterAll(async () => {
     `DELETE FROM users WHERE id='${user.id}';`,
   ]);
 
-  try {
-    execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
-  } catch {
-    console.warn("Cleanup failed for user-management.test.ts");
-  }
+  runPostgresCleanupStatements(statements, "user-management.test.ts");
 });
 
 describe("Admin user management (service)", () => {

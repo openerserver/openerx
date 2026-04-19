@@ -51,6 +51,10 @@ export function buildTaskSessionRegistrations(
     return shared.sessionMessageApi.postTaskSessionMessage(args);
   }
 
+  async function getTaskPhaseView(args: { taskId: string; phaseId: string }) {
+    return shared.sessionReadApi.getTaskPhaseView(args.taskId, args.phaseId);
+  }
+
   return {
     upsertTaskSession,
     persistTaskSessionMessage,
@@ -63,7 +67,7 @@ export function buildTaskSessionRegistrations(
     activateTaskSession: shared.branchWriteApi.activateTaskBranch,
     archiveTaskSession: shared.branchWriteApi.archiveTaskBranch,
     listTaskSessions: shared.sessionReadApi.listTaskSessions,
-    getTaskPhaseView: shared.sessionReadApi.getTaskPhaseView,
+    getTaskPhaseView,
     getTaskSession: shared.sessionReadApi.getTaskSession,
     buildTaskConversationMessagesResponse:
       shared.sessionReadApi.buildTaskConversationMessagesResponse,

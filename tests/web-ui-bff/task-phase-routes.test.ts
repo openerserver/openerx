@@ -7,6 +7,7 @@ import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
 const createInternalAuthorizationMock = mock(async () => "Bearer internal");
+const wsBroadcastMock = mock(() => undefined);
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
@@ -92,7 +93,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator"
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
   wsBroadcaster: {
-    broadcast: mock(() => undefined),
+    broadcast: wsBroadcastMock,
   },
 }));
 
@@ -116,6 +117,7 @@ describe("task phase routes", () => {
     cpFetchMock.mockReset();
     authHeaderMock.mockReset();
     createInternalAuthorizationMock.mockReset();
+    wsBroadcastMock.mockReset();
 
     authHeaderMock.mockReturnValue("Bearer test");
     createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
@@ -209,6 +211,172 @@ describe("task phase routes", () => {
     expect(cpFetchMock).toHaveBeenCalledWith(
       "/api/tasks/task-1/phases/phase-1/view",
       expect.objectContaining({ authorization: "Bearer test" }),
+    );
+  });
+
+  test("POST /:taskId/phases broadcasts task.phase.created for new phases", async () => {
+    cpFetchMock.mockResolvedValue({
+      ok: true,
+      status: 201,
+      data: {
+        id: "phase-1",
+        phaseIndex: 1,
+        phaseKind: "single",
+        triggerType: "execute",
+        status: "running",
+        parentPhaseId: null,
+        resumedFromPhaseId: null,
+        candidateCount: null,
+        winnerSessionId: null,
+        judgeSessionId: null,
+        startedAt: "2026-04-16T10:00:00.000Z",
+        finishedAt: null,
+        createdAt: "2026-04-16T10:00:00.000Z",
+        updatedAt: "2026-04-16T10:00:01.000Z",
+      },
+    });
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request("http://localhost/task-1/phases", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        phaseKind: "single",
+        triggerType: "execute",
+        status: "running",
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
+    expect(wsBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task.phase.created",
+        taskId: "task-1",
+        phaseId: "phase-1",
+        data: expect.objectContaining({
+          phaseId: "phase-1",
+          status: "running",
+          phaseKind: "single",
+          triggerType: "execute",
+        }),
+      }),
+    );
+  });
+
+  test("POST /:taskId/phases broadcasts task.phase.updated for running updates", async () => {
+    cpFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        id: "phase-2",
+        phaseIndex: 2,
+        phaseKind: "parallel",
+        triggerType: "continue",
+        status: "running",
+        parentPhaseId: "phase-1",
+        resumedFromPhaseId: null,
+        candidateCount: 3,
+        winnerSessionId: null,
+        judgeSessionId: null,
+        startedAt: "2026-04-16T11:00:00.000Z",
+        finishedAt: null,
+        createdAt: "2026-04-16T11:00:00.000Z",
+        updatedAt: "2026-04-16T11:00:05.000Z",
+      },
+    });
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request("http://localhost/task-1/phases", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        id: "phase-2",
+        phaseKind: "parallel",
+        triggerType: "continue",
+        status: "running",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
+    expect(wsBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task.phase.updated",
+        taskId: "task-1",
+        phaseId: "phase-2",
+        data: expect.objectContaining({
+          phaseId: "phase-2",
+          status: "running",
+          phaseKind: "parallel",
+          triggerType: "continue",
+          parentPhaseId: "phase-1",
+          candidateCount: 3,
+        }),
+      }),
+    );
+  });
+
+  test("POST /:taskId/phases broadcasts task.phase.failed for failed phase writes", async () => {
+    cpFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        id: "phase-3",
+        phaseIndex: 3,
+        phaseKind: "parallel",
+        triggerType: "execute",
+        status: "failed",
+        parentPhaseId: "phase-root",
+        resumedFromPhaseId: null,
+        candidateCount: 2,
+        winnerSessionId: null,
+        judgeSessionId: null,
+        startedAt: "2026-04-16T12:00:00.000Z",
+        finishedAt: "2026-04-16T12:00:07.000Z",
+        createdAt: "2026-04-16T12:00:00.000Z",
+        updatedAt: "2026-04-16T12:00:07.000Z",
+      },
+    });
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request("http://localhost/task-1/phases", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        id: "phase-3",
+        phaseKind: "parallel",
+        triggerType: "execute",
+        status: "failed",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
+    expect(wsBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task.phase.failed",
+        taskId: "task-1",
+        phaseId: "phase-3",
+        data: expect.objectContaining({
+          phaseId: "phase-3",
+          status: "failed",
+          phaseKind: "parallel",
+          triggerType: "execute",
+          parentPhaseId: "phase-root",
+          candidateCount: 2,
+          finishedAt: "2026-04-16T12:00:07.000Z",
+        }),
+      }),
     );
   });
 });

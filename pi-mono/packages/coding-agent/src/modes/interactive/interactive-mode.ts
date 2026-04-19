@@ -2318,15 +2318,14 @@ export class InteractiveMode {
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
+					this.streamingMessage = event.message;
 					this.streamingComponent = new AssistantMessageComponent(
-						undefined,
+						this.streamingMessage,
 						this.hideThinkingBlock,
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 					);
-					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
-					this.streamingComponent.updateContent(this.streamingMessage);
 					this.ui.requestRender();
 				}
 				break;

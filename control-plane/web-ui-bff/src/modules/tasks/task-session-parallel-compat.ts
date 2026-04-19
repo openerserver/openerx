@@ -1,3 +1,14 @@
+/**
+ * Compat-only parallel-session bridge for the legacy session-keyed round facade.
+ *
+ * Phase-first migration (checklist §5.3 / §10.2) surfaces parallel candidates through the
+ * phase-keyed DTOs on `/phases/:phaseId/view`. The suppression/mainline helpers below
+ * exist only to keep older round-message responses from double-counting parallel runs
+ * while a single winner is adopted. New code must not patch the parallel read path here;
+ * extend the phase-keyed projector (`task-detail-parallel-conversation-projector.ts` on
+ * the web-ui side, phase view DTO builders on the BFF side) instead. See
+ * `docs/task-detail/task-detail-phase-first-migration-checklist.md` §10.4.
+ */
 import type { TaskSessionLineageRecord } from "./task-session-store";
 
 type PendingParallelMessageSuppressionGroup = {

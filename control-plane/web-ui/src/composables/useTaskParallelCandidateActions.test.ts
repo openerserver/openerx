@@ -2,10 +2,10 @@ import { effectScope, ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useTaskParallelCandidateActions } from "./useTaskParallelCandidateActions";
 
-const adoptParallelCandidateMock = vi.fn();
-const messageSuccessMock = vi.fn();
-const messageErrorMock = vi.fn();
-const messageWarningMock = vi.fn();
+const adoptParallelCandidateMock = vi.hoisted(() => vi.fn());
+const messageSuccessMock = vi.hoisted(() => vi.fn());
+const messageErrorMock = vi.hoisted(() => vi.fn());
+const messageWarningMock = vi.hoisted(() => vi.fn());
 
 vi.mock("ant-design-vue", () => ({
   message: {

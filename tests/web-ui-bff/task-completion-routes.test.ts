@@ -444,7 +444,52 @@ describe("task completion routes", () => {
       },
     });
     expect(terminateAgentMock).toHaveBeenCalledWith("agent-run-2");
-    expect(wsBroadcastMock).toHaveBeenCalledTimes(2);
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(3);
+
+    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    expect(broadcastCalls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.objectContaining({
+            type: "task.phase.completed",
+            taskId: "task-adopt-1",
+            projectId: "proj-adopt",
+            sessionId: "session-a",
+            phaseId: "phase-parallel-1",
+            data: expect.objectContaining({
+              phaseId: "phase-parallel-1",
+              status: "completed",
+              terminalReason: "winner_adopted",
+              winnerCandidateIndex: 0,
+              winnerSessionId: "task-session:task-adopt-1:session-a",
+              currentSessionId: "session-a",
+              currentTaskSessionId: "task-session:task-adopt-1:session-a",
+            }),
+          }),
+        ],
+        [
+          expect.objectContaining({
+            type: "task.completed",
+            taskId: "task-adopt-1",
+            projectId: "proj-adopt",
+            data: expect.objectContaining({
+              phaseId: "phase-parallel-1",
+              status: "completed",
+              winnerCandidateIndex: 0,
+            }),
+          }),
+        ],
+        [
+          expect.objectContaining({
+            type: "session.activated",
+            taskId: "task-adopt-1",
+            projectId: "proj-adopt",
+          }),
+        ],
+      ]),
+    );
 
     const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
       [string, RouteFetchOptions | undefined]
@@ -467,6 +512,16 @@ describe("task completion routes", () => {
       sessionId: "session-a",
       result: "候选 A 结果",
     });
+    const sessionDeactivateCalls = cpFetchCalls.filter(
+      ([url, options]) => url === "/api/tasks/task-adopt-1/sessions" && options?.method === "POST",
+    );
+    expect(sessionDeactivateCalls.length).toBeGreaterThan(0);
+    expect(
+      sessionDeactivateCalls.some(([, options]) => {
+        const body = options?.body as Record<string, unknown> | undefined;
+        return typeof body?.runtimeSessionId === "string" && body.isActive === false;
+      }),
+    ).toBe(true);
     expect(
       cpFetchCalls.some(
         ([url, options]) =>
@@ -1031,6 +1086,129 @@ describe("task completion routes", () => {
           flow: true,
           messages: true,
         },
+      },
+    });
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
+    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    expect(broadcastCalls[0]?.[0]).toMatchObject({
+      type: "task.phase.cancelled",
+      taskId: "task-stop-1",
+      projectId: "proj-stop",
+      sessionId: "session-live",
+      phaseId: "phase-live-1",
+      data: {
+        phaseId: "phase-live-1",
+        status: "cancelled",
+        currentSessionId: "session-live",
+      },
+    });
+  });
+
+  test("POST /:taskId/phases/:phaseId/cancel broadcasts task.phase.cancelled on success", async () => {
+    mockCpFetchRoutes([
+      {
+        url: "/api/tasks/task-cancel-1/phases/phase-cancel-1/cancel",
+        method: "POST",
+        response: {
+          ok: true,
+          data: {
+            taskId: "task-cancel-1",
+            phaseId: "phase-cancel-1",
+            status: "cancelled",
+            terminalReason: "user_cancelled",
+            currentSessionId: "task-session:task-cancel-1:session-1",
+          },
+        },
+      },
+    ]);
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-cancel-1/phases/phase-cancel-1/cancel",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ reason: "user_cancelled" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      taskId: "task-cancel-1",
+      phaseId: "phase-cancel-1",
+      status: "cancelled",
+      terminalReason: "user_cancelled",
+      currentSessionId: "task-session:task-cancel-1:session-1",
+    });
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
+    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    expect(broadcastCalls[0]?.[0]).toMatchObject({
+      type: "task.phase.cancelled",
+      taskId: "task-cancel-1",
+      sessionId: "task-session:task-cancel-1:session-1",
+      phaseId: "phase-cancel-1",
+      data: {
+        phaseId: "phase-cancel-1",
+        status: "cancelled",
+        terminalReason: "user_cancelled",
+        currentSessionId: "task-session:task-cancel-1:session-1",
+      },
+    });
+  });
+
+  test("POST /:taskId/phases/:phaseId/resume broadcasts task.phase.resumed on success", async () => {
+    mockCpFetchRoutes([
+      {
+        url: "/api/tasks/task-resume-1/phases/phase-resume-1/resume",
+        method: "POST",
+        response: {
+          ok: true,
+          data: {
+            taskId: "task-resume-1",
+            phaseId: "phase-resume-1",
+            status: "running",
+          },
+        },
+      },
+    ]);
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-resume-1/phases/phase-resume-1/resume",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ mode: "reuse" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      taskId: "task-resume-1",
+      phaseId: "phase-resume-1",
+      status: "running",
+    });
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
+    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    expect(broadcastCalls[0]?.[0]).toMatchObject({
+      type: "task.phase.resumed",
+      taskId: "task-resume-1",
+      phaseId: "phase-resume-1",
+      data: {
+        phaseId: "phase-resume-1",
+        status: "running",
       },
     });
   });

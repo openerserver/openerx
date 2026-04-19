@@ -5,9 +5,17 @@ import {
 import {
   applyTaskMessagePatchEventToLiveAssistantState,
   cloneLiveAssistantState,
+  replayPhaseLiveAssistantState,
   replayTaskMessagePatchEvents,
 } from "./task-live-message-state";
 import { type TaskMessagePatchEvent } from "./task-message-patch-event";
+
+export type ReplaceLiveAssistantStateFromPhaseHistoryOptions = {
+  taskId: string;
+  phaseId: string | null | undefined;
+  sessionIds: string[];
+  patchEvents: TaskMessagePatchEvent[];
+};
 
 export type ConsumePendingTaskPatchEventsOptions = {
   consumerId: string;
@@ -90,6 +98,26 @@ export function createTaskLiveAssistantStateManager() {
     const replayedState = replayTaskMessagePatchEvents(patchEvents, sessionId);
     liveAssistantStates.set(buildLiveAssistantStateKey(taskId, sessionId), replayedState);
     return cloneLiveAssistantState(replayedState);
+  }
+
+  function replaceLiveAssistantStateFromPhaseHistory({
+    taskId,
+    phaseId,
+    sessionIds,
+    patchEvents,
+  }: ReplaceLiveAssistantStateFromPhaseHistoryOptions) {
+    const normalizedSessionIds = sessionIds.filter(
+      (sessionId): sessionId is string =>
+        typeof sessionId === "string" && sessionId.trim().length > 0,
+    );
+    if (!taskId || normalizedSessionIds.length === 0) {
+      return createEmptyLiveAssistantState();
+    }
+
+    return replayPhaseLiveAssistantState(patchEvents, {
+      phaseId: phaseId ?? null,
+      sessionIds: normalizedSessionIds,
+    });
   }
 
   function markConsumerHandled(consumerId: string, eventId: string | null | undefined) {
@@ -183,6 +211,7 @@ export function createTaskLiveAssistantStateManager() {
     getLiveAssistantState,
     markConsumerHandled,
     replaceLiveAssistantStateFromHistory,
+    replaceLiveAssistantStateFromPhaseHistory,
     reset,
   };
 }

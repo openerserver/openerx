@@ -110,4 +110,69 @@ describe("task live assistant state manager", () => {
       orderedAssistantMessageIds: ["assistant-1"],
     });
   });
+
+  it("replaceLiveAssistantStateFromPhaseHistory merges phase-scoped assistant state across sessions without mutating the session cache", () => {
+    const manager = createTaskLiveAssistantStateManager();
+
+    const phaseAStart = createPatchEvent({
+      eventId: "event-phase-a-start",
+      kind: "assistant-progress",
+      messageId: "assistant-a",
+      createdAt: "2026-04-17T01:00:00.000Z",
+      phaseId: "phase-a",
+      sessionId: "session-a",
+    });
+    const phaseAChainStart = createPatchEvent({
+      eventId: "event-phase-a-chain-start",
+      kind: "assistant-progress",
+      messageId: "assistant-a2",
+      createdAt: "2026-04-17T01:00:05.000Z",
+      phaseId: "phase-a",
+      sessionId: "session-a-child",
+    });
+    const phaseBStart = createPatchEvent({
+      eventId: "event-phase-b-start",
+      kind: "assistant-progress",
+      messageId: "assistant-b",
+      createdAt: "2026-04-17T01:00:10.000Z",
+      phaseId: "phase-b",
+      sessionId: "session-a",
+    });
+
+    // Seed session-a cache via session-only replay containing both phase events.
+    manager.replaceLiveAssistantStateFromHistory("task-1", "session-a", [
+      phaseBStart,
+      phaseAStart,
+    ]);
+    expect(
+      manager.getLiveAssistantState("task-1", "session-a", [phaseBStart, phaseAStart])
+        .orderedAssistantMessageIds,
+    ).toEqual(["assistant-a", "assistant-b"]);
+
+    const merged = manager.replaceLiveAssistantStateFromPhaseHistory({
+      taskId: "task-1",
+      phaseId: "phase-a",
+      sessionIds: ["session-a", "session-a-child"],
+      patchEvents: [phaseBStart, phaseAChainStart, phaseAStart],
+    });
+
+    expect(merged.orderedAssistantMessageIds).toEqual(["assistant-a", "assistant-a2"]);
+
+    // Session-only cache must not be overwritten by the phase-scoped replay.
+    expect(
+      manager.getLiveAssistantState("task-1", "session-a", [phaseBStart, phaseAStart])
+        .orderedAssistantMessageIds,
+    ).toEqual(["assistant-a", "assistant-b"]);
+  });
+
+  it("replaceLiveAssistantStateFromPhaseHistory returns an empty state when sessionIds is empty", () => {
+    const manager = createTaskLiveAssistantStateManager();
+    const state = manager.replaceLiveAssistantStateFromPhaseHistory({
+      taskId: "task-1",
+      phaseId: "phase-a",
+      sessionIds: [],
+      patchEvents: [],
+    });
+    expect(state.orderedAssistantMessageIds).toEqual([]);
+  });
 });

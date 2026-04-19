@@ -1,7 +1,12 @@
 <template>
   <div style="padding: 24px">
     <a-flex justify="space-between" align="center" style="margin-bottom: 16px">
-      <a-typography-title :level="3" style="margin: 0">任务列表</a-typography-title>
+      <div>
+        <a-typography-title :level="3" style="margin: 0">任务列表</a-typography-title>
+        <a-typography-text type="secondary" style="display: block; margin-top: 4px">
+          {{ taskSummaryText }}
+        </a-typography-text>
+      </div>
       <a-space>
         <a-input-search
           :value="searchText"
@@ -58,17 +63,46 @@
       style="margin-bottom: 16px"
     >
       <template #message>
-        当前仅显示最近 {{ TASK_LIST_LIMIT }} 条任务，更早的记录已被截断。可通过状态筛选缩小范围。
+        当前窗口显示 {{ tasks.length }} / 共 {{ totalTaskCount }} 条任务，删除一条后更早的任务可能补入当前列表。
       </template>
     </a-alert>
+
+    <div
+      v-if="isAdmin"
+      style="margin-bottom: 16px; padding: 12px 16px; border: 1px solid #f0f0f0; border-radius: 8px; background: #fafafa"
+    >
+      <a-flex justify="space-between" align="center" wrap="wrap" gap="middle">
+        <a-typography-text type="secondary">
+          {{
+            selectedTaskIds.length > 0
+              ? `已选 ${selectedTaskIds.length} 个任务，可批量删除`
+              : "勾选任务后可批量删除"
+          }}
+        </a-typography-text>
+        <a-space wrap>
+          <a-button
+            danger
+            :disabled="selectedTaskIds.length === 0"
+            :loading="deletingTasks"
+            data-testid="bulk-delete-tasks"
+            @click="handleBulkDeleteClick"
+          >删除所选任务</a-button>
+          <a-button v-if="selectedTaskIds.length > 0" @click="clearSelectedTaskIds">
+            清空选择
+          </a-button>
+        </a-space>
+      </a-flex>
+    </div>
 
     <a-table
       :data-source="filteredTasks"
       :columns="columns"
+      :row-selection="rowSelection"
       :loading="loading"
-      :pagination="{ pageSize: 20 }"
+      :pagination="tablePagination"
       row-key="id"
       size="middle"
+      @change="handleTableChange"
     >
       <template #emptyText>
         <a-empty :description="statusFilter ? '当前筛选条件下没有任务' : '暂无任务'">
@@ -126,7 +160,11 @@
               cancel-text="取消"
               @confirm="handleDelete(record.id)"
             >
-              <a-button danger size="small" :loading="deletingId === record.id">删除</a-button>
+              <a-button
+                danger
+                size="small"
+                :loading="pendingDeleteTaskIds.includes(String(record.id ?? ''))"
+              >删除</a-button>
             </a-popconfirm>
           </a-space>
         </template>
@@ -420,6 +458,7 @@ import {
   type RepositoryCredential,
   TASK_LIST_LIMIT,
   type Task,
+  type TaskListResponse,
   createTask,
   deleteTask,
   executeTask,
@@ -446,12 +485,17 @@ const route = useRoute();
 const router = useRouter();
 const loading = ref(false);
 const creating = ref(false);
-const deletingId = ref<string | null>(null);
+const selectedTaskIds = ref<string[]>([]);
+const pendingDeleteTaskIds = ref<string[]>([]);
 const tasks = ref<Task[]>([]);
 const statusFilter = ref<string | undefined>(undefined);
 const searchText = ref("");
 const loadError = ref("");
 const truncated = ref(false);
+const totalTaskCount = ref(0);
+const taskListWindowSize = ref(TASK_LIST_LIMIT);
+const tablePage = ref(1);
+const tablePageSize = ref(20);
 const showCreateModal = ref(false);
 const modelsLoading = ref(false);
 const modelsData = ref<Array<Record<string, unknown>> | null>(null);
@@ -462,21 +506,129 @@ const AUTO_REFRESH_INTERVAL_MS = 8000;
 const isAdmin = computed(() =>
   ["admin", "platform_admin", "org_admin"].includes(authStore.user?.role ?? ""),
 );
+const deletingTasks = computed(() => pendingDeleteTaskIds.value.length > 0);
+const rowSelection = computed(() => {
+  if (!isAdmin.value) {
+    return undefined;
+  }
+
+  return {
+    selectedRowKeys: selectedTaskIds.value,
+    onChange: (keys: Array<string | number>) =>
+      handleTaskSelectionChange(keys.map((key) => String(key))),
+    getCheckboxProps: (record: Task) => ({
+      disabled:
+        deletingTasks.value || pendingDeleteTaskIds.value.includes(String(record.id ?? "")),
+    }),
+  };
+});
 
 const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null);
 const hasActiveTasks = computed(() =>
   tasks.value.some((t) => t.status === "running" || t.status === "pending"),
 );
 
+const taskSummaryText = computed(() => {
+  const totalLabel = statusFilter.value
+    ? `当前状态共 ${totalTaskCount.value} 个任务`
+    : `共 ${totalTaskCount.value} 个任务`;
+
+  if (searchText.value.trim()) {
+    return `${totalLabel}，搜索后显示 ${filteredTasks.value.length} 个`;
+  }
+
+  if (tasks.value.length !== totalTaskCount.value) {
+    return `${totalLabel}，当前窗口显示 ${tasks.value.length} 个`;
+  }
+
+  return totalLabel;
+});
+
+const tablePagination = computed(() => ({
+  current: tablePage.value,
+  pageSize: tablePageSize.value,
+  total: filteredTasks.value.length,
+  showSizeChanger: true,
+  pageSizeOptions: ["10", "20", "50", "100"],
+  showTotal: showTaskPaginationTotal,
+}));
+
+function showTaskPaginationTotal(total: number, range: [number, number]) {
+  if (total <= 0) {
+    return totalTaskCount.value > 0 ? `当前页 0 条，任务总数 ${totalTaskCount.value} 条` : "暂无任务";
+  }
+
+  const [start, end] = range;
+  const pageLabel = `第 ${start}-${end} 条，共 ${total} 条`;
+
+  if (searchText.value.trim()) {
+    return totalTaskCount.value !== total
+      ? `${pageLabel}，任务总数 ${totalTaskCount.value} 条`
+      : pageLabel;
+  }
+
+  if (totalTaskCount.value !== total) {
+    return `${pageLabel}，任务总数 ${totalTaskCount.value} 条`;
+  }
+
+  return pageLabel;
+}
+
+function clampTablePage(page: number, pageSize = tablePageSize.value) {
+  const nextPageSize = Math.max(pageSize, 1);
+  const maxPage = Math.max(1, Math.ceil(filteredTasks.value.length / nextPageSize));
+  return Math.min(Math.max(page, 1), maxPage);
+}
+
+function resetTablePage() {
+  tablePage.value = 1;
+}
+
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
+  const nextPageSize =
+    typeof pagination.pageSize === "number" && Number.isFinite(pagination.pageSize)
+      ? pagination.pageSize
+      : tablePageSize.value;
+  const pageSizeChanged = nextPageSize !== tablePageSize.value;
+
+  tablePageSize.value = nextPageSize;
+
+  if (pageSizeChanged) {
+    tablePage.value = 1;
+    return;
+  }
+
+  const nextPage =
+    typeof pagination.current === "number" && Number.isFinite(pagination.current)
+      ? pagination.current
+      : tablePage.value;
+  tablePage.value = clampTablePage(nextPage, nextPageSize);
+}
+
+function applyTaskListResponse(result: TaskListResponse) {
+  const data = Array.isArray(result.data) ? result.data : [];
+  tasks.value = data;
+  totalTaskCount.value =
+    typeof result.totalCount === "number" ? result.totalCount : data.length;
+  taskListWindowSize.value =
+    typeof result.limit === "number" ? result.limit : TASK_LIST_LIMIT;
+  truncated.value =
+    typeof result.truncated === "boolean"
+      ? result.truncated
+      : totalTaskCount.value > data.length || data.length >= taskListWindowSize.value;
+  syncSelectedTaskIds();
+}
+
 function startAutoRefresh() {
   stopAutoRefresh();
   autoRefreshTimer.value = setInterval(async () => {
     if (loading.value) return;
     try {
-      const result = await listTasks(projectStore.currentProjectId || undefined);
-      const data = result.data || [];
-      tasks.value = data;
-      truncated.value = data.length >= TASK_LIST_LIMIT;
+      const result = await listTasks(projectStore.currentProjectId || undefined, statusFilter.value);
+      applyTaskListResponse(result);
     } catch {
       // Silently ignore auto-refresh errors
     }
@@ -524,6 +676,8 @@ function upsertTaskSnapshot(snapshot: Partial<Task> & Pick<Task, "id">) {
     ...snapshot,
     id: snapshot.id,
   });
+  totalTaskCount.value = Math.max(totalTaskCount.value + 1, tasks.value.length);
+  truncated.value = totalTaskCount.value > taskListWindowSize.value;
 }
 
 async function waitForExecutionState(taskId: string) {
@@ -1137,6 +1291,20 @@ function setStatusFilter(value: unknown) {
   statusFilter.value = value == null ? undefined : String(value);
 }
 
+function handleTaskSelectionChange(keys: string[]) {
+  const visibleIds = new Set(filteredTasks.value.map((task) => task.id));
+  selectedTaskIds.value = Array.from(new Set(keys.filter((key) => visibleIds.has(key))));
+}
+
+function clearSelectedTaskIds() {
+  selectedTaskIds.value = [];
+}
+
+function syncSelectedTaskIds() {
+  const visibleIds = new Set(filteredTasks.value.map((task) => task.id));
+  selectedTaskIds.value = selectedTaskIds.value.filter((key) => visibleIds.has(key));
+}
+
 function getProjectName(projectId: string): string {
   const project = projectStore.projects.find((p) => p.id === projectId);
   return project?.name || projectId;
@@ -1156,14 +1324,17 @@ const filteredTasks = computed(() => {
   return result;
 });
 
+watch(searchText, () => {
+  resetTablePage();
+  clearSelectedTaskIds();
+});
+
 async function refresh() {
   loading.value = true;
   loadError.value = "";
   try {
-    const result = await listTasks(projectStore.currentProjectId || undefined);
-    const data = result.data || [];
-    tasks.value = data;
-    truncated.value = data.length >= TASK_LIST_LIMIT;
+    const result = await listTasks(projectStore.currentProjectId || undefined, statusFilter.value);
+    applyTaskListResponse(result);
     maybeStartAutoRefresh();
   } catch (e) {
     loadError.value = `加载任务列表失败: ${e}`;
@@ -1213,16 +1384,81 @@ async function handleCreate() {
 }
 
 async function handleDelete(taskId: string) {
-  deletingId.value = taskId;
-  try {
-    await deleteTask(taskId);
-    message.success("任务已删除");
-    await refresh();
-  } catch (e) {
-    message.error(`删除失败: ${e}`);
-  } finally {
-    deletingId.value = null;
+  await runTaskDeletion([taskId]);
+}
+
+function normalizeDeleteError(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
+
+  return String(error);
+}
+
+async function runTaskDeletion(taskIds: string[]) {
+  if (taskIds.length === 0) {
+    return;
+  }
+
+  pendingDeleteTaskIds.value = [...taskIds];
+  try {
+    const results = await Promise.allSettled(taskIds.map((taskId) => deleteTask(taskId)));
+    const succeededIds: string[] = [];
+    const failedIds: string[] = [];
+    const failedMessages: string[] = [];
+
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        succeededIds.push(taskIds[index] ?? "");
+        continue;
+      }
+
+      failedIds.push(taskIds[index] ?? "");
+      failedMessages.push(normalizeDeleteError(result.reason));
+    }
+
+    if (succeededIds.length > 0) {
+      await refresh();
+      message.success(succeededIds.length === 1 ? "任务已删除" : `已删除 ${succeededIds.length} 个任务`);
+    }
+
+    selectedTaskIds.value = failedIds;
+    syncSelectedTaskIds();
+
+    if (failedMessages.length > 0) {
+      message.error(
+        failedMessages.length === 1
+          ? `删除失败: ${failedMessages[0]}`
+          : `有 ${failedMessages.length} 个任务删除失败，请重试`,
+      );
+    }
+  } finally {
+    pendingDeleteTaskIds.value = [];
+  }
+}
+
+async function handleBulkDeleteClick() {
+  if (!isAdmin.value) {
+    message.error("仅管理员可以删除任务");
+    return;
+  }
+
+  if (selectedTaskIds.value.length === 0) {
+    message.warning("请先选择要删除的任务");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    selectedTaskIds.value.length === 1
+      ? "确定删除所选任务？此操作不可恢复。"
+      : `确定删除所选的 ${selectedTaskIds.value.length} 个任务？此操作不可恢复。`,
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  await runTaskDeletion([...selectedTaskIds.value]);
 }
 
 function formatDuration(task: { startedAt?: string; finishedAt?: string }) {
@@ -1260,11 +1496,34 @@ watch(
   (projectId) => {
     if (!projectId) {
       tasks.value = [];
+      totalTaskCount.value = 0;
+      truncated.value = false;
+      clearSelectedTaskIds();
+      resetTablePage();
       return;
     }
+    clearSelectedTaskIds();
+    resetTablePage();
     void refresh();
   },
   { immediate: true },
+);
+
+watch(statusFilter, () => {
+  if (!projectStore.currentProjectId) {
+    return;
+  }
+  clearSelectedTaskIds();
+  resetTablePage();
+  void refresh();
+});
+
+watch(
+  filteredTasks,
+  () => {
+    tablePage.value = clampTablePage(tablePage.value);
+  },
+  { flush: "sync" },
 );
 
 watch(

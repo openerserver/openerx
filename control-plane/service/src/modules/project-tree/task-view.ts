@@ -1,9 +1,10 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { db } from "../../db";
 import {
   projectTreeNodes,
   repositories,
   repositoryCredentials,
+  taskExecutionPhases,
   taskSessions,
   taskSnapshots,
   tasks,
@@ -11,6 +12,7 @@ import {
 import { normalizeApiTimestamp } from "../shared/api-timestamp";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
 import {
+  normalizeAuthoritativeTaskStatusValue,
   normalizePublicTaskStatusValue,
   resolvePublicTaskStatus,
 } from "../tasks/public-task-status";
@@ -66,6 +68,13 @@ export interface TaskTreeRecord {
   credentialLabel: string | null;
 }
 
+export interface TaskTreeListResponse {
+  data: TaskTreeRecord[];
+  totalCount: number;
+  limit: number;
+  truncated: boolean;
+}
+
 function normalizeTaskCategory(value: unknown): TaskCategory | null {
   return value === "quick" ||
     value === "deep" ||
@@ -78,12 +87,17 @@ function normalizeTaskCategory(value: unknown): TaskCategory | null {
 
 type TaskAggregateRow = typeof tasks.$inferSelect;
 type TaskSnapshotRow = typeof taskSnapshots.$inferSelect;
+type TaskExecutionPhaseRow = Pick<
+  typeof taskExecutionPhases.$inferSelect,
+  "id" | "status" | "winnerSessionId" | "finishedAt" | "terminalReason"
+>;
 type TaskRepoRow = typeof repositories.$inferSelect;
 type TaskCredentialRow = typeof repositoryCredentials.$inferSelect;
 type MapTaskTreeNodeArgs = {
   node: typeof projectTreeNodes.$inferSelect;
   aggregate?: TaskAggregateRow;
   snapshot?: TaskSnapshotRow;
+  phasesById: Map<string, TaskExecutionPhaseRow>;
   sessionRuntimeIds: Map<string, string>;
   repos: Map<string, TaskRepoRow>;
   credentials: Map<string, TaskCredentialRow>;
@@ -95,11 +109,51 @@ function mapOrchestrationKindToExecutionMode(
   return fromStoredTaskExecutionMode(orchestrationKind);
 }
 
+function resolveRelevantSnapshotPhase(
+  snapshot: TaskSnapshotRow | undefined,
+  phasesById: Map<string, TaskExecutionPhaseRow>,
+) {
+  const currentPhase = snapshot?.currentPhaseId ? phasesById.get(snapshot.currentPhaseId) : undefined;
+  if (currentPhase) {
+    return currentPhase;
+  }
+
+  return snapshot?.latestPhaseId ? phasesById.get(snapshot.latestPhaseId) : undefined;
+}
+
+function resolveSnapshotAuthoritativeStatus(
+  snapshot: TaskSnapshotRow | undefined,
+  phasesById: Map<string, TaskExecutionPhaseRow>,
+) {
+  return normalizeAuthoritativeTaskStatusValue(
+    resolveRelevantSnapshotPhase(snapshot, phasesById)?.status,
+  );
+}
+
+function resolveAuthoritativeSnapshotSessionId(
+  snapshot: TaskSnapshotRow | undefined,
+  phasesById: Map<string, TaskExecutionPhaseRow>,
+) {
+  const phase = resolveRelevantSnapshotPhase(snapshot, phasesById);
+  const authoritativeStatus = normalizeAuthoritativeTaskStatusValue(phase?.status);
+  if (authoritativeStatus === "completed" && phase?.winnerSessionId) {
+    return phase.winnerSessionId;
+  }
+
+  return snapshot?.currentSessionId ?? null;
+}
+
+function isTerminalTaskStatus(status: TaskStatus | null | undefined) {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 function resolveSnapshotTaskStatus(
   snapshot?: TaskSnapshotRow,
+  phasesById: Map<string, TaskExecutionPhaseRow> = new Map(),
   _aggregate?: TaskAggregateRow,
 ): TaskStatus {
   return resolvePublicTaskStatus({
+    authoritativeStatus: resolveSnapshotAuthoritativeStatus(snapshot, phasesById),
     currentExecutionStatus: snapshot?.currentExecutionStatus,
     lifecycleStatus: snapshot?.lifecycleStatus,
   });
@@ -170,15 +224,22 @@ function resolveTaskRunFields(
   refs: ReturnType<typeof resolveTaskReferenceIds>,
   strategyFields: ReturnType<typeof resolveTaskStrategyFields>,
 ) {
-  const snapshotSessionId = args.snapshot?.currentSessionId
-    ? (args.sessionRuntimeIds.get(args.snapshot.currentSessionId) ?? null)
+  const authoritativeStatus = resolveSnapshotAuthoritativeStatus(args.snapshot, args.phasesById);
+  const authoritativeSessionId = resolveAuthoritativeSnapshotSessionId(
+    args.snapshot,
+    args.phasesById,
+  );
+  const snapshotSessionId = authoritativeSessionId
+    ? (args.sessionRuntimeIds.get(authoritativeSessionId) ?? authoritativeSessionId)
     : null;
   const startedAt = args.aggregate?.activatedAt ?? null;
-  const finishedAt = args.aggregate?.doneAt ?? null;
+  const finishedAt =
+    args.aggregate?.doneAt ??
+    (isTerminalTaskStatus(authoritativeStatus) ? (args.snapshot?.lastActivityAt ?? null) : null);
   const lastActivityAt = args.snapshot?.lastActivityAt ?? null;
 
   return {
-    status: resolveSnapshotTaskStatus(args.snapshot, args.aggregate),
+    status: resolveSnapshotTaskStatus(args.snapshot, args.phasesById, args.aggregate),
     sessionId: snapshotSessionId,
     agentRunId: null,
     result:
@@ -190,7 +251,8 @@ function resolveTaskRunFields(
     finishedAt: normalizeApiTimestamp(finishedAt),
     orchestrationKind: mapOrchestrationKindToExecutionMode(args.snapshot?.currentExecutionMode),
     currentRunId: refs.currentRunId,
-    currentRunStatus: normalizePublicTaskStatusValue(args.snapshot?.currentExecutionStatus),
+    currentRunStatus:
+      authoritativeStatus ?? normalizePublicTaskStatusValue(args.snapshot?.currentExecutionStatus),
     currentRunStartedAt: null,
     currentRunFinishedAt: null,
     currentRunCandidateCount: null,
@@ -229,6 +291,7 @@ async function loadTaskDomainMaps(taskIds: string[]) {
     return {
       aggregates: new Map<string, TaskAggregateRow>(),
       snapshots: new Map<string, TaskSnapshotRow>(),
+      phasesById: new Map<string, TaskExecutionPhaseRow>(),
       sessionRuntimeIds: new Map<string, string>(),
     };
   }
@@ -238,10 +301,32 @@ async function loadTaskDomainMaps(taskIds: string[]) {
     db.select().from(taskSnapshots).where(inArray(taskSnapshots.taskId, taskIds)),
   ]);
 
+  const phaseIds = Array.from(
+    new Set(
+      snapshotRows
+        .flatMap((row) => [row.currentPhaseId, row.latestPhaseId])
+        .filter((phaseId): phaseId is string => Boolean(phaseId)),
+    ),
+  );
+  const phaseRows =
+    phaseIds.length > 0
+      ? await db
+          .select({
+            id: taskExecutionPhases.id,
+            status: taskExecutionPhases.status,
+            winnerSessionId: taskExecutionPhases.winnerSessionId,
+            finishedAt: taskExecutionPhases.finishedAt,
+            terminalReason: taskExecutionPhases.terminalReason,
+          })
+          .from(taskExecutionPhases)
+          .where(inArray(taskExecutionPhases.id, phaseIds))
+      : [];
+
   const sessionIds = Array.from(
     new Set(
       snapshotRows
-        .map((row) => row.currentSessionId)
+        .flatMap((row) => [row.currentSessionId, row.latestSessionId])
+        .concat(phaseRows.map((row) => row.winnerSessionId))
         .filter((sessionId): sessionId is string => Boolean(sessionId)),
     ),
   );
@@ -256,6 +341,7 @@ async function loadTaskDomainMaps(taskIds: string[]) {
   return {
     aggregates: new Map(aggregateRows.map((row) => [row.id, row] as const)),
     snapshots: new Map(snapshotRows.map((row) => [row.taskId, row] as const)),
+    phasesById: new Map(phaseRows.map((row) => [row.id, row] as const)),
     sessionRuntimeIds: new Map(
       sessionRows.map((row) => [row.id, row.runtimeSessionId ?? row.id] as const),
     ),
@@ -333,6 +419,57 @@ export async function loadExistingTaskTreeNodeIdsByProjectIds(projectIds: string
   return rows.map((row) => row.id);
 }
 
+function buildTaskAggregateFilters(args: { projectId?: string; repoId?: string }) {
+  const filters: SQL[] = [];
+
+  if (args.projectId) {
+    filters.push(eq(tasks.projectId, args.projectId));
+  }
+
+  if (args.repoId) {
+    filters.push(eq(tasks.repoId, args.repoId));
+  }
+
+  return filters;
+}
+
+async function countTaskTreeRecords(args: {
+  projectId?: string;
+  status?: string;
+  repoId?: string;
+}): Promise<number> {
+  const aggregateFilters = buildTaskAggregateFilters(args);
+
+  if (!args.status) {
+    const baseQuery = db.select({ count: count() }).from(tasks);
+    const [row] = aggregateFilters.length
+      ? await baseQuery.where(and(...aggregateFilters))
+      : await baseQuery;
+
+    return Number(row?.count || 0);
+  }
+
+  const snapshotQuery = db
+    .select({ id: taskSnapshots.taskId })
+    .from(taskSnapshots)
+    .innerJoin(tasks, eq(tasks.id, taskSnapshots.taskId))
+    .orderBy(desc(taskSnapshots.lastActivityAt));
+
+  const snapshotRows = aggregateFilters.length
+    ? await snapshotQuery.where(and(...aggregateFilters))
+    : await snapshotQuery;
+
+  if (snapshotRows.length === 0) {
+    return 0;
+  }
+
+  const records = await loadTaskTreeRecords({
+    taskIds: snapshotRows.map((row) => row.id),
+  });
+
+  return records.filter((record) => record.status === args.status).length;
+}
+
 export async function listTaskTreeRecords(args: {
   projectId?: string;
   status?: string;
@@ -340,52 +477,32 @@ export async function listTaskTreeRecords(args: {
   limit: number;
 }): Promise<TaskTreeRecord[]> {
   let taskIds: string[] | undefined;
+  const candidateLimit = args.status ? Math.max(args.limit, Math.min(args.limit * 5, 500)) : args.limit;
+  const aggregateFilters = buildTaskAggregateFilters(args);
 
   if (args.projectId || args.status || args.repoId) {
-    const statusFilter = args.status
-      ? (() => {
-          // Map old-style status to lifecycle + execution status filter
-          const lifecycleStatus =
-            args.status === "completed"
-              ? "done"
-              : args.status === "cancelled"
-                ? "archived"
-                : args.status === "pending"
-                  ? "draft"
-                  : "active";
-          return eq(taskSnapshots.lifecycleStatus, lifecycleStatus);
-        })()
-      : undefined;
-
     if (args.status) {
-      // When filtering by status, join snapshots
-      const snapshotRows = await db
+      // Status filtering must use normalized read-model status, not raw lifecycle_status.
+      const snapshotBaseQuery = db
         .select({ id: taskSnapshots.taskId })
         .from(taskSnapshots)
         .innerJoin(tasks, eq(tasks.id, taskSnapshots.taskId))
-        .where(
-          and(
-            statusFilter,
-            ...(args.projectId ? [eq(tasks.projectId, args.projectId)] : []),
-            ...(args.repoId ? [eq(tasks.repoId, args.repoId)] : []),
-          ),
-        )
-        .orderBy(desc(taskSnapshots.lastActivityAt))
-        .limit(args.limit);
+        .orderBy(desc(taskSnapshots.lastActivityAt));
+
+      const snapshotRows = aggregateFilters.length
+        ? await snapshotBaseQuery.where(and(...aggregateFilters)).limit(candidateLimit)
+        : await snapshotBaseQuery.limit(candidateLimit);
 
       taskIds = snapshotRows.map((row) => row.id);
     } else {
-      const aggregateRows = await db
+      const aggregateBaseQuery = db
         .select({ id: tasks.id })
         .from(tasks)
-        .where(
-          and(
-            ...(args.projectId ? [eq(tasks.projectId, args.projectId)] : []),
-            ...(args.repoId ? [eq(tasks.repoId, args.repoId)] : []),
-          ),
-        )
-        .orderBy(desc(tasks.createdAt))
-        .limit(args.limit);
+        .orderBy(desc(tasks.createdAt));
+
+      const aggregateRows = aggregateFilters.length
+        ? await aggregateBaseQuery.where(and(...aggregateFilters)).limit(args.limit)
+        : await aggregateBaseQuery.limit(args.limit);
 
       taskIds = aggregateRows.map((row) => row.id);
     }
@@ -406,7 +523,7 @@ export async function listTaskTreeRecords(args: {
       ),
     )
     .orderBy(desc(projectTreeNodes.createdAt))
-    .limit(args.limit);
+    .limit(candidateLimit);
 
   const domainMaps = await loadTaskDomainMaps(treeRows.map((row) => row.id));
   const mergedRecords = treeRows.map((row) => ({
@@ -415,16 +532,38 @@ export async function listTaskTreeRecords(args: {
   }));
   const maps = await loadTaskReferenceMaps(mergedRecords);
 
-  return treeRows.map((row) =>
+  const records = treeRows.map((row) =>
     mapTaskTreeNodeToTaskRecord({
       node: row,
       aggregate: domainMaps.aggregates.get(row.id),
       snapshot: domainMaps.snapshots.get(row.id),
+      phasesById: domainMaps.phasesById,
       sessionRuntimeIds: domainMaps.sessionRuntimeIds,
       repos: maps.repos,
       credentials: maps.credentials,
     }),
   );
+
+  return args.status ? records.filter((record) => record.status === args.status).slice(0, args.limit) : records;
+}
+
+export async function listTaskTreeRecordPage(args: {
+  projectId?: string;
+  status?: string;
+  repoId?: string;
+  limit: number;
+}): Promise<TaskTreeListResponse> {
+  const [data, totalCount] = await Promise.all([
+    listTaskTreeRecords(args),
+    countTaskTreeRecords(args),
+  ]);
+
+  return {
+    data,
+    totalCount,
+    limit: args.limit,
+    truncated: totalCount > data.length,
+  };
 }
 
 export async function loadTaskTreeRecords(args: {
@@ -452,6 +591,7 @@ export async function loadTaskTreeRecords(args: {
       node: row,
       aggregate: domainMaps.aggregates.get(row.id),
       snapshot: domainMaps.snapshots.get(row.id),
+      phasesById: domainMaps.phasesById,
       sessionRuntimeIds: domainMaps.sessionRuntimeIds,
       repos: maps.repos,
       credentials: maps.credentials,

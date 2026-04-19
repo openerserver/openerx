@@ -10,6 +10,8 @@ const mockState = vi.hoisted(() => ({
   seedPendingAssistantDraft: vi.fn(),
   refreshTask: vi.fn(async () => undefined),
   refreshSessions: vi.fn(async () => undefined),
+  refreshCurrentPhase: vi.fn(async () => undefined),
+  refreshSnapshot: vi.fn(async () => undefined),
   taskStatusSync: vi.fn(),
 }));
 
@@ -63,8 +65,8 @@ vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageSnapshot", () 
         resolvedSessionId: "session-current",
       },
     ]),
-    refresh: vi.fn(async () => undefined),
-    refreshCurrentPhase: vi.fn(async () => undefined),
+    refresh: mockState.refreshSnapshot,
+    refreshCurrentPhase: mockState.refreshCurrentPhase,
     resolvedSessionId: ref("session-current"),
     sourceMessages: ref([]),
     trace: ref({
@@ -119,6 +121,8 @@ describe("useTaskDetailCoreContext", () => {
     mockState.seedPendingAssistantDraft.mockReset();
     mockState.refreshTask.mockReset();
     mockState.refreshSessions.mockReset();
+    mockState.refreshCurrentPhase.mockReset();
+    mockState.refreshSnapshot.mockReset();
     mockState.taskStatusSync.mockReset();
   });
 
@@ -197,5 +201,23 @@ describe("useTaskDetailCoreContext", () => {
         ]),
       }),
     );
+  });
+
+  it("exposes a phaseTimeline facade that targets the current focused phase and routes refreshPhase through the snapshot", async () => {
+    scope = effectScope();
+    const context = scope.run(() => useTaskDetailCoreContext(ref("task-1")));
+    if (!context) {
+      throw new Error("expected task detail core context");
+    }
+
+    await flushPromises();
+
+    expect(context.phaseTimeline.currentPhaseSlice.value?.phase.id).toBe("phase-current");
+
+    await context.phaseTimeline.refreshPhase("phase-old", true);
+
+    expect(mockState.refreshCurrentPhase).toHaveBeenCalledTimes(1);
+    expect(mockState.refreshCurrentPhase).toHaveBeenCalledWith(true, "phase-old");
+    expect(mockState.refreshSnapshot).not.toHaveBeenCalled();
   });
 });

@@ -6,9 +6,8 @@
       class="task-detail-v3-phase-block"
     >
       <header class="task-detail-v3-phase-block__header">
-        <a-flex justify="space-between" align="center" gap="small" wrap>
+        <a-flex justify="space-between" align="center" gap="small" wrap="wrap">
           <a-space size="small" wrap>
-            <a-tag color="blue">阶段 {{ block.phaseIndex }}</a-tag>
             <a-tag :color="phaseKindColor(block.phaseKind)">{{ phaseKindLabel(block.phaseKind) }}</a-tag>
             <a-tag :color="phaseStatusColor(block.status)">{{ phaseStatusLabel(block.status) }}</a-tag>
             <a-tag color="default">{{ phaseTriggerLabel(block.triggerType) }}</a-tag>
@@ -84,27 +83,54 @@
               <span class="streaming-skeleton__dot">.</span>
               <span class="streaming-skeleton__dot">.</span>
             </div>
-            <template v-else-if="hasPromptDecomposition(entry.item)">
-              <pre class="task-detail-phase-card__plain">{{ userDisplayText(entry.item) }}</pre>
-              <div v-if="entry.item.finalSentText" class="task-detail-phase-card__final-sent">
-                <button
-                  type="button"
-                  class="task-detail-phase-card__final-sent-toggle"
-                  @click="toggleFinalSent(entry.item.key)"
-                >
-                  {{ isFinalSentExpanded(entry.item.key) ? '收起完整发送内容' : '查看完整发送内容' }}
-                </button>
-                <pre
-                  v-if="isFinalSentExpanded(entry.item.key)"
-                  class="task-detail-phase-card__plain task-detail-phase-card__final-sent-content"
-                >{{ entry.item.finalSentText }}</pre>
-              </div>
-            </template>
             <pre
               v-else-if="displayText(entry.item) || sanitizedItemText(entry.item) || shouldRenderEmptyTextFallback(entry.item, entry.toolCalls.length)"
               class="task-detail-phase-card__plain"
               :class="{ 'task-detail-phase-card__plain--streaming': entry.item.isStreaming }"
             >{{ displayText(entry.item) || sanitizedItemText(entry.item) || '暂无文本内容' }}</pre>
+            <div
+              v-for="workflowItem in entry.attachedWorkflowItems"
+              :key="workflowItem.key"
+              class="task-detail-phase-card__embedded-workflow"
+            >
+              <div class="task-detail-phase-card__workflow-group">
+                <a-flex justify="space-between" align="center" gap="small" wrap="wrap" class="task-detail-phase-card__parallel-summary">
+                  <a-space size="small" wrap>
+                    <a-tag :color="workflowTagColor(workflowItem)">{{ workflowTagLabel(workflowItem) }}</a-tag>
+                    <a-typography-text type="secondary" class="task-detail-phase-card__parallel-hint">
+                      {{ workflowHint(workflowItem) }}
+                    </a-typography-text>
+                  </a-space>
+                  <a-button type="text" size="small" @click="toggleWorkflowCollapse(workflowItem.key)">
+                    {{ isWorkflowCollapsed(workflowItem.key) ? '展开详情' : '收起' }}
+                  </a-button>
+                </a-flex>
+
+                <template v-if="!isWorkflowCollapsed(workflowItem.key)">
+                  <section
+                    v-for="step in workflowItem.steps"
+                    :key="`${workflowItem.key}:${step.sessionId}:${step.agentName}`"
+                    class="task-detail-phase-card__workflow-step"
+                  >
+                    <a-space size="small" wrap>
+                      <a-tag color="blue">{{ step.agentName }}</a-tag>
+                      <a-typography-text
+                        v-if="step.items[0]?.createdAt"
+                        type="secondary"
+                        class="task-detail-phase-card__time"
+                      >
+                        {{ formatTime(step.items[0]?.createdAt || '') }}
+                      </a-typography-text>
+                    </a-space>
+                    <pre
+                      v-for="workflowMessage in step.items"
+                      :key="workflowMessage.key"
+                      class="task-detail-phase-card__plain task-detail-phase-card__workflow-plain"
+                    >{{ displayText(workflowMessage) || sanitizedItemText(workflowMessage) || workflowMessage.text || '暂无文本内容' }}</pre>
+                  </section>
+                </template>
+              </div>
+            </div>
             <TaskToolCallGroup
               :tool-calls="entry.toolCalls"
               @open-file-preview="emit('openFilePreview', $event)"
@@ -115,18 +141,69 @@
           </article>
 
           <article
+            v-else-if="entry.kind === 'workflow'"
+            :key="entry.key"
+            class="task-detail-phase-card task-detail-phase-card--workflow"
+          >
+            <div class="task-detail-phase-card__workflow-group">
+              <a-flex justify="space-between" align="center" gap="small" wrap="wrap" class="task-detail-phase-card__parallel-summary">
+                <a-space size="small" wrap>
+                  <a-tag :color="workflowTagColor(entry.item)">{{ workflowTagLabel(entry.item) }}</a-tag>
+                  <a-typography-text type="secondary" class="task-detail-phase-card__parallel-hint">
+                    {{ workflowHint(entry.item) }}
+                  </a-typography-text>
+                </a-space>
+                <a-button type="text" size="small" @click="toggleWorkflowCollapse(entry.item.key)">
+                  {{ isWorkflowCollapsed(entry.item.key) ? '展开详情' : '收起' }}
+                </a-button>
+              </a-flex>
+
+              <template v-if="!isWorkflowCollapsed(entry.item.key)">
+                <section
+                  v-for="step in entry.item.steps"
+                  :key="`${entry.item.key}:${step.sessionId}:${step.agentName}`"
+                  class="task-detail-phase-card__workflow-step"
+                >
+                  <a-space size="small" wrap>
+                    <a-tag color="blue">{{ step.agentName }}</a-tag>
+                    <a-typography-text
+                      v-if="step.items[0]?.createdAt"
+                      type="secondary"
+                      class="task-detail-phase-card__time"
+                    >
+                      {{ formatTime(step.items[0]?.createdAt || '') }}
+                    </a-typography-text>
+                  </a-space>
+                  <pre
+                    v-for="workflowMessage in step.items"
+                    :key="workflowMessage.key"
+                    class="task-detail-phase-card__plain task-detail-phase-card__workflow-plain"
+                  >{{ displayText(workflowMessage) || sanitizedItemText(workflowMessage) || workflowMessage.text || '暂无文本内容' }}</pre>
+                </section>
+              </template>
+            </div>
+          </article>
+
+          <article
             v-else
             :key="entry.key"
             class="task-detail-phase-card task-detail-phase-card--parallel"
           >
             <div class="task-detail-phase-card__parallel-group">
-              <a-space size="small" wrap>
-                <a-tag color="volcano">并行模型结果</a-tag>
-                <a-typography-text type="secondary" class="task-detail-phase-card__parallel-hint">
-                  多个模型会同时回复，请在这里对比后手动决定采纳哪个结果。
-                </a-typography-text>
-              </a-space>
+              <a-flex justify="space-between" align="center" gap="small" wrap="wrap" class="task-detail-phase-card__parallel-summary">
+                <a-space size="small" wrap>
+                  <a-tag color="volcano">并行模型结果</a-tag>
+                  <a-tag v-if="parallelSummaryLabel(entry.item)" color="gold">{{ parallelSummaryLabel(entry.item) }}</a-tag>
+                  <a-typography-text type="secondary" class="task-detail-phase-card__parallel-hint">
+                    {{ parallelSummaryHint(entry.item) }}
+                  </a-typography-text>
+                </a-space>
+                <a-button type="text" size="small" @click="toggleParallelCollapse(entry.item)">
+                  {{ isParallelCollapsed(entry.item) ? '展开审计详情' : '收起审计详情' }}
+                </a-button>
+              </a-flex>
 
+              <template v-if="!isParallelCollapsed(entry.item)">
               <div class="task-detail-phase-card__parallel-grid">
                 <div
                   v-for="candidate in entry.item.candidates"
@@ -274,6 +351,7 @@
                 :message="entry.item.judgeSummary"
                 :description="entry.item.judgeReasoning"
               />
+              </template>
             </div>
           </article>
         </template>
@@ -287,11 +365,13 @@ import { computed, ref } from "vue";
 import { renderMarkdown } from "../../lib/markdown";
 import { buildToolCopyText } from "../../lib/task-tool-call-display";
 import type { TaskDetailPhaseBlock } from "../../lib/task-detail-phase-blocks";
-import type {
-  TaskConversationMessageItem,
-  TaskConversationParallelItem,
-  TaskConversationToolCallItem,
-  TaskParallelComparisonCard,
+import {
+  extractWrappedOriginalTaskText,
+  type TaskConversationMessageItem,
+  type TaskConversationParallelItem,
+  type TaskConversationToolCallItem,
+  type TaskConversationWorkflowItem,
+  type TaskParallelComparisonCard,
 } from "../../lib/message-normalize";
 
 const props = defineProps<{
@@ -321,6 +401,7 @@ type MessageDisplayEntry = {
   kind: "message";
   item: TaskConversationMessageItem;
   toolCalls: TaskConversationToolCallItem[];
+  attachedWorkflowItems: TaskConversationWorkflowItem[];
 };
 
 type ParallelDisplayEntry = {
@@ -329,12 +410,19 @@ type ParallelDisplayEntry = {
   item: TaskConversationParallelItem;
 };
 
+type WorkflowDisplayEntry = {
+  key: string;
+  kind: "workflow";
+  item: TaskConversationWorkflowItem;
+};
+
 type PhaseBlockDisplay = TaskDetailPhaseBlock & {
-  displayItems: Array<MessageDisplayEntry | ParallelDisplayEntry>;
+  displayItems: Array<MessageDisplayEntry | ParallelDisplayEntry | WorkflowDisplayEntry>;
 };
 
 const expandedThinking = ref<Record<string, boolean>>({});
-const expandedFinalSent = ref<Record<string, boolean>>({});
+const collapsedWorkflows = ref<Record<string, boolean>>({});
+const collapsedParallelGroups = ref<Record<string, boolean>>({});
 const STREAMING_PLACEHOLDER_TEXT = "正在生成...";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -484,10 +572,6 @@ function findRecentToolRef(
   return null;
 }
 
-function hasPromptDecomposition(item: TaskConversationMessageItem) {
-  return item.role === "user" && Boolean(item.userInputText);
-}
-
 function stripStageCompleteMarker(text: string): string {
   return text
     .replace(/^\s*\[STAGE_COMPLETE\]\s*$/gmu, "")
@@ -573,19 +657,67 @@ function assistantThinkingText(item: TaskConversationMessageItem) {
 }
 
 function userDisplayText(item: TaskConversationMessageItem) {
-  const userInputText = item.userInputText;
-  if (hasPromptDecomposition(item) && userInputText) {
-    return userInputText;
-  }
-  return sanitizedItemText(item) || item.text || "";
+  return resolvedUserMessageText(item);
 }
 
 function displayText(item: TaskConversationMessageItem) {
+  if (item.role === "user") {
+    const text = resolvedUserMessageText(item);
+    if (!text || text === STREAMING_PLACEHOLDER_TEXT) {
+      return undefined;
+    }
+    return text;
+  }
+
   const text = sanitizedItemText(item);
   if (!text || text === STREAMING_PLACEHOLDER_TEXT) {
     return undefined;
   }
   return text;
+}
+
+function isWorkflowCollapsed(key: string) {
+  return collapsedWorkflows.value[key] === true;
+}
+
+function workflowTagLabel(item: TaskConversationWorkflowItem) {
+  return item.label || (item.variant === "context" ? "工作流消息" : "工作流调度");
+}
+
+function workflowTagColor(item: TaskConversationWorkflowItem) {
+  return item.variant === "context" ? "blue" : "purple";
+}
+
+function workflowHint(item: TaskConversationWorkflowItem) {
+  if (item.hint) {
+    return item.hint;
+  }
+
+  return item.variant === "context" ? "当前阶段与执行上下文" : `${item.steps.length} 个子 Agent 执行`;
+}
+
+function toggleWorkflowCollapse(key: string) {
+  collapsedWorkflows.value = { ...collapsedWorkflows.value, [key]: !collapsedWorkflows.value[key] };
+}
+
+function resolvedUserMessageText(item: TaskConversationMessageItem) {
+  if (item.role !== "user") {
+    return sanitizedItemText(item) || item.text || "";
+  }
+
+  const wrappedOriginalTaskText =
+    extractWrappedOriginalTaskText(item.userInputText) ??
+    extractWrappedOriginalTaskText(item.finalSentText) ??
+    extractWrappedOriginalTaskText(item.text);
+
+  return (
+    wrappedOriginalTaskText ||
+    item.userInputText ||
+    sanitizedItemText(item) ||
+    item.text ||
+    item.finalSentText ||
+    ""
+  );
 }
 
 function shouldRenderEmptyTextFallback(item: TaskConversationMessageItem, toolCallCount: number) {
@@ -704,6 +836,10 @@ function isParallelComparisonItem(item: unknown): item is TaskConversationParall
   return (item as TaskConversationParallelItem | undefined)?.role === "parallel";
 }
 
+function isWorkflowItem(item: unknown): item is TaskConversationWorkflowItem {
+  return (item as TaskConversationWorkflowItem | undefined)?.role === "workflow";
+}
+
 function isMessageItem(item: unknown): item is TaskConversationMessageItem {
   const role = (item as TaskConversationMessageItem | undefined)?.role;
   return typeof role === "string" && role !== "parallel" && role !== "workflow";
@@ -715,13 +851,28 @@ const displayBlocks = computed<PhaseBlockDisplay[]>(() =>
       block.items.filter((item): item is TaskConversationMessageItem => isMessageItem(item)),
     );
     const topLevelDisplayTurnMap = new Map(topLevelDisplayTurns.map((turn) => [turn.item.key, turn]));
-    const displayItems: Array<MessageDisplayEntry | ParallelDisplayEntry> = [];
+    const displayItems: Array<MessageDisplayEntry | ParallelDisplayEntry | WorkflowDisplayEntry> = [];
 
     for (const item of block.items) {
       if (isParallelComparisonItem(item)) {
         displayItems.push({
           key: item.key,
           kind: "parallel",
+          item,
+        });
+        continue;
+      }
+
+      if (isWorkflowItem(item)) {
+        const previousDisplayItem = displayItems[displayItems.length - 1];
+        if (previousDisplayItem?.kind === "message" && previousDisplayItem.item.role === "user") {
+          previousDisplayItem.attachedWorkflowItems.push(item);
+          continue;
+        }
+
+        displayItems.push({
+          key: item.key,
+          kind: "workflow",
           item,
         });
         continue;
@@ -741,6 +892,7 @@ const displayBlocks = computed<PhaseBlockDisplay[]>(() =>
         kind: "message",
         item,
         toolCalls: turn.toolCalls,
+        attachedWorkflowItems: [],
       });
     }
 
@@ -855,6 +1007,39 @@ function candidateTraceStateColor(state: "incomplete" | "stale") {
   return "gold";
 }
 
+function adoptedParallelCandidate(item: TaskConversationParallelItem) {
+  return item.candidates.find((candidate) => candidate.isAdopted) ?? null;
+}
+
+function parallelSummaryLabel(item: TaskConversationParallelItem) {
+  const adoptedCandidate = adoptedParallelCandidate(item);
+  return adoptedCandidate ? `已采纳${adoptedCandidate.label}` : undefined;
+}
+
+function parallelSummaryHint(item: TaskConversationParallelItem) {
+  if (adoptedParallelCandidate(item)) {
+    return "正式回复已进入主线；此卡片保留对比、Judge 结果和审计回看。";
+  }
+
+  return "多个模型会同时回复，请在这里对比后手动决定采纳哪个结果。";
+}
+
+function isParallelCollapsed(item: TaskConversationParallelItem) {
+  const state = collapsedParallelGroups.value[item.key];
+  if (typeof state === "boolean") {
+    return state;
+  }
+  return Boolean(adoptedParallelCandidate(item));
+}
+
+function toggleParallelCollapse(item: TaskConversationParallelItem) {
+  const current = isParallelCollapsed(item);
+  collapsedParallelGroups.value = {
+    ...collapsedParallelGroups.value,
+    [item.key]: !current,
+  };
+}
+
 function canCopyMessage(item: TaskConversationMessageItem, toolCalls: TaskConversationToolCallItem[]) {
   return Boolean(displayText(item) || sanitizedItemText(item) || toolCalls.length);
 }
@@ -936,17 +1121,6 @@ function toggleThinking(key: string) {
   expandedThinking.value = {
     ...expandedThinking.value,
     [key]: !expandedThinking.value[key],
-  };
-}
-
-function isFinalSentExpanded(key: string) {
-  return expandedFinalSent.value[key] === true;
-}
-
-function toggleFinalSent(key: string) {
-  expandedFinalSent.value = {
-    ...expandedFinalSent.value,
-    [key]: !expandedFinalSent.value[key],
   };
 }
 
@@ -1095,13 +1269,11 @@ function phaseTriggerLabel(triggerType: string) {
   padding: 10px;
 }
 
-.task-detail-phase-card__thinking,
-.task-detail-phase-card__final-sent {
+.task-detail-phase-card__thinking {
   margin-bottom: 10px;
 }
 
-.task-detail-phase-card__thinking-toggle,
-.task-detail-phase-card__final-sent-toggle {
+.task-detail-phase-card__thinking-toggle {
   border: 0;
   background: transparent;
   padding: 0;
@@ -1110,8 +1282,7 @@ function phaseTriggerLabel(triggerType: string) {
   font-size: 12px;
 }
 
-.task-detail-phase-card__thinking-content,
-.task-detail-phase-card__final-sent-content {
+.task-detail-phase-card__thinking-content {
   margin-top: 8px;
   padding: 10px;
   border-radius: 10px;
@@ -1129,6 +1300,39 @@ function phaseTriggerLabel(triggerType: string) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.task-detail-phase-card__workflow-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-detail-phase-card__embedded-workflow {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(15, 23, 42, 0.08);
+}
+
+.task-detail-phase-card__workflow-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px dashed rgba(15, 23, 42, 0.08);
+  padding-top: 10px;
+}
+
+.task-detail-phase-card__workflow-step:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.task-detail-phase-card__workflow-plain {
+  margin: 0;
+}
+
+.task-detail-phase-card__parallel-summary {
+  padding-bottom: 4px;
 }
 
 .task-detail-phase-card__parallel-hint,

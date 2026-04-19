@@ -610,6 +610,39 @@ describe("executeLifecycleHooks behavior", () => {
     createSessionMock
       .mockResolvedValueOnce({ ok: false, error: "candidate A failed" })
       .mockResolvedValueOnce({ ok: false, error: "candidate B failed" });
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (!options?.method) {
+        return {
+          ok: true,
+          data: currentTask,
+        };
+      }
+
+      if (url === "/api/tasks/task-1/phases" && options.method === "POST") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "phase-failed-1",
+            phaseIndex: 1,
+            phaseKind: "parallel",
+            triggerType: "execute",
+            status: "failed",
+            parentPhaseId: null,
+            resumedFromPhaseId: null,
+            candidateCount: 2,
+            winnerSessionId: null,
+            judgeSessionId: null,
+            startedAt: "2026-04-16T10:00:00.000Z",
+            finishedAt: "2026-04-16T10:00:05.000Z",
+            createdAt: "2026-04-16T10:00:00.000Z",
+            updatedAt: "2026-04-16T10:00:05.000Z",
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: { body: options.body } };
+    });
 
     const { taskRoutes } = await loadTaskRoutesModule();
     recordPaidExecutionRuntimeUsageMock.mockResolvedValueOnce({
@@ -633,7 +666,21 @@ describe("executeLifecycleHooks behavior", () => {
     expect(body).toEqual({ error: "All parallel candidates failed to start" });
     expect(createSessionMock).toHaveBeenCalledTimes(2);
     expect(registerParallelTaskMock).not.toHaveBeenCalled();
-    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(broadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task.phase.failed",
+        taskId: "task-1",
+        phaseId: "phase-failed-1",
+        data: expect.objectContaining({
+          phaseId: "phase-failed-1",
+          status: "failed",
+          phaseKind: "parallel",
+          triggerType: "execute",
+          candidateCount: 2,
+        }),
+      }),
+    );
 
     const patchCalls = getPatchCalls();
     expect(patchCalls).toHaveLength(1);

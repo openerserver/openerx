@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { TaskTreeSnapshot } from "../project-tree/storage";
 import type { TaskTreeRecord } from "../project-tree/task-view";
+import { normalizePublicTaskStatusValue } from "./public-task-status";
 import {
   extractTaskSessionMessageRuntimeId,
   taskSessionRuntimeMessageSchema,
@@ -168,6 +169,16 @@ function buildTaskBranchResponse(args: {
       };
 }
 
+function isTerminalTaskRecord(task: Pick<TaskTreeRecord, "status" | "finishedAt">) {
+  const normalizedStatus = normalizePublicTaskStatusValue(task.status);
+  return (
+    normalizedStatus === "completed" ||
+    normalizedStatus === "failed" ||
+    normalizedStatus === "cancelled" ||
+    Boolean(task.finishedAt)
+  );
+}
+
 export function createTaskBranchWriteApi(deps: {
   loadTaskTreeBackedRecord: (taskId: string) => Promise<TaskTreeRecord | null>;
   resolveTaskBranchCompatRecord: (
@@ -241,7 +252,11 @@ export function createTaskBranchWriteApi(deps: {
       task.projectId,
       body.runtimeSessionId,
     );
-    const branchState = resolveTaskBranchState(body, existingRecord);
+    const resolvedBranchState = resolveTaskBranchState(body, existingRecord);
+    const branchState = {
+      ...resolvedBranchState,
+      isActive: isTerminalTaskRecord(task) ? false : resolvedBranchState.isActive,
+    };
 
     await deps.syncTaskBranchCompatTreeNode({
       taskId,
@@ -317,6 +332,7 @@ export function createTaskBranchWriteApi(deps: {
     const isActive = shouldPreserveCandidateActiveState(existingRecord)
       ? existingRecord?.isActive ?? false
       : task.sessionId === body.runtimeSessionId;
+    const effectiveIsActive = isTerminalTaskRecord(task) ? false : isActive;
     const existingCompatLineage = existingRecord
       ? {
           ...(existingRecord.parentRuntimeSessionId
@@ -361,7 +377,7 @@ export function createTaskBranchWriteApi(deps: {
       taskId,
       runtimeSessionId: body.runtimeSessionId,
       ...existingCompatLineage,
-      isActive,
+      isActive: effectiveIsActive,
       archivedAt: null,
     });
 
@@ -369,7 +385,7 @@ export function createTaskBranchWriteApi(deps: {
       task,
       runtimeSessionId: body.runtimeSessionId,
       ...existingSessionLineage,
-      isActive,
+      isActive: effectiveIsActive,
       archivedAt: null,
     });
 
@@ -408,6 +424,8 @@ export function createTaskBranchWriteApi(deps: {
       return { ok: false as const, status: 404 as const, error: "Task branch not found" };
     }
 
+    const effectiveIsActive = !isTerminalTaskRecord(task);
+
     await deps.upsertConversationSessionRecord({
       task,
       runtimeSessionId: record.runtimeSessionId,
@@ -418,15 +436,17 @@ export function createTaskBranchWriteApi(deps: {
       phaseId: record.phaseId ?? null,
       phaseRole: record.phaseRole ?? null,
       phaseItemIndex: record.phaseItemIndex ?? null,
-      isActive: true,
+      isActive: effectiveIsActive,
       archivedAt: null,
     });
 
-    const taskSnapshot = deps.buildTaskTreeSnapshotFromRecord(task, {
-      status: "running",
-      sessionId: record.runtimeSessionId,
-    });
-    await deps.syncTaskAggregateFromSnapshot(taskSnapshot);
+    if (effectiveIsActive) {
+      const taskSnapshot = deps.buildTaskTreeSnapshotFromRecord(task, {
+        status: "running",
+        sessionId: record.runtimeSessionId,
+      });
+      await deps.syncTaskAggregateFromSnapshot(taskSnapshot);
+    }
 
     return {
       ok: true as const,

@@ -91,6 +91,29 @@ describe("useTaskDetailRefreshController", () => {
     expect(refreshTaskSnapshot).not.toHaveBeenCalled();
   });
 
+  it("forwards the refresh request phaseId into refreshMessageSnapshot so downstream reconcile can target the phase", async () => {
+    const { latestTaskRefreshRequest, refreshMessageSnapshot } = mountController();
+
+    latestTaskRefreshRequest.value = {
+      eventId: "event-phase-scoped-1",
+      reason: "round-synced",
+      phaseId: "phase-77",
+      targets: {
+        workflow: false,
+        flow: false,
+        messages: true,
+      },
+      shouldBumpTraceRefreshKey: false,
+    };
+
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshMessageSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshMessageSnapshot).toHaveBeenCalledWith("phase-77");
+  });
+
   it("skips a redundant round-synced message-only refresh once the local phase snapshot has caught up", async () => {
     const {
       latestTaskRefreshRequest,
@@ -119,12 +142,19 @@ describe("useTaskDetailRefreshController", () => {
     expect(refreshTaskSnapshot).not.toHaveBeenCalled();
   });
 
-  it("dispatches flow-only refresh requests to the flow path", async () => {
-    const { latestTaskRefreshRequest, refreshFlowSnapshot, refreshTaskSnapshot } = mountController();
+  it.each([
+    "phase-awaiting-adoption",
+    "phase-paused",
+    "phase-resumed",
+    "phase-failed",
+  ] as const)("dispatches %s flow-only refresh requests to the flow path", async (reason) => {
+    const { latestTaskRefreshRequest, refreshFlowSnapshot, refreshMessageSnapshot, refreshTaskSnapshot } =
+      mountController();
 
     latestTaskRefreshRequest.value = {
-      eventId: "event-phase-1",
-      reason: "phase-awaiting-adoption",
+      eventId: `event-${reason}`,
+      reason,
+      phaseId: "phase-2",
       targets: {
         workflow: false,
         flow: true,
@@ -138,6 +168,7 @@ describe("useTaskDetailRefreshController", () => {
     await nextTick();
 
     expect(refreshFlowSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshMessageSnapshot).not.toHaveBeenCalled();
     expect(refreshTaskSnapshot).not.toHaveBeenCalled();
   });
 

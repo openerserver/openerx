@@ -770,6 +770,53 @@ describe("useTaskMessageSnapshot", () => {
     ]);
   });
 
+  it("falls back to the current focused phase when refreshCurrentPhase is called with a phaseId that is not loaded", async () => {
+    const phase = createPhase({
+      id: "phase-2",
+      phaseIndex: 2,
+      sessionIds: ["task-session:task-1:ses-round-2"],
+    });
+    apiMocks.getTaskPhases.mockResolvedValue({ data: [phase] });
+    apiMocks.getTaskPhaseView.mockResolvedValue(
+      createPhaseView({
+        phase,
+        currentSessionId: "ses-round-2",
+        messageGroups: [
+          {
+            taskSessionId: "task-session:task-1:ses-round-2",
+            runtimeSessionId: "ses-round-2",
+            phaseRole: "mainline",
+            phaseItemIndex: 0,
+            messages: [
+              createMessage({
+                id: "phase-2-assistant",
+                sessionId: "ses-round-2",
+                role: "assistant",
+                text: "focus fallback",
+                createdAt: "2026-04-13T09:00:00.000Z",
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+
+    const { state } = await mountSnapshot({
+      currentPhaseId: "phase-2",
+      currentSessionId: "ses-round-2",
+      sessionId: "ses-round-2",
+    });
+
+    apiMocks.getTaskPhases.mockClear();
+    apiMocks.getTaskPhaseView.mockClear();
+
+    await state.refreshCurrentPhase(true, "phase-unknown");
+    await flushPromises();
+
+    expect(apiMocks.getTaskPhaseView).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getTaskPhaseView).toHaveBeenCalledWith("task-1", "phase-2");
+  });
+
   it("absorbs current phase persisted overlay updates into the current phase slice", async () => {
     const phase = createPhase({
       id: "phase-1",

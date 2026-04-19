@@ -162,6 +162,7 @@ const messagesState = vi.hoisted(() => ({
   loading: false,
   loadOlderHistory: vi.fn(async () => undefined),
   refresh: vi.fn(async () => undefined),
+  refreshCurrentPhase: vi.fn(async () => undefined),
   seedPendingAssistantDraft: vi.fn(),
   sourceMessages: [] as Array<unknown>,
 }));
@@ -240,6 +241,7 @@ vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageSnapshot", asy
       loadOlderHistory: messagesState.loadOlderHistory,
       phaseSlices: computed(() => messagesStoreMock.phaseSlices),
       refresh: messagesState.refresh,
+      refreshCurrentPhase: messagesState.refreshCurrentPhase,
       resolvedSessionId: ref<string | undefined>(undefined),
       sourceMessages: computed(() => messagesStoreMock.sourceMessages),
       trace: computed(() => messagesStoreMock.trace),
@@ -261,10 +263,28 @@ vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageStore", async 
       clearPendingAssistantDraft: messagesState.clearPendingAssistantDraft,
       hasStreamingAssistant: computed(() => messagesStoreMock.hasStreamingAssistant),
       latestTaskRefreshRequest: computed(() => {
-        const event = realtimeStoreMock.events.find(
-          (entry) => entry.taskId === String(routeState.params.taskId || ""),
-        );
-        return getTaskDetailRefreshRequest(event ? toTaskMessagePatchEvent(event as any) : null);
+        const currentTaskId = String(routeState.params.taskId || "");
+        let latestRefreshRequest = null;
+        let latestRefreshEventTs = "";
+
+        for (const entry of realtimeStoreMock.events) {
+          if (entry.taskId !== currentTaskId) {
+            continue;
+          }
+
+          const refreshRequest = getTaskDetailRefreshRequest(toTaskMessagePatchEvent(entry as any));
+          if (!refreshRequest) {
+            continue;
+          }
+
+          const eventTs = typeof entry.ts === "string" ? entry.ts : "";
+          if (!latestRefreshRequest || eventTs > latestRefreshEventTs) {
+            latestRefreshRequest = refreshRequest;
+            latestRefreshEventTs = eventTs;
+          }
+        }
+
+        return latestRefreshRequest;
       }),
       realtimeConnected: computed(() => realtimeStoreMock.connected),
       needsMessagePollingFallback: computed(() => false),
@@ -1285,6 +1305,8 @@ describe("TaskDetailV3 runtime permissions", () => {
     taskState.refresh.mockImplementation(async () => undefined);
     messagesState.refresh.mockReset();
     messagesState.refresh.mockImplementation(async () => undefined);
+    messagesState.refreshCurrentPhase.mockReset();
+    messagesState.refreshCurrentPhase.mockImplementation(async () => undefined);
     legacyParallelFixtureState.taskSessionsResponse = { data: [] };
     legacyParallelFixtureState.agentRunsResponse = { data: [] };
     legacyParallelFixtureState.domainRunsResponse = { data: [] };
@@ -1619,37 +1641,47 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(wrapper.get('[data-testid="trace-panel"]').attributes("data-refresh-key")).toBe("1");
   });
 
-  it("refreshes phase-aware task and compare state without forcing message reload", async () => {
-    vi.useFakeTimers();
-    try {
-      const wrapper = await mountPage();
-      taskState.refresh.mockClear();
-      branchState.refresh.mockClear();
-      messagesState.refresh.mockClear();
+  it.each([
+    "task.phase.created",
+    "task.phase.updated",
+    "task.phase.paused",
+    "task.phase.resumed",
+    "task.phase.failed",
+  ] as const)(
+    "refreshes phase-aware task and compare state for %s without forcing message reload",
+    async (eventType) => {
+      vi.useFakeTimers();
+      try {
+        const wrapper = await mountPage();
+        taskState.refresh.mockClear();
+        branchState.refresh.mockClear();
+        messagesState.refresh.mockClear();
 
-      realtimeStoreMock.events = [
-        {
-          id: "evt-snapshot-1",
-          type: "task.phase.updated",
-          taskId: "task-1",
-          data: {
+        realtimeStoreMock.events = [
+          {
+            id: `evt-${eventType}`,
+            type: eventType,
+            taskId: "task-1",
             phaseId: "phase-1",
+            data: {
+              phaseId: "phase-1",
+            },
           },
-        },
-      ];
+        ];
 
-      await nextTick();
-      await vi.advanceTimersByTimeAsync(250);
-      await flushPromises();
+        await nextTick();
+        await vi.advanceTimersByTimeAsync(250);
+        await flushPromises();
 
-      expect(taskState.refresh).toHaveBeenCalled();
-      expect(branchState.refresh).toHaveBeenCalled();
-      expect(messagesState.refresh).not.toHaveBeenCalled();
-      wrapper.unmount();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(taskState.refresh).toHaveBeenCalled();
+        expect(branchState.refresh).toHaveBeenCalled();
+        expect(messagesState.refresh).not.toHaveBeenCalled();
+        wrapper.unmount();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("does not refetch persisted messages for an in-progress assistant realtime update", async () => {
     vi.useFakeTimers();
@@ -1735,6 +1767,7 @@ describe("TaskDetailV3 runtime permissions", () => {
       taskState.refresh.mockClear();
       branchState.refresh.mockClear();
       messagesState.refresh.mockClear();
+      messagesState.refreshCurrentPhase.mockClear();
 
       realtimeStoreMock.events = [
         {
@@ -1757,7 +1790,105 @@ describe("TaskDetailV3 runtime permissions", () => {
 
       expect(taskState.refresh).not.toHaveBeenCalled();
       expect(branchState.refresh).not.toHaveBeenCalled();
-      expect(messagesState.refresh).toHaveBeenCalled();
+      expect(messagesState.refreshCurrentPhase).toHaveBeenCalledWith(true, undefined);
+      expect(messagesState.refresh).not.toHaveBeenCalled();
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes round synced phase-local reconcile through refreshCurrentPhase when currentPhaseId differs from the selected session", async () => {
+    vi.useFakeTimers();
+    try {
+      branchState.currentSessionId = "ses-mainline";
+      branchState.currentPhaseId = "phase-live-2";
+
+      const wrapper = await mountPage();
+      taskState.refresh.mockClear();
+      branchState.refresh.mockClear();
+      messagesState.refresh.mockClear();
+      messagesState.refreshCurrentPhase.mockClear();
+
+      realtimeStoreMock.events = [
+        {
+          id: "evt-round-synced-phase-2",
+          type: "task.round.synced",
+          taskId: "task-1",
+          sessionId: "ses-mainline",
+          phaseId: "phase-live-2",
+          data: {
+            roundId: "task-session:task-1:ses-mainline",
+            taskSessionId: "task-session:task-1:ses-mainline",
+            messageId: "assistant-phase-2",
+            snapshotVersion: 9,
+            persistedThroughRevision: 9,
+          },
+        },
+      ];
+
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(200);
+      await flushPromises();
+
+      expect(taskState.refresh).not.toHaveBeenCalled();
+      expect(branchState.refresh).not.toHaveBeenCalled();
+      expect(messagesState.refreshCurrentPhase).toHaveBeenCalledWith(true, "phase-live-2");
+      expect(messagesState.refresh).not.toHaveBeenCalled();
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the newer round synced message refresh when an older phase update arrives later", async () => {
+    vi.useFakeTimers();
+    try {
+      branchState.currentSessionId = "ses-mainline";
+      branchState.currentPhaseId = "phase-live-2";
+
+      const wrapper = await mountPage();
+      taskState.refresh.mockClear();
+      branchState.refresh.mockClear();
+      messagesState.refresh.mockClear();
+      messagesState.refreshCurrentPhase.mockClear();
+
+      realtimeStoreMock.events = [
+        {
+          id: "evt-phase-update-old-arrived-late",
+          ts: "2026-04-08T03:18:16.000Z",
+          type: "task.phase.updated",
+          taskId: "task-1",
+          phaseId: "phase-old",
+          data: {
+            phaseId: "phase-old",
+          },
+        },
+        {
+          id: "evt-round-synced-newer",
+          ts: "2026-04-08T03:18:17.000Z",
+          type: "task.round.synced",
+          taskId: "task-1",
+          sessionId: "ses-mainline",
+          phaseId: "phase-live-2",
+          data: {
+            roundId: "task-session:task-1:ses-mainline",
+            taskSessionId: "task-session:task-1:ses-mainline",
+            messageId: "assistant-phase-2",
+            snapshotVersion: 10,
+            persistedThroughRevision: 10,
+          },
+        },
+      ];
+
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(200);
+      await flushPromises();
+
+      expect(taskState.refresh).not.toHaveBeenCalled();
+      expect(branchState.refresh).not.toHaveBeenCalled();
+      expect(messagesState.refreshCurrentPhase).toHaveBeenCalledWith(true, "phase-live-2");
+      expect(messagesState.refresh).not.toHaveBeenCalled();
       wrapper.unmount();
     } finally {
       vi.useRealTimers();
@@ -1796,6 +1927,19 @@ describe("TaskDetailV3 runtime permissions", () => {
     wrapper.unmount();
 
     taskState.task.status = "running";
+    taskState.task.agentRunId = undefined;
+    taskState.task.currentRunId = undefined;
+    taskState.task.currentRunStatus = undefined;
+    taskState.task.activeCandidateCount = 0;
+    branchState.currentPhaseId = null;
+
+    wrapper = await mountPage();
+    composer = wrapper.get('[data-testid="chat-composer"]');
+    expect(composer.attributes("data-can-terminate")).toBe("false");
+    expect(composer.attributes("data-is-executing")).toBe("false");
+
+    wrapper.unmount();
+
     taskState.task.agentRunId = "run-1";
 
     wrapper = await mountPage();
@@ -4293,6 +4437,198 @@ describe("TaskDetailV3 runtime permissions", () => {
       latestResponse: "追踪候选 A",
     });
     await flushPromises();
+  });
+
+  it("keeps a completed fallback candidate visible when a phase update arrives before slower candidates settle", async () => {
+    vi.useFakeTimers();
+    try {
+      taskState.task.executionMode = "parallel";
+      taskState.task.orchestrationKind = "parallel";
+      taskState.task.currentRunId = "run-current-1";
+      messagesState.conversationItems = [
+        {
+          key: "parallel-user-1",
+          role: "user",
+          text: "给两个并行方案",
+          createdAt: "2026-03-22T05:25:21.900Z",
+          toolCalls: [],
+          raw: null,
+        },
+      ];
+      setLegacyParallelRuns([
+          {
+            id: "run-current-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            orchestrationKind: "parallel",
+            triggerType: "user_execute",
+            status: "running",
+            rootSessionId: "ses-root",
+            createdAt: "2026-03-22T05:25:21.900Z",
+            updatedAt: "2026-03-22T05:25:21.980Z",
+          },
+        ],);
+      setLegacyParallelRunDetail({
+          run: {
+            id: "run-current-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            orchestrationKind: "parallel",
+            triggerType: "user_execute",
+            status: "running",
+            rootSessionId: "ses-root",
+            createdAt: "2026-03-22T05:25:21.900Z",
+            updatedAt: "2026-03-22T05:25:21.980Z",
+          },
+          nodes: [],
+          candidateNodes: [
+            {
+              id: "current-node-a",
+              runId: "run-current-1",
+              taskId: "task-1",
+              projectId: "proj-1",
+              nodeKind: "candidate",
+              nodeKey: "candidate:0",
+              title: "候选 A",
+              candidateIndex: 0,
+              agentType: "oracle-enterprise",
+              modelUsed: "gpt-5-mini",
+              sessionId: "ses-a",
+              status: "running",
+              createdAt: "2026-03-22T05:25:21.966Z",
+              updatedAt: "2026-03-22T05:25:21.970Z",
+            },
+            {
+              id: "current-node-b",
+              runId: "run-current-1",
+              taskId: "task-1",
+              projectId: "proj-1",
+              nodeKind: "candidate",
+              nodeKey: "candidate:1",
+              title: "候选 B",
+              candidateIndex: 1,
+              agentType: "oracle-enterprise",
+              modelUsed: "gpt-4o",
+              sessionId: "ses-b",
+              status: "running",
+              createdAt: "2026-03-22T05:25:21.977Z",
+              updatedAt: "2026-03-22T05:25:21.980Z",
+            },
+          ],
+          judgeNode: null,
+          winnerCandidateIndex: null,
+        },);
+      const traceA = createDeferred<any>();
+      const traceB = createDeferred<any>();
+      apiMocks.getTaskConversationMessages.mockImplementation(
+        async (_taskId: string, sessionId: string) => ({
+          data:
+            sessionId === "ses-a"
+              ? [
+                  {
+                    info: {
+                      id: "assistant-ses-a",
+                      role: "assistant",
+                      time: { created: "2026-03-22T05:25:22.100Z" },
+                    },
+                    parts: [{ type: "text", text: "会话回退候选 A" }],
+                  },
+                ]
+              : [],
+        }),
+      );
+      apiMocks.getTaskExecutionTraceView.mockImplementation(
+        (_taskId: string, sessionId: string) =>
+          sessionId === "ses-a" ? traceA.promise : traceB.promise,
+      );
+      apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+      const wrapper = await mountPage();
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await flushPromises();
+        await nextTick();
+      }
+
+      let parallelItem = wrapper
+        .findAll(".chat-item")
+        .find((node) => node.attributes("data-role") === "parallel");
+
+      expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|running");
+      expect(wrapper.get(".parallel-candidate-texts").text()).toContain("会话回退候选 A");
+
+      taskState.refresh.mockClear();
+      branchState.refresh.mockClear();
+      messagesState.refresh.mockClear();
+      messagesState.refreshCurrentPhase.mockClear();
+
+      realtimeStoreMock.events = [
+        {
+          id: "evt-phase-update-late-1",
+          type: "task.phase.updated",
+          taskId: "task-1",
+          phaseId: "phase-1",
+          data: {
+            phaseId: "phase-1",
+          },
+        },
+      ];
+
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(250);
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await flushPromises();
+        await nextTick();
+      }
+
+      parallelItem = wrapper
+        .findAll(".chat-item")
+        .find((node) => node.attributes("data-role") === "parallel");
+
+      expect(taskState.refresh).toHaveBeenCalled();
+      expect(branchState.refresh).toHaveBeenCalled();
+      expect(messagesState.refresh).not.toHaveBeenCalled();
+      expect(messagesState.refreshCurrentPhase).not.toHaveBeenCalled();
+      expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|running");
+      expect(wrapper.get(".parallel-candidate-texts").text()).toContain("会话回退候选 A");
+      expect(wrapper.get(".parallel-candidate-texts").text()).not.toContain("追踪候选 B");
+
+      traceA.resolve({
+        taskId: "task-1",
+        sessionId: "ses-a",
+        segments: [],
+        hookExecutions: [],
+        messages: [
+          {
+            id: "assistant-ses-a",
+            role: "assistant",
+            text: "追踪候选 A",
+            createdAt: "2026-03-22T05:25:22.100Z",
+          },
+        ],
+        timeline: [],
+        latestResponse: "追踪候选 A",
+      });
+      traceB.resolve({
+        taskId: "task-1",
+        sessionId: "ses-b",
+        segments: [],
+        hookExecutions: [],
+        messages: [
+          {
+            id: "assistant-ses-b",
+            role: "assistant",
+            text: "追踪候选 B",
+            createdAt: "2026-03-22T05:25:22.300Z",
+          },
+        ],
+        timeline: [],
+        latestResponse: "追踪候选 B",
+      });
+      await flushPromises();
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("applies realtime assistant deltas to parallel candidate cards", async () => {

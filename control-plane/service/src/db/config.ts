@@ -13,7 +13,7 @@ export function resolveDatabaseDialect(
   if (!databaseDialect || databaseDialect === "postgres") {
     if (databaseUrl && !/^(postgres|postgresql):\/\//i.test(databaseUrl)) {
       throw new Error(
-        `DATABASE_URL must be a PostgreSQL URL. Received: ${databaseUrl}. SQLite runtime support has been removed; use the offline migration scripts under src/db/migration to export old SQLite snapshots.`,
+        `DATABASE_URL must be a PostgreSQL URL. Received: ${databaseUrl}. Legacy file-backed database support has been removed.`,
       );
     }
 
@@ -21,7 +21,7 @@ export function resolveDatabaseDialect(
   }
 
   throw new Error(
-    `Unsupported DATABASE_DIALECT: ${databaseDialect}. PostgreSQL is now the only supported runtime database. Use the offline SQLite migration scripts to move historical snapshots.`,
+    `Unsupported DATABASE_DIALECT: ${databaseDialect}. PostgreSQL is now the only supported runtime database.`,
   );
 }
 
@@ -38,13 +38,13 @@ export function resolveDatabaseUrl(
 
   if (isAbsolute(databaseUrl)) {
     throw new Error(
-      `Absolute SQLite path ${databaseUrl} is no longer supported for runtime startup. Provide a PostgreSQL DATABASE_URL instead.`,
+      `Absolute database path ${databaseUrl} is no longer supported for runtime startup. Provide a PostgreSQL DATABASE_URL instead.`,
     );
   }
 
   const resolvedPath = resolve(SERVICE_ROOT, databaseUrl);
   throw new Error(
-    `Resolved DATABASE_URL ${resolvedPath} is not a PostgreSQL URL. Runtime SQLite support has been removed.`,
+    `Resolved DATABASE_URL ${resolvedPath} is not a PostgreSQL URL. Legacy file-backed database support has been removed.`,
   );
 }
 

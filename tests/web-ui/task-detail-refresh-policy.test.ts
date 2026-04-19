@@ -71,4 +71,30 @@ describe("task detail refresh policy", () => {
       shouldBumpTraceRefreshKey: false,
     });
   });
+
+  it.each([
+    ["phase-created", "task.phase.created"],
+    ["phase-paused", "task.phase.paused"],
+    ["phase-resumed", "task.phase.resumed"],
+    ["phase-failed", "task.phase.failed"],
+  ] as const)("treats %s as a flow-only refresh boundary", (kind, rawEventKind) => {
+    const event = createPatchEvent(kind, {
+      rawEventKind,
+      phaseId: "phase-2",
+    });
+
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
+    expect(getTaskDetailRefreshRequest(event)).toEqual({
+      eventId: "event-1",
+      reason: kind,
+      phaseId: "phase-2",
+      targets: {
+        workflow: false,
+        flow: true,
+        messages: false,
+      },
+      shouldBumpTraceRefreshKey: false,
+    });
+  });
 });

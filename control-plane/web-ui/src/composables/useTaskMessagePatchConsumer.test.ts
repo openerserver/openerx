@@ -203,4 +203,69 @@ describe("useTaskMessagePatchConsumer", () => {
     expect(liveState.textById.get("assistant-1")).toBe("你好");
     expect(liveState.incompleteIds.has("assistant-1")).toBe(true);
   });
+
+  it("getPhaseTaskPatchEvents filters patch events by phaseId while keeping events without phaseId as legacy compatible", async () => {
+    const { consumer } = mountConsumer();
+
+    const phaseAEvent = createEvent({
+      id: "event-phase-a",
+      type: "task.message.delta",
+      data: {
+        part: {
+          messageID: "assistant-phase-a",
+          type: "text",
+          text: "phase a",
+        },
+      },
+    });
+    (phaseAEvent as RealtimeEvent & { phaseId?: string }).phaseId = "phase-a";
+
+    const phaseBEvent = createEvent({
+      id: "event-phase-b",
+      type: "task.message.delta",
+      data: {
+        part: {
+          messageID: "assistant-phase-b",
+          type: "text",
+          text: "phase b",
+        },
+      },
+    });
+    (phaseBEvent as RealtimeEvent & { phaseId?: string }).phaseId = "phase-b";
+
+    const legacyEvent = createEvent({
+      id: "event-legacy",
+      type: "task.message.delta",
+      data: {
+        part: {
+          messageID: "assistant-legacy",
+          type: "text",
+          text: "legacy",
+        },
+      },
+    });
+
+    realtimeStoreMock.events = [phaseBEvent, phaseAEvent, legacyEvent];
+
+    await nextTick();
+
+    const phaseAEvents = consumer.getPhaseTaskPatchEvents("task-1", "phase-a");
+    expect(phaseAEvents.map((event) => event.eventId)).toEqual([
+      "event-phase-a",
+      "event-legacy",
+    ]);
+
+    const phaseBEvents = consumer.getPhaseTaskPatchEvents("task-1", "phase-b");
+    expect(phaseBEvents.map((event) => event.eventId)).toEqual([
+      "event-phase-b",
+      "event-legacy",
+    ]);
+
+    const unscopedEvents = consumer.getPhaseTaskPatchEvents("task-1", null);
+    expect(unscopedEvents.map((event) => event.eventId)).toEqual([
+      "event-phase-b",
+      "event-phase-a",
+      "event-legacy",
+    ]);
+  });
 });

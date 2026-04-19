@@ -12,6 +12,7 @@ import {
 
 type TaskMessagePatchEventBase = {
   eventId: string;
+  eventTs: string;
   taskId?: string;
   phaseId?: string;
   sessionId?: string;
@@ -174,6 +175,7 @@ const TASK_EVENT_KIND_TO_PATCH_KIND = new Map<string, PassiveTaskMessagePatchKin
 function buildBasePatchEvent(event: RealtimeEvent): TaskMessagePatchEventBase {
   return {
     eventId: event.id,
+    eventTs: event.ts,
     taskId: event.taskId,
     phaseId: event.phaseId,
     sessionId: event.sessionId,
@@ -254,13 +256,28 @@ function extractPatchEventInlineText(event: RealtimeEvent) {
     return undefined;
   }
 
+  const parts = Array.isArray(message.parts)
+    ? message.parts
+        .map((part) => asRecord(part))
+        .filter((part): part is Record<string, unknown> => Boolean(part))
+    : [];
+  const hasTypedThinkingPart = parts.some((part) => {
+    const partType = asString(part.type);
+    return partType === "thinking" || partType === "reasoning";
+  });
+  const hasDisplayTextPart = parts.some((part) => {
+    const partType = asString(part.type);
+    return !partType || partType === "text";
+  });
+  const suppressDirectTextFallback = hasTypedThinkingPart && !hasDisplayTextPart;
+
   const directText =
     asString(message.text) ??
     asString(message.textContent) ??
     asString(message.content) ??
     asString(message.contentText) ??
     asString(message.summaryText);
-  if (directText) {
+  if (directText && !suppressDirectTextFallback) {
     const normalized = directText.trim();
     if (
       normalized &&
@@ -271,12 +288,6 @@ function extractPatchEventInlineText(event: RealtimeEvent) {
       return normalized;
     }
   }
-
-  const parts = Array.isArray(message.parts)
-    ? message.parts
-        .map((part) => asRecord(part))
-        .filter((part): part is Record<string, unknown> => Boolean(part))
-    : [];
   const textParts = parts
     .filter((part) => {
       const partType = asString(part.type);

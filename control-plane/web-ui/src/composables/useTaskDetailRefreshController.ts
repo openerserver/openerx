@@ -26,7 +26,7 @@ export function useTaskDetailRefreshController(args: {
   realtimeConnected: Ref<boolean>;
   shouldPollRunningStatus: Ref<boolean>;
   refreshFlowSnapshot: () => void | Promise<void>;
-  refreshMessageSnapshot: () => void | Promise<void>;
+  refreshMessageSnapshot: (phaseId?: string) => void | Promise<void>;
   refreshTaskSnapshot: (options?: TaskDetailRefreshTargets) => void | Promise<void>;
   refreshWorkflowSnapshot: () => void | Promise<void>;
 }) {
@@ -54,6 +54,7 @@ export function useTaskDetailRefreshController(args: {
   function scheduleTaskRefreshOptions(
     options: TaskDetailRefreshTargets,
     reason: TaskDetailRefreshScheduleReason,
+    phaseId?: string,
   ) {
     if (!args.taskId.value) {
       return;
@@ -64,6 +65,7 @@ export function useTaskDetailRefreshController(args: {
     traceTaskDetailRealtime("refresh:schedule", {
       taskId: args.taskId.value,
       reason,
+      phaseId,
       options,
       delay,
     }, { taskId: args.taskId.value });
@@ -80,13 +82,14 @@ export function useTaskDetailRefreshController(args: {
       traceTaskDetailRealtime("refresh:execute", {
         taskId: args.taskId.value,
         reason,
+        phaseId,
         options,
         refreshPath,
       }, { taskId: args.taskId.value });
 
       try {
         if (refreshPath === "messages-only") {
-          await args.refreshMessageSnapshot();
+          await args.refreshMessageSnapshot(phaseId);
         } else if (refreshPath === "workflow-only") {
           await args.refreshWorkflowSnapshot();
         } else if (refreshPath === "flow-only") {
@@ -98,6 +101,7 @@ export function useTaskDetailRefreshController(args: {
         traceTaskDetailRealtime("refresh:complete", {
           taskId: args.taskId.value,
           reason,
+          phaseId,
           options,
           refreshPath,
           durationMs: measureTaskRealtimeDuration(startedAt),
@@ -106,6 +110,7 @@ export function useTaskDetailRefreshController(args: {
         traceTaskDetailRealtime("refresh:failed", {
           taskId: args.taskId.value,
           reason,
+          phaseId,
           options,
           refreshPath,
           durationMs: measureTaskRealtimeDuration(startedAt),
@@ -116,7 +121,7 @@ export function useTaskDetailRefreshController(args: {
   }
 
   function scheduleTaskRefresh(request: TaskDetailRefreshRequest) {
-    scheduleTaskRefreshOptions(request.targets, request.reason);
+    scheduleTaskRefreshOptions(request.targets, request.reason, request.phaseId);
   }
 
   function ensureRunningStatusPoll() {

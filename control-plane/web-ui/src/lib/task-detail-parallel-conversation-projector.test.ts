@@ -161,4 +161,102 @@ describe("task-detail-parallel-conversation-projector", () => {
       "parallel-task-session:task-phase:phase-1",
     ]);
   });
+
+  it("injects all adopted candidate assistant replies into the mainline when no top-level assistant reply exists", () => {
+    const items = buildConversationItemsWithParallelRuns({
+      baseConversationItems: [
+        {
+          key: "user-1",
+          role: "user",
+          text: "给我最终建议",
+          createdAt: "2026-04-12T10:00:00.000Z",
+          toolCalls: [],
+          raw: null,
+        } as any,
+        {
+          key: "user-2",
+          role: "user",
+          text: "下一轮提问",
+          createdAt: "2026-04-12T10:10:00.000Z",
+          toolCalls: [],
+          raw: null,
+        } as any,
+      ],
+      parallelConversationItems: [
+        {
+          key: "parallel-run-1",
+          role: "parallel",
+          createdAt: "2026-04-12T10:05:00.000Z",
+          candidates: [
+            {
+              key: "candidate-a",
+              index: 0,
+              label: "候选 A",
+              status: "completed",
+              loading: false,
+              items: [
+                {
+                  key: "candidate-a-first",
+                  role: "assistant",
+                  text: "这是采纳候选的第一条模型回复",
+                  createdAt: "2026-04-12T10:05:10.000Z",
+                  toolCalls: [],
+                  raw: null,
+                },
+                {
+                  key: "candidate-a-final",
+                  role: "assistant",
+                  text: "这是采纳后的正式回复",
+                  createdAt: "2026-04-12T10:05:30.000Z",
+                  toolCalls: [],
+                  raw: null,
+                },
+              ],
+              canAdopt: false,
+              isAdopted: true,
+              isRecommended: false,
+            },
+            {
+              key: "candidate-b",
+              index: 1,
+              label: "候选 B",
+              status: "completed",
+              loading: false,
+              items: [
+                {
+                  key: "candidate-b-final",
+                  role: "assistant",
+                  text: "另一个候选回复",
+                  createdAt: "2026-04-12T10:05:28.000Z",
+                  toolCalls: [],
+                  raw: null,
+                },
+              ],
+              canAdopt: false,
+              isAdopted: false,
+              isRecommended: false,
+            },
+          ],
+          raw: { anchorMessageId: "user-1", candidateSessions: [] },
+          toolCalls: [],
+        } as any,
+      ],
+    });
+
+    expect(items.map((item) => item.key)).toEqual([
+      "user-1",
+      "parallel-run-1",
+      "parallel-adopted:parallel-run-1:candidate-a-first",
+      "parallel-adopted:parallel-run-1:candidate-a-final",
+      "user-2",
+    ]);
+    expect(items[2]).toMatchObject({
+      role: "assistant",
+      text: "这是采纳候选的第一条模型回复",
+    });
+    expect(items[3]).toMatchObject({
+      role: "assistant",
+      text: "这是采纳后的正式回复",
+    });
+  });
 });
