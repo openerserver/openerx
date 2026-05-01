@@ -87,6 +87,111 @@ describe("task detail phase blocks", () => {
     expect(blocks[1]?.items.map((item) => item.role)).toEqual(["user", "parallel"]);
   });
 
+  it("drops a trailing single-phase transition prompt when the next parallel phase reuses it as the anchor", () => {
+    const blocks = buildTaskDetailPhaseBlocks({
+      phaseSlices: [
+        {
+          phase: {
+            id: "phase-1",
+            phaseIndex: 1,
+            phaseKind: "single",
+            triggerType: "continue",
+            status: "running",
+            startedAt: "2026-04-14T09:59:00.000Z",
+          } as any,
+          sourceMessages: [
+            {
+              id: "phase-1-user",
+              role: "user",
+              text: "先解释一下 TUI",
+              createdAt: "2026-04-14T09:59:01.000Z",
+            },
+            {
+              id: "phase-1-assistant",
+              role: "assistant",
+              text: "这是上一轮的单轮回复",
+              createdAt: "2026-04-14T09:59:02.000Z",
+            },
+            {
+              id: "phase-1-transition-user",
+              role: "user",
+              text: "再解释一下 TUI",
+              createdAt: "2026-04-14T09:59:03.000Z",
+            },
+          ],
+        },
+        {
+          phase: {
+            id: "phase-2",
+            phaseIndex: 2,
+            phaseKind: "parallel",
+            triggerType: "execute",
+            status: "awaiting_adoption",
+            startedAt: "2026-04-14T09:59:03.000Z",
+          } as any,
+          sourceMessages: [],
+        },
+      ],
+      baseConversationItems: [
+        {
+          key: "phase-2-anchor-user",
+          role: "user",
+          text: "再解释一下 TUI",
+          toolCalls: [],
+          createdAt: "2026-04-14T09:59:03.000Z",
+          raw: {
+            id: "phase-2-anchor-user",
+          },
+        },
+      ] as any,
+      parallelConversationItems: [
+        {
+          key: "parallel-phase-2",
+          role: "parallel",
+          createdAt: "2026-04-14T09:59:04.000Z",
+          candidates: [
+            {
+              key: "candidate-a",
+              index: 0,
+              label: "候选 A",
+              status: "completed",
+              loading: false,
+              items: [],
+              canAdopt: false,
+              isAdopted: false,
+              isRecommended: false,
+            },
+            {
+              key: "candidate-b",
+              index: 1,
+              label: "候选 B",
+              status: "completed",
+              loading: false,
+              items: [],
+              canAdopt: false,
+              isAdopted: false,
+              isRecommended: false,
+            },
+          ],
+          raw: {
+            phaseId: "phase-2",
+            anchorMessageId: "phase-2-anchor-user",
+          },
+          toolCalls: [],
+        } as any,
+      ],
+    });
+
+    expect(blocks[0]?.items.map((item) => item.key)).toEqual([
+      "phase-1-user",
+      "phase-1-assistant",
+    ]);
+    expect(blocks[1]?.items.map((item) => item.key)).toEqual([
+      "phase-2-anchor-user",
+      "parallel-phase-2",
+    ]);
+  });
+
   it("orders message items and parallel cards by createdAt within the same phase block", () => {
     const blocks = buildTaskDetailPhaseBlocks({
       phaseSlices: [

@@ -348,6 +348,15 @@ function normalizeComparableUserMessageText(item: TaskConversationMessageItem) {
   return typeof text === "string" ? text.replace(/\s+/gu, " ").trim() : "";
 }
 
+function buildComparableUserMessageSignature(item: TaskConversationMessageItem) {
+  const comparableText = normalizeComparableUserMessageText(item);
+  if (!comparableText) {
+    return null;
+  }
+
+  return item.createdAt ? `${item.createdAt}::${comparableText}` : comparableText;
+}
+
 function collapseEquivalentUserMessages(items: TaskConversationMessageItem[]) {
   const seenUserSignatures = new Set<string>();
 
@@ -356,12 +365,11 @@ function collapseEquivalentUserMessages(items: TaskConversationMessageItem[]) {
       return true;
     }
 
-    const comparableText = normalizeComparableUserMessageText(item);
-    if (!comparableText) {
+    const signature = buildComparableUserMessageSignature(item);
+    if (!signature) {
       return true;
     }
 
-    const signature = `${item.createdAt}::${comparableText}`;
     if (seenUserSignatures.has(signature)) {
       return false;
     }
@@ -384,6 +392,48 @@ function resolveLivePhaseTargetId(args: {
   }
 
   return args.phaseSlices.length > 0 ? args.phaseSlices[args.phaseSlices.length - 1]?.phase.id ?? null : null;
+}
+
+function trimSupersededTransitionUserItems(args: {
+  items: TaskConversationListItem[];
+  nextParallelItems: TaskConversationParallelItem[];
+  baseConversationItems?: TaskConversationListItem[];
+}) {
+  if (args.nextParallelItems.length === 0) {
+    return args.items;
+  }
+
+  const baseMessageItems = Array.isArray(args.baseConversationItems)
+    ? args.baseConversationItems.filter(isMessageConversationItem)
+    : [];
+  const anchorUserSignatures = new Set(
+    args.nextParallelItems
+      .map((parallelItem) => findParallelAnchorUserMessage(parallelItem, baseMessageItems))
+      .filter((item): item is TaskConversationMessageItem => Boolean(item))
+      .map((item) => buildComparableUserMessageSignature(item))
+      .filter((signature): signature is string => Boolean(signature)),
+  );
+
+  if (anchorUserSignatures.size === 0) {
+    return args.items;
+  }
+
+  const nextItems = args.items.slice();
+  while (nextItems.length > 0) {
+    const lastItem = nextItems[nextItems.length - 1];
+    if (!isMessageConversationItem(lastItem) || lastItem.role !== "user") {
+      break;
+    }
+
+    const signature = buildComparableUserMessageSignature(lastItem);
+    if (!signature || !anchorUserSignatures.has(signature)) {
+      break;
+    }
+
+    nextItems.pop();
+  }
+
+  return nextItems;
 }
 
 function resolvePhaseMessageItems(args: {
@@ -569,9 +619,14 @@ export function buildTaskDetailPhaseBlocks(args: {
     .map((slice, sliceIndex) => {
       const messageItems = resolvedMessageItemsByPhaseId[slice.phase.id] ?? [];
       const workflowItems = resolvedWorkflowItemsByPhaseId[slice.phase.id] ?? [];
+      const nextSlice = sortedPhaseSlices[sliceIndex + 1];
       const parallelItems =
         slice.phase.phaseKind === "parallel"
           ? resolveParallelPhaseItems(slice.phase.id, args.parallelConversationItems)
+          : [];
+      const nextParallelItems =
+        nextSlice?.phase.phaseKind === "parallel"
+          ? resolveParallelPhaseItems(nextSlice.phase.id, args.parallelConversationItems)
           : [];
       const visibleMessageItems = visibleMessageItemsByPhaseId[slice.phase.id] ?? messageItems;
       const adoptedReplyItems: TaskConversationMessageItem[] = parallelItems
@@ -595,7 +650,11 @@ export function buildTaskDetailPhaseBlocks(args: {
                 ...adoptedReplyItems,
               ]),
             ]
-          : sortConversationItemsByTimestamp([...visibleMessageItems, ...workflowItems]);
+          : trimSupersededTransitionUserItems({
+              items: sortConversationItemsByTimestamp([...visibleMessageItems, ...workflowItems]),
+              nextParallelItems,
+              baseConversationItems: args.baseConversationItems,
+            });
 
       return {
         key: `phase-block:${slice.phase.id}`,

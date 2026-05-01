@@ -55,21 +55,21 @@ export function useTaskDetailTaskDerivedState(args: {
   };
 }
 
-function hasExplicitTaskExecutionEvidence(task: Task, currentPhaseId?: string | null) {
-  if (typeof task.agentRunId === "string" && task.agentRunId.trim().length > 0) {
+function hasActiveRunId(task: Task) {
+  return (
+    (typeof task.agentRunId === "string" && task.agentRunId.trim().length > 0) ||
+    (typeof task.currentRunId === "string" && task.currentRunId.trim().length > 0)
+  );
+}
+
+function hasExplicitTaskExecutionEvidence(task: Task, _currentPhaseId?: string | null) {
+  // An active run id is the strongest signal of ongoing execution.
+  if (hasActiveRunId(task)) {
     return true;
   }
 
-  if (typeof task.currentRunId === "string" && task.currentRunId.trim().length > 0) {
-    return true;
-  }
-
-  if (
-    typeof task.currentRunStatus === "string" &&
-    ["running", "paused", "awaiting_adoption"].includes(task.currentRunStatus)
-  ) {
-    return true;
-  }
+  // currentRunStatus alone (without a run id) is stale after session
+  // completion and must not keep the spinner alive.
 
   if (typeof task.activeCandidateCount === "number" && task.activeCandidateCount > 0) {
     return true;
@@ -79,7 +79,7 @@ function hasExplicitTaskExecutionEvidence(task: Task, currentPhaseId?: string | 
     return true;
   }
 
-  return typeof currentPhaseId === "string" && currentPhaseId.trim().length > 0;
+  return false;
 }
 
 export function useTaskDetailWorkflowDerivedState(args: {

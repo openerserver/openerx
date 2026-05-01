@@ -341,6 +341,62 @@ function isEffectiveCurrentTaskSessionRecord(
   );
 }
 
+type TaskSessionMetaTaskRecord = {
+  status?: string | null;
+  currentRunStatus?: string | null;
+  executionMode?: string | null;
+  orchestrationKind?: string | null;
+  activeCandidateCount?: number | null;
+};
+
+function isOpenTaskExecutionStatus(status?: string | null) {
+  return status === "running" || status === "awaiting_adoption" || status === "paused";
+}
+
+function shouldPreferLatestPhaseAsCurrent(args: {
+  task?: TaskSessionMetaTaskRecord | null;
+  currentPhaseId?: string | null;
+  latestPhaseId?: string | null;
+}) {
+  const currentPhaseId = asNonEmptyString(args.currentPhaseId);
+  const latestPhaseId = asNonEmptyString(args.latestPhaseId);
+  if (!latestPhaseId || latestPhaseId === currentPhaseId) {
+    return false;
+  }
+
+  if (
+    typeof args.task?.activeCandidateCount === "number" &&
+    Number.isFinite(args.task.activeCandidateCount) &&
+    args.task.activeCandidateCount > 0
+  ) {
+    return true;
+  }
+
+  if (args.task?.executionMode === "parallel" || args.task?.orchestrationKind === "parallel") {
+    return true;
+  }
+
+  return (
+    isOpenTaskExecutionStatus(asNonEmptyString(args.task?.currentRunStatus)) ||
+    isOpenTaskExecutionStatus(asNonEmptyString(args.task?.status))
+  );
+}
+
+function resolveTaskSessionMetaCurrentPhaseId(args: {
+  task?: TaskSessionMetaTaskRecord | null;
+  currentPhaseId?: string | null;
+  latestPhaseId?: string | null;
+}) {
+  const currentPhaseId = asNonEmptyString(args.currentPhaseId);
+  const latestPhaseId = asNonEmptyString(args.latestPhaseId);
+
+  if (shouldPreferLatestPhaseAsCurrent(args)) {
+    return latestPhaseId ?? null;
+  }
+
+  return currentPhaseId ?? null;
+}
+
 function extractRuntimeSessionIdFromPublicTaskSessionId(taskId: string, sessionId: string) {
   const normalizedSessionId = sessionId.trim();
   if (!normalizedSessionId) {
@@ -8213,7 +8269,15 @@ taskRoutes.get(":taskId/sessions", async (c) => {
   const authorization = authHeader(c);
   const includeArchived = shouldIncludeArchivedTaskSessions(c);
 
-  const taskResult = await cpFetch<{ sessionId?: string; title?: string; status?: string }>(
+  const taskResult = await cpFetch<{
+    sessionId?: string;
+    title?: string;
+    status?: string | null;
+    currentRunStatus?: string | null;
+    executionMode?: string | null;
+    orchestrationKind?: string | null;
+    activeCandidateCount?: number | null;
+  }>(
     `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     { authorization },
   );
@@ -8326,6 +8390,8 @@ taskRoutes.get(":taskId/sessions", async (c) => {
           record.runtimeSessionId === taskResult.data?.sessionId ||
           record.id === taskResult.data?.sessionId,
       );
+    const currentPhaseId = currentRecord ? resolveCanonicalPhaseId(currentRecord) : null;
+    const latestPhaseId = latestRecord ? resolveCanonicalPhaseId(latestRecord) : null;
 
     return c.json({
       data: sessions,
@@ -8335,8 +8401,12 @@ taskRoutes.get(":taskId/sessions", async (c) => {
           asNonEmptyString(currentRecord?.id) ??
           asNonEmptyString(taskResult.data?.sessionId) ??
           null,
-        currentPhaseId: currentRecord ? resolveCanonicalPhaseId(currentRecord) : null,
-        latestPhaseId: latestRecord ? resolveCanonicalPhaseId(latestRecord) : null,
+        currentPhaseId: resolveTaskSessionMetaCurrentPhaseId({
+          task: taskResult.data,
+          currentPhaseId,
+          latestPhaseId,
+        }),
+        latestPhaseId,
         phaseCount: new Set(
           sessions
             .map((session) => asNonEmptyString(session.phaseId))

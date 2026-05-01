@@ -480,6 +480,116 @@ describe("task sessions route", () => {
     expect(historicalBody.meta.currentPhaseId).toBe("task-phase:phase-parallel");
   });
 
+  test("promotes currentPhaseId to the latest parallel phase when the task session stays on the pre-adoption mainline", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "parallel adoption task",
+            status: "awaiting_adoption",
+            currentRunStatus: "awaiting_adoption",
+            executionMode: "parallel",
+            orchestrationKind: "parallel",
+            activeCandidateCount: 2,
+            sessionId: "session-mainline",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-mainline",
+                runtimeSessionId: "session-mainline",
+                branchName: "main",
+                sourceType: "root",
+                phaseId: "task-phase:phase-single",
+                phaseRole: "mainline",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-candidate-a",
+                runtimeSessionId: "session-candidate-a",
+                parentRuntimeSessionId: "session-mainline",
+                branchName: "候选 A",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                phaseId: "task-phase:phase-parallel",
+                phaseRole: "candidate",
+                candidateIndex: 0,
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:06:00.000Z",
+                updatedAt: "2026-03-14T10:06:30.000Z",
+              },
+              {
+                id: "task-session:task-1:session-candidate-b",
+                runtimeSessionId: "session-candidate-b",
+                parentRuntimeSessionId: "session-mainline",
+                branchName: "候选 B",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                phaseId: "task-phase:phase-parallel",
+                phaseRole: "candidate",
+                candidateIndex: 1,
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:06:01.000Z",
+                updatedAt: "2026-03-14T10:06:40.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/sessions", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      data: Array<{ id: string }>;
+      meta: {
+        currentSessionId: string | null;
+        currentPhaseId: string | null;
+        latestPhaseId: string | null;
+        phaseCount: number;
+      };
+    };
+
+    expect(body.data.map((session) => session.id)).toEqual([
+      "session-mainline",
+      "session-candidate-a",
+      "session-candidate-b",
+    ]);
+    expect(body.meta).toEqual({
+      currentSessionId: "session-mainline",
+      currentPhaseId: "task-phase:phase-parallel",
+      latestPhaseId: "task-phase:phase-parallel",
+      phaseCount: 2,
+    });
+  });
+
   test("rebuilds historical session-lineage trees when archived ancestors are requested", async () => {
     setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/tasks/task-1/sessions" && !options?.method) {

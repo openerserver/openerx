@@ -6,11 +6,13 @@ import {
   type TaskSessionMessageStatus,
   type TaskSessionNodeStatus,
   taskArtifacts,
+  taskExecutionPhases,
   taskMessageParts,
   taskMessages,
   taskOperations,
   taskSessionRuns,
   taskSessions,
+  taskSnapshots,
   taskTimelineViews,
 } from "../../db/schema";
 import {
@@ -1949,6 +1951,88 @@ export function createTaskSessionMessageWriteApi(deps: {
     return isTaskMessageSessionSeqConflict(record.cause);
   }
 
+  /**
+   * When a session reaches a terminal state (completed/failed/cancelled) and
+   * belongs to a single-execution phase that is still "running", close the
+   * phase and propagate the status to the task snapshot so the frontend
+   * `isExecuting` flag clears correctly.
+   */
+  async function syncPhaseCompletionOnSessionEnd(context: TaskSessionMessageWriteContext) {
+    if (
+      context.taskMessageStatus !== "completed" &&
+      context.taskMessageStatus !== "failed" &&
+      context.taskMessageStatus !== "cancelled"
+    ) {
+      return;
+    }
+
+    if (context.role !== "assistant") {
+      return;
+    }
+
+    const phaseId = context.sessionRecord?.phaseId;
+    if (!phaseId) {
+      return;
+    }
+
+    const phase = await db.query.taskExecutionPhases.findFirst({
+      where: and(
+        eq(taskExecutionPhases.taskId, context.task.id),
+        eq(taskExecutionPhases.id, phaseId),
+      ),
+    });
+    if (!phase || phase.status !== "running") {
+      return;
+    }
+
+    // Only auto-close single-execution and manual_branch phases.
+    // Parallel / sequential phases have explicit adopt / cancel flows.
+    if (phase.phaseKind !== "single" && phase.phaseKind !== "manual_branch") {
+      return;
+    }
+
+    const terminalPhaseStatus =
+      context.taskMessageStatus === "completed" ? "completed" as const
+        : context.taskMessageStatus === "failed" ? "failed" as const
+          : "cancelled" as const;
+
+    const now = context.updatedAt;
+    await db
+      .update(taskExecutionPhases)
+      .set({
+        status: terminalPhaseStatus,
+        finishedAt: phase.finishedAt ?? now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(taskExecutionPhases.taskId, context.task.id),
+          eq(taskExecutionPhases.id, phaseId),
+        ),
+      );
+
+    // Propagate to snapshot so the API returns the correct currentRunStatus.
+    const existing = await db.query.taskSnapshots.findFirst({
+      where: eq(taskSnapshots.taskId, context.task.id),
+    });
+
+    if (existing) {
+      const snapshotExecutionStatus =
+        terminalPhaseStatus === "completed" ? "complete" as const
+          : terminalPhaseStatus === "failed" ? "failed" as const
+            : "cancelled" as const;
+
+      await db
+        .update(taskSnapshots)
+        .set({
+          currentExecutionStatus: snapshotExecutionStatus,
+          lastActivityAt: now,
+          updatedAt: now,
+        })
+        .where(eq(taskSnapshots.taskId, context.task.id));
+    }
+  }
+
   async function persistTaskSessionMessageContext(context: TaskSessionMessageWriteContext) {
     await db
       .insert(taskSessionRuns)
@@ -1992,6 +2076,8 @@ export function createTaskSessionMessageWriteApi(deps: {
       .update(taskSessions)
       .set(buildTaskSessionUpdatesFromMessage(context))
       .where(eq(taskSessions.id, context.sessionId));
+
+    await syncPhaseCompletionOnSessionEnd(context);
   }
 
   async function upsertTaskSessionMessageRecord(args: TaskSessionMessageWriteRequestArgs) {

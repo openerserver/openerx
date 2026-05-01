@@ -86,7 +86,13 @@
       style="margin-bottom: 12px"
     />
 
-    <div v-if="main.phaseBlocks.length > 0" class="task-detail-v3-phase-blocks">
+    <div
+      v-if="main.phaseBlocks.length > 0"
+      ref="phaseBlocksContainer"
+      class="task-detail-v3-phase-blocks"
+      data-testid="task-detail-v3-phase-blocks"
+      @scroll="handlePhaseBlocksScroll"
+    >
       <div
         v-if="!main.messagesLoading && !main.messagesError && (main.historyLoading || main.hasOlderHistory)"
         class="task-detail-v3-phase-blocks__history"
@@ -167,12 +173,169 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent } from "vue";
+import { computed, defineAsyncComponent, nextTick, ref, watch } from "vue";
 import type { TaskDetailMainPaneModelState } from "../../composables/useTaskDetailPageSectionModels";
+import type {
+  TaskConversationListItem,
+  TaskConversationMessageItem,
+  TaskConversationParallelItem,
+  TaskConversationWorkflowItem,
+  TaskParallelComparisonCard,
+} from "../../lib/message-normalize";
 
-defineProps<{
+const props = defineProps<{
   main: TaskDetailMainPaneModelState;
 }>();
+
+const main = computed(() => props.main);
+const phaseBlocksContainer = ref<HTMLElement | null>(null);
+const shouldAutoScrollPhaseBlocks = ref(true);
+const AUTO_SCROLL_THRESHOLD_PX = 120;
+
+function isMessageConversationItem(
+  item: TaskConversationListItem,
+): item is TaskConversationMessageItem {
+  return item.role !== "parallel" && item.role !== "workflow";
+}
+
+function isParallelConversationItem(
+  item: TaskConversationListItem,
+): item is TaskConversationParallelItem {
+  return item.role === "parallel";
+}
+
+function isWorkflowConversationItem(
+  item: TaskConversationListItem,
+): item is TaskConversationWorkflowItem {
+  return item.role === "workflow";
+}
+
+function buildMessageSignature(item: TaskConversationMessageItem) {
+  return [
+    item.key,
+    item.role,
+    item.status ?? "",
+    item.text ?? "",
+    item.thinkingText ?? "",
+    item.isStreaming ? "1" : "0",
+    String(item.toolCalls.length),
+  ].join(":");
+}
+
+function buildParallelCandidateSignature(candidate: TaskParallelComparisonCard) {
+  return [
+    candidate.key,
+    candidate.status ?? "",
+    candidate.loading ? "1" : "0",
+    candidate.isAdopted ? "1" : "0",
+    candidate.isRecommended ? "1" : "0",
+    candidate.items.map(buildMessageSignature).join("!"),
+  ].join(":");
+}
+
+function buildWorkflowSignature(item: TaskConversationWorkflowItem) {
+  return [
+    item.key,
+    item.variant ?? "",
+    item.steps
+      .map((step) =>
+        [
+          step.sessionId,
+          step.agentName,
+          step.items.map(buildMessageSignature).join("!"),
+        ].join(":"),
+      )
+      .join("~"),
+  ].join(":");
+}
+
+function buildConversationItemSignature(item: TaskConversationListItem) {
+  if (isParallelConversationItem(item)) {
+    return [item.key, item.candidates.map(buildParallelCandidateSignature).join("~")].join(":");
+  }
+
+  if (isWorkflowConversationItem(item)) {
+    return buildWorkflowSignature(item);
+  }
+
+  if (isMessageConversationItem(item)) {
+    return buildMessageSignature(item);
+  }
+
+  return "";
+}
+
+const phaseBlocksSignature = computed(() =>
+  main.value.phaseBlocks
+    .map((block) =>
+      [
+        block.key,
+        block.phaseId,
+        block.status,
+        block.items.map(buildConversationItemSignature).join("^"),
+      ].join("|"),
+    )
+    .join("||"),
+);
+
+function isPhaseBlocksNearBottom() {
+  const element = phaseBlocksContainer.value;
+  if (!element) {
+    return true;
+  }
+
+  const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return distanceToBottom <= AUTO_SCROLL_THRESHOLD_PX;
+}
+
+function scrollPhaseBlocksToBottom(force = false) {
+  const element = phaseBlocksContainer.value;
+  if (!element || (!force && !shouldAutoScrollPhaseBlocks.value)) {
+    return;
+  }
+
+  element.scrollTop = element.scrollHeight;
+}
+
+function handlePhaseBlocksScroll() {
+  if (main.value.phaseBlocks.length === 0) {
+    return;
+  }
+
+  shouldAutoScrollPhaseBlocks.value = isPhaseBlocksNearBottom();
+}
+
+async function followPhaseBlocksBottom(force = false) {
+  await nextTick();
+  scrollPhaseBlocksToBottom(force);
+}
+
+watch(
+  () =>
+    [
+      main.value.phaseBlocks.length > 0 ? "1" : "0",
+      main.value.selectedSessionId ?? "",
+      String(main.value.conversationFocusToken ?? 0),
+      String(main.value.composerResetToken ?? 0),
+    ].join("|"),
+  async () => {
+    if (main.value.phaseBlocks.length === 0) {
+      return;
+    }
+
+    shouldAutoScrollPhaseBlocks.value = true;
+    await followPhaseBlocksBottom(true);
+  },
+  { immediate: true },
+);
+
+watch(phaseBlocksSignature, async () => {
+  if (main.value.phaseBlocks.length === 0) {
+    return;
+  }
+
+  await followPhaseBlocksBottom();
+});
 
 const TaskDetailQuickOverview = defineAsyncComponent(
   () => import("../task-detail/TaskDetailQuickOverview.vue"),
