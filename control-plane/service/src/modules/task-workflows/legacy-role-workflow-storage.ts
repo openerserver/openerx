@@ -687,19 +687,22 @@ async function ensureLegacyTaskWorkflowRunMigrated(
     (task.status === "completed" || task.status === "failed" || task.status === "cancelled"
       ? now
       : null);
-  const workflowRunId = crypto.randomUUID();
+  const workflowRunId = `task-workflow:${task.id}`;
 
-  await db.insert(taskWorkflowRuns).values({
-    id: workflowRunId,
-    taskId: task.id,
-    templateId,
-    currentStage,
-    status: workflowStatus,
-    startedAt,
-    finishedAt,
-    createdAt: task.createdAt ?? now,
-    updatedAt: now,
-  });
+  await db
+    .insert(taskWorkflowRuns)
+    .values({
+      id: workflowRunId,
+      taskId: task.id,
+      templateId,
+      currentStage,
+      status: workflowStatus,
+      startedAt,
+      finishedAt,
+      createdAt: task.createdAt ?? now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing();
 
   const createdWorkflowRun = await db.query.taskWorkflowRuns.findFirst({
     where: eq(taskWorkflowRuns.id, workflowRunId),

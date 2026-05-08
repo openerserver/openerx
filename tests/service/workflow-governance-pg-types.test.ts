@@ -26,7 +26,14 @@ function toPostgresPlaceholders(query: string) {
 }
 
 async function writeDb(query: string, params: unknown[]) {
-  await sql.unsafe(toPostgresPlaceholders(query), params as never[]);
+  const normalizedQuery = toPostgresPlaceholders(query).replace(
+    /CURRENT_TIMESTAMP::text/g,
+    "CURRENT_TIMESTAMP",
+  );
+  const normalizedParams = params.map((param) =>
+    typeof param === "string" && /^\d{4}-\d{2}-\d{2}T/.test(param) ? new Date(param) : param,
+  );
+  await sql.unsafe(normalizedQuery, normalizedParams as never[]);
 }
 
 async function safeWriteDb(query: string, params: unknown[]) {

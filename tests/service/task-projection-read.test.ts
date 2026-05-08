@@ -58,6 +58,7 @@ async function loadTaskProjectionReadModule(args: {
   }));
 
   mock.module("../../control-plane/service/src/modules/tasks/task-session-read", () => ({
+    createTaskSessionReadApi: mock(() => ({})),
     shouldPersistStandalonePartEvent: () => true,
     toCanonicalTaskSessionId: (taskId: string, sessionId?: string | null) =>
       typeof sessionId === "string" && sessionId.trim()

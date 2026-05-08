@@ -1,19 +1,49 @@
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
 import { organizations, projectRoles, projects, users } from "../../db/schema";
 import { type AppEnv, authMiddleware, signJWT } from "../../middleware/auth";
+import { recordAuditEvent } from "../audit/routes";
 import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 import { validatePasswordPolicy } from "../shared/password-policy";
+import {
+  generatedUsernameFromPhone,
+  normalizeAuthIdentifier,
+  normalizeInternationalPhoneNumber,
+} from "./identity";
+import { type AuthRateLimitDecision, checkAuthRateLimit } from "./rate-limit";
 
 export const authRoutes = new Hono<AppEnv>();
 
-const loginSchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(1),
-});
+const loginSchema = z
+  .object({
+    identifier: z.string().min(1).optional(),
+    username: z.string().min(1).optional(),
+    password: z.string().min(1),
+  })
+  .refine((body) => Boolean(body.identifier || body.username), {
+    path: ["identifier"],
+    message: "Phone number or username is required",
+  });
+
+const registerSchema = z
+  .object({
+    phoneNumber: z.string().min(1),
+    password: z.string().min(8),
+    displayName: z.string().min(1).max(100),
+    email: z.string().email().max(200).nullable().optional(),
+  })
+  .refine((body) => Boolean(normalizeInternationalPhoneNumber(body.phoneNumber)), {
+    path: ["phoneNumber"],
+    message: "请输入有效的国际手机号，例如 +8613800000000",
+  })
+  .refine((body) => validatePasswordPolicy(body.password).valid, {
+    path: ["password"],
+    message: "密码需包含大小写字母、数字和特殊字符",
+  });
 
 const updateMeSchema = z
   .object({
@@ -74,6 +104,7 @@ async function buildUserProfile(userId: string) {
     {
       id: user.id,
       username: user.username,
+      phoneNumber: user.phoneNumber,
       displayName: user.displayName,
       email: user.email,
       role: user.role,
@@ -89,13 +120,56 @@ async function buildUserProfile(userId: string) {
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+const DEFAULT_SELF_REGISTER_PROJECT_ID = "proj-default";
+
+function getClientIp(c: Context<AppEnv>) {
+  const forwardedFor = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
+  return (
+    c.req.header("cf-connecting-ip")?.trim() ||
+    c.req.header("x-real-ip")?.trim() ||
+    forwardedFor ||
+    "unknown"
+  );
+}
+
+function rateLimitResponse(c: Context<AppEnv>, decision: AuthRateLimitDecision) {
+  if (decision.allowed) {
+    return null;
+  }
+
+  c.header("Retry-After", String(decision.retryAfterSeconds));
+  return c.json(
+    {
+      error: "Too many authentication attempts, please try again later",
+      code: "rate_limited",
+      retryAfterSeconds: decision.retryAfterSeconds,
+      scope: decision.scope,
+    },
+    429,
+  );
+}
 
 // POST /api/auth/login
 authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
-  const { username, password } = c.req.valid("json");
+  const { password } = c.req.valid("json");
+  const identifier = (c.req.valid("json").identifier ?? c.req.valid("json").username ?? "").trim();
+  const normalizedPhoneNumber = normalizeInternationalPhoneNumber(identifier);
+  if (identifier.startsWith("+") && !normalizedPhoneNumber) {
+    return c.json({ error: "Invalid credentials" }, 401);
+  }
+
+  const rateLimitDecision = checkAuthRateLimit({
+    action: "login",
+    clientIp: getClientIp(c),
+    identifier: normalizeAuthIdentifier(identifier),
+  });
+  const limited = rateLimitResponse(c, rateLimitDecision);
+  if (limited) return limited;
 
   const user = await db.query.users.findFirst({
-    where: eq(users.username, username),
+    where: normalizedPhoneNumber
+      ? eq(users.phoneNumber, normalizedPhoneNumber)
+      : eq(users.username, identifier),
   });
 
   if (!user) {
@@ -157,6 +231,7 @@ authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
       {
         id: user.id,
         username: user.username,
+        phoneNumber: user.phoneNumber,
         displayName: user.displayName,
         email: user.email,
         role: user.role,
@@ -169,6 +244,104 @@ authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
       ["lastLoginAt", "createdAt"] as const,
     ),
   });
+});
+
+// POST /api/auth/register
+authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
+  const body = c.req.valid("json");
+  const phoneNumber = normalizeInternationalPhoneNumber(body.phoneNumber);
+  if (!phoneNumber) {
+    return c.json({ error: "请输入有效的国际手机号，例如 +8613800000000" }, 400);
+  }
+
+  const rateLimitDecision = checkAuthRateLimit({
+    action: "register",
+    clientIp: getClientIp(c),
+    identifier: phoneNumber,
+  });
+  const limited = rateLimitResponse(c, rateLimitDecision);
+  if (limited) return limited;
+
+  const existing = await db.query.users.findFirst({
+    where: eq(users.phoneNumber, phoneNumber),
+  });
+  if (existing) return c.json({ error: "Phone number already registered" }, 409);
+
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, DEFAULT_SELF_REGISTER_PROJECT_ID),
+  });
+  if (!project) {
+    return c.json({ error: "Default project is not configured for self-registration" }, 500);
+  }
+
+  const userId = crypto.randomUUID();
+  const username = generatedUsernameFromPhone(phoneNumber, userId);
+  const now = new Date().toISOString();
+  const passwordHash = await Bun.password.hash(body.password, { algorithm: "bcrypt", cost: 12 });
+
+  await db.transaction(async (tx) => {
+    await tx.insert(users).values({
+      id: userId,
+      username,
+      phoneNumber,
+      passwordHash,
+      displayName: body.displayName,
+      email: body.email ?? null,
+      role: "developer",
+      accountStatus: "active",
+      mustChangePassword: false,
+      lastLoginAt: now,
+      createdAt: now,
+    });
+
+    await tx.insert(projectRoles).values({
+      id: crypto.randomUUID(),
+      userId,
+      projectId: DEFAULT_SELF_REGISTER_PROJECT_ID,
+      role: "developer",
+    });
+  });
+
+  await recordAuditEvent({
+    userId,
+    projectId: DEFAULT_SELF_REGISTER_PROJECT_ID,
+    eventType: "user.self_registered",
+    action: "self_register",
+    target: phoneNumber,
+    detail: { userId, projectId: DEFAULT_SELF_REGISTER_PROJECT_ID },
+    riskLevel: "medium",
+  });
+
+  const token = await signJWT({
+    sub: userId,
+    org: "",
+    projects: [{ id: DEFAULT_SELF_REGISTER_PROJECT_ID, role: "developer" }],
+    role: "developer",
+    tv: 0,
+  });
+
+  return c.json(
+    {
+      token,
+      user: normalizeApiTimestampFields(
+        {
+          id: userId,
+          username,
+          phoneNumber,
+          displayName: body.displayName,
+          email: body.email ?? null,
+          role: "developer",
+          accountStatus: "active",
+          mustChangePassword: false,
+          lastLoginAt: now,
+          createdAt: now,
+          projects: [{ id: DEFAULT_SELF_REGISTER_PROJECT_ID, role: "developer" }],
+        },
+        ["lastLoginAt", "createdAt"] as const,
+      ),
+    },
+    201,
+  );
 });
 
 // POST /api/auth/refresh

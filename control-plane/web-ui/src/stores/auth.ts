@@ -4,6 +4,7 @@ import { ref } from "vue";
 export interface User {
   id: string;
   username: string;
+  phoneNumber?: string | null;
   displayName: string;
   email?: string | null;
   role: string;

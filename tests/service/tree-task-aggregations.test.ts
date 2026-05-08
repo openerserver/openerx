@@ -930,21 +930,20 @@ describe("tree-backed task aggregations", () => {
     await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [task.id]);
     await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [task.id]);
 
-    const previousDatabaseUrl = process.env.DATABASE_URL;
-    const previousDatabaseDialect = process.env.DATABASE_DIALECT;
-    process.env.DATABASE_URL = DATABASE_URL;
-    process.env.DATABASE_DIALECT = "postgres";
-    let replayResult: { replayedEventCount: number };
-    try {
-      const { replayTaskDomainProjections } = await import(
-        "../../control-plane/service/src/modules/tasks/task-domain-projector"
-      );
-      replayResult = await replayTaskDomainProjections(task.id);
-    } finally {
-      process.env.DATABASE_URL = previousDatabaseUrl;
-      process.env.DATABASE_DIALECT = previousDatabaseDialect;
-    }
-    expect(replayResult.replayedEventCount).toBe(1);
+    const replayResponse = await authedRequest<{ scope: string; replayedEventCount: number }>(
+      "/api/tasks/projections/replay",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          scope: "task",
+          taskId: task.id,
+          reason: "rebuild task projection from canonical aggregate events",
+        }),
+      },
+    );
+    expect(replayResponse.status).toBe(200);
+    expect(replayResponse.data.scope).toBe("task");
+    expect(replayResponse.data.replayedEventCount).toBe(1);
 
     const rebuiltSnapshotRows = await sql.unsafe<
       Array<{ lifecycle_status: string; current_session_id: string | null }>
@@ -1034,23 +1033,26 @@ describe("tree-backed task aggregations", () => {
     await sql.unsafe("DELETE FROM task_timeline_views WHERE project_id = $1", [projectRecord.id]);
     await sql.unsafe("DELETE FROM task_snapshots WHERE project_id = $1", [projectRecord.id]);
 
-    const previousDatabaseUrl = process.env.DATABASE_URL;
-    const previousDatabaseDialect = process.env.DATABASE_DIALECT;
-    process.env.DATABASE_URL = DATABASE_URL;
-    process.env.DATABASE_DIALECT = "postgres";
-    let replayResult: { replayedTaskCount: number; replayedEventCount: number };
-    try {
-      const { replayTaskDomainProjectionsByProject } = await import(
-        "../../control-plane/service/src/modules/tasks/task-domain-projector"
-      );
-      replayResult = await replayTaskDomainProjectionsByProject(projectRecord.id);
-    } finally {
-      process.env.DATABASE_URL = previousDatabaseUrl;
-      process.env.DATABASE_DIALECT = previousDatabaseDialect;
-    }
+    const replayResponse = await authedRequest<{
+      scope: string;
+      confirmed: boolean;
+      replayedTaskCount: number;
+      replayedEventCount: number;
+    }>("/api/tasks/projections/replay", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "project",
+        projectId: projectRecord.id,
+        confirm: true,
+        reason: "rebuild project projections from canonical aggregate events",
+      }),
+    });
 
-    expect(replayResult.replayedTaskCount).toBe(2);
-    expect(replayResult.replayedEventCount).toBe(2);
+    expect(replayResponse.status).toBe(200);
+    expect(replayResponse.data.scope).toBe("project");
+    expect(replayResponse.data.confirmed).toBe(true);
+    expect(replayResponse.data.replayedTaskCount).toBe(2);
+    expect(replayResponse.data.replayedEventCount).toBe(2);
 
     const rebuiltSnapshotRows = await sql.unsafe<Array<{ task_id: string }>>(
       "SELECT task_id FROM task_snapshots WHERE project_id = $1 ORDER BY task_id ASC",

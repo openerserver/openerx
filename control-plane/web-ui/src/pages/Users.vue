@@ -38,7 +38,7 @@
       <a-flex :gap="12" style="margin-bottom: 12px" wrap="wrap">
         <a-input
           :value="searchText"
-          placeholder="搜索用户名、显示名、邮箱"
+          placeholder="搜索用户名、手机号、显示名、邮箱"
           allow-clear
           style="width: 260px"
           @update:value="searchText = String($event ?? '')"
@@ -82,6 +82,10 @@
                 {{ record.id }}
               </a-typography-text>
             </a-space>
+          </template>
+
+          <template v-else-if="column.key === 'phoneNumber'">
+            {{ record.phoneNumber || '-' }}
           </template>
 
           <template v-else-if="column.key === 'email'">
@@ -376,6 +380,7 @@ const filteredUsers = computed(() => {
     result = result.filter(
       (u) =>
         u.username.toLowerCase().includes(q) ||
+        u.phoneNumber?.toLowerCase().includes(q) ||
         u.displayName.toLowerCase().includes(q) ||
         u.email?.toLowerCase().includes(q),
     );
@@ -431,6 +436,7 @@ const resetPasswordForm = reactive({
 
 const columns = [
   { title: "账号", key: "username", dataIndex: "username", width: 220 },
+  { title: "手机号", key: "phoneNumber", dataIndex: "phoneNumber", width: 180 },
   { title: "显示名称", key: "displayName", dataIndex: "displayName", width: 160 },
   { title: "邮箱", key: "email", dataIndex: "email", width: 220 },
   { title: "角色", key: "role", dataIndex: "role", width: 220 },

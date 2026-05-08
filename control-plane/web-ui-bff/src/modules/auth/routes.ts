@@ -9,9 +9,22 @@ import { cpFetch } from "../../lib/control-plane-client";
 
 export const authRoutes = new Hono();
 
-const loginSchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(1),
+const loginSchema = z
+  .object({
+    identifier: z.string().min(1).optional(),
+    username: z.string().min(1).optional(),
+    password: z.string().min(1),
+  })
+  .refine((body) => Boolean(body.identifier || body.username), {
+    path: ["identifier"],
+    message: "Phone number or username is required",
+  });
+
+const registerSchema = z.object({
+  phoneNumber: z.string().min(1),
+  password: z.string().min(8),
+  displayName: z.string().min(1).max(100),
+  email: z.string().email().max(200).nullable().optional(),
 });
 
 const updateMeSchema = z
@@ -33,7 +46,17 @@ authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
     method: "POST",
     body,
   });
-  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 500));
+  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 429 | 500));
+});
+
+// POST /api/auth/register
+authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
+  const body = c.req.valid("json");
+  const result = await cpFetch("/api/auth/register", {
+    method: "POST",
+    body,
+  });
+  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 409 | 429 | 500 | 502));
 });
 
 // POST /api/auth/refresh  (requires existing token)

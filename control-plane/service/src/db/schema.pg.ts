@@ -650,6 +650,7 @@ export const environments = pgTable(
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
+  phoneNumber: text("phone_number").unique(),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),
   email: text("email"),
@@ -2036,4 +2037,3 @@ export const humanEscalations = pgTable(
   },
   (table) => [index("idx_human_escalations_task_ts").on(table.taskId, table.ts)],
 );
-

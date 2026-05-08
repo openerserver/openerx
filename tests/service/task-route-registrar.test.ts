@@ -17,9 +17,6 @@ async function loadTaskSessionRegistrarModule() {
     createTaskBranchSchema: z.object({}).passthrough(),
     persistTaskBranchMessageSchema: z.object({}).passthrough(),
   }));
-  mock.module("../../control-plane/service/src/modules/tasks/task-route-builder-shared", () => ({
-    resolveTaskByRuntimeSessionId: mock(async () => null),
-  }));
   importCounter += 1;
   return import(
     `../../control-plane/service/src/modules/tasks/task-session-routes.ts?task-session-routes-test=${importCounter}`
@@ -56,6 +53,7 @@ function createTaskSessionRegistrarDeps(overrides: Record<string, unknown> = {})
     listTaskUsageLedgerEntries: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskSessionTimelineViewResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskExecutionTraceResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
+    resolveTaskByRuntimeSessionId: mock(async () => null),
     ...overrides,
   };
 }

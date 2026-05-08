@@ -9,8 +9,8 @@ import {
   taskSessions,
   taskSnapshots,
   taskTimelineViews,
-} from "../../db/schema";
-import * as schema from "../../db/schema";
+} from "../../db/schema.pg";
+import * as schema from "../../db/schema.pg";
 import { fromStoredTaskExecutionMode, toStoredTaskExecutionMode } from "./task-execution-mode";
 
 /**
