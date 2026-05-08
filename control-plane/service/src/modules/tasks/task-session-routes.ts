@@ -284,12 +284,15 @@ export function registerTaskSessionRoutes(
       error?: string;
       data?: unknown;
     }>;
+    resolveTaskByRuntimeSessionId?: typeof resolveTaskByRuntimeSessionId;
   },
 ) {
+  const resolveRuntimeSessionTask = deps.resolveTaskByRuntimeSessionId ?? resolveTaskByRuntimeSessionId;
+
   // Lookup route — must come before /:taskId routes to avoid conflict.
   taskRoutes.get("/lookup/session-task/:runtimeSessionId", async (c) => {
     const runtimeSessionId = c.req.param("runtimeSessionId");
-    const result = await resolveTaskByRuntimeSessionId(runtimeSessionId);
+    const result = await resolveRuntimeSessionTask(runtimeSessionId);
     if (!result) {
       return c.json({ error: "No task found for session" }, 404);
     }

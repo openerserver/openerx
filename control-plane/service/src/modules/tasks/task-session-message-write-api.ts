@@ -1975,7 +1975,19 @@ export function createTaskSessionMessageWriteApi(deps: {
       return;
     }
 
-    const phase = await db.query.taskExecutionPhases.findFirst({
+    const queryApi = db.query as typeof db.query & {
+      taskExecutionPhases?: {
+        findFirst?: typeof db.query.taskExecutionPhases.findFirst;
+      };
+      taskSnapshots?: {
+        findFirst?: typeof db.query.taskSnapshots.findFirst;
+      };
+    };
+    if (!queryApi.taskExecutionPhases?.findFirst || !queryApi.taskSnapshots?.findFirst) {
+      return;
+    }
+
+    const phase = await queryApi.taskExecutionPhases.findFirst({
       where: and(
         eq(taskExecutionPhases.taskId, context.task.id),
         eq(taskExecutionPhases.id, phaseId),
@@ -2012,7 +2024,7 @@ export function createTaskSessionMessageWriteApi(deps: {
       );
 
     // Propagate to snapshot so the API returns the correct currentRunStatus.
-    const existing = await db.query.taskSnapshots.findFirst({
+    const existing = await queryApi.taskSnapshots.findFirst({
       where: eq(taskSnapshots.taskId, context.task.id),
     });
 

@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { createRouteCollector } from "./task-route-test-helpers";
 
 let importCounter = 0;
@@ -8,20 +8,16 @@ let importCounter = 0;
 async function loadTaskRouteRegistrationsModule() {
   importCounter += 1;
   return import(
-    `../../control-plane/service/src/modules/tasks/task-route-registrations.ts?task-route-registrations-test=${importCounter}`
+    `../../control-plane/service/src/modules/tasks/task-route-assembly.ts?task-route-assembly-registrations-test=${importCounter}`
   );
 }
 
 async function loadTaskRouteModulesModule() {
   importCounter += 1;
   return import(
-    `../../control-plane/service/src/modules/tasks/task-route-modules.ts?task-route-modules-test=${importCounter}`
+    `../../control-plane/service/src/modules/tasks/task-route-assembly.ts?task-route-assembly-modules-test=${importCounter}`
   );
 }
-
-afterEach(() => {
-  mock.restore();
-});
 
 describe("task route registration assembly", () => {
   test("buildTaskRouteRegistrations composes each subgroup from shared builder output", async () => {
@@ -37,31 +33,14 @@ describe("task route registration assembly", () => {
     const buildSessions = mock((value: unknown) => ({ ...sessions, shared: value }));
     const buildProjections = mock((value: unknown) => ({ ...projections, shared: value }));
 
-    mock.module("../../control-plane/service/src/modules/tasks/task-route-builder-shared", () => ({
-      buildTaskRouteBuilderShared: buildShared,
-    }));
-    mock.module(
-      "../../control-plane/service/src/modules/tasks/task-route-core-registrations",
-      () => ({
-        buildTaskCoreRegistrations: buildCore,
-        buildTaskAgentRunWriteRegistrations: buildAgentRunWrites,
-      }),
-    );
-    mock.module(
-      "../../control-plane/service/src/modules/tasks/task-route-session-registrations",
-      () => ({
-        buildTaskSessionRegistrations: buildSessions,
-      }),
-    );
-    mock.module(
-      "../../control-plane/service/src/modules/tasks/task-route-projection-registrations",
-      () => ({
-        buildTaskProjectionRegistrations: buildProjections,
-      }),
-    );
-
-    const { buildTaskRouteRegistrations } = await loadTaskRouteRegistrationsModule();
-    const registrations = buildTaskRouteRegistrations();
+    const { buildTaskRouteRegistrationsFromBuilders } = await loadTaskRouteRegistrationsModule();
+    const registrations = buildTaskRouteRegistrationsFromBuilders({
+      buildShared,
+      buildCore,
+      buildAgentRunWrites,
+      buildSessions,
+      buildProjections,
+    });
 
     expect(buildShared).toHaveBeenCalledTimes(1);
     expect(buildCore).toHaveBeenCalledWith(shared);
@@ -105,30 +84,15 @@ describe("task route module assembly", () => {
       callLog.push(["projections", routes, deps]);
     });
 
-    mock.module("../../control-plane/service/src/modules/tasks/task-route-registrations", () => ({
-      buildTaskRouteRegistrations: buildRegistrations,
-    }));
-    mock.module("../../control-plane/service/src/modules/tasks/task-core-routes", () => ({
-      registerTaskCoreRoutes: registerCore,
-    }));
-    mock.module("../../control-plane/service/src/modules/tasks/task-agent-run-read-routes", () => ({
-      registerTaskAgentRunReadRoutes: registerAgentRunReads,
-    }));
-    mock.module(
-      "../../control-plane/service/src/modules/tasks/task-agent-run-write-routes-canonical",
-      () => ({
-        registerTaskAgentRunWriteRoutes: registerAgentRunWrites,
-      }),
-    );
-    mock.module("../../control-plane/service/src/modules/tasks/task-session-routes", () => ({
-      registerTaskSessionRoutes: registerSessions,
-    }));
-    mock.module("../../control-plane/service/src/modules/tasks/task-projection-routes", () => ({
-      registerTaskProjectionRoutes: registerProjections,
-    }));
-
-    const { registerTaskRouteModules } = await loadTaskRouteModulesModule();
-    registerTaskRouteModules(taskRoutes as never);
+    const { registerTaskRouteModulesFromRegistrars } = await loadTaskRouteModulesModule();
+    registerTaskRouteModulesFromRegistrars(taskRoutes as never, {
+      buildRegistrations,
+      registerAgentRunReads,
+      registerAgentRunWrites,
+      registerCore,
+      registerSessions,
+      registerProjections,
+    });
 
     expect(buildRegistrations).toHaveBeenCalledTimes(1);
     expect(callLog).toEqual([

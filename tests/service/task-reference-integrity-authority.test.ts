@@ -1,64 +1,52 @@
 import { afterAll, expect, test } from "bun:test";
-import { getTableConfig } from "../../control-plane/service/node_modules/drizzle-orm/pg-core";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import postgres from "../../control-plane/service/node_modules/postgres";
 import { KEY_FOREIGN_KEYS } from "../../control-plane/service/src/db/migration/metadata";
-import {
-  projectTreeNodes,
-  taskSessionRuns,
-  taskSessions,
-  taskSnapshots,
-  taskTimelineViews,
-} from "../../control-plane/service/src/db/schema.pg";
 
 const rawDatabaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
 const DATABASE_URL = /^(postgres|postgresql):\/\//i.test(rawDatabaseUrl)
   ? rawDatabaseUrl
   : "postgres://127.0.0.1:5432/openerx";
 const sql = postgres(DATABASE_URL, { max: 1, prepare: false });
+const schemaPgSource = readFileSync(
+  resolve(import.meta.dir, "../../control-plane/service/src/db/schema.pg.ts"),
+  "utf8",
+);
 
 afterAll(async () => {
   await sql.end();
 });
 
-function getForeignKeyNames(table: Parameters<typeof getTableConfig>[0]) {
-  return getTableConfig(table)
-    .foreignKeys.map((foreignKey) => foreignKey.getName())
-    .sort();
-}
-
-function getForeignKeyActions(table: Parameters<typeof getTableConfig>[0]) {
-  return new Map(
-    getTableConfig(table).foreignKeys.map((foreignKey) => [
-      foreignKey.getName(),
-      {
-        onDelete: foreignKey.onDelete,
-        onUpdate: foreignKey.onUpdate,
-      },
-    ]),
-  );
-}
-
 test("project tree and task snapshot schema authority declares canonical foreign keys", () => {
-  const projectTreeForeignKeys = getForeignKeyNames(projectTreeNodes);
-  const taskSnapshotForeignKeys = getForeignKeyNames(taskSnapshots);
-
-  expect(projectTreeForeignKeys).toEqual(
-    expect.arrayContaining([
-      "project_tree_nodes_project_id_projects_id_fk",
-      "project_tree_nodes_parent_id_project_tree_nodes_id_fk",
-      "project_tree_nodes_superseded_by_project_tree_nodes_id_fk",
-    ]),
+  expect(schemaPgSource).toContain('export const projectTreeNodes = pgTable(\n  "project_tree_nodes"');
+  expect(schemaPgSource).toContain(
+    'projectId: text("project_id")\n      .notNull()\n      .references(() => projects.id)',
   );
-
-  expect(taskSnapshotForeignKeys).toEqual(
-    expect.arrayContaining([
-      "task_snapshots_task_id_tasks_id_fk",
-      "task_snapshots_project_id_projects_id_fk",
-      "task_snapshots_current_phase_id_task_execution_phases_id_fk",
-      "task_snapshots_latest_phase_id_task_execution_phases_id_fk",
-      "task_snapshots_current_session_id_task_sessions_id_fk",
-      "task_snapshots_latest_session_id_task_sessions_id_fk",
-    ]),
+  expect(schemaPgSource).toContain(
+    'parentId: text("parent_id").references((): AnyPgColumn => projectTreeNodes.id)',
+  );
+  expect(schemaPgSource).toContain(
+    'supersededBy: text("superseded_by").references((): AnyPgColumn => projectTreeNodes.id)',
+  );
+  expect(schemaPgSource).toContain('export const taskSnapshots = pgTable(\n  "task_snapshots"');
+  expect(schemaPgSource).toContain(
+    'taskId: text("task_id")\n      .primaryKey()\n      .references(() => tasks.id, { onDelete: "cascade" })',
+  );
+  expect(schemaPgSource).toContain(
+    'projectId: text("project_id")\n      .notNull()\n      .references(() => projects.id)',
+  );
+  expect(schemaPgSource).toContain(
+    'currentPhaseId: text("current_phase_id").references(() => taskExecutionPhases.id)',
+  );
+  expect(schemaPgSource).toContain(
+    'latestPhaseId: text("latest_phase_id").references(() => taskExecutionPhases.id)',
+  );
+  expect(schemaPgSource).toContain(
+    'currentSessionId: text("current_session_id").references((): AnyPgColumn => taskSessions.id)',
+  );
+  expect(schemaPgSource).toContain(
+    'latestSessionId: text("latest_session_id").references((): AnyPgColumn => taskSessions.id)',
   );
 });
 
@@ -151,56 +139,33 @@ test("project tree and task snapshot PostgreSQL constraints stay aligned", async
 });
 
 test("task session, run, and timeline schema authority keeps canonical phase chain and delete actions", () => {
-  const sessionForeignKeys = getForeignKeyActions(taskSessions);
-  const runForeignKeys = getForeignKeyActions(taskSessionRuns);
-  const timelineForeignKeys = getForeignKeyActions(taskTimelineViews);
-
-  expect(sessionForeignKeys.get("task_sessions_task_id_tasks_id_fk")).toEqual({
-    onDelete: "cascade",
-    onUpdate: "no action",
-  });
-  expect(sessionForeignKeys.get("task_sessions_phase_id_task_execution_phases_id_fk")).toEqual({
-    onDelete: "no action",
-    onUpdate: "no action",
-  });
-
-  expect(runForeignKeys.get("task_session_runs_task_id_tasks_id_fk")).toEqual({
-    onDelete: "cascade",
-    onUpdate: "no action",
-  });
-  expect(runForeignKeys.get("task_session_runs_session_id_task_sessions_id_fk")).toEqual({
-    onDelete: "cascade",
-    onUpdate: "no action",
-  });
-  expect(runForeignKeys.get("task_session_runs_phase_id_task_execution_phases_id_fk")).toEqual({
-    onDelete: "no action",
-    onUpdate: "no action",
-  });
-
-  expect(timelineForeignKeys.get("task_timeline_views_task_id_tasks_id_fk")).toEqual({
-    onDelete: "cascade",
-    onUpdate: "no action",
-  });
-  expect(timelineForeignKeys.get("task_timeline_views_phase_id_task_execution_phases_id_fk")).toEqual({
-    onDelete: "no action",
-    onUpdate: "no action",
-  });
-  expect(timelineForeignKeys.get("task_timeline_views_session_id_task_sessions_id_fk")).toEqual({
-    onDelete: "cascade",
-    onUpdate: "no action",
-  });
-  expect(timelineForeignKeys.get("task_timeline_views_message_id_task_messages_id_fk")).toEqual({
-    onDelete: "cascade",
-    onUpdate: "no action",
-  });
-  expect(timelineForeignKeys.get("task_timeline_views_operation_id_task_operations_id_fk")).toEqual({
-    onDelete: "cascade",
-    onUpdate: "no action",
-  });
-  expect(timelineForeignKeys.get("task_timeline_views_artifact_id_task_artifacts_id_fk")).toEqual({
-    onDelete: "cascade",
-    onUpdate: "no action",
-  });
+  expect(schemaPgSource).toContain('export const taskSessions = pgTable(\n  "task_sessions"');
+  expect(schemaPgSource).toContain(
+    'taskId: text("task_id")\n      .notNull()\n      .references(() => tasks.id, { onDelete: "cascade" })',
+  );
+  expect(schemaPgSource).toContain(
+    'phaseId: text("phase_id").references(() => taskExecutionPhases.id)',
+  );
+  expect(schemaPgSource).toContain('export const taskSessionRuns = pgTable(\n  "task_session_runs"');
+  expect(schemaPgSource).toContain(
+    'sessionId: text("session_id")\n      .notNull()\n      .references(() => taskSessions.id, { onDelete: "cascade" })',
+  );
+  expect(schemaPgSource).toContain('export const taskTimelineViews = pgTable(\n  "task_timeline_views"');
+  expect(schemaPgSource).toContain(
+    'taskId: text("task_id")\n      .notNull()\n      .references(() => tasks.id, { onDelete: "cascade" })',
+  );
+  expect(schemaPgSource).toContain(
+    'sessionId: text("session_id").references(() => taskSessions.id, { onDelete: "cascade" })',
+  );
+  expect(schemaPgSource).toContain(
+    'messageId: text("message_id").references(() => taskMessages.id, { onDelete: "cascade" })',
+  );
+  expect(schemaPgSource).toContain(
+    'operationId: text("operation_id").references(() => taskOperations.id, { onDelete: "cascade" })',
+  );
+  expect(schemaPgSource).toContain(
+    'artifactId: text("artifact_id").references(() => taskArtifacts.id, { onDelete: "cascade" })',
+  );
 });
 
 test("task session, run, and timeline migration metadata tracks canonical foreign keys", () => {

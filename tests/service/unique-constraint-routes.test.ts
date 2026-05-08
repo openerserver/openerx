@@ -27,12 +27,6 @@ function createUniqueConflictError(constraint: string) {
     message: `duplicate key value violates unique constraint "${constraint}"`,
   };
 }
-mock.module("drizzle-orm", () => ({
-  and: (...args: unknown[]) => ({ op: "and", args }),
-  eq: (...args: unknown[]) => ({ op: "eq", args }),
-  ne: (...args: unknown[]) => ({ op: "ne", args }),
-  isNull: (...args: unknown[]) => ({ op: "isNull", args }),
-}));
 mock.module("../../control-plane/service/src/middleware/auth", () => ({
   authMiddleware: async (
     c: { set: (key: string, value: unknown) => void },

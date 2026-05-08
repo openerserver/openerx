@@ -9,6 +9,7 @@ async function loadTaskBranchWriteModule() {
   importCounter += 1;
 
   mock.module("../../control-plane/service/src/modules/tasks/task-session-read", () => ({
+    createTaskSessionReadApi: mock(() => ({})),
     buildTaskSessionLineagePath: (
       records: Array<{ id: string; parentSessionId: string | null }>,
       sessionId: string,

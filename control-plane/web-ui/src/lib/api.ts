@@ -93,30 +93,46 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ── Auth ───────────────────────────────────────────────────────────
 
-export async function login(username: string, password: string) {
-  return request<{
-    token: string;
-    user: {
-      id: string;
-      username: string;
-      displayName: string;
-      email?: string | null;
-      role: string;
-      accountStatus?: "active" | "disabled";
-      mustChangePassword?: boolean;
-      lastLoginAt?: string | null;
-      createdAt?: string;
-      projects?: Array<{ id: string; role: string }>;
-    };
-  }>("/auth/login", {
+export interface AuthResult {
+  token: string;
+  user: {
+    id: string;
+    username: string;
+    phoneNumber?: string | null;
+    displayName: string;
+    email?: string | null;
+    role: string;
+    accountStatus?: "active" | "disabled";
+    mustChangePassword?: boolean;
+    lastLoginAt?: string | null;
+    createdAt?: string;
+    projects?: Array<{ id: string; role: string }>;
+  };
+}
+
+export async function login(identifier: string, password: string) {
+  return request<AuthResult>("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ identifier, password }),
+  });
+}
+
+export async function register(data: {
+  phoneNumber: string;
+  password: string;
+  displayName: string;
+  email?: string | null;
+}) {
+  return request<AuthResult>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify(data),
   });
 }
 
 export interface CurrentUserProfile {
   id: string;
   username: string;
+  phoneNumber: string | null;
   displayName: string;
   email: string | null;
   role: string;
@@ -180,6 +196,7 @@ export type UserRole = "platform_admin" | "org_admin" | "project_admin" | "devel
 export interface AdminUser {
   id: string;
   username: string;
+  phoneNumber: string | null;
   displayName: string;
   email: string | null;
   role: UserRole;

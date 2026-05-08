@@ -381,7 +381,12 @@ function resolveCurrentTaskSessionId(
 function resolveTaskSessionPhaseId<
   TSession extends { id: string; phaseId?: string | null; coordinationKey?: string | null },
 >(session?: TSession | null) {
-  return asNonEmptyString(session?.phaseId) ?? null;
+  return (
+    asNonEmptyString(session?.phaseId) ??
+    asNonEmptyString(session?.coordinationKey) ??
+    asNonEmptyString(session?.id) ??
+    null
+  );
 }
 
 function findTaskSessionByIdentifier<
