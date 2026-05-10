@@ -21,6 +21,7 @@
 8. [paid-model-request-guardrail-plan.md](paid-model-request-guardrail-plan.md)
 9. [repository-feature-blueprint.md](repository-feature-blueprint.md)
 10. [runtime-process-architecture.md](runtime-process-architecture.md)
+11. [ai-crowdsourced-development-platform-development-plan.md](ai-crowdsourced-development-platform-development-plan.md)
 
 ## 3. 阅读边界
 
