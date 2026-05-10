@@ -20,6 +20,7 @@ import { dashboardRoutes } from "./modules/dashboard/routes";
 import { envRoutes } from "./modules/envs/routes";
 import { orgRoutes } from "./modules/orgs/routes";
 import { policyRoutes } from "./modules/policies/routes";
+import { previewGatewayRoutes } from "./modules/preview-gateway/routes";
 import { projectRoutes } from "./modules/projects/routes";
 import { realtimeRoutes } from "./modules/realtime/routes";
 import { websocketHandler } from "./modules/realtime/ws-broadcaster";
@@ -76,6 +77,8 @@ export function createBffApp(serviceName = "opener-x-bff") {
   app.route("/api/workflow-templates", workflowTemplateRoutes);
   app.route("/api/workbench", workbenchRoutes);
   app.route("/api/workspace-files", workspaceFileRoutes);
+  app.use("/preview/*", authMiddleware);
+  app.route("/preview", previewGatewayRoutes);
 
   return app;
 }

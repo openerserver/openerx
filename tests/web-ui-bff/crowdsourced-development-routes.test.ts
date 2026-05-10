@@ -97,4 +97,97 @@ describe("crowdsourced development BFF routes", () => {
       "GET /api/commit-runtimes/abc/preview-url",
     ]);
   });
+
+  test("preview gateway reports ready state for a running runtime", async () => {
+    const seen: string[] = [];
+    setControlPlaneFetchHandler(async (req) => {
+      const url = new URL(req.url);
+      seen.push(`${req.method} ${url.pathname}`);
+      return Response.json({
+        data: {
+          id: "rt-1",
+          commitSha: "abc",
+          status: "running",
+          targetUrl: "http://127.0.0.1:5173",
+          expiresAt: "2999-01-01T00:00:00Z",
+        },
+      });
+    });
+
+    const res = await request("/preview/commits/abc/app/index.html");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      data: {
+        status: "ready",
+        commitSha: "abc",
+        runtimeId: "rt-1",
+        targetPath: "/app/index.html",
+        proxyReady: false,
+      },
+    });
+    expect(seen).toEqual(["GET /api/commit-runtimes/abc"]);
+  });
+
+  test("preview gateway wakes a stopped runtime when a target is registered", async () => {
+    const seen: Array<{ path: string; body?: unknown }> = [];
+    setControlPlaneFetchHandler(async (req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/runtime-scheduler/start") {
+        seen.push({ path: `${req.method} ${url.pathname}`, body: await req.json() });
+        return Response.json({
+          data: {
+            id: "rt-1",
+            commitSha: "abc",
+            status: "running",
+            targetUrl: "http://127.0.0.1:5173",
+          },
+        });
+      }
+      seen.push({ path: `${req.method} ${url.pathname}` });
+      return Response.json({
+        data: {
+          id: "rt-1",
+          taskId: "task-1",
+          commitStepId: "step-1",
+          commitSha: "abc",
+          runtimeLevel: 1,
+          provider: "local-registered",
+          status: "stopped",
+          targetUrl: "http://127.0.0.1:5173",
+          previewUrl: "/preview/commits/abc",
+          ttlSeconds: 1800,
+        },
+      });
+    });
+
+    const res = await request("/preview/commits/abc");
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({
+      data: {
+        status: "starting",
+        runtime: {
+          id: "rt-1",
+          commitSha: "abc",
+          status: "running",
+          targetUrl: "http://127.0.0.1:5173",
+        },
+      },
+    });
+    expect(seen).toEqual([
+      { path: "GET /api/commit-runtimes/abc" },
+      {
+        path: "POST /api/runtime-scheduler/start",
+        body: {
+          commitSha: "abc",
+          taskId: "task-1",
+          commitStepId: "step-1",
+          runtimeLevel: 1,
+          provider: "local-registered",
+          targetUrl: "http://127.0.0.1:5173",
+          previewUrl: "/preview/commits/abc",
+          ttlSeconds: 1800,
+        },
+      },
+    ]);
+  });
 });
