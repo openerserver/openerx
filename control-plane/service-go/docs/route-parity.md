@@ -175,7 +175,9 @@ migration `0053_contributor_profiles.sql`, and migration `0054_code_owners.sql`.
 They establish the Go Control Plane facts needed for the crowdsourced platform
 loop: participant levels, code ownership, task boundaries, single active
 assignment, isolated branch workspace, per-step commit records, and per-commit
-runtime preview records.
+runtime preview records. Migration `0055_commit_runtime_scheduler_fields.sql`
+adds the scheduler-facing fields required by Preview Gateway: `target_url`,
+`started_at`, `stopped_at`, `last_accessed_at`, and `error_message`.
 
 Remaining:
 

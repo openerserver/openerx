@@ -87,6 +87,8 @@ Implemented:
   quota-backed task assignment eligibility
 - Code ownership routes for project path owner rules and file-path owner
   resolution
+- Commit runtime scheduler fields for preview target URLs, lifecycle timestamps,
+  last access tracking, and runtime error messages
 
 Still intentionally separate:
 

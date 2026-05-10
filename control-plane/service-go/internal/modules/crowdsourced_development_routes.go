@@ -55,14 +55,19 @@ type createCommitStepRequest struct {
 }
 
 type startCommitRuntimeRequest struct {
-	TaskID       *string `json:"taskId"`
-	CommitStepID *string `json:"commitStepId"`
-	RuntimeLevel int     `json:"runtimeLevel"`
-	Provider     string  `json:"provider"`
-	Status       string  `json:"status"`
-	PreviewURL   *string `json:"previewUrl"`
-	LogsURL      *string `json:"logsUrl"`
-	TTLSeconds   int     `json:"ttlSeconds"`
+	TaskID         *string `json:"taskId"`
+	CommitStepID   *string `json:"commitStepId"`
+	RuntimeLevel   int     `json:"runtimeLevel"`
+	Provider       string  `json:"provider"`
+	Status         string  `json:"status"`
+	PreviewURL     *string `json:"previewUrl"`
+	TargetURL      *string `json:"targetUrl"`
+	LogsURL        *string `json:"logsUrl"`
+	TTLSeconds     int     `json:"ttlSeconds"`
+	StartedAt      *string `json:"startedAt"`
+	StoppedAt      *string `json:"stoppedAt"`
+	LastAccessedAt *string `json:"lastAccessedAt"`
+	ErrorMessage   *string `json:"errorMessage"`
 }
 
 func (api API) CommitRuntimeRoutes(r chi.Router) {
@@ -573,24 +578,36 @@ func (api API) startCommitRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	id := uuid.NewString()
 	now := time.Now().UTC()
+	startedAt := parseOptionalRuntimeTime(body.StartedAt)
+	stoppedAt := parseOptionalRuntimeTime(body.StoppedAt)
+	lastAccessedAt := parseOptionalRuntimeTime(body.LastAccessedAt)
+	if status == "running" && startedAt == nil {
+		startedAt = &now
+	}
 	expiresAt := now.Add(time.Duration(ttl) * time.Second)
 	_, err = api.DB.Exec(r.Context(), `
 		INSERT INTO commit_runtimes (
 			id, task_id, commit_step_id, commit_sha, runtime_level, provider, status,
-			preview_url, logs_url, ttl_seconds, requested_by_user_id, created_at, updated_at, expires_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13)
+			preview_url, target_url, logs_url, ttl_seconds, requested_by_user_id, created_at,
+			updated_at, expires_at, started_at, stopped_at, last_accessed_at, error_message
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT (commit_sha) DO UPDATE SET
 			commit_step_id=COALESCE(EXCLUDED.commit_step_id, commit_runtimes.commit_step_id),
 			runtime_level=EXCLUDED.runtime_level,
 			provider=EXCLUDED.provider,
 			status=EXCLUDED.status,
 			preview_url=EXCLUDED.preview_url,
+			target_url=EXCLUDED.target_url,
 			logs_url=EXCLUDED.logs_url,
 			ttl_seconds=EXCLUDED.ttl_seconds,
 			requested_by_user_id=EXCLUDED.requested_by_user_id,
 			updated_at=EXCLUDED.updated_at,
-			expires_at=EXCLUDED.expires_at
-	`, id, taskID, nullString(commitStepID), commitSha, runtimeLevel, provider, status, previewURL, body.LogsURL, ttl, user.Sub, now, expiresAt)
+			expires_at=EXCLUDED.expires_at,
+			started_at=COALESCE(EXCLUDED.started_at, commit_runtimes.started_at),
+			stopped_at=EXCLUDED.stopped_at,
+			last_accessed_at=COALESCE(EXCLUDED.last_accessed_at, commit_runtimes.last_accessed_at),
+			error_message=EXCLUDED.error_message
+	`, id, taskID, nullString(commitStepID), commitSha, runtimeLevel, provider, status, previewURL, body.TargetURL, body.LogsURL, ttl, user.Sub, now, expiresAt, startedAt, stoppedAt, lastAccessedAt, body.ErrorMessage)
 	if err != nil {
 		web.Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -600,7 +617,7 @@ func (api API) startCommitRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = api.recordAudit(r.Context(), auditInput{
 		UserID: user.Sub, ProjectID: projectID, TaskID: taskID, EventType: "commit_runtime",
-		Action: "start", Target: commitSha, Detail: map[string]any{"runtimeLevel": runtimeLevel, "provider": provider, "status": status, "previewUrl": previewURL},
+		Action: "start", Target: commitSha, Detail: map[string]any{"runtimeLevel": runtimeLevel, "provider": provider, "status": status, "previewUrl": previewURL, "targetUrl": body.TargetURL},
 	})
 	item, err := api.loadCommitRuntimeBySha(r.Context(), commitSha)
 	if err != nil {
@@ -817,24 +834,28 @@ func scanCommitStepRows(rows pgx.Rows) ([]map[string]any, error) {
 
 func (api API) loadCommitRuntimeBySha(ctx context.Context, commitSha string) (map[string]any, error) {
 	var id, taskID, sha, provider, status string
-	var commitStepID, previewURL, logsURL, requestedByUserID *string
+	var commitStepID, previewURL, targetURL, logsURL, requestedByUserID, errorMessage *string
 	var runtimeLevel, ttlSeconds int
 	var createdAt, updatedAt time.Time
-	var expiresAt *time.Time
+	var expiresAt, startedAt, stoppedAt, lastAccessedAt *time.Time
 	err := api.DB.QueryRow(ctx, `
 		SELECT id, task_id, commit_step_id, commit_sha, runtime_level, provider, status,
-		       preview_url, logs_url, ttl_seconds, requested_by_user_id, created_at, updated_at, expires_at
+		       preview_url, target_url, logs_url, ttl_seconds, requested_by_user_id,
+		       created_at, updated_at, expires_at, started_at, stopped_at, last_accessed_at,
+		       error_message
 		FROM commit_runtimes
 		WHERE commit_sha=$1
-	`, commitSha).Scan(&id, &taskID, &commitStepID, &sha, &runtimeLevel, &provider, &status, &previewURL, &logsURL, &ttlSeconds, &requestedByUserID, &createdAt, &updatedAt, &expiresAt)
+	`, commitSha).Scan(&id, &taskID, &commitStepID, &sha, &runtimeLevel, &provider, &status, &previewURL, &targetURL, &logsURL, &ttlSeconds, &requestedByUserID, &createdAt, &updatedAt, &expiresAt, &startedAt, &stoppedAt, &lastAccessedAt, &errorMessage)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"id": id, "taskId": taskID, "commitStepId": commitStepID, "commitSha": sha,
 		"runtimeLevel": runtimeLevel, "provider": provider, "status": status, "previewUrl": previewURL,
-		"logsUrl": logsURL, "ttlSeconds": ttlSeconds, "requestedByUserId": requestedByUserID,
+		"targetUrl": targetURL, "logsUrl": logsURL, "ttlSeconds": ttlSeconds, "requestedByUserId": requestedByUserID,
 		"createdAt": formatRuntimeTime(&createdAt), "updatedAt": formatRuntimeTime(&updatedAt), "expiresAt": formatRuntimeTime(expiresAt),
+		"startedAt": formatRuntimeTime(startedAt), "stoppedAt": formatRuntimeTime(stoppedAt),
+		"lastAccessedAt": formatRuntimeTime(lastAccessedAt), "errorMessage": errorMessage,
 	}, nil
 }
 
