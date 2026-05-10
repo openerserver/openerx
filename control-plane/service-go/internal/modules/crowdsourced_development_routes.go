@@ -301,6 +301,60 @@ func (api API) listTaskMarketplace(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{"data": items})
 }
 
+func (api API) listTaskReviewQueue(w http.ResponseWriter, r *http.Request) {
+	projectID := r.URL.Query().Get("projectId")
+	if projectID == "" {
+		web.Error(w, http.StatusBadRequest, "projectId is required")
+		return
+	}
+	user := authpkg.User(r)
+	if !authpkg.HasProjectRole(user, projectID, "developer") {
+		web.Error(w, http.StatusForbidden, "Insufficient project permissions")
+		return
+	}
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = "open"
+	}
+	rows, err := api.DB.Query(r.Context(), `
+		SELECT d.id, d.task_id, t.title AS task_title, d.priority, d.title, d.summary,
+		       d.blocking, d.approval_required, d.status, d.created_at, d.updated_at
+		FROM developer_change_requests d
+		JOIN tasks t ON t.id=d.task_id
+		WHERE t.project_id=$1
+		  AND ($2::text = 'all' OR d.status=$2)
+		ORDER BY d.blocking DESC,
+		         CASE d.priority WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
+		         d.created_at ASC
+		LIMIT $3
+	`, projectID, status, parseLimit(r, 50, 200))
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, taskID, taskTitle, priority, title, summary, itemStatus string
+		var blocking, approvalRequired bool
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &taskID, &taskTitle, &priority, &title, &summary, &blocking, &approvalRequired, &itemStatus, &createdAt, &updatedAt); err != nil {
+			web.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		items = append(items, map[string]any{
+			"id": id, "taskId": taskID, "taskTitle": taskTitle, "priority": priority,
+			"title": title, "summary": summary, "blocking": blocking, "approvalRequired": approvalRequired,
+			"status": itemStatus, "createdAt": formatRuntimeTime(&createdAt), "updatedAt": formatRuntimeTime(&updatedAt),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	web.JSON(w, http.StatusOK, map[string]any{"data": items})
+}
+
 func (api API) createTaskAssignment(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 	projectID, err := api.taskProjectID(r.Context(), taskID)

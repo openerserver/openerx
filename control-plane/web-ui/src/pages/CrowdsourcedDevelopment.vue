@@ -185,6 +185,33 @@
       </a-col>
 
       <a-col :xs="24">
+        <a-card title="审核队列">
+          <a-table
+            :data-source="reviewQueue"
+            :columns="reviewQueueColumns"
+            :loading="reviewQueueLoading"
+            row-key="id"
+            size="small"
+            :pagination="{ pageSize: 8 }"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'priority'">
+                <a-tag :color="priorityColor(record.priority)">{{ priorityLabel(record.priority) }}</a-tag>
+              </template>
+              <template v-if="column.key === 'blocking'">
+                <a-tag :color="record.blocking ? 'red' : 'default'">
+                  {{ record.blocking ? '阻断' : '提示' }}
+                </a-tag>
+              </template>
+              <template v-if="column.key === 'status'">
+                <a-tag>{{ record.status }}</a-tag>
+              </template>
+            </template>
+          </a-table>
+        </a-card>
+      </a-col>
+
+      <a-col :xs="24">
         <a-card title="Owner 解析">
           <a-flex gap="middle" align="start" wrap="wrap">
             <a-textarea
@@ -279,12 +306,25 @@ interface TaskMarketplaceItem {
   blockedReason?: string;
 }
 
+interface ReviewQueueItem {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  priority: "low" | "medium" | "high" | "critical";
+  title: string;
+  summary: string;
+  blocking: boolean;
+  approvalRequired: boolean;
+  status: string;
+}
+
 const authStore = useAuthStore();
 const projectStore = useProjectStore();
 const loading = ref(false);
 const profileLoading = ref(false);
 const ownersLoading = ref(false);
 const marketplaceLoading = ref(false);
+const reviewQueueLoading = ref(false);
 const savingOwner = ref(false);
 const resolvingOwners = ref(false);
 const claimingTaskId = ref("");
@@ -292,6 +332,7 @@ const loadError = ref("");
 const myProfile = ref<ContributorProfile | null>(null);
 const codeOwners = ref<CodeOwner[]>([]);
 const marketplaceTasks = ref<TaskMarketplaceItem[]>([]);
+const reviewQueue = ref<ReviewQueueItem[]>([]);
 const ownerResolution = ref<OwnerResolution | null>(null);
 const resolveInput = ref("");
 
@@ -324,6 +365,14 @@ const marketplaceColumns = [
   { title: "奖励", key: "reward", width: 120 },
   { title: "状态", key: "eligible", width: 180 },
   { title: "操作", key: "actions", width: 96 },
+];
+
+const reviewQueueColumns = [
+  { title: "任务", dataIndex: "taskTitle", key: "taskTitle" },
+  { title: "标题", dataIndex: "title", key: "title" },
+  { title: "优先级", dataIndex: "priority", key: "priority", width: 96 },
+  { title: "阻断", dataIndex: "blocking", key: "blocking", width: 96 },
+  { title: "状态", dataIndex: "status", key: "status", width: 96 },
 ];
 
 const resolvePaths = computed(() =>
@@ -398,11 +447,27 @@ async function loadMarketplace() {
   }
 }
 
+async function loadReviewQueue() {
+  if (!projectStore.currentProjectId) {
+    reviewQueue.value = [];
+    return;
+  }
+  reviewQueueLoading.value = true;
+  try {
+    const result = await apiRequest<{ data: ReviewQueueItem[] }>(
+      `/tasks/review-queue?projectId=${encodeURIComponent(projectStore.currentProjectId)}&status=open`,
+    );
+    reviewQueue.value = result.data;
+  } finally {
+    reviewQueueLoading.value = false;
+  }
+}
+
 async function loadAll() {
   loading.value = true;
   loadError.value = "";
   try {
-    await Promise.all([loadProfile(), loadCodeOwners(), loadMarketplace()]);
+    await Promise.all([loadProfile(), loadCodeOwners(), loadMarketplace(), loadReviewQueue()]);
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -516,6 +581,24 @@ function statusLabel(status: ContributorProfile["status"]) {
   }[status];
 }
 
+function priorityColor(priority: string) {
+  return {
+    low: "default",
+    medium: "gold",
+    high: "orange",
+    critical: "red",
+  }[priority] || "default";
+}
+
+function priorityLabel(priority: string) {
+  return {
+    low: "低",
+    medium: "中",
+    high: "高",
+    critical: "关键",
+  }[priority] || priority;
+}
+
 function rewardLabel(task: Record<string, any>) {
   if (task.rewardAmount == null) return "-";
   return `${task.rewardAmount} ${task.rewardCurrency || "points"}`;
@@ -532,7 +615,7 @@ watch(
   () => projectStore.currentProjectId,
   async () => {
     ownerResolution.value = null;
-    await Promise.all([loadCodeOwners(), loadMarketplace()]);
+    await Promise.all([loadCodeOwners(), loadMarketplace(), loadReviewQueue()]);
   },
 );
 </script>

@@ -41,6 +41,20 @@ crowdsourcedTaskRoutes.get("/marketplace", async (c) => {
   return c.json(result.data, statusFrom(result));
 });
 
+crowdsourcedTaskRoutes.get("/review-queue", async (c) => {
+  const result = await cpFetch(
+    withQuery("/api/tasks/review-queue", {
+      projectId: c.req.query("projectId"),
+      status: c.req.query("status"),
+      limit: c.req.query("limit"),
+    }),
+    {
+      authorization: authHeader(c),
+    },
+  );
+  return c.json(result.data, statusFrom(result));
+});
+
 crowdsourcedTaskRoutes.get("/:taskId/boundary", async (c) => {
   const taskId = c.req.param("taskId");
   const result = await cpFetch(`/api/tasks/${taskId}/boundary`, {

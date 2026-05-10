@@ -114,6 +114,24 @@ describe("crowdsourced development BFF routes", () => {
     ]);
   });
 
+  test("proxies project review queue before task id catch-all routes", async () => {
+    const seen: string[] = [];
+    setControlPlaneFetchHandler(async (req) => {
+      const url = new URL(req.url);
+      seen.push(`${req.method} ${url.pathname}${url.search}`);
+      return Response.json({
+        data: [{ id: "cr-1", taskId: "task-1", blocking: true }],
+      });
+    });
+
+    const res = await request("/api/tasks/review-queue?projectId=p1&status=open");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      data: [{ id: "cr-1", taskId: "task-1", blocking: true }],
+    });
+    expect(seen).toEqual(["GET /api/tasks/review-queue?projectId=p1&status=open"]);
+  });
+
   test("proxies code owner resolution and commit runtime preview routes", async () => {
     const seen: string[] = [];
     setControlPlaneFetchHandler(async (req) => {
