@@ -18,8 +18,11 @@ async function request(path: string, init: RequestInit = {}) {
   });
 }
 
+const originalFetch = globalThis.fetch;
+
 afterEach(() => {
   setControlPlaneFetchHandler(null);
+  globalThis.fetch = originalFetch;
 });
 
 describe("crowdsourced development BFF routes", () => {
@@ -98,8 +101,16 @@ describe("crowdsourced development BFF routes", () => {
     ]);
   });
 
-  test("preview gateway reports ready state for a running runtime", async () => {
+  test("preview gateway proxies a running runtime target", async () => {
     const seen: string[] = [];
+    const proxied: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      proxied.push(input.toString());
+      return new Response("console.log('preview')", {
+        status: 200,
+        headers: { "Content-Type": "application/javascript" },
+      });
+    }) as typeof fetch;
     setControlPlaneFetchHandler(async (req) => {
       const url = new URL(req.url);
       seen.push(`${req.method} ${url.pathname}`);
@@ -114,18 +125,14 @@ describe("crowdsourced development BFF routes", () => {
       });
     });
 
-    const res = await request("/preview/commits/abc/app/index.html");
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      data: {
-        status: "ready",
-        commitSha: "abc",
-        runtimeId: "rt-1",
-        targetPath: "/app/index.html",
-        proxyReady: false,
-      },
+    const res = await request("/preview/commits/abc/assets/app.js?v=1", {
+      headers: { Accept: "application/javascript" },
     });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/javascript");
+    expect(await res.text()).toBe("console.log('preview')");
     expect(seen).toEqual(["GET /api/commit-runtimes/abc"]);
+    expect(proxied).toEqual(["http://127.0.0.1:5173/assets/app.js?v=1"]);
   });
 
   test("preview gateway wakes a stopped runtime when a target is registered", async () => {

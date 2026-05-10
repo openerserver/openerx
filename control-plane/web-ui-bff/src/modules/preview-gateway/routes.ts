@@ -25,6 +25,17 @@ interface CommitRuntimePayload {
   error?: string;
 }
 
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
 function normalizeRuntime(payload: unknown): CommitRuntimeRecord | undefined {
   if (!payload || typeof payload !== "object") return undefined;
   const maybe = payload as CommitRuntimePayload;
@@ -49,6 +60,107 @@ function previewTargetPath(fullPath: string, commitSha: string) {
   const prefix = `/preview/commits/${commitSha}`;
   const suffix = fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : "";
   return suffix || "/";
+}
+
+function isAllowedPreviewTargetUrl(raw: string) {
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname;
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      (host === "localhost" || host === "127.0.0.1" || host === "::1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function joinPath(basePath: string, targetPath: string) {
+  const normalizedBase = basePath.replace(/\/+$/, "");
+  const normalizedTarget = targetPath.startsWith("/") ? targetPath : `/${targetPath}`;
+  return `${normalizedBase}${normalizedTarget}` || "/";
+}
+
+function buildProxyTargetUrl(targetUrl: string, targetPath: string, requestUrl: string) {
+  const target = new URL(targetUrl);
+  const request = new URL(requestUrl);
+  target.pathname = joinPath(target.pathname, targetPath);
+  target.search = request.search;
+  return target;
+}
+
+function proxyRequestHeaders(source: Headers) {
+  const headers = new Headers();
+  for (const name of ["accept", "accept-language", "user-agent"]) {
+    const value = source.get(name);
+    if (value) headers.set(name, value);
+  }
+  return headers;
+}
+
+function proxyResponseHeaders(source: Headers, targetUrl: URL, commitSha: string) {
+  const headers = new Headers();
+  source.forEach((value, key) => {
+    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+      headers.set(key, value);
+    }
+  });
+  const location = headers.get("location");
+  if (location) {
+    try {
+      const resolved = new URL(location, targetUrl);
+      if (resolved.origin === targetUrl.origin) {
+        headers.set("location", `/preview/commits/${commitSha}${resolved.pathname}${resolved.search}`);
+      }
+    } catch {
+      // Keep an invalid upstream Location header unchanged.
+    }
+  }
+  return headers;
+}
+
+async function proxyPreview(c: {
+  req: {
+    header: (name: string) => string | undefined;
+    path: string;
+    raw: Request;
+    url: string;
+  };
+}, runtime: CommitRuntimeRecord, commitSha: string) {
+  if (c.req.raw.method !== "GET" && c.req.raw.method !== "HEAD") {
+    return new Response("Preview Gateway only supports GET and HEAD", { status: 405 });
+  }
+  if (!runtime.targetUrl || !isAllowedPreviewTargetUrl(runtime.targetUrl)) {
+    return Response.json(
+      {
+        error: "Preview runtime targetUrl is not allowed",
+        status: "target_not_allowed",
+      },
+      { status: 403 },
+    );
+  }
+  const targetPath = previewTargetPath(c.req.path, commitSha);
+  const targetUrl = buildProxyTargetUrl(runtime.targetUrl, targetPath, c.req.url);
+  try {
+    const upstream = await fetch(targetUrl, {
+      method: c.req.raw.method,
+      headers: proxyRequestHeaders(c.req.raw.headers),
+      redirect: "manual",
+    });
+    return new Response(c.req.raw.method === "HEAD" ? null : upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: proxyResponseHeaders(upstream.headers, targetUrl, commitSha),
+    });
+  } catch (error) {
+    return Response.json(
+      {
+        error: `Preview runtime unreachable: ${error}`,
+        status: "target_unreachable",
+      },
+      { status: 502 },
+    );
+  }
 }
 
 async function wakeRuntime(c: {
@@ -96,6 +208,8 @@ async function handlePreview(c: {
     header: (name: string) => string | undefined;
     param: (name: string) => string;
     path: string;
+    raw: Request;
+    url: string;
   };
   json: (data: unknown, status?: PreviewGatewayStatus) => Response | Promise<Response>;
 }) {
@@ -146,15 +260,7 @@ async function handlePreview(c: {
     );
   }
 
-  return c.json({
-    data: {
-      status: "ready",
-      commitSha,
-      runtimeId: runtime.id,
-      targetPath: previewTargetPath(c.req.path, commitSha),
-      proxyReady: false,
-    },
-  });
+  return proxyPreview(c, runtime, commitSha);
 }
 
 previewGatewayRoutes.get("/commits/:commitSha", handlePreview);

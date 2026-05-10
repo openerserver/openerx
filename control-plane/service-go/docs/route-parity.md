@@ -43,7 +43,7 @@ Additional parity checks that pass:
 | Task/session/message/run reads | Session-first create/read/message/tree/timeline/execution-trace/runs and phase create/view/adopt/pause/resume/cancel pass current service coverage | Broaden route-shape tests when new BFF task views are added |
 | Runtime usage/cost/dashboard | Runtime ledger, cost budget/records/detail, governance overview pass service and smoke coverage | Add deeper cost/dashboard aggregations only when product paths require them |
 | Workflow/role/governance | Role conclusions, developer change requests, workflow templates/runs, approvals, task governance summary, workbench layout, operating-runtime mode/decisions/escalations pass current coverage | Add richer governance rule parity as governance UI expands |
-| Crowdsourced development MVP | Task boundary, contributor profile, code ownership, assignment, workspace branch, commit step, commit runtime preview record routes, and the BFF Preview Gateway status entry are implemented against Go as the new Control Plane source of truth | Wire BFF/Web UI marketplace screens, owner-aware CR review, and byte-level preview proxying |
+| Crowdsourced development MVP | Task boundary, contributor profile, code ownership, assignment, workspace branch, commit step, commit runtime preview record routes, and the BFF Preview Gateway proxy entry are implemented against Go as the new Control Plane source of truth | Wire BFF/Web UI marketplace screens and owner-aware CR review |
 | Test harness parity | Full `tests/service` is green against Go | Preserve this as the replacement gate |
 
 ## P0 Gate
@@ -185,7 +185,7 @@ adds the scheduler-facing fields required by Preview Gateway: `target_url`,
 Remaining:
 
 - BFF aggregation and UI integration for marketplace/contributor/reviewer views;
-- byte-level Preview Gateway proxying behind the current status/wake-up entry;
+- richer Preview Gateway header/cookie rewriting and runtime heartbeat updates;
 - Docker/process provider startup behind the current local-registered scheduler
   provider;
 - policy-engine enforcement beyond the current boundary, owner, quota, and risk
