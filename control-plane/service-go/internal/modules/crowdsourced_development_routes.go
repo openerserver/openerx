@@ -54,6 +54,22 @@ type createCommitStepRequest struct {
 	RiskLevel         string  `json:"riskLevel"`
 }
 
+type commitStepFileChange struct {
+	FilePath   string
+	Insertions int
+	Deletions  int
+}
+
+type commitStepPolicyDecision struct {
+	Allowed          bool
+	Status           int
+	Message          string
+	OverallRisk      string
+	ApprovalRequired bool
+	Violations       []map[string]any
+	ChangeRequest    map[string]any
+}
+
 type startCommitRuntimeRequest struct {
 	TaskID         *string `json:"taskId"`
 	CommitStepID   *string `json:"commitStepId"`
@@ -419,6 +435,23 @@ func (api API) createCommitStep(w http.ResponseWriter, r *http.Request) {
 	normalizeCommitStepDefaults(&body)
 	if err := validateCommitStep(body); err != nil {
 		web.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	decision, err := api.evaluateCommitStepPolicy(r.Context(), projectID, taskID, user, body)
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !decision.Allowed {
+		web.JSON(w, decision.Status, map[string]any{
+			"error": decision.Message,
+			"policyDecision": map[string]any{
+				"overallRisk":      decision.OverallRisk,
+				"approvalRequired": decision.ApprovalRequired,
+				"violations":       decision.Violations,
+				"changeRequest":    decision.ChangeRequest,
+			},
+		})
 		return
 	}
 	id := uuid.NewString()
@@ -868,6 +901,186 @@ func (api API) defaultRuntimeLevel(ctx context.Context, taskID string) int {
 		return level
 	}
 	return 1
+}
+
+func (api API) evaluateCommitStepPolicy(ctx context.Context, projectID string, taskID string, user *authpkg.Claims, body createCommitStepRequest) (commitStepPolicyDecision, error) {
+	decision := commitStepPolicyDecision{Allowed: true, OverallRisk: body.RiskLevel}
+	profile, err := api.ensureContributorProfile(ctx, user.Sub)
+	if err != nil {
+		return decision, err
+	}
+	if profile.Status != "active" {
+		return commitStepPolicyDecision{
+			Allowed: false, Status: http.StatusForbidden, Message: fmt.Sprintf("Contributor is %s", profile.Status),
+			OverallRisk: body.RiskLevel,
+		}, nil
+	}
+	if !contributorCanAcceptRisk(profile.Level, body.RiskLevel) {
+		return commitStepPolicyDecision{
+			Allowed: false, Status: http.StatusForbidden,
+			Message:     fmt.Sprintf("Contributor level %s cannot submit %s risk changes", profile.Level, body.RiskLevel),
+			OverallRisk: body.RiskLevel,
+		}, nil
+	}
+	if body.CodeChangeID == nil || *body.CodeChangeID == "" {
+		return decision, nil
+	}
+	files, err := api.loadCommitStepFileChanges(ctx, taskID, *body.CodeChangeID)
+	if err != nil {
+		return decision, err
+	}
+	if len(files) == 0 {
+		return decision, nil
+	}
+	owners, err := api.loadCodeOwnersForProjectContext(ctx, projectID)
+	if err != nil {
+		return decision, err
+	}
+	violations, overallRisk, approvalRequired := commitStepOwnerViolations(files, owners, body.RiskLevel)
+	if !contributorCanAcceptRisk(profile.Level, overallRisk) {
+		return commitStepPolicyDecision{
+			Allowed: false, Status: http.StatusForbidden,
+			Message:     fmt.Sprintf("Contributor level %s cannot submit %s risk changes", profile.Level, overallRisk),
+			OverallRisk: overallRisk, ApprovalRequired: approvalRequired, Violations: violations,
+		}, nil
+	}
+	matchedOwners := matchingCommitStepOwners(files, owners)
+	if approvalRequired && !userCanBypassCommitOwnerApproval(user, projectID, profile, matchedOwners) {
+		changeRequest, err := api.createCommitStepPolicyChangeRequest(ctx, taskID, body, overallRisk, violations)
+		if err != nil {
+			return decision, err
+		}
+		return commitStepPolicyDecision{
+			Allowed: false, Status: http.StatusConflict,
+			Message:          "Code owner approval is required before this commit step can be recorded",
+			OverallRisk:      overallRisk,
+			ApprovalRequired: true,
+			Violations:       violations,
+			ChangeRequest:    changeRequest,
+		}, nil
+	}
+	decision.OverallRisk = overallRisk
+	decision.ApprovalRequired = approvalRequired
+	decision.Violations = violations
+	return decision, nil
+}
+
+func (api API) loadCommitStepFileChanges(ctx context.Context, taskID string, codeChangeID string) ([]commitStepFileChange, error) {
+	rows, err := api.DB.Query(ctx, `
+		SELECT fc.file_path, fc.insertions, fc.deletions
+		FROM file_changes fc
+		JOIN code_changes cc ON cc.id=fc.change_id
+		WHERE cc.task_id=$1 AND cc.id=$2
+	`, taskID, codeChangeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []commitStepFileChange{}
+	for rows.Next() {
+		var item commitStepFileChange
+		if err := rows.Scan(&item.FilePath, &item.Insertions, &item.Deletions); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func commitStepOwnerViolations(files []commitStepFileChange, owners []codeOwnerRecord, fallbackRisk string) ([]map[string]any, string, bool) {
+	violations := []map[string]any{}
+	overallRisk := fallbackRisk
+	approvalRequired := false
+	for _, file := range files {
+		matches := []map[string]any{}
+		for _, owner := range owners {
+			if !codeOwnerPatternMatches(owner.PathPattern, file.FilePath) {
+				continue
+			}
+			matches = append(matches, publicCodeOwner(owner))
+			if compareRisk(owner.RiskLevel, overallRisk) > 0 {
+				overallRisk = owner.RiskLevel
+			}
+			if owner.RequiresApproval {
+				approvalRequired = true
+			}
+		}
+		if len(matches) > 0 {
+			violations = append(violations, map[string]any{
+				"ruleId": "code-owner-approval", "filePath": file.FilePath,
+				"risk": overallRisk, "insertions": file.Insertions, "deletions": file.Deletions,
+				"owners": matches,
+			})
+		}
+	}
+	return violations, overallRisk, approvalRequired
+}
+
+func matchingCommitStepOwners(files []commitStepFileChange, owners []codeOwnerRecord) []codeOwnerRecord {
+	matches := []codeOwnerRecord{}
+	seen := map[string]bool{}
+	for _, file := range files {
+		for _, owner := range owners {
+			if !codeOwnerPatternMatches(owner.PathPattern, file.FilePath) || seen[owner.ID] {
+				continue
+			}
+			seen[owner.ID] = true
+			matches = append(matches, owner)
+		}
+	}
+	return matches
+}
+
+func userCanBypassCommitOwnerApproval(user *authpkg.Claims, projectID string, profile contributorProfile, owners []codeOwnerRecord) bool {
+	if contributorLevelRank(profile.Level) >= contributorLevelRank("L4") {
+		return true
+	}
+	if authpkg.HasProjectRole(user, projectID, "project_admin") {
+		return true
+	}
+	for _, owner := range owners {
+		switch owner.OwnerType {
+		case "user":
+			if owner.OwnerRef == user.Sub {
+				return true
+			}
+		case "role":
+			if authpkg.HasProjectRole(user, projectID, owner.OwnerRef) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (api API) createCommitStepPolicyChangeRequest(ctx context.Context, taskID string, body createCommitStepRequest, risk string, violations []map[string]any) (map[string]any, error) {
+	_, ok, err := api.ensureDeveloperChangeRequestsAvailable(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, pgx.ErrNoRows
+	}
+	id := uuid.NewString()
+	now := time.Now().UTC()
+	requiredChanges, _ := jsonBytes(violations)
+	relatedFindingKeys, _ := jsonBytes([]string{"code-owner-approval"})
+	title := "Code owner approval required"
+	summary := fmt.Sprintf("Commit %s touches paths protected by code owner rules. Required risk level: %s.", body.CommitSha, risk)
+	_, err = api.DB.Exec(ctx, `
+		INSERT INTO developer_change_requests (
+			id, task_id, task_stage_run_id, source_role_agent_id, assigned_role_agent_id, priority, title,
+			summary, required_changes_json, related_finding_keys_json, blocking, approval_required, status,
+			resolution_note, created_at, updated_at, resolved_at
+		) VALUES ($1,$2,NULL,'policy.code-owner','role.code-owner','high',$3,$4,$5,$6,true,true,'open',NULL,$7,$7,NULL)
+	`, id, taskID, title, summary, requiredChanges, relatedFindingKeys, now)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"id": id, "taskId": taskID, "priority": "high", "title": title, "summary": summary,
+		"blocking": true, "approvalRequired": true, "status": "open", "createdAt": formatRuntimeTime(&now),
+	}, nil
 }
 
 func (api API) validateContributorCanAcceptTask(ctx context.Context, taskID string, profile contributorProfile) error {

@@ -1,6 +1,10 @@
 package modules
 
-import "testing"
+import (
+	"testing"
+
+	authpkg "openerx/control-plane/service-go/internal/auth"
+)
 
 func TestValidateTaskBoundaryRejectsUnsafePath(t *testing.T) {
 	err := validateTaskBoundary(taskBoundaryRequest{
@@ -96,6 +100,45 @@ func TestRiskRankOrdering(t *testing.T) {
 	}
 	if compareRisk("low", "medium") >= 0 {
 		t.Fatal("low should rank below medium")
+	}
+}
+
+func TestCommitStepOwnerPolicyRequiresApproval(t *testing.T) {
+	files := []commitStepFileChange{{FilePath: "services/payments/checkout.ts", Insertions: 12, Deletions: 3}}
+	owners := []codeOwnerRecord{{
+		ID: "owner-1", PathPattern: "services/payments/**", OwnerType: "user", OwnerRef: "maintainer-1",
+		RiskLevel: "high", RequiresApproval: true,
+	}}
+	violations, risk, approvalRequired := commitStepOwnerViolations(files, owners, "low")
+	if risk != "high" {
+		t.Fatalf("risk = %q, want high", risk)
+	}
+	if !approvalRequired {
+		t.Fatal("expected owner approval to be required")
+	}
+	if len(violations) != 1 {
+		t.Fatalf("violations = %d, want 1", len(violations))
+	}
+}
+
+func TestCommitStepOwnerApprovalBypassIsScoped(t *testing.T) {
+	user := &authpkg.Claims{
+		Sub:      "developer-1",
+		Projects: []authpkg.ProjectClaim{{ID: "project-1", Role: "developer"}},
+		Role:     "developer",
+	}
+	profile := contributorProfile{UserID: "developer-1", Level: "L3", Status: "active"}
+	otherOwner := []codeOwnerRecord{{ID: "owner-1", OwnerType: "user", OwnerRef: "maintainer-1"}}
+	if userCanBypassCommitOwnerApproval(user, "project-1", profile, otherOwner) {
+		t.Fatal("non-owner L3 contributor should not bypass owner approval")
+	}
+	selfOwner := []codeOwnerRecord{{ID: "owner-2", OwnerType: "user", OwnerRef: "developer-1"}}
+	if !userCanBypassCommitOwnerApproval(user, "project-1", profile, selfOwner) {
+		t.Fatal("matching user owner should bypass owner approval")
+	}
+	profile.Level = "L4"
+	if !userCanBypassCommitOwnerApproval(user, "project-1", profile, otherOwner) {
+		t.Fatal("L4 module maintainer should bypass owner approval")
 	}
 }
 

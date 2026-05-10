@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -290,7 +291,11 @@ func (api API) loadCodeOwner(r *http.Request, ownerID string) (codeOwnerRecord, 
 }
 
 func (api API) loadCodeOwnersForProject(r *http.Request, projectID string) ([]codeOwnerRecord, error) {
-	rows, err := api.DB.Query(r.Context(), `
+	return api.loadCodeOwnersForProjectContext(r.Context(), projectID)
+}
+
+func (api API) loadCodeOwnersForProjectContext(ctx context.Context, projectID string) ([]codeOwnerRecord, error) {
+	rows, err := api.DB.Query(ctx, `
 		SELECT id, project_id, path_pattern, owner_type, owner_ref, risk_level,
 		       requires_approval, created_by_user_id, created_at, updated_at
 		FROM code_owners
