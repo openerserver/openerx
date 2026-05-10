@@ -43,6 +43,7 @@ Additional parity checks that pass:
 | Task/session/message/run reads | Session-first create/read/message/tree/timeline/execution-trace/runs and phase create/view/adopt/pause/resume/cancel pass current service coverage | Broaden route-shape tests when new BFF task views are added |
 | Runtime usage/cost/dashboard | Runtime ledger, cost budget/records/detail, governance overview pass service and smoke coverage | Add deeper cost/dashboard aggregations only when product paths require them |
 | Workflow/role/governance | Role conclusions, developer change requests, workflow templates/runs, approvals, task governance summary, workbench layout, operating-runtime mode/decisions/escalations pass current coverage | Add richer governance rule parity as governance UI expands |
+| Crowdsourced development MVP | Task boundary, assignment, workspace branch, commit step, and commit runtime preview record routes are implemented in Go as the new Control Plane source of truth | Wire BFF/Web UI marketplace screens and preview gateway calls to these Go routes |
 | Test harness parity | Full `tests/service` is green against Go | Preserve this as the replacement gate |
 
 ## P0 Gate
@@ -142,8 +143,40 @@ Before production switch:
 - run UI login/project/task smoke manually through BFF;
 - keep the existing Bun/TypeScript Control Plane available as rollback/reference code until production traffic has burned in.
 
+## P5: Crowdsourced Development MVP
+
+Implemented in Go:
+
+- `GET /api/tasks/:taskId/boundary`
+- `PUT /api/tasks/:taskId/boundary`
+- `POST /api/tasks/:taskId/assignments`
+- `GET /api/tasks/:taskId/assignments/current`
+- `DELETE /api/tasks/:taskId/assignments/current`
+- `POST /api/tasks/:taskId/workspaces`
+- `GET /api/tasks/:taskId/workspaces/current`
+- `POST /api/tasks/:taskId/commit-steps`
+- `GET /api/tasks/:taskId/commit-steps`
+- `GET /api/tasks/:taskId/commit-steps/:stepId/files`
+- `POST /api/commit-runtimes/:commitSha/start`
+- `GET /api/commit-runtimes/:commitSha`
+- `GET /api/commit-runtimes/:commitSha/preview-url`
+
+These routes are backed by migration `0052_crowdsourced_development_mvp.sql`.
+They establish the Go Control Plane facts needed for the crowdsourced platform
+loop: task boundaries, single active assignment, isolated branch workspace,
+per-step commit records, and per-commit runtime preview records.
+
+Remaining:
+
+- BFF aggregation and UI integration for marketplace/contributor/reviewer views;
+- real Preview Gateway proxying and runtime scheduler implementation behind
+  `commit_runtimes`;
+- code ownership and policy-engine rules beyond the current boundary and risk
+  fields.
+
 ## Next Implementation Queue
 
-1. Keep any future paid-execution or governance persistence routes behind `tests/service` plus BFF smoke coverage.
-2. Re-run `go test ./...`, strict parity gate, full `tests/service`, and BFF smoke before changing traffic routing.
-3. After production traffic burns in, decide whether to retire the TypeScript service or keep it as a long-term reference implementation.
+1. Wire BFF/Web UI crowdsourced MVP screens to the new Go routes.
+2. Keep any future paid-execution, governance, or crowdsourced persistence routes behind `tests/service` plus BFF smoke coverage.
+3. Re-run `go test ./...`, strict parity gate, full `tests/service`, and BFF smoke before changing traffic routing.
+4. After production traffic burns in, decide whether to retire the TypeScript service or keep it as a long-term reference implementation.

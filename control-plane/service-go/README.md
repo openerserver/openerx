@@ -81,6 +81,8 @@ Implemented:
 - Session-first task routes for sessions, messages, tree, timeline, execution trace, snapshots, run create/update/list, and projection replay
 - Runtime usage ledgers and baselines, cost basics, dashboard governance overview, role agents, role conclusions, developer change requests, workflow templates and task workflow reads
 - Phase lifecycle routes, workbench layout, approvals, task governance summary, repository CRUD, cost budget list/update, and task operating-runtime mode/decision/escalation routes
+- Crowdsourced-development MVP routes for task boundaries, task assignments,
+  workspace branches, commit steps, and commit runtime preview records
 
 Still intentionally separate:
 
