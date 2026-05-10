@@ -183,6 +183,7 @@ const menuItems = computed(() => {
   const items = [
     { key: "/", icon: () => h(DashboardOutlined), label: "Dashboard" },
     { key: "/tasks", icon: () => h(UnorderedListOutlined), label: "任务" },
+    { key: "/crowdsourced", icon: () => h(TeamOutlined), label: "众包协作" },
     { key: "/workbench", icon: () => h(AppstoreOutlined), label: "任务工作台" },
     { key: "/multi-task-monitor", icon: () => h(AppstoreOutlined), label: "多任务监控台" },
     { key: "/projects", icon: () => h(ProjectOutlined), label: "项目" },
@@ -206,6 +207,7 @@ const menuItems = computed(() => {
 const selectedKeys = computed(() => {
   const path = route.path;
   if (path === "/" || path === "") return ["/"];
+  if (path.startsWith("/crowdsourced")) return ["/crowdsourced"];
   if (path.startsWith("/workbench")) return ["/workbench"];
   if (path.startsWith("/multi-task-monitor")) return ["/multi-task-monitor"];
   if (path.startsWith("/tasks")) return ["/tasks"];

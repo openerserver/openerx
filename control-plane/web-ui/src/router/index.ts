@@ -23,6 +23,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/Tasks.vue"),
       },
       {
+        path: "crowdsourced",
+        name: "CrowdsourcedDevelopment",
+        component: () => import("../pages/CrowdsourcedDevelopment.vue"),
+      },
+      {
         path: "workbench",
         name: "TaskWorkbench",
         component: () => import("../pages/TaskWorkbench.vue"),
