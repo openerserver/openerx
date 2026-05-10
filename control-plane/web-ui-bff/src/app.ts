@@ -10,6 +10,12 @@ import { chatSettingsRoutes } from "./modules/chat-settings/routes";
 import { configRoutes } from "./modules/config/routes";
 import { costRoutes } from "./modules/cost/routes";
 import { credentialRoutes } from "./modules/credentials/routes";
+import {
+  codeOwnerRoutes,
+  commitRuntimeRoutes,
+  contributorRoutes,
+  crowdsourcedTaskRoutes,
+} from "./modules/crowdsourced-development/routes";
 import { dashboardRoutes } from "./modules/dashboard/routes";
 import { envRoutes } from "./modules/envs/routes";
 import { orgRoutes } from "./modules/orgs/routes";
@@ -48,8 +54,12 @@ export function createBffApp(serviceName = "opener-x-bff") {
   app.route("/api/audit", auditRoutes);
   app.route("/api/realtime", realtimeRoutes);
   app.route("/api/agents", agentControlRoutes);
+  app.route("/api/tasks", crowdsourcedTaskRoutes);
   app.route("/api/tasks", taskRoutes);
   app.route("/api/approvals", approvalRoutes);
+  app.route("/api/code-owners", codeOwnerRoutes);
+  app.route("/api/commit-runtimes", commitRuntimeRoutes);
+  app.route("/api/contributors", contributorRoutes);
   app.route("/api/cost", costRoutes);
   app.route("/api/dashboard", dashboardRoutes);
   app.route("/api/envs", envRoutes);
