@@ -43,7 +43,7 @@ Additional parity checks that pass:
 | Task/session/message/run reads | Session-first create/read/message/tree/timeline/execution-trace/runs and phase create/view/adopt/pause/resume/cancel pass current service coverage | Broaden route-shape tests when new BFF task views are added |
 | Runtime usage/cost/dashboard | Runtime ledger, cost budget/records/detail, governance overview pass service and smoke coverage | Add deeper cost/dashboard aggregations only when product paths require them |
 | Workflow/role/governance | Role conclusions, developer change requests, workflow templates/runs, approvals, task governance summary, workbench layout, operating-runtime mode/decisions/escalations pass current coverage | Add richer governance rule parity as governance UI expands |
-| Crowdsourced development MVP | Task boundary, assignment, workspace branch, commit step, and commit runtime preview record routes are implemented in Go as the new Control Plane source of truth | Wire BFF/Web UI marketplace screens and preview gateway calls to these Go routes |
+| Crowdsourced development MVP | Task boundary, contributor profile, assignment, workspace branch, commit step, and commit runtime preview record routes are implemented in Go as the new Control Plane source of truth | Wire BFF/Web UI marketplace screens and preview gateway calls to these Go routes |
 | Test harness parity | Full `tests/service` is green against Go | Preserve this as the replacement gate |
 
 ## P0 Gate
@@ -160,11 +160,16 @@ Implemented in Go:
 - `POST /api/commit-runtimes/:commitSha/start`
 - `GET /api/commit-runtimes/:commitSha`
 - `GET /api/commit-runtimes/:commitSha/preview-url`
+- `GET /api/contributors/me`
+- `GET /api/contributors`
+- `GET /api/contributors/:userId`
+- `PUT /api/contributors/:userId`
 
 These routes are backed by migration `0052_crowdsourced_development_mvp.sql`.
-They establish the Go Control Plane facts needed for the crowdsourced platform
-loop: task boundaries, single active assignment, isolated branch workspace,
-per-step commit records, and per-commit runtime preview records.
+and migration `0053_contributor_profiles.sql`. They establish the Go Control
+Plane facts needed for the crowdsourced platform loop: participant levels,
+task boundaries, single active assignment, isolated branch workspace, per-step
+commit records, and per-commit runtime preview records.
 
 Remaining:
 

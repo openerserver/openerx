@@ -48,3 +48,24 @@ func TestDefaultBranchNameIsStableAndScoped(t *testing.T) {
 		t.Fatalf("default branch = %q, want %q", got, want)
 	}
 }
+
+func TestContributorLevelRiskAndRuntimePolicy(t *testing.T) {
+	if !contributorCanAcceptRisk("L1", "low") {
+		t.Fatal("L1 should accept low risk tasks")
+	}
+	if contributorCanAcceptRisk("L1", "medium") {
+		t.Fatal("L1 should not accept medium risk tasks")
+	}
+	if !contributorCanAcceptRisk("L3", "high") {
+		t.Fatal("L3 should accept high risk tasks")
+	}
+	if contributorCanAcceptRisk("L4", "critical") {
+		t.Fatal("critical tasks should require L5")
+	}
+	if !contributorCanUseRuntimeLevel("L2", 3) {
+		t.Fatal("L2 should use runtime level 3")
+	}
+	if contributorCanUseRuntimeLevel("L2", 4) {
+		t.Fatal("L2 should not use runtime level 4")
+	}
+}

@@ -190,6 +190,19 @@ func (api API) createTaskAssignment(w http.ResponseWriter, r *http.Request) {
 		}
 		contributorID = *body.ContributorUserID
 	}
+	profile, err := api.ensureContributorProfile(r.Context(), contributorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		web.Error(w, http.StatusNotFound, "Contributor not found")
+		return
+	}
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := api.validateContributorCanAcceptTask(r.Context(), taskID, profile); err != nil {
+		web.Error(w, http.StatusForbidden, err.Error())
+		return
+	}
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	lockedUntil := parseOptionalRuntimeTime(body.LockedUntil)
@@ -208,7 +221,7 @@ func (api API) createTaskAssignment(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = api.recordAudit(r.Context(), auditInput{
 		UserID: user.Sub, ProjectID: projectID, TaskID: taskID, EventType: "task_assignment",
-		Action: "create", Target: id, Detail: map[string]any{"contributorUserId": contributorID, "lockedUntil": formatRuntimeTime(lockedUntil)},
+		Action: "create", Target: id, Detail: map[string]any{"contributorUserId": contributorID, "contributorLevel": profile.Level, "lockedUntil": formatRuntimeTime(lockedUntil)},
 	})
 	item, err := api.loadAssignment(r.Context(), id)
 	if err != nil {
@@ -831,6 +844,56 @@ func (api API) defaultRuntimeLevel(ctx context.Context, taskID string) int {
 		return level
 	}
 	return 1
+}
+
+func (api API) validateContributorCanAcceptTask(ctx context.Context, taskID string, profile contributorProfile) error {
+	if profile.Status != "active" {
+		return fmt.Errorf("Contributor is %s", profile.Status)
+	}
+	riskLevel := "low"
+	var runtimeLevel int
+	err := api.DB.QueryRow(ctx, `SELECT risk_level, runtime_level FROM task_boundaries WHERE task_id=$1`, taskID).Scan(&riskLevel, &runtimeLevel)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if !contributorCanAcceptRisk(profile.Level, riskLevel) {
+		return fmt.Errorf("Contributor level %s cannot accept %s risk tasks", profile.Level, riskLevel)
+	}
+	if runtimeLevel > 0 && !contributorCanUseRuntimeLevel(profile.Level, runtimeLevel) {
+		return fmt.Errorf("Contributor level %s cannot use runtime level %d", profile.Level, runtimeLevel)
+	}
+	activeCount, err := api.countContributorActiveAssignments(ctx, profile.UserID)
+	if err != nil {
+		return err
+	}
+	if profile.ActiveTaskQuota >= 0 && activeCount >= profile.ActiveTaskQuota {
+		return fmt.Errorf("Contributor active task quota exceeded")
+	}
+	todayCount, err := api.countContributorAssignmentsSince(ctx, profile.UserID, startOfUTCDay(time.Now().UTC()))
+	if err != nil {
+		return err
+	}
+	if profile.DailyTaskQuota >= 0 && todayCount >= profile.DailyTaskQuota {
+		return fmt.Errorf("Contributor daily task quota exceeded")
+	}
+	return nil
+}
+
+func (api API) countContributorActiveAssignments(ctx context.Context, userID string) (int, error) {
+	var count int
+	err := api.DB.QueryRow(ctx, `SELECT COUNT(*) FROM task_assignments WHERE contributor_user_id=$1 AND status='active'`, userID).Scan(&count)
+	return count, err
+}
+
+func (api API) countContributorAssignmentsSince(ctx context.Context, userID string, since time.Time) (int, error) {
+	var count int
+	err := api.DB.QueryRow(ctx, `SELECT COUNT(*) FROM task_assignments WHERE contributor_user_id=$1 AND created_at >= $2`, userID, since).Scan(&count)
+	return count, err
+}
+
+func startOfUTCDay(value time.Time) time.Time {
+	year, month, day := value.UTC().Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 func validateTaskBoundary(body taskBoundaryRequest) error {

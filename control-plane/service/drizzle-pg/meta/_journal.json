@@ -372,6 +372,13 @@
       "when": 1775002680000,
       "tag": "0052_crowdsourced_development_mvp",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1775002740000,
+      "tag": "0053_contributor_profiles",
+      "breakpoints": true
     }
   ]
 }

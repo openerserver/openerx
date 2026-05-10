@@ -83,6 +83,8 @@ Implemented:
 - Phase lifecycle routes, workbench layout, approvals, task governance summary, repository CRUD, cost budget list/update, and task operating-runtime mode/decision/escalation routes
 - Crowdsourced-development MVP routes for task boundaries, task assignments,
   workspace branches, commit steps, and commit runtime preview records
+- Contributor profile routes for L1-L5 levels, status, reputation counters, and
+  quota-backed task assignment eligibility
 
 Still intentionally separate:
 
