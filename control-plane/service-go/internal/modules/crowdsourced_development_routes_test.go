@@ -74,6 +74,19 @@ func TestContributorLevelRiskAndRuntimePolicy(t *testing.T) {
 	}
 }
 
+func TestMarketplaceEligibilityExplainsBlockedTasks(t *testing.T) {
+	profile := contributorProfile{UserID: "u1", Level: "L2", Status: "active", ActiveTaskQuota: 1, DailyTaskQuota: 2}
+	if eligible, reason := marketplaceEligibility(profile, "medium", 3, 0, 0); !eligible || reason != "" {
+		t.Fatalf("expected eligible L2 task, got eligible=%v reason=%q", eligible, reason)
+	}
+	if eligible, reason := marketplaceEligibility(profile, "high", 3, 0, 0); eligible || reason == "" {
+		t.Fatalf("expected high risk block, got eligible=%v reason=%q", eligible, reason)
+	}
+	if eligible, reason := marketplaceEligibility(profile, "medium", 3, 1, 0); eligible || reason != "Contributor active task quota exceeded" {
+		t.Fatalf("expected quota block, got eligible=%v reason=%q", eligible, reason)
+	}
+}
+
 func TestCodeOwnerPatternMatches(t *testing.T) {
 	cases := []struct {
 		pattern string

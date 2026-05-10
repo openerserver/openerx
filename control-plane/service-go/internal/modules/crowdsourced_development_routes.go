@@ -33,6 +33,22 @@ type createAssignmentRequest struct {
 	LockedUntil       *string `json:"lockedUntil"`
 }
 
+type marketplaceTask struct {
+	ID                    string
+	ProjectID             string
+	Title                 string
+	Category              *string
+	LifecycleStatus       *string
+	RuntimeLevel          int
+	RewardAmount          *float64
+	RewardCurrency        string
+	RiskLevel             string
+	AssignmentID          *string
+	AssignedContributorID *string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
 type createWorkspaceRequest struct {
 	AssignmentID  *string `json:"assignmentId"`
 	BranchName    *string `json:"branchName"`
@@ -181,6 +197,92 @@ func (api API) putTaskBoundary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.JSON(w, http.StatusOK, map[string]any{"data": item})
+}
+
+func (api API) listTaskMarketplace(w http.ResponseWriter, r *http.Request) {
+	projectID := r.URL.Query().Get("projectId")
+	if projectID == "" {
+		web.Error(w, http.StatusBadRequest, "projectId is required")
+		return
+	}
+	user := authpkg.User(r)
+	if !authpkg.HasProjectRole(user, projectID, "developer") {
+		web.Error(w, http.StatusForbidden, "Insufficient project permissions")
+		return
+	}
+	profile, err := api.ensureContributorProfile(r.Context(), user.Sub)
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	activeCount, err := api.countContributorActiveAssignments(r.Context(), profile.UserID)
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	todayCount, err := api.countContributorAssignmentsSince(r.Context(), profile.UserID, startOfUTCDay(time.Now().UTC()))
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	includeAssigned := r.URL.Query().Get("includeAssigned") == "1" || r.URL.Query().Get("includeAssigned") == "true"
+	rows, err := api.DB.Query(r.Context(), `
+		SELECT t.id, t.project_id, t.title, t.category, t.lifecycle_status,
+		       COALESCE(tb.runtime_level, 1) AS runtime_level,
+		       tb.reward_amount::float8, COALESCE(tb.reward_currency, 'points') AS reward_currency,
+		       COALESCE(tb.risk_level, 'low') AS risk_level,
+		       active.id AS assignment_id, active.contributor_user_id AS assigned_contributor_user_id,
+		       t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN task_boundaries tb ON tb.task_id=t.id
+		LEFT JOIN LATERAL (
+			SELECT id, contributor_user_id
+			FROM task_assignments
+			WHERE task_id=t.id AND status='active'
+			ORDER BY created_at DESC
+			LIMIT 1
+		) active ON true
+		WHERE t.project_id=$1
+		  AND ($2::boolean OR active.id IS NULL)
+		  AND COALESCE(t.lifecycle_status, t.status, 'draft') NOT IN ('done', 'archived', 'cancelled')
+		ORDER BY COALESCE(tb.reward_amount, 0) DESC, t.updated_at DESC
+		LIMIT $3
+	`, projectID, includeAssigned, parseLimit(r, 50, 200))
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var item marketplaceTask
+		if err := rows.Scan(
+			&item.ID, &item.ProjectID, &item.Title, &item.Category, &item.LifecycleStatus,
+			&item.RuntimeLevel, &item.RewardAmount, &item.RewardCurrency, &item.RiskLevel,
+			&item.AssignmentID, &item.AssignedContributorID, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			web.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		eligible, reason := marketplaceEligibility(profile, item.RiskLevel, item.RuntimeLevel, activeCount, todayCount)
+		if item.AssignmentID != nil && *item.AssignmentID != "" {
+			eligible = false
+			reason = "Task already assigned"
+		}
+		items = append(items, map[string]any{
+			"id": item.ID, "projectId": item.ProjectID, "title": item.Title, "category": item.Category,
+			"lifecycleStatus": item.LifecycleStatus, "runtimeLevel": item.RuntimeLevel,
+			"rewardAmount": item.RewardAmount, "rewardCurrency": item.RewardCurrency, "riskLevel": item.RiskLevel,
+			"assignmentId": item.AssignmentID, "assignedContributorUserId": item.AssignedContributorID,
+			"eligible": eligible, "blockedReason": reason,
+			"createdAt": formatRuntimeTime(&item.CreatedAt), "updatedAt": formatRuntimeTime(&item.UpdatedAt),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	web.JSON(w, http.StatusOK, map[string]any{"data": items})
 }
 
 func (api API) createTaskAssignment(w http.ResponseWriter, r *http.Request) {
@@ -1081,6 +1183,25 @@ func (api API) createCommitStepPolicyChangeRequest(ctx context.Context, taskID s
 		"id": id, "taskId": taskID, "priority": "high", "title": title, "summary": summary,
 		"blocking": true, "approvalRequired": true, "status": "open", "createdAt": formatRuntimeTime(&now),
 	}, nil
+}
+
+func marketplaceEligibility(profile contributorProfile, riskLevel string, runtimeLevel int, activeCount int, todayCount int) (bool, string) {
+	if profile.Status != "active" {
+		return false, fmt.Sprintf("Contributor is %s", profile.Status)
+	}
+	if !contributorCanAcceptRisk(profile.Level, riskLevel) {
+		return false, fmt.Sprintf("Contributor level %s cannot accept %s risk tasks", profile.Level, riskLevel)
+	}
+	if runtimeLevel > 0 && !contributorCanUseRuntimeLevel(profile.Level, runtimeLevel) {
+		return false, fmt.Sprintf("Contributor level %s cannot use runtime level %d", profile.Level, runtimeLevel)
+	}
+	if profile.ActiveTaskQuota >= 0 && activeCount >= profile.ActiveTaskQuota {
+		return false, "Contributor active task quota exceeded"
+	}
+	if profile.DailyTaskQuota >= 0 && todayCount >= profile.DailyTaskQuota {
+		return false, "Contributor daily task quota exceeded"
+	}
+	return true, ""
 }
 
 func (api API) validateContributorCanAcceptTask(ctx context.Context, taskID string, profile contributorProfile) error {

@@ -70,6 +70,24 @@ describe("crowdsourced development BFF routes", () => {
     ]);
   });
 
+  test("proxies marketplace listing before task id catch-all routes", async () => {
+    const seen: string[] = [];
+    setControlPlaneFetchHandler(async (req) => {
+      const url = new URL(req.url);
+      seen.push(`${req.method} ${url.pathname}${url.search}`);
+      return Response.json({
+        data: [{ id: "task-1", title: "Fix checkout", eligible: true }],
+      });
+    });
+
+    const res = await request("/api/tasks/marketplace?projectId=p1&limit=20");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      data: [{ id: "task-1", title: "Fix checkout", eligible: true }],
+    });
+    expect(seen).toEqual(["GET /api/tasks/marketplace?projectId=p1&limit=20"]);
+  });
+
   test("proxies code owner resolution and commit runtime preview routes", async () => {
     const seen: string[] = [];
     setControlPlaneFetchHandler(async (req) => {

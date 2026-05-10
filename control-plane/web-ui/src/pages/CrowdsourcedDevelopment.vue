@@ -144,6 +144,47 @@
       </a-col>
 
       <a-col :xs="24">
+        <a-card title="开发任务市场">
+          <a-table
+            :data-source="marketplaceTasks"
+            :columns="marketplaceColumns"
+            :loading="marketplaceLoading"
+            row-key="id"
+            size="small"
+            :pagination="{ pageSize: 8 }"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'riskLevel'">
+                <a-tag :color="riskColor(record.riskLevel)">{{ riskLabel(record.riskLevel) }}</a-tag>
+              </template>
+              <template v-if="column.key === 'runtimeLevel'">
+                L{{ record.runtimeLevel }}
+              </template>
+              <template v-if="column.key === 'reward'">
+                {{ rewardLabel(record) }}
+              </template>
+              <template v-if="column.key === 'eligible'">
+                <a-tag :color="record.eligible ? 'green' : 'default'">
+                  {{ record.eligible ? '可领取' : record.blockedReason || '不可领取' }}
+                </a-tag>
+              </template>
+              <template v-if="column.key === 'actions'">
+                <a-button
+                  type="primary"
+                  size="small"
+                  :loading="claimingTaskId === record.id"
+                  :disabled="!record.eligible"
+                  @click="claimMarketplaceTask(record.id)"
+                >
+                  领取
+                </a-button>
+              </template>
+            </template>
+          </a-table>
+        </a-card>
+      </a-col>
+
+      <a-col :xs="24">
         <a-card title="Owner 解析">
           <a-flex gap="middle" align="start" wrap="wrap">
             <a-textarea
@@ -225,16 +266,32 @@ interface OwnerResolution {
   approvalRequired: boolean;
 }
 
+interface TaskMarketplaceItem {
+  id: string;
+  title: string;
+  category?: string | null;
+  lifecycleStatus?: string | null;
+  runtimeLevel: number;
+  rewardAmount?: number | null;
+  rewardCurrency: string;
+  riskLevel: CodeOwner["riskLevel"];
+  eligible: boolean;
+  blockedReason?: string;
+}
+
 const authStore = useAuthStore();
 const projectStore = useProjectStore();
 const loading = ref(false);
 const profileLoading = ref(false);
 const ownersLoading = ref(false);
+const marketplaceLoading = ref(false);
 const savingOwner = ref(false);
 const resolvingOwners = ref(false);
+const claimingTaskId = ref("");
 const loadError = ref("");
 const myProfile = ref<ContributorProfile | null>(null);
 const codeOwners = ref<CodeOwner[]>([]);
+const marketplaceTasks = ref<TaskMarketplaceItem[]>([]);
 const ownerResolution = ref<OwnerResolution | null>(null);
 const resolveInput = ref("");
 
@@ -257,6 +314,16 @@ const ownerColumns = [
 const resolutionColumns = [
   { title: "文件", dataIndex: "path", key: "path" },
   { title: "匹配 owner", key: "owners" },
+];
+
+const marketplaceColumns = [
+  { title: "任务", dataIndex: "title", key: "title" },
+  { title: "分类", dataIndex: "category", key: "category", width: 120 },
+  { title: "风险", dataIndex: "riskLevel", key: "riskLevel", width: 96 },
+  { title: "Runtime", dataIndex: "runtimeLevel", key: "runtimeLevel", width: 96 },
+  { title: "奖励", key: "reward", width: 120 },
+  { title: "状态", key: "eligible", width: 180 },
+  { title: "操作", key: "actions", width: 96 },
 ];
 
 const resolvePaths = computed(() =>
@@ -315,15 +382,47 @@ async function loadCodeOwners() {
   }
 }
 
+async function loadMarketplace() {
+  if (!projectStore.currentProjectId) {
+    marketplaceTasks.value = [];
+    return;
+  }
+  marketplaceLoading.value = true;
+  try {
+    const result = await apiRequest<{ data: TaskMarketplaceItem[] }>(
+      `/tasks/marketplace?projectId=${encodeURIComponent(projectStore.currentProjectId)}`,
+    );
+    marketplaceTasks.value = result.data;
+  } finally {
+    marketplaceLoading.value = false;
+  }
+}
+
 async function loadAll() {
   loading.value = true;
   loadError.value = "";
   try {
-    await Promise.all([loadProfile(), loadCodeOwners()]);
+    await Promise.all([loadProfile(), loadCodeOwners(), loadMarketplace()]);
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error);
   } finally {
     loading.value = false;
+  }
+}
+
+async function claimMarketplaceTask(taskId: string) {
+  claimingTaskId.value = taskId;
+  try {
+    await apiRequest(`/tasks/${taskId}/assignments`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    await Promise.all([loadProfile(), loadMarketplace()]);
+    message.success("任务已领取");
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error));
+  } finally {
+    claimingTaskId.value = "";
   }
 }
 
@@ -417,6 +516,11 @@ function statusLabel(status: ContributorProfile["status"]) {
   }[status];
 }
 
+function rewardLabel(task: Record<string, any>) {
+  if (task.rewardAmount == null) return "-";
+  return `${task.rewardAmount} ${task.rewardCurrency || "points"}`;
+}
+
 onMounted(async () => {
   if (projectStore.projects.length === 0) {
     await projectStore.loadProjects();
@@ -428,7 +532,7 @@ watch(
   () => projectStore.currentProjectId,
   async () => {
     ownerResolution.value = null;
-    await loadCodeOwners();
+    await Promise.all([loadCodeOwners(), loadMarketplace()]);
   },
 );
 </script>

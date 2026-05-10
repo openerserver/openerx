@@ -105,6 +105,7 @@ func (api API) TaskRoutes(r chi.Router) {
 	r.Patch("/{taskId}/runs/{runId}", api.updateTaskRun)
 	r.Get("/{taskId}/execution-trace", api.taskExecutionTrace)
 	r.Post("/projections/replay", api.replayTaskProjections)
+	r.Get("/marketplace", api.listTaskMarketplace)
 	r.Get("/{taskId}/boundary", api.getTaskBoundary)
 	r.Put("/{taskId}/boundary", api.putTaskBoundary)
 	r.Post("/{taskId}/assignments", api.createTaskAssignment)

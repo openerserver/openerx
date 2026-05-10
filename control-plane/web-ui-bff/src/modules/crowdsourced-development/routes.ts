@@ -27,6 +27,20 @@ function withQuery(path: string, params: Record<string, string | undefined>) {
 
 // Task boundary, assignment, workspace and commit-step routes.
 
+crowdsourcedTaskRoutes.get("/marketplace", async (c) => {
+  const result = await cpFetch(
+    withQuery("/api/tasks/marketplace", {
+      projectId: c.req.query("projectId"),
+      includeAssigned: c.req.query("includeAssigned"),
+      limit: c.req.query("limit"),
+    }),
+    {
+      authorization: authHeader(c),
+    },
+  );
+  return c.json(result.data, statusFrom(result));
+});
+
 crowdsourcedTaskRoutes.get("/:taskId/boundary", async (c) => {
   const taskId = c.req.param("taskId");
   const result = await cpFetch(`/api/tasks/${taskId}/boundary`, {
