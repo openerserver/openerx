@@ -98,3 +98,21 @@ func TestRiskRankOrdering(t *testing.T) {
 		t.Fatal("low should rank below medium")
 	}
 }
+
+func TestRuntimeSchedulerMVPPolicy(t *testing.T) {
+	if !runtimeSchedulerSupportsLevel(1) || !runtimeSchedulerSupportsLevel(2) {
+		t.Fatal("MVP scheduler should support levels 1 and 2")
+	}
+	if runtimeSchedulerSupportsLevel(3) {
+		t.Fatal("MVP scheduler should not support level 3 yet")
+	}
+	if err := validateLocalPreviewTargetURL("http://127.0.0.1:5173/preview"); err != nil {
+		t.Fatalf("expected localhost target URL to pass, got %v", err)
+	}
+	if err := validateLocalPreviewTargetURL("https://example.com/preview"); err == nil {
+		t.Fatal("expected non-local target URL to be rejected")
+	}
+	if err := validateLocalPreviewTargetURL("file:///tmp/demo"); err == nil {
+		t.Fatal("expected non-http target URL to be rejected")
+	}
+}

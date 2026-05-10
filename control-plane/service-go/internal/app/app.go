@@ -57,6 +57,7 @@ func New(cfg config.Config, pool *pgxpool.Pool) http.Handler {
 		protected.Route("/api/code-owners", api.CodeOwnerRoutes)
 		protected.Route("/api/commit-runtimes", api.CommitRuntimeRoutes)
 		protected.Route("/api/contributors", api.ContributorRoutes)
+		protected.Route("/api/runtime-scheduler", api.RuntimeSchedulerRoutes)
 		protected.Route("/api/workflow-templates", api.WorkflowTemplateRoutes)
 		protected.Route("/api/cost", api.CostRoutes)
 		protected.Route("/api/role-agents", api.RoleAgentRoutes)

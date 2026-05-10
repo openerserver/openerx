@@ -160,6 +160,9 @@ Implemented in Go:
 - `POST /api/commit-runtimes/:commitSha/start`
 - `GET /api/commit-runtimes/:commitSha`
 - `GET /api/commit-runtimes/:commitSha/preview-url`
+- `POST /api/runtime-scheduler/start`
+- `POST /api/runtime-scheduler/stop/:runtimeId`
+- `GET /api/runtime-scheduler/:runtimeId/status`
 - `GET /api/contributors/me`
 - `GET /api/contributors`
 - `GET /api/contributors/:userId`
@@ -182,8 +185,9 @@ adds the scheduler-facing fields required by Preview Gateway: `target_url`,
 Remaining:
 
 - BFF aggregation and UI integration for marketplace/contributor/reviewer views;
-- real Preview Gateway proxying and runtime scheduler implementation behind
-  `commit_runtimes`;
+- real Preview Gateway proxying behind `commit_runtimes`;
+- Docker/process provider startup behind the current local-registered scheduler
+  provider;
 - policy-engine enforcement beyond the current boundary, owner, quota, and risk
   fields.
 

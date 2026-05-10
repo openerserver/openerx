@@ -89,6 +89,8 @@ Implemented:
   resolution
 - Commit runtime scheduler fields for preview target URLs, lifecycle timestamps,
   last access tracking, and runtime error messages
+- MVP runtime scheduler routes for registering local preview targets, stopping
+  runtimes, and reading runtime status
 
 Still intentionally separate:
 

@@ -833,6 +833,10 @@ func scanCommitStepRows(rows pgx.Rows) ([]map[string]any, error) {
 }
 
 func (api API) loadCommitRuntimeBySha(ctx context.Context, commitSha string) (map[string]any, error) {
+	return api.loadCommitRuntimeWhere(ctx, `commit_sha=$1`, commitSha)
+}
+
+func (api API) loadCommitRuntimeWhere(ctx context.Context, predicate string, arg any) (map[string]any, error) {
 	var id, taskID, sha, provider, status string
 	var commitStepID, previewURL, targetURL, logsURL, requestedByUserID, errorMessage *string
 	var runtimeLevel, ttlSeconds int
@@ -844,8 +848,7 @@ func (api API) loadCommitRuntimeBySha(ctx context.Context, commitSha string) (ma
 		       created_at, updated_at, expires_at, started_at, stopped_at, last_accessed_at,
 		       error_message
 		FROM commit_runtimes
-		WHERE commit_sha=$1
-	`, commitSha).Scan(&id, &taskID, &commitStepID, &sha, &runtimeLevel, &provider, &status, &previewURL, &targetURL, &logsURL, &ttlSeconds, &requestedByUserID, &createdAt, &updatedAt, &expiresAt, &startedAt, &stoppedAt, &lastAccessedAt, &errorMessage)
+		WHERE `+predicate, arg).Scan(&id, &taskID, &commitStepID, &sha, &runtimeLevel, &provider, &status, &previewURL, &targetURL, &logsURL, &ttlSeconds, &requestedByUserID, &createdAt, &updatedAt, &expiresAt, &startedAt, &stoppedAt, &lastAccessedAt, &errorMessage)
 	if err != nil {
 		return nil, err
 	}
