@@ -379,6 +379,13 @@
       "when": 1775002740000,
       "tag": "0053_contributor_profiles",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1775002800000,
+      "tag": "0054_code_owners",
+      "breakpoints": true
     }
   ]
 }

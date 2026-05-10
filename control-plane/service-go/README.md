@@ -85,6 +85,8 @@ Implemented:
   workspace branches, commit steps, and commit runtime preview records
 - Contributor profile routes for L1-L5 levels, status, reputation counters, and
   quota-backed task assignment eligibility
+- Code ownership routes for project path owner rules and file-path owner
+  resolution
 
 Still intentionally separate:
 

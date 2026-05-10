@@ -69,3 +69,32 @@ func TestContributorLevelRiskAndRuntimePolicy(t *testing.T) {
 		t.Fatal("L2 should not use runtime level 4")
 	}
 }
+
+func TestCodeOwnerPatternMatches(t *testing.T) {
+	cases := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		{"services/payments/**", "services/payments/checkout.ts", true},
+		{"services/payments/**", "services/payment/checkout.ts", false},
+		{"packages/ui/*", "packages/ui/Button.tsx", true},
+		{"packages/ui/*", "packages/ui/forms/Input.tsx", false},
+		{"infra/nginx.conf", "infra/nginx.conf", true},
+		{"*", "anything.go", true},
+	}
+	for _, tc := range cases {
+		if got := codeOwnerPatternMatches(tc.pattern, tc.path); got != tc.want {
+			t.Fatalf("pattern %q path %q got %v want %v", tc.pattern, tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestRiskRankOrdering(t *testing.T) {
+	if compareRisk("critical", "high") <= 0 {
+		t.Fatal("critical should rank above high")
+	}
+	if compareRisk("low", "medium") >= 0 {
+		t.Fatal("low should rank below medium")
+	}
+}
