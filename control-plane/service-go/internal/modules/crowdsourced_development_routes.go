@@ -33,6 +33,22 @@ type createAssignmentRequest struct {
 	LockedUntil       *string `json:"lockedUntil"`
 }
 
+type settleAssignmentRequest struct {
+	Outcome         string   `json:"outcome"`
+	RewardAmount    *float64 `json:"rewardAmount"`
+	RewardCurrency  string   `json:"rewardCurrency"`
+	ReputationDelta *float64 `json:"reputationDelta"`
+	Note            *string  `json:"note"`
+}
+
+type settlementDelta struct {
+	Status         string
+	CompletedDelta int
+	RejectedDelta  int
+	RiskDelta      int
+	Reputation     float64
+}
+
 type marketplaceTask struct {
 	ID                    string
 	ProjectID             string
@@ -406,6 +422,113 @@ func (api API) releaseCurrentTaskAssignment(w http.ResponseWriter, r *http.Reque
 		Action: "release", Target: taskID,
 	})
 	web.JSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (api API) settleTaskAssignment(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "taskId")
+	assignmentID := chi.URLParam(r, "assignmentId")
+	projectID, err := api.taskProjectID(r.Context(), taskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		web.Error(w, http.StatusNotFound, "Task not found")
+		return
+	}
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	user := authpkg.User(r)
+	if !authpkg.HasProjectRole(user, projectID, "project_admin") {
+		web.Error(w, http.StatusForbidden, "Project admin permission required")
+		return
+	}
+	var body settleAssignmentRequest
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	delta, err := assignmentSettlementDelta(body.Outcome, body.ReputationDelta)
+	if err != nil {
+		web.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	item, err := api.loadAssignment(r.Context(), assignmentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		web.Error(w, http.StatusNotFound, "Assignment not found")
+		return
+	}
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if stringFromMap(item, "taskId") != taskID {
+		web.Error(w, http.StatusNotFound, "Assignment not found")
+		return
+	}
+	contributorID := stringFromMap(item, "contributorUserId")
+	if _, err := api.ensureContributorProfile(r.Context(), contributorID); err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rewardAmount := body.RewardAmount
+	rewardCurrency := body.RewardCurrency
+	if rewardCurrency == "" {
+		rewardCurrency = "points"
+	}
+	if rewardAmount == nil {
+		var amount *float64
+		var currency string
+		err := api.DB.QueryRow(r.Context(), `SELECT reward_amount::float8, reward_currency FROM task_boundaries WHERE task_id=$1`, taskID).Scan(&amount, &currency)
+		if err == nil {
+			rewardAmount = amount
+			if currency != "" {
+				rewardCurrency = currency
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			web.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	now := time.Now().UTC()
+	_, err = api.DB.Exec(r.Context(), `
+		UPDATE task_assignments
+		SET status=$1, updated_at=$2, released_at=CASE WHEN $1='released' THEN $2 ELSE released_at END
+		WHERE id=$3 AND task_id=$4
+	`, delta.Status, now, assignmentID, taskID)
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_, err = api.DB.Exec(r.Context(), `
+		UPDATE contributor_profiles
+		SET completed_tasks=completed_tasks+$2,
+		    rejected_changes=rejected_changes+$3,
+		    risk_incidents=risk_incidents+$4,
+		    reputation_score=reputation_score+$5,
+		    updated_at=$6
+		WHERE user_id=$1
+	`, contributorID, delta.CompletedDelta, delta.RejectedDelta, delta.RiskDelta, delta.Reputation, now)
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = api.recordAudit(r.Context(), auditInput{
+		UserID: user.Sub, ProjectID: projectID, TaskID: taskID, EventType: "task_assignment",
+		Action: "settle", Target: assignmentID, RiskLevel: "low",
+		Detail: map[string]any{
+			"outcome": body.Outcome, "contributorUserId": contributorID, "rewardAmount": rewardAmount,
+			"rewardCurrency": rewardCurrency, "reputationDelta": delta.Reputation, "note": body.Note,
+		},
+	})
+	updated, err := api.loadAssignment(r.Context(), assignmentID)
+	if err != nil {
+		web.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	web.JSON(w, http.StatusOK, map[string]any{
+		"data": map[string]any{
+			"assignment": updated, "outcome": body.Outcome, "rewardAmount": rewardAmount,
+			"rewardCurrency": rewardCurrency, "reputationDelta": delta.Reputation,
+		},
+	})
 }
 
 func (api API) createWorkspaceBranch(w http.ResponseWriter, r *http.Request) {
@@ -1202,6 +1325,25 @@ func marketplaceEligibility(profile contributorProfile, riskLevel string, runtim
 		return false, "Contributor daily task quota exceeded"
 	}
 	return true, ""
+}
+
+func assignmentSettlementDelta(outcome string, reputationDelta *float64) (settlementDelta, error) {
+	switch outcome {
+	case "accepted":
+		value := 5.0
+		if reputationDelta != nil {
+			value = *reputationDelta
+		}
+		return settlementDelta{Status: "completed", CompletedDelta: 1, Reputation: value}, nil
+	case "rejected":
+		value := -5.0
+		if reputationDelta != nil {
+			value = *reputationDelta
+		}
+		return settlementDelta{Status: "released", RejectedDelta: 1, RiskDelta: 1, Reputation: value}, nil
+	default:
+		return settlementDelta{}, errors.New("outcome must be accepted or rejected")
+	}
 }
 
 func (api API) validateContributorCanAcceptTask(ctx context.Context, taskID string, profile contributorProfile) error {

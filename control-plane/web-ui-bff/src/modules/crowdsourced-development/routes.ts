@@ -86,6 +86,17 @@ crowdsourcedTaskRoutes.delete("/:taskId/assignments/current", async (c) => {
   return c.json(result.data, statusFrom(result));
 });
 
+crowdsourcedTaskRoutes.post("/:taskId/assignments/:assignmentId/settle", async (c) => {
+  const taskId = c.req.param("taskId");
+  const assignmentId = c.req.param("assignmentId");
+  const result = await cpFetch(`/api/tasks/${taskId}/assignments/${assignmentId}/settle`, {
+    method: "POST",
+    body: await readJson(c),
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, statusFrom(result));
+});
+
 crowdsourcedTaskRoutes.post("/:taskId/workspaces", async (c) => {
   const taskId = c.req.param("taskId");
   const result = await cpFetch(`/api/tasks/${taskId}/workspaces`, {

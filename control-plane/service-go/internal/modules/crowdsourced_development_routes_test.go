@@ -87,6 +87,27 @@ func TestMarketplaceEligibilityExplainsBlockedTasks(t *testing.T) {
 	}
 }
 
+func TestAssignmentSettlementDelta(t *testing.T) {
+	accepted, err := assignmentSettlementDelta("accepted", nil)
+	if err != nil {
+		t.Fatalf("accepted delta returned error: %v", err)
+	}
+	if accepted.Status != "completed" || accepted.CompletedDelta != 1 || accepted.Reputation != 5 {
+		t.Fatalf("unexpected accepted delta: %+v", accepted)
+	}
+	custom := -2.5
+	rejected, err := assignmentSettlementDelta("rejected", &custom)
+	if err != nil {
+		t.Fatalf("rejected delta returned error: %v", err)
+	}
+	if rejected.Status != "released" || rejected.RejectedDelta != 1 || rejected.RiskDelta != 1 || rejected.Reputation != -2.5 {
+		t.Fatalf("unexpected rejected delta: %+v", rejected)
+	}
+	if _, err := assignmentSettlementDelta("maybe", nil); err == nil {
+		t.Fatal("expected invalid outcome to fail")
+	}
+}
+
 func TestCodeOwnerPatternMatches(t *testing.T) {
 	cases := []struct {
 		pattern string

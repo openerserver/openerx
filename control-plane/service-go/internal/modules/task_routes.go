@@ -111,6 +111,7 @@ func (api API) TaskRoutes(r chi.Router) {
 	r.Post("/{taskId}/assignments", api.createTaskAssignment)
 	r.Get("/{taskId}/assignments/current", api.getCurrentTaskAssignment)
 	r.Delete("/{taskId}/assignments/current", api.releaseCurrentTaskAssignment)
+	r.Post("/{taskId}/assignments/{assignmentId}/settle", api.settleTaskAssignment)
 	r.Post("/{taskId}/workspaces", api.createWorkspaceBranch)
 	r.Get("/{taskId}/workspaces/current", api.getCurrentWorkspaceBranch)
 	r.Post("/{taskId}/commit-steps", api.createCommitStep)

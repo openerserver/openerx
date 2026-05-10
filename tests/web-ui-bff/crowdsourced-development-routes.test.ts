@@ -88,6 +88,32 @@ describe("crowdsourced development BFF routes", () => {
     expect(seen).toEqual(["GET /api/tasks/marketplace?projectId=p1&limit=20"]);
   });
 
+  test("proxies assignment settlement requests", async () => {
+    const seen: Array<{ path: string; body: unknown }> = [];
+    setControlPlaneFetchHandler(async (req) => {
+      const url = new URL(req.url);
+      seen.push({ path: `${req.method} ${url.pathname}`, body: await req.json() });
+      return Response.json({
+        data: { outcome: "accepted", reputationDelta: 5 },
+      });
+    });
+
+    const res = await request("/api/tasks/task-1/assignments/asg-1/settle", {
+      method: "POST",
+      body: JSON.stringify({ outcome: "accepted" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      data: { outcome: "accepted", reputationDelta: 5 },
+    });
+    expect(seen).toEqual([
+      {
+        path: "POST /api/tasks/task-1/assignments/asg-1/settle",
+        body: { outcome: "accepted" },
+      },
+    ]);
+  });
+
   test("proxies code owner resolution and commit runtime preview routes", async () => {
     const seen: string[] = [];
     setControlPlaneFetchHandler(async (req) => {

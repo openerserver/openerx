@@ -43,7 +43,7 @@ Additional parity checks that pass:
 | Task/session/message/run reads | Session-first create/read/message/tree/timeline/execution-trace/runs and phase create/view/adopt/pause/resume/cancel pass current service coverage | Broaden route-shape tests when new BFF task views are added |
 | Runtime usage/cost/dashboard | Runtime ledger, cost budget/records/detail, governance overview pass service and smoke coverage | Add deeper cost/dashboard aggregations only when product paths require them |
 | Workflow/role/governance | Role conclusions, developer change requests, workflow templates/runs, approvals, task governance summary, workbench layout, operating-runtime mode/decisions/escalations pass current coverage | Add richer governance rule parity as governance UI expands |
-| Crowdsourced development MVP | Task marketplace, task boundary, contributor profile, code ownership, assignment, workspace branch, commit step, owner-aware CR blocking, commit runtime preview record routes, and the BFF Preview Gateway proxy entry are implemented against Go as the new Control Plane source of truth | Wire reviewer work queues and reputation/reward settlement |
+| Crowdsourced development MVP | Task marketplace, task boundary, contributor profile, code ownership, assignment, assignment settlement, workspace branch, commit step, owner-aware CR blocking, commit runtime preview record routes, and the BFF Preview Gateway proxy entry are implemented against Go as the new Control Plane source of truth | Wire reviewer work queues and richer reward ledgers |
 | Test harness parity | Full `tests/service` is green against Go | Preserve this as the replacement gate |
 
 ## P0 Gate
@@ -189,7 +189,7 @@ Remaining:
 - Docker/process provider startup behind the current local-registered scheduler
   provider;
 - policy-engine enforcement beyond the current boundary, owner, quota, risk,
-  and blocking CR checks.
+  blocking CR checks, and audit-backed assignment settlement.
 
 ## Next Implementation Queue
 
