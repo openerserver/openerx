@@ -5,6 +5,20 @@ import type {
   EmailChallenge,
 } from "./account";
 import type {
+  BillingOverview,
+  BillingStatementExport,
+  BillingTerms,
+  BillingTermsAcceptance,
+  ChargeRecord,
+  FundsReservation,
+  LedgerTransaction,
+  PaymentCallback,
+  PriceCatalogEntry,
+  PriceQuote,
+  RechargeOrder,
+  RefundOrder,
+} from "./billing";
+import type {
   ModelCatalogEntry,
   ModelGatewayRequestDto,
   ModelGatewayResponse,
@@ -69,9 +83,62 @@ export interface ModelGatewayServicePort {
   execute(request: ModelGatewayRequestDto, signal?: AbortSignal): Promise<ModelGatewayResponse>;
 }
 
+export interface PricingServicePort {
+  terms(): BillingTerms;
+  catalog(): PriceCatalogEntry[];
+  acceptTerms(accountId: string, version: string): BillingTermsAcceptance;
+  termsAcceptance(accountId: string, version?: string): BillingTermsAcceptance | null;
+  createQuote(accountId: string, input: unknown): PriceQuote;
+  getQuote(accountId: string, quoteId: string): PriceQuote;
+}
+
+export interface BillingLedgerServicePort {
+  overview(accountId: string): BillingOverview;
+  reserve(quote: PriceQuote, idempotencyKey: string): FundsReservation;
+  release(accountId: string, reservationId: string): FundsReservation;
+  settle(
+    accountId: string,
+    reservationId: string,
+    usage: UsageRecord,
+    dedupeKey: string,
+  ): ChargeRecord;
+  listCharges(accountId: string): ChargeRecord[];
+  listLedger(accountId: string): LedgerTransaction[];
+  exportStatement(accountId: string, month: string): BillingStatementExport;
+  rebuildAssetProjections?(accountId: string): BillingOverview;
+}
+
+export interface PaymentServicePort {
+  createOrder(accountId: string, input: unknown): RechargeOrder;
+  handleCallback(input: PaymentCallback): RechargeOrder;
+  listOrders(accountId: string): RechargeOrder[];
+  refund(
+    accountId: string,
+    orderId: string,
+    amountMinor: number,
+    reason: string,
+    idempotencyKey: string,
+  ): RefundOrder;
+  listRefunds(accountId: string): RefundOrder[];
+}
+
+export interface ModelBillingAuthorization {
+  quote: PriceQuote;
+  reservation: FundsReservation;
+}
+
+export interface ModelBillingPort {
+  authorize(request: ModelGatewayRequestDto): Promise<ModelBillingAuthorization>;
+  settle(authorization: ModelBillingAuthorization, usage: UsageRecord): Promise<ChargeRecord>;
+  release(authorization: ModelBillingAuthorization): Promise<void>;
+}
+
 export interface PlatformAlphaServices {
   identity: IdentityServicePort;
   sync: AccountSyncServicePort;
   models: ModelGatewayServicePort;
   usage: UsageStorePort;
+  pricing?: PricingServicePort;
+  billing?: BillingLedgerServicePort;
+  payments?: PaymentServicePort;
 }

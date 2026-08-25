@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 开发计划
 
-> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2 LOCAL COMPLETE / NEXT M3`
+> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2 LOCAL COMPLETE / M3 LOCAL COMPLETE / NEXT M4`
 >
 > 更新日期：2026-08-25（Asia/Shanghai）
 >
@@ -41,6 +41,7 @@ V1 完成必须同时满足：
 | M1 Chat Alpha | COMPLETE | Conversation/Message、分支、搜索、流式投影、停止、失败、重启恢复、桌面 UI | 双平台原生 CI 结果在发布前确认 |
 | Pi Foundation | COMPLETE | 直接依赖 Pi；`AgentSession` 原生事件；`pi.session.prompt/abort`；生产包仅含 Pi Host | [实现与质量证据](evidence/pi-foundation-2026-08-25.md) |
 | M2 Account + Model | LOCAL COMPLETE | 账户/设备会话、Outbox/冲突/墓碑、Pi-native Model Gateway Provider、UsageRecord、Remote V1 Schema | 原生 Windows/macOS 双设备与付费 Provider 验证属于发布环境门禁；[实现与质量证据](evidence/m2-2026-08-25.md) |
+| M3 Billing Alpha | LOCAL COMPLETE | 服务端报价/预留/结算、额度/积分/现金复式账本、支付回调/退款/对账、最终 Billing UI、CSV/PDF | 真实支付宝/微信沙箱、商户参数、属地合规与原生发布矩阵仍是发布环境门禁；[实现与质量证据](evidence/m3-2026-08-25.md) |
 
 当前生产路径在未配置平台模型时明确返回 `PI_MODEL_NOT_CONFIGURED`，不以测试模型伪装可用模型。
 
@@ -104,15 +105,20 @@ flowchart LR
 证据：[M2 checkpoint](evidence/m2-2026-08-25.md)。Remote 在本检查点冻结版本化协议
 Schema；移动端、Connector、Relay、推送和真机矩阵仍由 M6 交付。
 
-### M3：Billing Alpha — 5 至 7 周
+### M3：Billing Alpha — LOCAL IMPLEMENTATION COMPLETE
 
 - Price Catalog、报价、价格快照、费用预留和真实用量结算。
 - QuotaGrant、PointGrant、CashBalanceAccount 和追加式复式账本。
 - 支付宝/微信订单、托管收银台、验签、查单、退款和每日对账。
 - 用量/费用、充值、账单和月度 CSV/PDF。
 - 重放、重试、服务重启和支付异常不能重复扣费或入账。
+- Token 数、用量预算、费率、报价和结算只在服务端形成；客户端只读取最终 Billing 快照。
 
-退出条件：GT-BILLING-01 至 GT-BILLING-10，测试资金可从账本逐笔重建且账平。
+本地退出条件：GT-BILLING-01 至 GT-BILLING-10；测试资金可从账本逐笔重建且账平；Electron
+E2E 证明客户端只显示服务端最终余额和 Charge。真实支付宝/微信商户沙箱、退款到账、合规
+评审与原生 Windows/macOS 发布矩阵仍是发布环境门禁。
+
+证据：[M3 checkpoint](evidence/m3-2026-08-25.md)。
 
 ### M4：File、Artifact 与 Pi Session 恢复 — 3 至 4 周
 
@@ -231,4 +237,5 @@ Schema；移动端、Connector、Relay、推送和真机矩阵仍由 M6 交付�
 
 ## 10. 当前下一步
 
-直接进入 M3 Billing Alpha：先冻结价格、报价、预留、结算和复式账本合同，再接支付与账单。M4 File/Artifact 可在不改变 M3 资金真值的前提下并行推进。
+进入 M4 File、Artifact 与 Pi Session 恢复。M4 不得改变 M3 的服务端计费真值，也不得向
+Renderer、Preload、App Service 或 Remote 客户端增加 token/rate/estimate/quote 写入能力。

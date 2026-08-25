@@ -1,10 +1,23 @@
 import type { Context } from "@earendil-works/pi-ai";
 import { AccountSyncService } from "@openerx/account-sync-api";
-import { automaticModelRef, type ModelCatalogEntry } from "@openerx/contracts";
+import { BillingLedgerService, ServerModelBilling } from "@openerx/billing-ledger-service";
+import {
+  automaticModelRef,
+  type BillingTerms,
+  type ModelCatalogEntry,
+  type PriceCatalogEntry,
+} from "@openerx/contracts";
 import { IdentityService } from "@openerx/identity-api";
 import { ModelGatewayService } from "@openerx/model-gateway";
+import { PaymentAdapter } from "@openerx/payment-adapter";
 import { createPlatformAlphaServer, listenOnEphemeralPort } from "@openerx/platform-alpha";
+import { PricingService } from "@openerx/pricing-service";
 import { UsageStore } from "@openerx/token-usage-store";
+
+export const platformFixturePaymentSecrets = {
+  alipay: "openerx-m3-e2e-alipay",
+  wechat: "openerx-m3-e2e-wechat",
+};
 
 const catalog: ModelCatalogEntry[] = [
   {
@@ -22,9 +35,9 @@ const catalog: ModelCatalogEntry[] = [
     contextWindow: 128_000,
     maxOutputTokens: 8_192,
     status: "available",
-    priceRef: "price/m2-alpha-standard",
-    priceSummary: "M2 E2E 免费计量",
-    free: true,
+    priceRef: "price/m3-alpha-standard",
+    priceSummary: "由服务端按实际 Token 结算",
+    free: false,
   },
   {
     modelRef: "platform/tools",
@@ -41,9 +54,9 @@ const catalog: ModelCatalogEntry[] = [
     contextWindow: 128_000,
     maxOutputTokens: 8_192,
     status: "available",
-    priceRef: "price/m2-alpha-tools",
-    priceSummary: "M2 E2E 免费计量",
-    free: true,
+    priceRef: "price/m3-alpha-tools",
+    priceSummary: "由服务端按实际 Token 结算",
+    free: false,
   },
 ];
 
@@ -65,9 +78,66 @@ const identity = new IdentityService(":memory:", {
 });
 const sync = new AccountSyncService(":memory:");
 const usage = new UsageStore(":memory:");
+const billingTerms: BillingTerms = {
+  version: "terms-m3-e2e-v1",
+  effectiveAt: "2026-08-01T00:00:00.000Z",
+  contentHash: "9e75f0633353754a63609b633af84ad6e38a57f32f12f0ecd8fca5bf47e4af3e",
+  summary: "模型费用由服务端实际用量、冻结价格快照和账户资产计算。",
+};
+const priceCatalog: PriceCatalogEntry[] = [
+  [automaticModelRef, "price/m3-alpha-auto"],
+  ["platform/standard", "price/m3-alpha-standard"],
+  ["platform/tools", "price/m3-alpha-tools"],
+].map(([modelRef, priceRef]) => ({
+  priceRef: priceRef ?? "",
+  version: "m3-e2e-v1",
+  modelRef: modelRef ?? "",
+  currency: "CNY",
+  effectiveFrom: "2026-08-01T00:00:00.000Z",
+  effectiveUntil: null,
+  tokenRates: {
+    inputMicroMinorPerToken: 1_000_000,
+    cachedInputMicroMinorPerToken: 0,
+    outputMicroMinorPerToken: 0,
+    reasoningMicroMinorPerToken: 0,
+  },
+  minimumChargeMinor: 0,
+  maximumChargeMinor: null,
+  rounding: "ceil_final",
+  termsVersion: billingTerms.version,
+  description: "E2E 服务端测试价格",
+  taxInclusive: true,
+  free: false,
+}));
+const pricing = new PricingService(":memory:", { catalog: priceCatalog, terms: billingTerms });
+const billing = new BillingLedgerService(":memory:");
+const payments = new PaymentAdapter(":memory:", {
+  ledger: billing,
+  secrets: platformFixturePaymentSecrets,
+});
+const modelBilling = new ServerModelBilling({
+  pricing,
+  ledger: billing,
+  usageBudget: () => ({
+    estimatedUsage: {
+      inputTokens: 32,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    },
+    maximumUsage: {
+      inputTokens: 100,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    },
+  }),
+  userLimitMinor: () => 1_000,
+});
 const models = new ModelGatewayService({
   catalog,
   usageStore: usage,
+  billing: modelBilling,
   executor: {
     async execute(request) {
       const text = latestUserText(request.context);
@@ -92,7 +162,7 @@ const models = new ModelGatewayService({
   },
 });
 const listener = await listenOnEphemeralPort(
-  createPlatformAlphaServer({ identity, sync, usage, models }),
+  createPlatformAlphaServer({ identity, sync, usage, models, pricing, billing, payments }),
 );
 
 process.send?.({ kind: "platform-alpha.ready", baseUrl: listener.baseUrl });
@@ -102,6 +172,9 @@ async function shutdown(): Promise<void> {
   identity.close();
   sync.close();
   usage.close();
+  payments.close();
+  billing.close();
+  pricing.close();
   process.exit(0);
 }
 

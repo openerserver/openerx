@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M2_ACCOUNT_SYNC_MODEL_USAGE_LOCAL_COMPLETE / M3_BILLING_ALPHA_NEXT`
+> 状态：`M3_BILLING_ALPHA_LOCAL_COMPLETE / M4_FILE_ARTIFACT_NEXT`
 >
 > 更新日期：2026-08-25（Asia/Shanghai）
 >
@@ -26,8 +26,9 @@
 
 ## 2. V2 总体逻辑架构图
 
-下图是完整 V1 目标态。M2 本地实现已接入账户云、内容同步、模型网关和 Token Usage；计费、文件、
-工具、Skill 与 Remote 运行面仍按后续检查点交付，不以占位实现伪装完成。
+下图是完整 V1 目标态。M3 本地实现已接入账户云、内容同步、模型网关、Token Usage、服务端
+报价/预留/结算、复式账本、支付适配和最终 Billing 展示；文件、工具、Skill 与 Remote 运行面
+仍按后续检查点交付，不以占位实现伪装完成。
 
 ```mermaid
 flowchart LR
@@ -120,8 +121,9 @@ flowchart LR
   PI --> MODEL
   MODEL --> PROVIDERS
   MODEL --> USAGE
-  APP --> PRICING
-  APP --> BILLING
+  MAIN -->|条款 / 充值订单 / 最终 Billing 只读快照| BILLING
+  MODEL -->|服务端报价授权| PRICING
+  MODEL -->|预留 / 实际用量结算| BILLING
   PRICING --> BILLING
   USAGE --> BILLING
   BILLING --> LEDGER_DB
@@ -191,6 +193,35 @@ Provider 进入 Platform Gateway，上游凭证不进入客户端；Renderer 同
 M2 同时冻结 `RemoteHost`、一次性配对、签名/加密命令、回执、`AttentionRequest`、脱敏加密
 事件和游标的 V1 Schema；Remote Connector、Relay 和移动端仍属于 M6。
 
+### 2.3 M3 当前本地已实现拓扑
+
+```mermaid
+flowchart LR
+  UI[React Renderer<br/>最终 Billing 展示] --> PRELOAD[Typed Billing Bridge<br/>无 quote/token/rate 写入]
+  PRELOAD --> MAIN[Electron Main<br/>账户鉴权]
+  MAIN --> API[Platform Billing API<br/>条款 / Overview / Charge / Ledger / Order / Statement]
+
+  PI[Pi AgentSession] --> GW[Platform Model Gateway]
+  GW -->|服务端用量预算| PRICE[Pricing Service<br/>条款 / Price Catalog / Quote / Frozen Snapshot]
+  PRICE -->|PriceQuote| LEDGER[Billing Ledger Service<br/>Reserve / Settle / Reverse]
+  LEDGER -->|授权成功后| GW
+  GW --> PROVIDER[Platform Model Provider]
+  PROVIDER -->|实际 Token| GW
+  GW --> USAGE[Token Usage Store]
+  GW -->|UsageRecord| LEDGER
+
+  API --> PRICE
+  API --> LEDGER
+  API --> PAY[Payment Adapter<br/>Alipay / WeChat signature / refund / reconcile]
+  PAY --> LEDGER
+  PAYPROVIDER[支付平台] -->|签名回调| PAY
+```
+
+客户端没有创建报价、提交 Token、提交费率、提交 Usage 估计或写余额/账本的 Bridge/API。
+客户端选择模型并发送普通消息；Gateway 在调用上游 Provider 前，以服务端上下文计算预算、
+生成冻结报价并预留资金。Provider 返回的实际 Token 由 Gateway 写入 Usage Store，再在同一
+服务端协调链结算唯一 Charge。Renderer 只重新读取最终资产、费用、订单、账本和账单快照。
+
 ## 3. 主链路
 
 ### 3.1 聊天与收费模型调用
@@ -200,6 +231,7 @@ sequenceDiagram
   participant U as 用户
   participant UI as React Renderer
   participant APP as App Service
+  participant PRICE as Pricing Service
   participant BILL as Billing Service
   participant SUP as Pi Host Supervisor
   participant PI as Pi Agent Harness
@@ -209,11 +241,13 @@ sequenceDiagram
 
   U->>UI: 发送消息
   UI->>APP: sendMessage(clientMessageId)
-  APP->>BILL: 创建报价并预留最大费用
-  BILL-->>APP: reservationId / acceptedLimit
   APP->>SUP: 绑定产品 ID 并提交 prompt
   SUP->>PI: prompt / resume Pi AgentSession
   PI->>GW: 模型请求(selectedModelRef)
+  GW->>PRICE: 服务端计算预算并创建冻结报价
+  PRICE-->>GW: PriceQuote / PricingSnapshot
+  GW->>BILL: 预留最大费用
+  BILL-->>GW: reservationId
   GW->>MODEL: 使用平台凭证调用
   MODEL-->>GW: 流式输出 + Token
   GW-->>PI: 模型增量 + Token
@@ -221,11 +255,15 @@ sequenceDiagram
   SUP-->>APP: 可持久化产品事件投影
   APP-->>UI: 可恢复流式事件
   GW->>USAGE: 写入唯一 UsageRecord
-  USAGE->>BILL: 实际用量结算
-  BILL-->>APP: ChargeRecord / 释放未用预留
+  GW->>BILL: UsageRecord 实际用量结算
+  BILL-->>GW: ChargeRecord / 释放未用预留
+  UI->>BILL: 另行读取最终 Billing 快照
 ```
 
-关键约束：消息先以稳定 ID 落盘；收费执行必须先预留；模型凭证只在服务端；Pi 完整负责 Agent Loop、Session、上下文压缩、内部重试和工具调用生命周期；V2 只监督宿主并投影产品状态；重试不能产生第二条有效 UsageRecord 或 ChargeRecord。
+关键约束：消息先以稳定 ID 落盘；收费执行必须先预留；Token、预算、费率、报价和结算只在
+服务端形成，客户端只读最终 Billing；模型凭证只在服务端；Pi 完整负责 Agent Loop、Session、
+上下文压缩、内部重试和工具调用生命周期；V2 只监督宿主并投影产品状态；重试不能产生第二条
+有效 UsageRecord 或 ChargeRecord。
 
 ### 3.2 云同步
 
@@ -349,7 +387,7 @@ packages/observability           脱敏日志、Trace 和诊断
 
 旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。
 
-## 8. M1/M2 本地已实现映射
+## 8. M1/M2/M3 本地已实现映射
 
 - 根 workspace 使用 npm 11；`apps`/`services` 只通过 `packages` 共享合同和实现。
 - Electron 44 + Forge 7 + Vite 6 分别构建 Main、Preload、App Service、Pi Host 和
@@ -369,6 +407,13 @@ packages/observability           脱敏日志、Trace 和诊断
   内存中流转，Renderer、SQLite 同步 payload 和 Pi 历史均不持有凭证。
 - Token Usage Store 以账户和稳定 dedupe key 去重，保留输入、缓存、输出、推理和总 Token 的
   `null + missingReason` 语义；消息、对话和账户聚合不把未知冒充为 0。
+- Model Gateway 在服务端调用 Pricing 和 Billing 端口完成报价、预留与 Usage 结算；Renderer、
+  Preload 和 App Service 没有 token/rate/estimate/quote 写入方法。未知收费字段形成待核算 Charge，
+  不使用客户端或本地估算。
+- Billing Ledger Service 分离额度、积分和现金科目，所有入账与结算使用整数最小币种单位和
+  追加式平衡分录；投影可从账本重建，已生成自然月 Statement 不可覆盖。
+- Payment Adapter 对支付宝/微信服务端回调验签、限时、防重放，入账/退款使用稳定幂等键；
+  对账只产生稳定差异，不自动修改余额。
 - Pi 测试 Provider 只存在于测试代码；生产路径只有 Pi harness。
 - Windows x64、macOS arm64 和 macOS x64 进入 CI 打包矩阵；本地交叉打包不替代原生双平台运行证据。
 
@@ -376,3 +421,8 @@ Remote M2 协议合同已冻结；M6 完成移动端、Connector、Gateway、推
 该目标态不改变已冻结的 Pi 唯一 harness 和私有进程边界。
 
 规范性细节见 [ADR 索引](adr/README.md) 和 [Electron/App Service 威胁模型](security/electron-threat-model.md)。
+
+## 9. 当前下一步
+
+进入 M4 File、Artifact 与 Pi Session 恢复。M4 只增加文件 Scope、解析、引用、成果版本和恢复，
+不得把文件或工具用量计算下放客户端，也不得改变 M3 已冻结的服务端资金真值。

@@ -1,13 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
   type AccessPrincipal,
+  acceptBillingTermsInputSchema,
   accountRequestCodeInputSchema,
   accountRevokeDeviceInputSchema,
   accountVerifyCodeInputSchema,
+  billingStatementRequestSchema,
   cloudDataDeletionResultSchema,
+  createRechargeOrderInputSchema,
   deviceDescriptorSchema,
   modelGatewayRequestSchema,
   type PlatformAlphaServices,
+  paymentCallbackSchema,
   type SyncPrincipal,
   safeErrorMessage,
   syncOperationSchema,
@@ -72,6 +76,13 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         send(response, 200, services.identity.verifyChallenge({ ...input, device }));
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/v2/payment/callback") {
+        if (!services.payments) throw new Error("PAYMENT_NOT_CONFIGURED");
+        const input = paymentCallbackSchema.parse(await jsonBody(request));
+        services.payments.handleCallback(input);
+        send(response, 200, { received: true });
+        return;
+      }
       const refreshMatch = /^\/api\/v2\/account\/sessions\/([^/]+)\/refresh$/.exec(url.pathname);
       if (request.method === "POST" && refreshMatch) {
         const body = (await jsonBody(request)) as Record<string, unknown>;
@@ -102,6 +113,61 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
       }
       if (request.method === "GET" && url.pathname === "/api/v2/models") {
         send(response, 200, services.models.catalog());
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/billing/terms") {
+        if (!services.pricing) throw new Error("BILLING_NOT_CONFIGURED");
+        const terms = services.pricing.terms();
+        send(response, 200, {
+          terms,
+          acceptance: services.pricing.termsAcceptance(principal.accountId, terms.version),
+        });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/billing/terms/accept") {
+        if (!services.pricing) throw new Error("BILLING_NOT_CONFIGURED");
+        const input = acceptBillingTermsInputSchema.parse(await jsonBody(request));
+        send(response, 200, services.pricing.acceptTerms(principal.accountId, input.version));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/billing/overview") {
+        if (!services.billing) throw new Error("BILLING_NOT_CONFIGURED");
+        send(response, 200, services.billing.overview(principal.accountId));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/billing/charges") {
+        if (!services.billing) throw new Error("BILLING_NOT_CONFIGURED");
+        send(response, 200, services.billing.listCharges(principal.accountId));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/billing/ledger") {
+        if (!services.billing) throw new Error("BILLING_NOT_CONFIGURED");
+        send(response, 200, services.billing.listLedger(principal.accountId));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/billing/recharge-orders") {
+        if (!services.payments) throw new Error("PAYMENT_NOT_CONFIGURED");
+        const input = createRechargeOrderInputSchema.parse(await jsonBody(request));
+        send(response, 200, services.payments.createOrder(principal.accountId, input));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/billing/recharge-orders") {
+        if (!services.payments) throw new Error("PAYMENT_NOT_CONFIGURED");
+        send(response, 200, services.payments.listOrders(principal.accountId));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/billing/refunds") {
+        if (!services.payments) throw new Error("PAYMENT_NOT_CONFIGURED");
+        send(response, 200, services.payments.listRefunds(principal.accountId));
+        return;
+      }
+      const statementMatch = /^\/api\/v2\/billing\/statements\/(\d{4}-(?:0[1-9]|1[0-2]))$/.exec(
+        url.pathname,
+      );
+      if (request.method === "GET" && statementMatch) {
+        if (!services.billing) throw new Error("BILLING_NOT_CONFIGURED");
+        const input = billingStatementRequestSchema.parse({ month: statementMatch[1] });
+        send(response, 200, services.billing.exportStatement(principal.accountId, input.month));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/v2/model/execute") {
@@ -175,7 +241,15 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
       const message = safeErrorMessage(error, "Unknown error");
       const code = message.split(":", 1)[0] || "PLATFORM_ERROR";
       const authenticationError = code.startsWith("ACCESS_") || code.startsWith("DEVICE_SESSION_");
-      send(response, authenticationError ? 401 : 400, { error: { code, message } });
+      const paymentRequired = [
+        "BILLING_INSUFFICIENT_FUNDS",
+        "BILLING_TERMS_NOT_ACCEPTED",
+        "QUOTE_EXCEEDS_USER_LIMIT",
+      ].includes(code);
+      const unavailable = ["BILLING_NOT_CONFIGURED", "PAYMENT_NOT_CONFIGURED"].includes(code);
+      send(response, authenticationError ? 401 : paymentRequired ? 402 : unavailable ? 503 : 400, {
+        error: { code, message },
+      });
     }
   });
 }

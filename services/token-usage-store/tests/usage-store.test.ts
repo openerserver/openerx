@@ -51,6 +51,10 @@ describe("UsageStore", () => {
     const record = usage(accountId, randomUUID(), randomUUID(), "model-call-stable");
     expect(store.record(record).replayed).toBe(false);
     expect(store.record(record)).toMatchObject({ replayed: true, record });
+    expect(store.record({ ...record, recordedAt: "2026-08-25T10:05:00.000Z" })).toMatchObject({
+      replayed: true,
+      record,
+    });
     expect(() => store.record({ ...record, totalTokens: 18 })).toThrow("USAGE_DEDUPE_MISMATCH");
   });
 

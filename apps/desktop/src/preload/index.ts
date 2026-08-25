@@ -1,10 +1,17 @@
 import {
+  acceptBillingTermsInputSchema,
   accountRequestCodeInputSchema,
   accountRevokeDeviceInputSchema,
   accountStateSchema,
   accountVerifyCodeInputSchema,
+  billingOverviewSchema,
+  billingStatementExportSchema,
+  billingStatementRequestSchema,
+  billingTermsAcceptanceSchema,
+  billingTermsStateSchema,
   type ChatCommandEnvelope,
   type ChatCommandResultMap,
+  chargeRecordSchema,
   chatActivateBranchInputSchema,
   chatArchiveInputSchema,
   chatDeleteInputSchema,
@@ -20,13 +27,17 @@ import {
   chatSendInputSchema,
   chatStopInputSchema,
   cloudDataDeletionResultSchema,
+  createRechargeOrderInputSchema,
   type DesktopBridge,
   desktopEnvironmentSchema,
   deviceSessionSchema,
   emailChallengeSchema,
   ipcChannels,
+  ledgerTransactionSchema,
   modelCatalogEntrySchema,
   parseChatCommandResult,
+  rechargeOrderSchema,
+  refundOrderSchema,
   syncResolveConflictInputSchema,
   usageAggregateSchema,
   usageQueryInputSchema,
@@ -102,6 +113,51 @@ const bridge: DesktopBridge = {
       usageQueryInputSchema.parse(input),
     );
     return usageRecordSchema.array().parse(result);
+  },
+  getBillingTerms: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.billingTerms);
+    return billingTermsStateSchema.parse(result);
+  },
+  acceptBillingTerms: async (version) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.billingAcceptTerms,
+      acceptBillingTermsInputSchema.parse({ version }),
+    );
+    return billingTermsAcceptanceSchema.parse(result);
+  },
+  getBillingOverview: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.billingOverview);
+    return billingOverviewSchema.parse(result);
+  },
+  listCharges: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.billingCharges);
+    return chargeRecordSchema.array().parse(result);
+  },
+  listLedger: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.billingLedger);
+    return ledgerTransactionSchema.array().parse(result);
+  },
+  createRechargeOrder: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.billingRechargeCreate,
+      createRechargeOrderInputSchema.parse(input),
+    );
+    return rechargeOrderSchema.parse(result);
+  },
+  listRechargeOrders: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.billingRechargeList);
+    return rechargeOrderSchema.array().parse(result);
+  },
+  listRefunds: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.billingRefundList);
+    return refundOrderSchema.array().parse(result);
+  },
+  exportBillingStatement: async (month) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.billingStatementExport,
+      billingStatementRequestSchema.parse({ month }),
+    );
+    return billingStatementExportSchema.parse(result);
   },
   syncNow: async () => invokeChat(ipcChannels.syncNow, "sync.now", {}),
   listSyncConflicts: async () => invokeChat(ipcChannels.syncConflicts, "sync.conflicts", {}),

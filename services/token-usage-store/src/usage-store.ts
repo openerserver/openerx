@@ -27,6 +27,33 @@ function recordHash(record: UsageRecord): string {
   return createHash("sha256").update(JSON.stringify(record), "utf8").digest("hex");
 }
 
+function measurementHash(record: UsageRecord): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        usageId: record.usageId,
+        accountId: record.accountId,
+        conversationId: record.conversationId,
+        messageId: record.messageId,
+        runId: record.runId,
+        toolCallId: record.toolCallId,
+        selectedModelRef: record.selectedModelRef,
+        effectiveModelRef: record.effectiveModelRef,
+        fallbackReason: record.fallbackReason ?? null,
+        inputTokens: record.inputTokens,
+        cachedInputTokens: record.cachedInputTokens,
+        outputTokens: record.outputTokens,
+        reasoningTokens: record.reasoningTokens,
+        totalTokens: record.totalTokens,
+        providerReported: record.providerReported,
+        missingReasons: Object.fromEntries(Object.entries(record.missingReasons).sort()),
+        dedupeKey: record.dedupeKey,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
 export class UsageStore {
   readonly #database: DatabaseSync;
 
@@ -49,8 +76,12 @@ export class UsageStore {
       )
       .get(record.accountId, record.dedupeKey) as SqlRow | undefined;
     if (existing) {
-      if (existing.record_hash !== hash) throw new Error("USAGE_DEDUPE_MISMATCH");
-      return { record: this.get(record.accountId, String(existing.usage_id)), replayed: true };
+      const stored = this.get(record.accountId, String(existing.usage_id));
+      const sameMeasurement = measurementHash(record) === measurementHash(stored);
+      if (existing.record_hash !== hash && !sameMeasurement) {
+        throw new Error("USAGE_DEDUPE_MISMATCH");
+      }
+      return { record: stored, replayed: true };
     }
     this.#database
       .prepare(
@@ -82,7 +113,7 @@ export class UsageStore {
         record.recordedAt,
         hash,
       );
-    return { record, replayed: false };
+    return { record: this.get(record.accountId, record.usageId), replayed: false };
   }
 
   get(accountId: string, usageId: string): UsageRecord {

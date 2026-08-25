@@ -396,7 +396,6 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 /api/v2/usage
 /api/v2/prices
 /api/v2/billing/overview
-/api/v2/billing/quotes
 /api/v2/billing/charges
 /api/v2/billing/ledger
 /api/v2/billing/statements
@@ -427,7 +426,9 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 - Remote Gateway 只路由有签名、端到端加密和短 TTL 的命令/事件；桌面 Host Connector 只出站连接，最终由 App Service/Broker 复核账户、revision、序列、Scope 和幂等。
 - Remote 命令只能映射 Pi 原生 `prompt/steer/followUp/abort` 或 Broker 决策，不得成为另一套 Agent 执行 API。
 - 金额使用币种最小单位整数，积分使用整数；货币计算不得使用二进制浮点数。
-- 客户端只能创建报价和充值订单，不能提交余额、新账本分录或“支付成功”状态。
+- 报价只由 Model Gateway 在服务端创建；客户端不能提交 Token 数、用量估计、费率、报价金额
+  或价格快照。客户端只读取最终 Billing 状态，并可创建充值订单；不能提交余额、新账本分录
+  或“支付成功”状态。
 - 支付回调由服务端验签、查单、防重放并幂等入账；页面跳转和深链接仅用于提示刷新状态。
 - 收费对象、充值订单和退款使用独立幂等命名空间；重试不得产生第二笔有效扣费或余额入账。
 

@@ -18,10 +18,14 @@ export default defineConfig({
   ssr: {
     noExternal: [
       "@openerx/account-sync-api",
+      "@openerx/billing-ledger-service",
       "@openerx/contracts",
+      "@openerx/domain",
       "@openerx/identity-api",
       "@openerx/model-gateway",
+      "@openerx/payment-adapter",
       "@openerx/platform-alpha",
+      "@openerx/pricing-service",
       "@openerx/token-usage-store",
     ],
   },

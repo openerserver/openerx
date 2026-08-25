@@ -14,7 +14,8 @@ a superseding ADR that records migration and rollback impact.
 | [ADR-V2-007](007-pi-harness-boundary.md) | Pi owns the agent harness | Accepted and implemented |
 | [ADR-V2-008](008-sync-cursor-and-conflicts.md) | Cloud objects, sync cursor and conflict strategy | Accepted and M2 slice implemented |
 | [ADR-V2-009](009-device-session-credentials.md) | Email verification, device credentials and session refresh | Accepted and implemented |
+| [ADR-V2-010](010-billing-ledger-and-money.md) | Integer money, reservation and append-only ledger | Accepted and M3 local slice implemented |
 
-ADR-V2-001 through ADR-V2-009 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
-recorded in [the checkpoint report](../evidence/m2-2026-08-25.md). ADR-V2-010 is the next
-milestone-blocking decision.
+ADR-V2-001 through ADR-V2-010 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
+recorded in [the checkpoint report](../evidence/m2-2026-08-25.md). ADR-V2-010 is implemented by the
+[M3 checkpoint](../evidence/m3-2026-08-25.md); real payment-provider and compliance gates remain.

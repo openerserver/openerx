@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -63,6 +64,57 @@ async function signInDevice(email, name) {
   }).then((response) => response.json());
 }
 
+async function fundBilling(accessToken) {
+  const authorization = {
+    authorization: `Bearer ${accessToken}`,
+    "content-type": "application/json",
+  };
+  const termsState = await fetch(`${platformUrl}/api/v2/billing/terms`, {
+    headers: authorization,
+  }).then((response) => response.json());
+  await fetch(`${platformUrl}/api/v2/billing/terms/accept`, {
+    method: "POST",
+    headers: authorization,
+    body: JSON.stringify({ version: termsState.terms.version }),
+  });
+  const order = await fetch(`${platformUrl}/api/v2/billing/recharge-orders`, {
+    method: "POST",
+    headers: authorization,
+    body: JSON.stringify({
+      amountMinor: 5_000,
+      provider: "alipay",
+      idempotencyKey: "e2e-account-recharge",
+    }),
+  }).then((response) => response.json());
+  const unsigned = {
+    eventId: crypto.randomUUID(),
+    orderId: order.orderId,
+    providerReference: `e2e-alipay-${order.orderId}`,
+    amountMinor: order.amountMinor,
+    currency: "CNY",
+    status: "succeeded",
+    occurredAt: new Date().toISOString(),
+  };
+  const canonical = [
+    unsigned.eventId,
+    unsigned.orderId,
+    unsigned.providerReference,
+    unsigned.amountMinor,
+    unsigned.currency,
+    unsigned.status,
+    unsigned.occurredAt,
+  ].join("|");
+  const signature = createHmac("sha256", "openerx-m3-e2e-alipay")
+    .update(canonical, "utf8")
+    .digest("hex");
+  const response = await fetch(`${platformUrl}/api/v2/payment/callback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...unsigned, signature }),
+  });
+  assert.equal(response.status, 200);
+}
+
 let running;
 try {
   running = await launch();
@@ -82,6 +134,13 @@ try {
   const credentialPath = path.join(profileDirectory, "account", "device-session.bin");
   assert.equal(existsSync(credentialPath), true);
   assert.equal(readFileSync(credentialPath).toString().includes("account-e2e@example.com"), false);
+
+  const billingSession = await signInDevice("account-e2e@example.com", "Billing Setup");
+  await fundBilling(billingSession.accessToken);
+  await page.getByRole("link", { name: "费用与账单" }).click();
+  await page.getByText("¥50.00", { exact: true }).first().waitFor();
+  await page.getByText(/已接受/).waitFor();
+  await page.getByText("credited", { exact: true }).waitFor();
 
   await page.getByRole("link", { name: "＋ 新对话" }).click();
   await page.getByLabel("发送消息").fill("账户模型测试");
@@ -107,6 +166,20 @@ try {
     .getByLabel("对话消息")
     .getByText(/平台 platform\/tools 已回答：切换后的消息/)
     .waitFor();
+
+  const settledCharges = await fetch(`${platformUrl}/api/v2/billing/charges`, {
+    headers: { authorization: `Bearer ${billingSession.accessToken}` },
+  }).then((response) => response.json());
+  assert.equal(settledCharges.length, 2, JSON.stringify(settledCharges));
+  await page.getByRole("link", { name: "费用与账单" }).click();
+  try {
+    await page.getByLabel("消费明细").getByText("2 笔", { exact: true }).waitFor();
+    await page.getByText("¥49.58", { exact: true }).first().waitFor();
+  } catch (error) {
+    console.error("E2E_ACCOUNT_BILLING_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
+  await page.getByRole("link", { name: /账户模型测试/ }).click();
   const conversationUrl = page.url();
 
   await application.close();
@@ -163,7 +236,7 @@ try {
   assert.equal(existsSync(credentialPath), false);
 
   console.log(
-    "E2E_ACCOUNT_OK login-keychain-auto-model-effective-usage-device-revoke-cache-cloud-delete-signout-all",
+    "E2E_ACCOUNT_OK login-keychain-server-billing-auto-model-effective-usage-device-revoke-cache-cloud-delete-signout-all",
   );
   await application.close();
   running = undefined;

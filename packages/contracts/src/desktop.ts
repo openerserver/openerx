@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AccountBridge } from "./account";
+import type { BillingBridge } from "./billing";
 import type { ModelUsageBridge } from "./model";
 import type { SyncBridge } from "./sync";
 
@@ -15,6 +16,15 @@ export const ipcChannels = Object.freeze({
   modelList: "model:catalog:list",
   usageGet: "usage:aggregate:get",
   usageRecords: "usage:records:list",
+  billingTerms: "billing:terms:get",
+  billingAcceptTerms: "billing:terms:accept",
+  billingOverview: "billing:overview:get",
+  billingCharges: "billing:charges:list",
+  billingLedger: "billing:ledger:list",
+  billingRechargeCreate: "billing:recharge:create",
+  billingRechargeList: "billing:recharge:list",
+  billingRefundList: "billing:refund:list",
+  billingStatementExport: "billing:statement:export",
   syncNow: "sync:run",
   syncConflicts: "sync:conflicts:list",
   syncResolveConflict: "sync:conflict:resolve",
@@ -46,7 +56,12 @@ export const desktopEnvironmentSchema = z
 
 export type DesktopEnvironment = z.infer<typeof desktopEnvironmentSchema>;
 
-export interface DesktopBridge extends ChatBridge, AccountBridge, ModelUsageBridge, SyncBridge {
+export interface DesktopBridge
+  extends ChatBridge,
+    AccountBridge,
+    ModelUsageBridge,
+    SyncBridge,
+    BillingBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
 }
 

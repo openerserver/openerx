@@ -4,7 +4,8 @@
 >
 > 修订日期：2026-08-25
 >
-> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation 与 M2 本地实现检查点已完成，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
+> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation、M2
+> 与 M3 本地实现检查点已完成，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
 
 ## 1. 当前已经确定的方向
 
@@ -68,6 +69,7 @@
 19. [evidence/m0-2026-08-25.md](evidence/m0-2026-08-25.md)：M0 检查点命令、结果和残余风险。
 20. [evidence/pi-foundation-2026-08-25.md](evidence/pi-foundation-2026-08-25.md)：Pi Foundation 的实现、测试、打包与边界证据。
 21. [evidence/m2-2026-08-25.md](evidence/m2-2026-08-25.md)：M2 账户、同步、平台模型、Token 与 Remote 合同检查点证据。
+22. [evidence/m3-2026-08-25.md](evidence/m3-2026-08-25.md)：M3 服务端计费、账本、支付和账单检查点证据。
 
 ## 5. V1 与未来方向边界
 
@@ -92,7 +94,9 @@
 
 1. 产品名称、导航、账户、系统范围、Pi 边界、权限、验收和商业规则均按 [00-product-decision-review.md](00-product-decision-review.md) 生效。
 2. 积分兑换数字、充值档位/上下限和支付商户参数作为运营参数，在 Billing Alpha 前配置，在发布前冻结。
-3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；M2 本地实现检查点已完成，当前直接进入 M3，不设置旧执行引擎迁移阶段。原生双平台和真实 Provider 证据仍按发布 Gate 补齐。
+3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；M3 本地实现
+   检查点已完成，当前进入 M4，不设置旧执行引擎迁移阶段。真实模型、支付沙箱、属地合规和
+   原生双平台证据仍按发布 Gate 补齐。
 
 `v1-backup/` 中的旧文档、旧控制平面和旧执行引擎依赖继续作为受保护资产；新 V2 主线不得从备份目录导入模块，或通过旧页面改名冒充完成。
 

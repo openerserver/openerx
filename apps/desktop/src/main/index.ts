@@ -2,10 +2,12 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  acceptBillingTermsInputSchema,
   accountRequestCodeInputSchema,
   accountRevokeDeviceInputSchema,
   accountStateSchema,
   accountVerifyCodeInputSchema,
+  billingStatementRequestSchema,
   chatActivateBranchInputSchema,
   chatArchiveInputSchema,
   chatCommandEnvelopeSchema,
@@ -20,6 +22,7 @@ import {
   chatSelectModelInputSchema,
   chatSendInputSchema,
   chatStopInputSchema,
+  createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
   emptyInputSchema,
   ipcChannels,
@@ -149,6 +152,56 @@ function registerIpcHandlers(
           usageQueryInputSchema.parse(input ?? {}),
         ),
       );
+  });
+  ipcMain.handle(ipcChannels.billingTerms, async (event) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    return await platformClient.billingTerms(await accounts.accessToken());
+  });
+  ipcMain.handle(ipcChannels.billingAcceptTerms, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    const parsed = acceptBillingTermsInputSchema.parse(input);
+    return await platformClient.acceptBillingTerms(await accounts.accessToken(), parsed.version);
+  });
+  ipcMain.handle(ipcChannels.billingOverview, async (event) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    return await platformClient.billingOverview(await accounts.accessToken());
+  });
+  ipcMain.handle(ipcChannels.billingCharges, async (event) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    return await platformClient.charges(await accounts.accessToken());
+  });
+  ipcMain.handle(ipcChannels.billingLedger, async (event) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    return await platformClient.ledger(await accounts.accessToken());
+  });
+  ipcMain.handle(ipcChannels.billingRechargeCreate, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    return await platformClient.createRechargeOrder(
+      await accounts.accessToken(),
+      createRechargeOrderInputSchema.parse(input),
+    );
+  });
+  ipcMain.handle(ipcChannels.billingRechargeList, async (event) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    return await platformClient.rechargeOrders(await accounts.accessToken());
+  });
+  ipcMain.handle(ipcChannels.billingRefundList, async (event) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    return await platformClient.refunds(await accounts.accessToken());
+  });
+  ipcMain.handle(ipcChannels.billingStatementExport, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    const parsed = billingStatementRequestSchema.parse(input);
+    return await platformClient.billingStatement(await accounts.accessToken(), parsed.month);
   });
   ipcMain.handle(ipcChannels.cloudDataDelete, async (event) => {
     assertTrustedIpcSender(event);

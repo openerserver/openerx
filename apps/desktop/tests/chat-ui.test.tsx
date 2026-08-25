@@ -97,6 +97,15 @@ function createBridge(): DesktopBridge {
     listModels: vi.fn().mockResolvedValue([]),
     getUsage: vi.fn(),
     getUsageRecords: vi.fn().mockResolvedValue([]),
+    getBillingTerms: vi.fn(),
+    acceptBillingTerms: vi.fn(),
+    getBillingOverview: vi.fn(),
+    listCharges: vi.fn().mockResolvedValue([]),
+    listLedger: vi.fn().mockResolvedValue([]),
+    createRechargeOrder: vi.fn(),
+    listRechargeOrders: vi.fn().mockResolvedValue([]),
+    listRefunds: vi.fn().mockResolvedValue([]),
+    exportBillingStatement: vi.fn(),
     syncNow: vi.fn(),
     listSyncConflicts: vi.fn().mockResolvedValue([]),
     resolveSyncConflict: vi.fn(),
@@ -231,5 +240,78 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "清理本机缓存" }));
     expect(confirm).toHaveBeenCalled();
     expect(bridge.clearLocalCache).toHaveBeenCalled();
+  });
+
+  it("renders only server-returned billing state and sends no token or quote inputs", async () => {
+    const bridge = createBridge();
+    const accountId = crypto.randomUUID();
+    vi.mocked(bridge.getAccountState).mockResolvedValue({
+      status: "signed_in",
+      account: {
+        accountId,
+        email: "billing@example.com",
+        displayName: "Billing Account",
+        createdAt: timestamp,
+      },
+      session: {
+        sessionId: crypto.randomUUID(),
+        accountId,
+        device: {
+          deviceId: crypto.randomUUID(),
+          name: "Billing Mac",
+          platform: "darwin",
+          arch: "arm64",
+        },
+        sessionVersion: 1,
+        createdAt: timestamp,
+        lastActiveAt: timestamp,
+        revokedAt: null,
+      },
+      reason: null,
+    });
+    vi.mocked(bridge.getBillingTerms).mockResolvedValue({
+      terms: {
+        version: "terms-v1",
+        effectiveAt: timestamp,
+        contentHash: "a".repeat(64),
+        summary: "按服务端实际用量结算。",
+      },
+      acceptance: null,
+    });
+    vi.mocked(bridge.acceptBillingTerms).mockResolvedValue({
+      accountId,
+      termsVersion: "terms-v1",
+      acceptedAt: timestamp,
+    });
+    vi.mocked(bridge.getBillingOverview).mockResolvedValue({
+      accountId,
+      currency: "CNY",
+      quotaGrants: [],
+      pointGrants: [],
+      cash: {
+        accountId,
+        currency: "CNY",
+        postedMinor: 5_000,
+        reservedMinor: 0,
+        availableMinor: 5_000,
+        updatedAt: timestamp,
+      },
+      quotaAvailableMinor: 1_000,
+      pointAvailableMinor: 500,
+      totalAvailableMinor: 6_500,
+      activeReservationsMinor: 0,
+      asOf: timestamp,
+    });
+
+    renderApp(bridge, "/settings/billing");
+
+    expect(await screen.findByText("总可用价值")).toBeTruthy();
+    expect(await screen.findByText("¥65.00")).toBeTruthy();
+    expect(
+      await screen.findByText(/Token 计量、费率匹配、报价、资金预留与最终扣费全部由服务端完成/),
+    ).toBeTruthy();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "接受当前条款" }));
+    expect(bridge.acceptBillingTerms).toHaveBeenCalledWith("terms-v1");
   });
 });

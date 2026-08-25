@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import {
   automaticModelRef,
+  type ModelBillingAuthorization,
+  type ModelBillingPort,
   type ModelCatalogEntry,
   type ModelGatewayRequestDto,
   type ModelGatewayResponse,
@@ -43,6 +45,7 @@ export interface ModelGatewayServiceOptions {
   catalog: ModelCatalogEntry[];
   executor: ModelExecutor;
   usageStore: Pick<UsageStorePort, "record">;
+  billing?: ModelBillingPort;
   now?: () => Date;
 }
 
@@ -57,6 +60,7 @@ export class ModelGatewayService {
   readonly #catalog: ModelCatalogEntry[];
   readonly #executor: ModelExecutor;
   readonly #usageStore: Pick<UsageStorePort, "record">;
+  readonly #billing: ModelBillingPort | undefined;
   readonly #now: () => Date;
   readonly #responses = new Map<string, ModelGatewayResponse>();
 
@@ -82,6 +86,7 @@ export class ModelGatewayService {
         : configured;
     this.#executor = options.executor;
     this.#usageStore = options.usageStore;
+    this.#billing = options.billing;
     this.#now = options.now ?? (() => new Date());
   }
 
@@ -153,39 +158,51 @@ export class ModelGatewayService {
       );
     }
     if (signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
-    const execution = await this.#executor.execute(request, signal);
-    if (request.selectedModelRef === automaticModelRef) {
-      if (execution.effectiveModelRef === automaticModelRef) {
-        throw new Error("MODEL_AUTO_ROUTE_UNRESOLVED");
+    let billingAuthorization: ModelBillingAuthorization | undefined;
+    try {
+      billingAuthorization = await this.#billing?.authorize(request);
+      const execution = await this.#executor.execute(request, signal);
+      if (request.selectedModelRef === automaticModelRef) {
+        if (execution.effectiveModelRef === automaticModelRef) {
+          throw new Error("MODEL_AUTO_ROUTE_UNRESOLVED");
+        }
+      } else if (execution.effectiveModelRef !== request.selectedModelRef) {
+        if (request.approvedFallbackModelRef !== execution.effectiveModelRef) {
+          throw new Error("MODEL_SILENT_FALLBACK_REJECTED");
+        }
+        if (!execution.fallbackReason) throw new Error("MODEL_FALLBACK_REASON_REQUIRED");
       }
-    } else if (execution.effectiveModelRef !== request.selectedModelRef) {
-      if (request.approvedFallbackModelRef !== execution.effectiveModelRef) {
-        throw new Error("MODEL_SILENT_FALLBACK_REJECTED");
+      const usage = usageRecordSchema.parse({
+        usageId: deterministicUsageId(request.accountId, request.requestDedupeKey),
+        accountId: request.accountId,
+        conversationId: request.conversationId,
+        messageId: request.messageId,
+        runId: null,
+        toolCallId: null,
+        selectedModelRef: request.selectedModelRef,
+        effectiveModelRef: execution.effectiveModelRef,
+        fallbackReason: execution.fallbackReason ?? null,
+        ...execution.usage,
+        dedupeKey: request.requestDedupeKey,
+        recordedAt: this.#now().toISOString(),
+      } satisfies UsageRecord);
+      const stored = this.#usageStore.record(usage).record;
+      if (billingAuthorization && this.#billing) {
+        await this.#billing.settle(billingAuthorization, stored);
       }
-      if (!execution.fallbackReason) throw new Error("MODEL_FALLBACK_REASON_REQUIRED");
+      const response = modelGatewayResponseSchema.parse({
+        text: execution.text,
+        effectiveModelRef: execution.effectiveModelRef,
+        fallbackReason: execution.fallbackReason ?? null,
+        usage: stored,
+      });
+      this.#responses.set(responseKey, response);
+      return structuredClone(response);
+    } catch (error) {
+      if (billingAuthorization && this.#billing) {
+        await this.#billing.release(billingAuthorization);
+      }
+      throw error;
     }
-    const usage = usageRecordSchema.parse({
-      usageId: deterministicUsageId(request.accountId, request.requestDedupeKey),
-      accountId: request.accountId,
-      conversationId: request.conversationId,
-      messageId: request.messageId,
-      runId: null,
-      toolCallId: null,
-      selectedModelRef: request.selectedModelRef,
-      effectiveModelRef: execution.effectiveModelRef,
-      fallbackReason: execution.fallbackReason ?? null,
-      ...execution.usage,
-      dedupeKey: request.requestDedupeKey,
-      recordedAt: this.#now().toISOString(),
-    } satisfies UsageRecord);
-    const stored = this.#usageStore.record(usage).record;
-    const response = modelGatewayResponseSchema.parse({
-      text: execution.text,
-      effectiveModelRef: execution.effectiveModelRef,
-      fallbackReason: execution.fallbackReason ?? null,
-      usage: stored,
-    });
-    this.#responses.set(responseKey, response);
-    return structuredClone(response);
   }
 }

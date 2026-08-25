@@ -1,6 +1,6 @@
 # V1 个人额度、计费与账单合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS / OPERATIONAL_CONFIG_PENDING`
+> 状态：`APPROVED_PRODUCT_SCOPE / M3_LOCAL_IMPLEMENTATION_COMPLETE / OPERATIONAL_CONFIG_PENDING`
 >
 > 合同类型：个人账户额度、费用、积分、充值、支付、账单与对账边界
 
@@ -72,6 +72,8 @@ V1 必须形成以下闭环：
 - 模型选择器显示当前单位价格；“自动”模型显示可能使用的价格范围或最大费率。
 - 首次收费前显示收费、退款和余额规则，并记录用户明确接受的条款版本；条款实质变化后重新确认。
 - 执行前生成 `PriceQuote`，至少包含预计范围、最大可扣金额、币种、价格版本、收费条款版本和过期时间。
+- `PriceQuote` 只由 Model Gateway 调用服务端 Pricing Service 生成。桌面、手机、Renderer、Preload
+  和 App Service 不提交 Token 数、用量估计、费率、报价金额或价格快照。
 - 手机 Remote 发起、Steer 或 Queue 的收费工作使用与桌面相同的报价、预留、幂等和结算链路；Remote Command/Relay 回执不能作为收费授权或生成第二笔预留。
 - 在已接受条款且报价不超过用户单次上限时，用户发送消息表示授权当次可见报价；超过上限必须再次明确确认。
 - 执行授权后冻结 `PricingSnapshot`。即使运行期间目录价格变化，本次结算仍使用冻结版本。
@@ -203,7 +205,6 @@ paid/credited -> partially_refunded | refunded
 ```text
 /api/v2/prices
 /api/v2/billing/overview
-/api/v2/billing/quotes
 /api/v2/billing/charges
 /api/v2/billing/ledger
 /api/v2/billing/statements
@@ -211,7 +212,10 @@ paid/credited -> partially_refunded | refunded
 /api/v2/billing/refunds
 ```
 
-客户端只能通过业务 API 创建报价和充值订单；不能提交“新余额”或任意账本分录。
+`/api/v2/prices` 如向客户端开放也只返回服务端发布的展示数据。报价是 Gateway 到 Pricing 的
+服务端内部调用，不是客户端业务 API。客户端可以接受条款、创建充值订单并读取最终 Billing
+快照；不能提交 Token 数、用量估计、费率、报价金额、价格快照、“新余额”、任意账本分录或
+“支付成功”状态。
 
 最低事件：
 

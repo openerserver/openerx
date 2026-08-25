@@ -1,4 +1,6 @@
 import type {
+  BillingOverview,
+  ChargeRecord,
   ChatEvent,
   ConversationSnapshot,
   ConversationSummary,
@@ -6,14 +8,46 @@ import type {
   DeviceSession,
   Message,
   ModelCatalogEntry,
+  RechargeOrder,
+  RefundOrder,
   SyncConflict,
   TokenAggregateField,
   UsageRecord,
 } from "@openerx/contracts";
+import {
+  ArrowClockwise,
+  ArrowUp,
+  CaretDown,
+  ChatCircle,
+  CheckCircle,
+  DotsThreeVertical,
+  FileText,
+  FolderSimple,
+  GearSix,
+  Info,
+  MagnifyingGlass,
+  Paperclip,
+  PaperPlaneTilt,
+  Plus,
+  Receipt,
+  SidebarSimple,
+  SlidersHorizontal,
+  Sparkle,
+  UserCircle,
+  X,
+} from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Navigate, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import {
+  Navigate,
+  NavLink,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import remarkGfm from "remark-gfm";
 
 const suggestions = [
@@ -29,6 +63,7 @@ const chatKeys = {
 };
 
 const accountKey = ["account", "state"] as const;
+const billingKey = ["billing"] as const;
 
 function idempotencyKey(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -38,6 +73,17 @@ function tokenValue(field: TokenAggregateField): string {
   return field.unknownRecords > 0
     ? `${field.known.toLocaleString()} + ${field.unknownRecords} 条未知`
     : field.known.toLocaleString();
+}
+
+function cny(minor: number): string {
+  return new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(minor / 100);
+}
+
+function previousMonth(): string {
+  const date = new Date();
+  date.setDate(1);
+  date.setMonth(date.getMonth() - 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 const capabilityLabels: Record<keyof ModelCatalogEntry["capabilities"], string> = {
@@ -62,7 +108,15 @@ function conflictPayload(payload: SyncConflict["clientPayload"]): string {
   return title ?? JSON.stringify(payload).slice(0, 160);
 }
 
-function Composer({ conversationId }: { conversationId?: string }): React.JSX.Element {
+function Composer({
+  conversationId,
+  onOpenContext,
+  contextOpen = false,
+}: {
+  conversationId?: string;
+  onOpenContext?: () => void;
+  contextOpen?: boolean;
+}): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -105,9 +159,36 @@ function Composer({ conversationId }: { conversationId?: string }): React.JSX.El
         }}
       />
       <div className="composer-actions">
-        <span>Enter 发送 · Shift+Enter 换行</span>
-        <button type="submit" className="primary-action" disabled={!draft.trim() || send.isPending}>
-          {send.isPending ? "发送中…" : "发送"}
+        <div className="composer-tools">
+          <button type="button" className="icon-button" aria-label="添加附件">
+            <Paperclip size={18} weight="regular" />
+          </button>
+          <button type="button" className="composer-select">
+            <Sparkle size={15} weight="regular" />
+            <span>添加 Skill</span>
+            <CaretDown size={13} weight="bold" />
+          </button>
+          {onOpenContext ? (
+            <button
+              type="button"
+              className={`composer-context ${contextOpen ? "is-active" : ""}`}
+              onClick={onOpenContext}
+            >
+              <SidebarSimple size={15} weight="regular" />
+              <span>{contextOpen ? "关闭上下文" : "当前上下文"}</span>
+            </button>
+          ) : null}
+          <span className="composer-hint">Shift + Enter 换行</span>
+        </div>
+        <button
+          type="submit"
+          className="primary-action"
+          aria-label="发送"
+          disabled={!draft.trim() || send.isPending}
+        >
+          <PaperPlaneTilt size={17} weight="fill" />
+          <span>{send.isPending ? "发送中…" : "发送"}</span>
+          <kbd>↵</kbd>
         </button>
       </div>
       {send.error ? <p className="inline-error">{send.error.message}</p> : null}
@@ -118,6 +199,10 @@ function Composer({ conversationId }: { conversationId?: string }): React.JSX.El
 function NewChat(): React.JSX.Element {
   return (
     <main className="new-chat-page">
+      <header className="new-chat-topbar">
+        <span className="topbar-product">OpenerX 2.0</span>
+        <span className="topbar-state"><span className="status-dot" /> 已同步</span>
+      </header>
       <section className="welcome" aria-labelledby="welcome-title">
         <p className="eyebrow">OpenerX 2.0 · Chat Alpha</p>
         <h1 id="welcome-title">今天想完成什么？</h1>
@@ -146,8 +231,99 @@ function Suggestion({ text }: { text: string }): React.JSX.Element {
   });
   return (
     <button type="button" className="suggestion-card" onClick={() => send.mutate()}>
+      <Sparkle size={17} weight="regular" />
       {text}
+      <ArrowUp size={17} weight="regular" />
     </button>
+  );
+}
+
+type ContextFile = {
+  id: string;
+  name: string;
+  size: string;
+  status: "已解析" | "待解析";
+};
+
+const initialContextFiles: ContextFile[] = [
+  { id: "prd", name: "产品需求文档（PRD）.pdf", size: "1.24 MB", status: "已解析" },
+  { id: "research", name: "用户调研报告.docx", size: "892 KB", status: "已解析" },
+];
+
+function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const [files, setFiles] = useState(initialContextFiles);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <aside className="context-dock" aria-label="当前上下文">
+      <header className="context-dock-header">
+        <div>
+          <div className="context-title-row">
+            <h2>当前上下文</h2>
+            <Info size={15} weight="regular" />
+          </div>
+          <p>仅用于当前对话</p>
+        </div>
+        <button type="button" className="icon-button" aria-label="关闭上下文" onClick={onClose}>
+          <X size={19} weight="regular" />
+        </button>
+      </header>
+
+      <section className="context-files" aria-labelledby="context-files-title">
+        <div className="context-section-heading">
+          <h3 id="context-files-title">文件</h3>
+          <span>{files.length}</span>
+        </div>
+        <label className="context-dropzone">
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".pdf,.doc,.docx,.md,.txt"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              setFiles((current) => [
+                {
+                  id: `${file.name}-${file.lastModified}`,
+                  name: file.name,
+                  size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+                  status: "待解析",
+                },
+                ...current,
+              ]);
+              event.target.value = "";
+            }}
+          />
+          <FileText size={26} weight="regular" />
+          <strong>拖拽文件到此处，或点击上传</strong>
+          <span>支持 PDF、Word、Markdown、Txt（单个 ≤50MB）</span>
+        </label>
+        <div className="context-file-list">
+          {files.map((file) => (
+            <article className="context-file" key={file.id}>
+              <div className="context-file-icon">
+                <FileText size={19} weight="regular" />
+              </div>
+              <div className="context-file-copy">
+                <strong title={file.name}>{file.name}</strong>
+                <span>{file.size}</span>
+              </div>
+              <span className={`context-file-status status-${file.status === "已解析" ? "ready" : "pending"}`}>
+                {file.status}
+              </span>
+              <button type="button" className="icon-button context-file-menu" aria-label={`管理 ${file.name}`}>
+                <DotsThreeVertical size={17} weight="bold" />
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <footer className="context-dock-footer">
+        <span><CheckCircle size={16} weight="fill" /> 内容不会用于模型训练</span>
+        <button type="button" className="text-button">了解更多</button>
+      </footer>
+    </aside>
   );
 }
 
@@ -298,7 +474,13 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
   );
 }
 
-function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): React.JSX.Element {
+function ConversationToolbar({
+  snapshot,
+  onToggleContext,
+}: {
+  snapshot: ConversationSnapshot;
+  onToggleContext: () => void;
+}): React.JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const conversation = snapshot.conversation;
@@ -368,7 +550,7 @@ function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): 
 
   return (
     <header className="conversation-toolbar">
-      <div>
+      <div className="conversation-heading">
         <p className="eyebrow">{conversation.selectedModelRef}</p>
         <h1>{conversation.title}</h1>
       </div>
@@ -404,6 +586,12 @@ function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): 
             <strong>{selectedModel.priceSummary}</strong>
           </div>
         ) : null}
+        <button type="button" className="toolbar-icon-button" aria-label="切换上下文" onClick={onToggleContext}>
+          <SidebarSimple size={17} weight="regular" />
+        </button>
+        <button type="button" className="toolbar-icon-button" aria-label="更多操作">
+          <SlidersHorizontal size={17} weight="regular" />
+        </button>
         {snapshot.branches.length > 1 ? (
           <label>
             分支
@@ -465,7 +653,13 @@ function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): 
   );
 }
 
-function ChatPage(): React.JSX.Element {
+function ChatPage({
+  contextOpen,
+  onToggleContext,
+}: {
+  contextOpen: boolean;
+  onToggleContext: () => void;
+}): React.JSX.Element {
   const { conversationId = "" } = useParams();
   const snapshot = useQuery({
     queryKey: chatKeys.conversation(conversationId),
@@ -480,13 +674,17 @@ function ChatPage(): React.JSX.Element {
   }
   return (
     <main className="conversation-page">
-      <ConversationToolbar snapshot={snapshot.data} />
+      <ConversationToolbar snapshot={snapshot.data} onToggleContext={onToggleContext} />
       <section className="message-list" aria-live="polite" aria-label="对话消息">
         {snapshot.data.messages.map((message) => (
           <MessageCard key={message.id} message={message} />
         ))}
       </section>
-      <Composer conversationId={conversationId} />
+      <Composer
+        conversationId={conversationId}
+        onOpenContext={onToggleContext}
+        contextOpen={contextOpen}
+      />
     </main>
   );
 }
@@ -900,6 +1098,374 @@ function AccountSettings(): React.JSX.Element {
   );
 }
 
+function BillingAssetCards({ overview }: { overview: BillingOverview }): React.JSX.Element {
+  const pointCount = overview.pointGrants.reduce((sum, grant) => sum + grant.remainingPoints, 0);
+  return (
+    <section className="billing-assets" aria-label="账户资产">
+      <article>
+        <span>可用额度</span>
+        <strong>{cny(overview.quotaAvailableMinor)}</strong>
+        <small>{overview.quotaGrants.length} 笔，按最早到期顺序使用</small>
+      </article>
+      <article>
+        <span>可用积分</span>
+        <strong>{pointCount.toLocaleString()} 分</strong>
+        <small>按服务端兑换规则可抵 {cny(overview.pointAvailableMinor)}</small>
+      </article>
+      <article>
+        <span>充值余额</span>
+        <strong>{cny(overview.cash.postedMinor)}</strong>
+        <small>当前可用 {cny(overview.cash.availableMinor)}</small>
+      </article>
+      <article className="billing-total">
+        <span>总可用价值</span>
+        <strong>{cny(overview.totalAvailableMinor)}</strong>
+        <small>预留中 {cny(overview.activeReservationsMinor)}</small>
+      </article>
+    </section>
+  );
+}
+
+function ChargeRow({ charge }: { charge: ChargeRecord }): React.JSX.Element {
+  return (
+    <div className="billing-row" data-charge-status={charge.status}>
+      <div>
+        <strong>{charge.effectiveModelRef}</strong>
+        <span>{new Date(charge.settledAt ?? charge.createdAt).toLocaleString()}</span>
+        <span>
+          Token：输入 {charge.usage.inputTokens ?? "未知"} · 缓存{" "}
+          {charge.usage.cachedInputTokens ?? "未知"} · 输出 {charge.usage.outputTokens ?? "未知"} ·
+          推理 {charge.usage.reasoningTokens ?? "未知"}
+        </span>
+        <span>
+          服务端价格 {charge.pricingSnapshot.version} · {charge.pricingSnapshot.description}
+        </span>
+      </div>
+      <div>
+        <span>额度 {cny(charge.quotaDeductionMinor)}</span>
+        <span>
+          积分 {charge.pointsDeducted.toLocaleString()} · {cny(charge.pointDeductionMinor)}
+        </span>
+        <span>余额 {cny(charge.cashDeductionMinor)}</span>
+      </div>
+      <strong>{cny(charge.finalAmountMinor)}</strong>
+      <code>{charge.chargeId}</code>
+      {charge.pendingReason ? <span>待核算：{charge.pendingReason}</span> : null}
+    </div>
+  );
+}
+
+function RechargeRow({ order }: { order: RechargeOrder }): React.JSX.Element {
+  return (
+    <div className="billing-row">
+      <div>
+        <strong>{order.provider === "alipay" ? "支付宝" : "微信支付"}</strong>
+        <span>{new Date(order.createdAt).toLocaleString()}</span>
+      </div>
+      <span className={`billing-status status-${order.status}`}>{order.status}</span>
+      <strong>{cny(order.amountMinor)}</strong>
+      {order.checkoutUrl ? (
+        <a href={order.checkoutUrl} target="_blank" rel="noreferrer">
+          打开托管收银台
+        </a>
+      ) : null}
+      <code>{order.orderId}</code>
+    </div>
+  );
+}
+
+function RefundRow({ refund }: { refund: RefundOrder }): React.JSX.Element {
+  return (
+    <div className="billing-row">
+      <div>
+        <strong>退款 · {refund.reason}</strong>
+        <span>{new Date(refund.createdAt).toLocaleString()}</span>
+      </div>
+      <span className={`billing-status status-${refund.status}`}>{refund.status}</span>
+      <strong>-{cny(refund.amountMinor)}</strong>
+      <code>{refund.refundId}</code>
+    </div>
+  );
+}
+
+function BillingSettings(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const account = useQuery({
+    queryKey: accountKey,
+    queryFn: () => window.openerx.getAccountState(),
+  });
+  const signedIn = account.data?.status === "signed_in";
+  const terms = useQuery({
+    queryKey: [...billingKey, "terms"],
+    queryFn: () => window.openerx.getBillingTerms(),
+    enabled: signedIn,
+    retry: false,
+    refetchOnMount: "always",
+  });
+  const overview = useQuery({
+    queryKey: [...billingKey, "overview"],
+    queryFn: () => window.openerx.getBillingOverview(),
+    enabled: signedIn,
+    retry: false,
+    refetchOnMount: "always",
+  });
+  const charges = useQuery({
+    queryKey: [...billingKey, "charges"],
+    queryFn: () => window.openerx.listCharges(),
+    enabled: signedIn,
+    retry: false,
+    refetchOnMount: "always",
+  });
+  const ledger = useQuery({
+    queryKey: [...billingKey, "ledger"],
+    queryFn: () => window.openerx.listLedger(),
+    enabled: signedIn,
+    retry: false,
+    refetchOnMount: "always",
+  });
+  const orders = useQuery({
+    queryKey: [...billingKey, "orders"],
+    queryFn: () => window.openerx.listRechargeOrders(),
+    enabled: signedIn,
+    retry: false,
+    refetchOnMount: "always",
+  });
+  const refunds = useQuery({
+    queryKey: [...billingKey, "refunds"],
+    queryFn: () => window.openerx.listRefunds(),
+    enabled: signedIn,
+    retry: false,
+    refetchOnMount: "always",
+  });
+  const acceptTerms = useMutation({
+    mutationFn: () => {
+      if (!terms.data) throw new Error("收费条款尚未加载");
+      return window.openerx.acceptBillingTerms(terms.data.terms.version);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [...billingKey, "terms"] }),
+  });
+  const [rechargeMinor, setRechargeMinor] = useState(5_000);
+  const [provider, setProvider] = useState<"alipay" | "wechat">("alipay");
+  const createOrder = useMutation({
+    mutationFn: () =>
+      window.openerx.createRechargeOrder({
+        amountMinor: rechargeMinor,
+        provider,
+        idempotencyKey: idempotencyKey("recharge"),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [...billingKey, "orders"] }),
+  });
+  const [statementMonth, setStatementMonth] = useState(previousMonth);
+  const statement = useMutation({
+    mutationFn: () => window.openerx.exportBillingStatement(statementMonth),
+  });
+
+  if (account.isPending) return <main className="center-state">正在读取账户状态…</main>;
+  if (!signedIn) {
+    return (
+      <main className="settings-page">
+        <p className="eyebrow">Billing Alpha</p>
+        <h1>费用与账单</h1>
+        <section className="settings-card settings-stack">
+          <h2>需要登录</h2>
+          <p>Billing 数据只从当前账户的服务端财务系统读取。</p>
+          <NavLink to="/settings/account">前往账户登录</NavLink>
+        </section>
+      </main>
+    );
+  }
+
+  const loadError =
+    terms.error ??
+    overview.error ??
+    charges.error ??
+    ledger.error ??
+    orders.error ??
+    refunds.error ??
+    null;
+  return (
+    <main className="settings-page billing-page">
+      <p className="eyebrow">Billing Alpha</p>
+      <h1>费用与账单</h1>
+      <p className="billing-server-note">
+        Token 计量、费率匹配、报价、资金预留与最终扣费全部由服务端完成；本页只显示服务端返回的最终
+        Billing 信息。
+      </p>
+
+      {overview.data ? <BillingAssetCards overview={overview.data} /> : null}
+
+      <section className="settings-card settings-stack" aria-label="收费条款">
+        <div className="settings-heading">
+          <div>
+            <h2>收费条款</h2>
+            <p>{terms.data?.terms.summary ?? "正在读取当前条款…"}</p>
+          </div>
+          {terms.data?.acceptance ? (
+            <span className="billing-status status-credited">
+              已接受 {new Date(terms.data.acceptance.acceptedAt).toLocaleString()}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => acceptTerms.mutate()}
+              disabled={!terms.data || acceptTerms.isPending}
+            >
+              接受当前条款
+            </button>
+          )}
+        </div>
+        {terms.data ? (
+          <code>
+            版本 {terms.data.terms.version} · 内容 {terms.data.terms.contentHash.slice(0, 12)}
+          </code>
+        ) : null}
+      </section>
+
+      <section className="settings-card settings-stack" aria-label="充值">
+        <div className="settings-heading">
+          <div>
+            <h2>充值</h2>
+            <p>客户端只创建订单；支付结果必须经服务端验签后才会进入余额。</p>
+          </div>
+          <form
+            className="billing-order-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              createOrder.mutate();
+            }}
+          >
+            <label>
+              金额
+              <select
+                value={rechargeMinor}
+                onChange={(event) => setRechargeMinor(Number(event.target.value))}
+              >
+                <option value={1_000}>¥10</option>
+                <option value={5_000}>¥50</option>
+                <option value={10_000}>¥100</option>
+              </select>
+            </label>
+            <label>
+              渠道
+              <select
+                value={provider}
+                onChange={(event) => setProvider(event.target.value as "alipay" | "wechat")}
+              >
+                <option value="alipay">支付宝</option>
+                <option value="wechat">微信支付</option>
+              </select>
+            </label>
+            <button type="submit" disabled={createOrder.isPending}>
+              创建充值订单
+            </button>
+          </form>
+        </div>
+        {createOrder.data ? (
+          <p>
+            订单 {createOrder.data.orderId} 已创建，当前状态 {createOrder.data.status}
+            。到账以服务端状态为准。
+            {createOrder.data.checkoutUrl ? (
+              <>
+                {" "}
+                <a href={createOrder.data.checkoutUrl} target="_blank" rel="noreferrer">
+                  打开托管收银台
+                </a>
+              </>
+            ) : null}
+          </p>
+        ) : null}
+        <div className="billing-list">
+          {orders.data?.map((order) => (
+            <RechargeRow key={order.orderId} order={order} />
+          ))}
+          {orders.data?.length === 0 ? <p>暂无充值订单。</p> : null}
+          {refunds.data?.map((refund) => (
+            <RefundRow key={refund.refundId} refund={refund} />
+          ))}
+        </div>
+      </section>
+
+      <section className="settings-card settings-stack" aria-label="消费明细">
+        <div className="settings-heading">
+          <div>
+            <h2>最终消费明细</h2>
+            <p>每笔记录来自服务端 Usage → Charge → Ledger 结算链路。</p>
+          </div>
+          <span>{charges.data?.length ?? 0} 笔</span>
+        </div>
+        <div className="billing-list">
+          {charges.data?.map((charge) => (
+            <ChargeRow key={charge.chargeId} charge={charge} />
+          ))}
+          {charges.data?.length === 0 ? <p>暂无消费记录。</p> : null}
+        </div>
+      </section>
+
+      <section className="settings-card settings-stack" aria-label="月度账单">
+        <div className="settings-heading">
+          <div>
+            <h2>月度账单</h2>
+            <p>已生成账单不可覆盖；后续退款或调整进入后续账期。</p>
+          </div>
+          <form
+            className="billing-order-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              statement.mutate();
+            }}
+          >
+            <label>
+              月份
+              <input
+                type="month"
+                value={statementMonth}
+                onChange={(event) => setStatementMonth(event.target.value)}
+                required
+              />
+            </label>
+            <button type="submit" disabled={statement.isPending}>
+              生成账单
+            </button>
+          </form>
+        </div>
+        {statement.data ? (
+          <div className="statement-result">
+            <span>期初 {cny(statement.data.statement.openingMinor)}</span>
+            <span>消费 {cny(statement.data.statement.chargesMinor)}</span>
+            <span>充值 {cny(statement.data.statement.creditsMinor)}</span>
+            <span>退款 {cny(statement.data.statement.refundsMinor)}</span>
+            <span>冲正 {cny(statement.data.statement.reversalsMinor)}</span>
+            <strong>期末 {cny(statement.data.statement.closingMinor)}</strong>
+            <a
+              download={`openerx-billing-${statementMonth}.csv`}
+              href={`data:text/csv;charset=utf-8,${encodeURIComponent(statement.data.csv)}`}
+            >
+              下载 CSV
+            </a>
+            <a
+              download={`openerx-billing-${statementMonth}.pdf`}
+              href={`data:application/pdf;base64,${statement.data.pdfBase64}`}
+            >
+              下载 PDF
+            </a>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="settings-card settings-stack" aria-label="账本状态">
+        <h2>账本状态</h2>
+        <p>{ledger.data?.length ?? 0} 个平衡业务事务；客户端无写余额或账本接口。</p>
+      </section>
+
+      {loadError || acceptTerms.error || createOrder.error || statement.error ? (
+        <p className="inline-error">
+          {(loadError ?? acceptTerms.error ?? createOrder.error ?? statement.error)?.message}
+        </p>
+      ) : null}
+    </main>
+  );
+}
+
 function Sidebar({
   environment,
   serviceStatus,
@@ -920,23 +1486,33 @@ function Sidebar({
     history.isSuccess && serviceStatus === "starting" ? "ready" : serviceStatus;
   return (
     <aside className="sidebar">
-      <div className="brand">OpenerX</div>
+      <div className="brand-row">
+        <div className="brand"><span className="brand-mark">O</span>OpenerX</div>
+        <button type="button" className="icon-button sidebar-collapse" aria-label="收起侧栏">
+          <SidebarSimple size={18} weight="regular" />
+        </button>
+      </div>
       <nav aria-label="主导航" className="main-nav">
-        <NavLink to="/chat/new">＋ 新对话</NavLink>
-        <NavLink to="/search">搜索</NavLink>
-        <NavLink to="/files">个人文件</NavLink>
-        <NavLink to="/assistants">助手与 Skill</NavLink>
-        <NavLink to="/settings/account">设置</NavLink>
+        <NavLink to="/chat/new" className="new-chat-link">
+          <Plus size={17} weight="bold" />
+          <span>新对话</span>
+        </NavLink>
+        <NavLink to="/search"><MagnifyingGlass size={17} /><span>搜索</span><kbd>⌘K</kbd></NavLink>
+        <NavLink to="/files"><FolderSimple size={17} /><span>个人文件</span></NavLink>
+        <NavLink to="/assistants"><Sparkle size={17} /><span>助手与 Skill</span></NavLink>
+        <NavLink to="/settings/billing"><Receipt size={17} /><span>费用与账单</span></NavLink>
+        <NavLink to="/settings/account"><GearSix size={17} /><span>设置</span></NavLink>
       </nav>
       <section className="history-list" aria-label="对话历史">
         <div className="history-heading">
           <span>历史</span>
-          <button type="button" onClick={() => setShowArchived((value) => !value)}>
-            {showArchived ? "仅活动" : "含归档"}
+          <button type="button" aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"} onClick={() => setShowArchived((value) => !value)}>
+            <SlidersHorizontal size={15} />
           </button>
         </div>
         {history.data?.map((conversation: ConversationSummary) => (
           <NavLink to={`/chat/${conversation.id}`} key={conversation.id}>
+            <ChatCircle size={16} weight="regular" />
             <strong>{conversation.title}</strong>
             <span>
               {conversation.archivedAt ? "已归档 · " : ""}
@@ -946,12 +1522,18 @@ function Sidebar({
         ))}
       </section>
       <div className={`sync-state service-${displayedStatus}`}>
-        <span aria-hidden="true" />
-        {environment ? `${environment.platform} · ${displayedStatus}` : "正在连接桌面服务"}
+        {displayedStatus === "ready" ? <CheckCircle size={16} weight="fill" /> : <ArrowClockwise size={16} />}
+        <div>
+          <strong>{displayedStatus === "ready" ? "已同步" : "正在同步"}</strong>
+          <span>{environment ? `${environment.platform} · ${displayedStatus}` : "正在连接桌面服务"}</span>
+        </div>
+        <button type="button" className="icon-button" aria-label="立即同步"><ArrowClockwise size={16} /></button>
       </div>
       <NavLink className="sidebar-account" to="/settings/account">
+        <UserCircle size={23} weight="regular" />
         <strong>{account.data?.account?.displayName ?? "未登录"}</strong>
-        <span>{account.data?.status ?? "loading"}</span>
+        <span>{account.data?.status === "signed_in" ? "已登录" : "未登录"}</span>
+        <CaretDown size={15} />
       </NavLink>
     </aside>
   );
@@ -960,6 +1542,13 @@ function Sidebar({
 export function App(): React.JSX.Element {
   const [environment, setEnvironment] = useState<DesktopEnvironment | null>(null);
   const [serviceStatus, setServiceStatus] = useState("starting");
+  const [contextOpen, setContextOpen] = useState(false);
+  const location = useLocation();
+  const isConversationRoute = location.pathname.startsWith("/chat/") && location.pathname !== "/chat/new";
+
+  useEffect(() => {
+    setContextOpen(isConversationRoute);
+  }, [isConversationRoute]);
   const sequenceByConversation = useRef(new Map<string, number>());
   const queryClient = useQueryClient();
 
@@ -996,18 +1585,30 @@ export function App(): React.JSX.Element {
   }, [queryClient]);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${contextOpen ? "context-is-open" : ""}`}>
       <Sidebar environment={environment} serviceStatus={serviceStatus} />
-      <Routes>
+      <div className="app-main">
+        <Routes>
         <Route path="/chat/new" element={<NewChat />} />
-        <Route path="/chat/:conversationId" element={<ChatPage />} />
+        <Route
+          path="/chat/:conversationId"
+          element={
+            <ChatPage
+              contextOpen={contextOpen}
+              onToggleContext={() => setContextOpen((current) => !current)}
+            />
+          }
+        />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/files" element={<Placeholder title="个人文件与成果" />} />
         <Route path="/assistants" element={<Placeholder title="助手与 Skill" />} />
+        <Route path="/settings/billing" element={<BillingSettings />} />
         <Route path="/settings/account" element={<AccountSettings />} />
         <Route path="/settings/*" element={<Placeholder title="设置" />} />
         <Route path="*" element={<Navigate to="/chat/new" replace />} />
-      </Routes>
+        </Routes>
+      </div>
+      {contextOpen ? <ContextDock onClose={() => setContextOpen(false)} /> : null}
     </div>
   );
 }
