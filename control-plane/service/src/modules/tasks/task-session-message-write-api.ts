@@ -111,8 +111,6 @@ type CanonicalTaskMessageRow = {
   updatedAt: string;
 };
 
-type TaskSessionRunRecord = typeof taskSessionRuns.$inferSelect;
-
 const CANONICAL_TASK_MESSAGE_COLUMNS = {
   id: taskMessages.id,
   taskId: taskMessages.taskId,

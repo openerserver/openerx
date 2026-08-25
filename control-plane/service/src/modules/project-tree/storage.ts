@@ -136,14 +136,16 @@ export async function upsertTaskTreeNode(task: TaskTreeSnapshot) {
 }
 
 export async function ensureProjectRootNode(projectId: string) {
-  const existing = await db.query.projectTreeNodes.findFirst({
+  const rootNodeId = getProjectRootNodeId(projectId);
+  const canonical = await db.query.projectTreeNodes.findFirst({
     where: and(
       eq(projectTreeNodes.projectId, projectId),
+      eq(projectTreeNodes.id, rootNodeId),
       eq(projectTreeNodes.nodeType, "project_root"),
     ),
   });
-  if (existing) {
-    return existing;
+  if (canonical) {
+    return canonical;
   }
 
   const project = await db.query.projects.findFirst({
@@ -153,7 +155,6 @@ export async function ensureProjectRootNode(projectId: string) {
     throw new Error(`Project ${projectId} not found while ensuring root node`);
   }
 
-  const rootNodeId = getProjectRootNodeId(projectId);
   const now = new Date().toISOString();
 
   await db.insert(projectTreeNodes).values({

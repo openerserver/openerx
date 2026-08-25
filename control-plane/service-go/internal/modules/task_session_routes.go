@@ -253,6 +253,14 @@ func (api API) persistTaskSessionMessage(w http.ResponseWriter, r *http.Request)
 	if !decodeBody(w, r, &body) {
 		return
 	}
+	if body.RuntimeSessionID == "" {
+		web.Error(w, http.StatusBadRequest, "runtimeSessionId is required")
+		return
+	}
+	if body.Message == nil {
+		web.Error(w, http.StatusBadRequest, "message is required")
+		return
+	}
 	sessionID := taskSessionID(taskID, body.RuntimeSessionID)
 	info := mapValue(body.Message, "info")
 	runtimeMessageID := stringMapValue(info, "id")
@@ -260,7 +268,8 @@ func (api API) persistTaskSessionMessage(w http.ResponseWriter, r *http.Request)
 		runtimeMessageID = stringMapValue(body.Message, "id")
 	}
 	if runtimeMessageID == "" {
-		runtimeMessageID = uuid.NewString()
+		web.Error(w, http.StatusBadRequest, "message id is required")
+		return
 	}
 	info["id"] = runtimeMessageID
 	role := stringMapValue(info, "role")

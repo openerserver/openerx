@@ -78,7 +78,7 @@ roleConclusionRoutes.get("/", async (c) => {
 roleConclusionRoutes.post("/", zValidator("json", roleConclusionSchema), async (c) => {
   const taskId = requireTaskId(c);
   const body = c.req.valid("json");
-  const task = await ensureRoleConclusionsAvailable(taskId);
+  const task = await ensureRoleConclusionsAvailability(taskId);
   if (!task) return c.json({ error: "Task not found" }, 404);
   const now = new Date().toISOString();
   const existing = await db.query.roleAggregateConclusions.findFirst({

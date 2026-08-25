@@ -6,10 +6,10 @@ import {
   terminateTaskExecution,
   type TaskExecutionReconcileEnvelope,
   type TaskExecutionTrace,
-  type TreeTask,
 } from "../lib/api";
 import type { ExecutionMode } from "../lib/api";
 import type { TaskConversationListItem } from "../lib/message-normalize";
+import type { TreeTask } from "./useProjectTreeTask";
 
 export type QueuedContinuation = {
   id: string;

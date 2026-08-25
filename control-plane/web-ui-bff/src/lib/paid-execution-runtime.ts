@@ -115,6 +115,13 @@ function computeNextPaidExecutionGuardState(args: {
   const nextActualRequests = (args.currentGuard.actualRequests || 0) + args.requestDelta;
   const nextActualTokenUsage = (args.currentGuard.actualTokenUsage || 0) + args.tokenUsed;
   const nextActualCost = roundUsd((args.currentGuard.actualCost || 0) + args.costUsd);
+  const breakerReason =
+    args.breakerReason ??
+    (nextActualRequests > args.currentGuard.maxRequestsPerRun
+      ? `Paid execution request limit exceeded: ${nextActualRequests}/${args.currentGuard.maxRequestsPerRun}`
+      : nextActualCost > args.currentGuard.maxEstimatedCostUsdPerRun
+        ? `Paid execution cost limit exceeded: $${nextActualCost}/$${args.currentGuard.maxEstimatedCostUsdPerRun}`
+        : undefined);
 
   return {
     nextGuard: {
@@ -127,14 +134,14 @@ function computeNextPaidExecutionGuardState(args: {
             fundReservedRemainingUsd: roundUsd(Math.max(0, args.fundReservedRemainingUsd)),
           }
         : {}),
-      ...(args.breakerReason
+      ...(breakerReason
         ? {
-            breakerReason: args.breakerReason,
+            breakerReason,
             breakerTrippedAt: args.currentGuard.breakerTrippedAt || new Date().toISOString(),
           }
         : {}),
     } satisfies PaidExecutionGuardState,
-    breakerReason: args.breakerReason,
+    breakerReason,
   };
 }
 
@@ -302,7 +309,7 @@ export async function recordPaidExecutionRuntimeUsage(
     }
   }
 
-  const { nextGuard } = computeNextPaidExecutionGuardState({
+  const nextGuardState = computeNextPaidExecutionGuardState({
     currentGuard,
     requestDelta: input.requestDelta,
     tokenUsed: usage.totalTokens,
@@ -310,6 +317,8 @@ export async function recordPaidExecutionRuntimeUsage(
     fundReservedRemainingUsd,
     breakerReason,
   });
+  const { nextGuard } = nextGuardState;
+  breakerReason = nextGuardState.breakerReason;
 
   await persistPaidExecutionGuardState({
     authorization: input.authorization,

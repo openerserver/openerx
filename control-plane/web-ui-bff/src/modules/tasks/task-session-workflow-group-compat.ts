@@ -1,4 +1,3 @@
-import { fetchRuntimeWorkflowCompatGroupSteps } from "./task-session-runtime-workflow-compat";
 import type { TaskSessionLineageRecord } from "./task-session-store";
 
 type SynthesizeWorkflowGroupCompatMessagesArgs<TMessage> = {
@@ -232,20 +231,6 @@ export async function synthesizeWorkflowGroupCompatMessages<TMessage>(
       ];
     },
   );
-
-  const runtimeWorkflowSteps = await fetchRuntimeWorkflowCompatGroupSteps(
-    args.taskId,
-    args.authorization,
-  );
-  if (runtimeWorkflowSteps.length > 0) {
-    workflowSteps.push(
-      ...runtimeWorkflowSteps.map((step) => ({
-        ...step,
-        messages: step.messages as typeof workflowSteps[number]["messages"],
-        createdAt: step.createdAt ?? null,
-      })),
-    );
-  }
 
   const regularMessages = args.mapRegularMessages(
     args.messages.filter((message) => !workflowMessageSet.has(message)),

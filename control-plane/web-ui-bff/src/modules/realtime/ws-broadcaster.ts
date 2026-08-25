@@ -45,26 +45,6 @@ function requiresExplicitMatch(client: WSClient) {
   return client.subscribedProjects.size > 0 || client.subscribedTasks.size > 0;
 }
 
-function shouldBroadcastEventToClient(client: WSClient, event: RealtimeEvent) {
-  if (!canClientAccessEventProject(client, event)) {
-    return false;
-  }
-
-  if (isProjectSubscribed(client, event)) {
-    return true;
-  }
-
-  if (isTaskFilteredOut(client, event)) {
-    return false;
-  }
-
-  if (requiresExplicitMatch(client) && !event.projectId && !event.taskId) {
-    return false;
-  }
-
-  return true;
-}
-
 function explainBroadcastDecision(client: WSClient, event: RealtimeEvent) {
   if (!canClientAccessEventProject(client, event)) {
     return { allowed: false, reason: "project-access-denied" } as const;

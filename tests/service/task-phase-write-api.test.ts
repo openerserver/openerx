@@ -501,8 +501,8 @@ describe("task phase write api", () => {
     });
     const sessionUpdate = updateCalls.find((call) => call.table === "task_sessions");
     expect(sessionUpdate?.payload).toMatchObject({
-      status: "paused",
-      executionStatus: "paused",
+      status: "interrupted",
+      executionStatus: "running",
       updatedAt: expect.any(String),
     });
 

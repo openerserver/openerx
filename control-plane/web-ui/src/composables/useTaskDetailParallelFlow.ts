@@ -1,5 +1,10 @@
 import { computed, ref, type Ref, watch } from "vue";
-import type { ProjectionRunRecord, TaskAgentRunRecord, TaskSessionRecord } from "../lib/api";
+import type {
+  ProjectionRunRecord,
+  TaskAgentRunRecord,
+  TaskPhaseViewRecord,
+  TaskSessionRecord,
+} from "../lib/api";
 import { getTaskAgentRuns, getTaskPhaseView, getTaskPhases } from "../lib/api";
 import {
   normalizeSessionConversationItems,
@@ -533,8 +538,8 @@ export function useTaskDetailParallelFlow(args: {
         return;
       }
 
-      const phaseViews = phaseViewResults.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
+      const phaseViews: TaskPhaseViewRecord[] = phaseViewResults.flatMap((result) =>
+        result.status === "fulfilled" && result.value ? [result.value] : [],
       );
       applyPhaseParallelCandidateBaselines(buildPhaseParallelCandidateBaselines({ phaseViews }));
 

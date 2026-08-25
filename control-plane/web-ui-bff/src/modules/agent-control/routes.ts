@@ -7,12 +7,7 @@ import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtim
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { finalizeTaskState } from "../tasks/finalize";
-import {
-  getAgentRun,
-  listAgentRuns,
-  recoverAgentRun,
-  updateAgentRunStatus,
-} from "./agent-run-registry";
+import { getAgentRun, recoverAgentRun, updateAgentRunStatus } from "./agent-run-registry";
 import { extractAssistantResultFromMessages } from "./runtime-message-utils";
 import { patchAgentRunRecord, recordAgentAudit } from "./run-persistence";
 import {
@@ -26,7 +21,7 @@ import {
 
 export const agentControlRoutes = new Hono();
 
-type RuntimeRun = ReturnType<typeof listAgentRuns>[number];
+type RuntimeRun = NonNullable<ReturnType<typeof getAgentRun>>;
 type AgentOpsQueue = "attention" | "running" | "recent";
 
 type AgentOpsViewScope = "mine" | "project" | "global";
@@ -111,6 +106,10 @@ interface AgentOpsQueueItemResponse {
   primaryAttentionReason?: string | null;
   quickActions?: string[];
   actionPermissions?: AgentRunSummaryResponse["actionPermissions"];
+}
+
+interface AgentRunSummariesResponse {
+  data?: Array<Partial<AgentRunSummaryResponse>>;
 }
 
 interface TaskSessionPhaseReference {
@@ -210,8 +209,7 @@ function extractRuntimeSessionIdFromPublicTaskSessionId(
 }
 
 function resolveRuntimeSessionIdFromAgentRunSummary(summary: Partial<AgentRunSummaryResponse>) {
-  const subSessionId =
-    typeof summary.subSessionId === "string" ? summary.subSessionId.trim() : "";
+  const subSessionId = typeof summary.subSessionId === "string" ? summary.subSessionId.trim() : "";
   if (subSessionId) {
     return subSessionId;
   }
@@ -499,10 +497,7 @@ async function resolveRuntimeRunTaskPhaseContext(
   };
 }
 
-async function syncPausedTaskPhaseForRun(
-  c: Parameters<typeof authHeader>[0],
-  run?: RuntimeRun,
-) {
+async function syncPausedTaskPhaseForRun(c: Parameters<typeof authHeader>[0], run?: RuntimeRun) {
   const phaseContext = await resolveRuntimeRunTaskPhaseContext(c, run);
   if (!phaseContext) {
     return;
@@ -521,8 +516,10 @@ async function syncPausedTaskPhaseForRun(
   }
 
   const payload = asRecord(result.data);
-  const currentSessionId = asNonEmptyString(payload?.currentSessionId) ?? phaseContext.currentSessionId;
-  const latestSessionId = asNonEmptyString(payload?.latestSessionId) ?? phaseContext.latestSessionId;
+  const currentSessionId =
+    asNonEmptyString(payload?.currentSessionId) ?? phaseContext.currentSessionId;
+  const latestSessionId =
+    asNonEmptyString(payload?.latestSessionId) ?? phaseContext.latestSessionId;
   broadcastTaskPhaseAgentLifecycleEvent({
     type: "task.phase.paused",
     taskId: phaseContext.taskId,
@@ -539,10 +536,7 @@ async function syncPausedTaskPhaseForRun(
   });
 }
 
-async function syncResumedTaskPhaseForRun(
-  c: Parameters<typeof authHeader>[0],
-  run?: RuntimeRun,
-) {
+async function syncResumedTaskPhaseForRun(c: Parameters<typeof authHeader>[0], run?: RuntimeRun) {
   const phaseContext = await resolveRuntimeRunTaskPhaseContext(c, run);
   if (!phaseContext) {
     return;
@@ -561,7 +555,8 @@ async function syncResumedTaskPhaseForRun(
   }
 
   const payload = asRecord(result.data);
-  const currentSessionId = asNonEmptyString(payload?.currentSessionId) ?? phaseContext.currentSessionId;
+  const currentSessionId =
+    asNonEmptyString(payload?.currentSessionId) ?? phaseContext.currentSessionId;
   broadcastTaskPhaseAgentLifecycleEvent({
     type: "task.phase.resumed",
     taskId: phaseContext.taskId,
@@ -606,9 +601,7 @@ function normalizeAgentRunSummary(
   const startedAt = typeof summary.startedAt === "string" ? summary.startedAt : null;
   const finishedAt = typeof summary.finishedAt === "string" ? summary.finishedAt : null;
   const lastActivityAt =
-    typeof summary.lastActivityAt === "string"
-      ? summary.lastActivityAt
-      : finishedAt ?? startedAt;
+    typeof summary.lastActivityAt === "string" ? summary.lastActivityAt : (finishedAt ?? startedAt);
   const blockerState = normalizeBlockerState(status, summary.blockerType, summary.blockerLabel);
 
   return {
@@ -644,110 +637,11 @@ function normalizeAgentRunSummary(
   };
 }
 
-function buildRuntimeFallbackSummary(agentRunId: string, run: RuntimeRun): AgentRunSummaryResponse {
-  const startedAt = new Date(run.startedAt).toISOString();
-  const finishedAt = typeof run.finishedAt === "string" ? run.finishedAt : null;
-  const lastActivityAt =
-    typeof run.lastPromptAt === "number"
-      ? new Date(run.lastPromptAt).toISOString()
-      : finishedAt ?? startedAt;
-  const blockerState = normalizeBlockerState(run.status, null, null);
-
-  return {
-    agentRunId,
-    taskId: run.taskId,
-    taskTitle: run.taskId,
-    projectId: run.projectId,
-    projectName: null,
-    agentType: "agent",
-    status: run.status,
-    sessionId: run.subSessionId,
-    modelUsed: run.model ? `${run.model.providerId}:${run.model.modelId}` : null,
-    startedAt,
-    finishedAt,
-    lastActivityAt,
-    durationMs: resolveDurationMs(startedAt, finishedAt, null),
-    tokenUsed: 0,
-    blockerType: blockerState.blockerType,
-    blockerLabel: blockerState.blockerLabel,
-    riskLevel: null,
-    guidanceCount: 0,
-    resultSummary: null,
-    result: null,
-    error: null,
-    longSummary: null,
-    latestEvents: [],
-    actionPermissions: {
-      canPause: run.status === "running",
-      canResume: run.status === "paused",
-      canTerminate: run.status === "running" || run.status === "paused",
-      canInjectGuidance: true,
-      canViewApproval: false,
-      canViewAudit: false,
-      canViewCodeChanges: false,
-      canExport: false,
-    },
-    governance: null,
-    codeChanges: null,
-    subSessionId: run.subSessionId,
-  };
-}
-
-function statusFreshnessRank(status: string) {
-  switch (status) {
-    case "paused":
-      return 1;
-    case "completed":
-    case "failed":
-    case "stopped":
-      return 2;
-    case "running":
-    default:
-      return 0;
-  }
-}
-
-function shouldPreferRuntimeSummary(persistedStatus: string, runtimeStatus: string) {
-  return statusFreshnessRank(runtimeStatus) > statusFreshnessRank(persistedStatus);
-}
-
-function mergeSummaryWithRuntime(
-  agentRunId: string,
-  persistedSummary: AgentRunSummaryResponse,
-  runtimeRun?: RuntimeRun,
-): AgentRunSummaryResponse {
-  if (!runtimeRun || !shouldPreferRuntimeSummary(persistedSummary.status, runtimeRun.status)) {
-    return persistedSummary;
-  }
-
-  const runtimeSummary = buildRuntimeFallbackSummary(agentRunId, runtimeRun);
-  const startedAt = persistedSummary.startedAt ?? runtimeSummary.startedAt;
-  const finishedAt = runtimeSummary.finishedAt ?? persistedSummary.finishedAt;
-  const lastActivityAt =
-    runtimeSummary.lastActivityAt ?? finishedAt ?? persistedSummary.lastActivityAt;
-
-  return {
-    ...persistedSummary,
-    status: runtimeSummary.status,
-    sessionId: persistedSummary.sessionId ?? runtimeSummary.sessionId,
-    modelUsed: persistedSummary.modelUsed ?? runtimeSummary.modelUsed,
-    startedAt,
-    finishedAt,
-    lastActivityAt,
-    durationMs: resolveDurationMs(startedAt, finishedAt, persistedSummary.durationMs),
-    blockerType: runtimeSummary.blockerType,
-    blockerLabel: runtimeSummary.blockerLabel,
-    actionPermissions: runtimeSummary.actionPermissions ?? persistedSummary.actionPermissions,
-    subSessionId: persistedSummary.subSessionId ?? runtimeSummary.subSessionId,
-  };
-}
-
 async function loadAgentRunSummaryResponse(
   c: Parameters<typeof authHeader>[0],
   agentRunId: string,
 ): Promise<
-  | { ok: true; summary: AgentRunSummaryResponse }
-  | { ok: false; status: number; error: string }
+  { ok: true; summary: AgentRunSummaryResponse } | { ok: false; status: number; error: string }
 > {
   const summaryResult = await cpFetch<Partial<AgentRunSummaryResponse>>(
     `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary`,
@@ -755,18 +649,9 @@ async function loadAgentRunSummaryResponse(
   );
   if (summaryResult.ok) {
     const normalizedSummary = normalizeAgentRunSummary(agentRunId, summaryResult.data);
-    const runtimeRun = (await ensureRuntimeRunFromSummary(c, agentRunId)) ?? getAgentRun(agentRunId);
     return {
       ok: true,
-      summary: mergeSummaryWithRuntime(agentRunId, normalizedSummary, runtimeRun),
-    };
-  }
-
-  const runtimeRun = (await ensureRuntimeRunFromSummary(c, agentRunId)) ?? getAgentRun(agentRunId);
-  if (runtimeRun) {
-    return {
-      ok: true,
-      summary: buildRuntimeFallbackSummary(agentRunId, runtimeRun),
+      summary: normalizedSummary,
     };
   }
 
@@ -775,10 +660,37 @@ async function loadAgentRunSummaryResponse(
     status: summaryResult.status,
     error: readErrorMessage(
       summaryResult.data,
-      summaryResult.status === 404
-        ? "Agent run not found"
-        : "Failed to load agent run summary",
+      summaryResult.status === 404 ? "Agent run not found" : "Failed to load agent run summary",
     ),
+  };
+}
+
+async function loadPersistedAgentRunSummaries(c: AgentOpsQueryContext) {
+  const result = await cpFetch<AgentRunSummariesResponse>("/api/agent-runs/summaries", {
+    authorization: authHeader(c),
+  });
+  if (!result.ok || !Array.isArray(result.data?.data)) {
+    return [];
+  }
+  return result.data.data
+    .map((summary) =>
+      typeof summary.agentRunId === "string"
+        ? normalizeAgentRunSummary(summary.agentRunId, summary)
+        : null,
+    )
+    .filter((summary): summary is AgentRunSummaryResponse => Boolean(summary));
+}
+
+function buildRegisteredRunFromSummary(summary: AgentRunSummaryResponse) {
+  return {
+    agentRunId: summary.agentRunId,
+    subSessionId: summary.subSessionId ?? summary.sessionId ?? "",
+    status: summary.status,
+    taskId: summary.taskId,
+    projectId: summary.projectId,
+    agentType: summary.agentType,
+    startedAt: parseIsoMs(summary.startedAt) ?? 0,
+    finishedAt: summary.finishedAt ?? undefined,
   };
 }
 
@@ -823,7 +735,11 @@ function normalizeQueryText(value?: string | null) {
 }
 
 function resolveSummaryTimeMs(summary: AgentRunSummaryResponse) {
-  return parseIsoMs(summary.lastActivityAt) ?? parseIsoMs(summary.finishedAt) ?? parseIsoMs(summary.startedAt);
+  return (
+    parseIsoMs(summary.lastActivityAt) ??
+    parseIsoMs(summary.finishedAt) ??
+    parseIsoMs(summary.startedAt)
+  );
 }
 
 function parseQueryTime(value?: string) {
@@ -834,7 +750,8 @@ function parseQueryTime(value?: string) {
 
 function isApprovalBlocked(summary: AgentRunSummaryResponse) {
   return (
-    (typeof summary.governance?.pendingApprovals === "number" && summary.governance.pendingApprovals > 0) ||
+    (typeof summary.governance?.pendingApprovals === "number" &&
+      summary.governance.pendingApprovals > 0) ||
     summary.governance?.latestApprovalStatus === "pending"
   );
 }
@@ -862,10 +779,7 @@ function resolveViewScope(c: AgentOpsQueryContext): AgentOpsViewScope {
   return "global";
 }
 
-function matchesAgentOpsFilters(
-  summary: AgentRunSummaryResponse,
-  c: AgentOpsQueryContext,
-) {
+function matchesAgentOpsFilters(summary: AgentRunSummaryResponse, c: AgentOpsQueryContext) {
   const projectId = c.req.query("projectId");
   if (projectId && summary.projectId !== projectId) {
     return false;
@@ -959,14 +873,7 @@ function matchesAgentOpsFilters(
 }
 
 async function loadFilteredAgentRunSummaries(c: AgentOpsQueryContext) {
-  const runs = listAgentRuns();
-  const summaries = await Promise.all(
-    runs.map(async (run) => {
-      const loaded = await loadAgentRunSummaryResponse(c, run.agentRunId);
-      return loaded.ok ? loaded.summary : buildRuntimeFallbackSummary(run.agentRunId, run);
-    }),
-  );
-
+  const summaries = await loadPersistedAgentRunSummaries(c);
   return summaries.filter((summary) => matchesAgentOpsFilters(summary, c));
 }
 
@@ -1055,10 +962,7 @@ function buildRankingItems(
     });
 }
 
-function buildBreakdownItems(
-  items: Array<{ key: string; label: string }>,
-  total: number,
-) {
+function buildBreakdownItems(items: Array<{ key: string; label: string }>, total: number) {
   const counts = new Map<string, { label: string; count: number }>();
 
   for (const item of items) {
@@ -1088,12 +992,7 @@ function floorBucketStart(timestampMs: number, bucketUnit: "hour" | "day") {
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
   }
 
-  return Date.UTC(
-    date.getUTCFullYear(),
-    date.getUTCMonth(),
-    date.getUTCDate(),
-    date.getUTCHours(),
-  );
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours());
 }
 
 function formatBucketLabel(timestampMs: number, bucketUnit: "hour" | "day") {
@@ -1119,7 +1018,8 @@ function buildTimelineBuckets(summaries: AgentRunSummaryResponse[]) {
   const timestamps = resolved.map((entry) => entry.timestampMs);
   const minTimestamp = Math.min(...timestamps);
   const maxTimestamp = Math.max(...timestamps);
-  const bucketUnit = maxTimestamp - minTimestamp > 48 * 60 * 60 * 1000 ? ("day" as const) : ("hour" as const);
+  const bucketUnit =
+    maxTimestamp - minTimestamp > 48 * 60 * 60 * 1000 ? ("day" as const) : ("hour" as const);
   const bucketMs = bucketUnit === "day" ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
   const start = floorBucketStart(minTimestamp, bucketUnit);
   const end = floorBucketStart(maxTimestamp, bucketUnit);
@@ -1169,9 +1069,7 @@ function buildTimelineBuckets(summaries: AgentRunSummaryResponse[]) {
 }
 
 function parseQueueName(value?: string): AgentOpsQueue {
-  return value === "attention" || value === "running" || value === "recent"
-    ? value
-    : "recent";
+  return value === "attention" || value === "running" || value === "recent" ? value : "recent";
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number) {
@@ -1193,14 +1091,17 @@ function shouldIncludeSummaryInQueue(summary: AgentRunSummaryResponse, queue: Ag
 
 function queueSortKey(summary: AgentRunSummaryResponse) {
   return (
-    parseIsoMs(summary.lastActivityAt) ?? parseIsoMs(summary.finishedAt) ?? parseIsoMs(summary.startedAt) ?? 0
+    parseIsoMs(summary.lastActivityAt) ??
+    parseIsoMs(summary.finishedAt) ??
+    parseIsoMs(summary.startedAt) ??
+    0
   );
 }
 
-// GET /api/agents — list all registered agent runs
-agentControlRoutes.get("/", (c) => {
-  const runs = listAgentRuns();
-  return c.json(runs);
+// GET /api/agents — list persisted agent runs for the product console.
+agentControlRoutes.get("/", async (c) => {
+  const summaries = await loadPersistedAgentRunSummaries(c);
+  return c.json(summaries.map(buildRegisteredRunFromSummary));
 });
 
 // GET /api/agents/overview
@@ -1209,11 +1110,17 @@ agentControlRoutes.get("/overview", async (c) => {
   const durationValues = summaries
     .map((summary) => summary.durationMs)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const attentionCount = summaries.filter((summary) => shouldIncludeSummaryInQueue(summary, "attention")).length;
-  const runningCount = summaries.filter((summary) => shouldIncludeSummaryInQueue(summary, "running")).length;
+  const attentionCount = summaries.filter((summary) =>
+    shouldIncludeSummaryInQueue(summary, "attention"),
+  ).length;
+  const runningCount = summaries.filter((summary) =>
+    shouldIncludeSummaryInQueue(summary, "running"),
+  ).length;
   const completedCount = summaries.filter((summary) => summary.status === "completed").length;
   const failedCount = summaries.filter((summary) => summary.status === "failed").length;
-  const humanInterventionCount = summaries.filter((summary) => hasHumanIntervention(summary)).length;
+  const humanInterventionCount = summaries.filter((summary) =>
+    hasHumanIntervention(summary),
+  ).length;
 
   return c.json({
     viewScope: resolveViewScope(c),
@@ -1233,7 +1140,8 @@ agentControlRoutes.get("/overview", async (c) => {
     blockerBreakdown: {
       failedHighRisk: summaries.filter(
         (summary) =>
-          summary.status === "failed" && (summary.riskLevel === "high" || summary.riskLevel === "critical"),
+          summary.status === "failed" &&
+          (summary.riskLevel === "high" || summary.riskLevel === "critical"),
       ).length,
       approvalBlocked: summaries.filter((summary) => isApprovalBlocked(summary)).length,
       pausedAwaitingResume: summaries.filter((summary) => summary.status === "paused").length,

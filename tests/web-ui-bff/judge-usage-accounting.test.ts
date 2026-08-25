@@ -152,6 +152,45 @@ beforeEach(() => {
         };
       }
 
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-judge/sessions") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "ts-a",
+                taskId: "task-judge",
+                runtimeSessionId: "ses-a",
+                parentRuntimeSessionId: "ses-root",
+                sourceType: "parallel",
+                sessionKind: "candidate",
+                phaseId: "phase-judge",
+                phaseRole: "candidate",
+                phaseItemIndex: 0,
+                candidateIndex: 0,
+                executionStatus: "completed",
+                isActive: true,
+              },
+              {
+                id: "ts-b",
+                taskId: "task-judge",
+                runtimeSessionId: "ses-b",
+                parentRuntimeSessionId: "ses-root",
+                sourceType: "parallel",
+                sessionKind: "candidate",
+                phaseId: "phase-judge",
+                phaseRole: "candidate",
+                phaseItemIndex: 1,
+                candidateIndex: 1,
+                executionStatus: "completed",
+                isActive: true,
+              },
+            ],
+          },
+        };
+      }
+
       return { ok: true, status: 200, data: { body: options?.body } };
     },
   );

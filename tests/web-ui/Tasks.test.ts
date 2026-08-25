@@ -470,16 +470,19 @@ describe("Tasks page", () => {
     table.vm.$emit("change", { current: 1, pageSize: 10 });
     await flushPromises();
 
-    pagination = table.props("pagination") as {
+    const updatedPagination = table.props("pagination") as {
       current: number;
       pageSize: number;
       total: number;
+      showSizeChanger: boolean;
       showTotal: (total: number, range: [number, number]) => string;
     };
 
-    expect(pagination.current).toBe(1);
-    expect(pagination.pageSize).toBe(10);
-    expect(pagination.showTotal(pagination.total, [1, 10])).toContain("第 1-10 条，共 30 条");
+    expect(updatedPagination.current).toBe(1);
+    expect(updatedPagination.pageSize).toBe(10);
+    expect(updatedPagination.showTotal(updatedPagination.total, [1, 10])).toContain(
+      "第 1-10 条，共 30 条",
+    );
   });
 
   it("refetches the task list with the selected status filter", async () => {

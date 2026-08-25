@@ -120,7 +120,7 @@ function createMainPaneModel(overrides: Record<string, unknown> = {}) {
     workflowStages: [],
     workflowSummary: null,
     ...overrides,
-  });
+  }) as any;
 }
 
 function mountMainPane(main: ReturnType<typeof createMainPaneModel>) {

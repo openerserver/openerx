@@ -113,7 +113,7 @@ export function createTaskCreationApi(deps: {
   async function validateTaskCreateInput(body: CreateTaskInput) {
     const modelValidation = validateConfiguredModelRoute(body.selectedModel, "任务模型");
     if (modelValidation) {
-      return { error: modelValidation as const };
+      return { error: modelValidation };
     }
 
     const repoValidation = await validateTaskRepository(body.projectId, body.repoId);

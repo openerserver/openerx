@@ -74,6 +74,8 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     currentSessionId,
     currentPhaseId,
   });
+  const activeMessageSessionId = computed(() => messageSnapshot.activeSessionId.value ?? undefined);
+  const activePhaseTimelineId = computed(() => currentPhaseId.value ?? undefined);
   const { getTaskPatchEvents, taskPatchEventSignature } = useTaskMessagePatchConsumer(
     computed(() => (taskId.value ? [taskId.value] : [])),
   );
@@ -86,7 +88,7 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     needsMessagePollingFallback,
     realtimeConnected,
     seedPendingAssistantDraft,
-  } = useTaskMessageStore(taskId, messageSnapshot.activeSessionId, {
+  } = useTaskMessageStore(taskId, activeMessageSessionId, {
     sourceMessages: messageSnapshot.sourceMessages,
     snapshotRevision: computed(() => getTaskMessageSnapshotRevision(messageSnapshot.trace.value)),
   });
@@ -148,7 +150,7 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
       refresh: messageSnapshot.refresh,
       refreshCurrentPhase: messageSnapshot.refreshCurrentPhase,
     },
-    currentPhaseId,
+    currentPhaseId: activePhaseTimelineId,
   });
   const locallySatisfiedMessageRefreshEventId = computed(() => {
     if (latestTaskRefreshRequest.value?.reason !== "round-synced") {

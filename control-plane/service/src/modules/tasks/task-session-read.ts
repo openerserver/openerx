@@ -2703,7 +2703,10 @@ export function createTaskSessionReadApi(deps: {
         candidateIndex:
           typeof session.candidateIndex === "number" ? session.candidateIndex : null,
         stepIndex: typeof session.stepIndex === "number" ? session.stepIndex : null,
-        title: asNonEmptyString(session.title) ?? asNonEmptyString(session.branchName) ?? null,
+        title:
+          asNonEmptyString((session as { title?: unknown }).title) ??
+          asNonEmptyString(session.branchName) ??
+          null,
         selectedModel: asNonEmptyString(session.selectedModel) ?? null,
         executionStatus: asNonEmptyString(session.executionStatus) ?? null,
         timelineMeta: buildTaskPhaseMessageGroupTimelineMeta({

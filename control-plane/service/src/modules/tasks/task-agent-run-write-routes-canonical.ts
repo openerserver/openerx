@@ -8,8 +8,8 @@ import { loadCanonicalAgentRun, type CanonicalAgentRunRecord } from "./agent-run
 const TERMINAL_AGENT_RUN_STATUSES = ["completed", "failed", "stopped", "terminated"] as const;
 
 const createRunSchema = z.object({
-  id: z.string().optional(),
-  sessionId: z.string().optional(),
+  id: z.string().min(1).optional(),
+  sessionId: z.string().min(1),
   agentType: z.string().min(1),
   status: z
     .enum(["pending", "running", "paused", "completed", "failed", "stopped", "terminated"])
@@ -120,7 +120,7 @@ async function createTaskAgentRun(args: {
     return { ok: false as const, status: 404 as const, payload: { error: "Task not found" } };
   }
 
-  const runId = args.body.id || crypto.randomUUID();
+  const runId = args.body.id ?? `agent-run:${args.taskId}:${crypto.randomUUID()}`;
   const existing = await loadCanonicalAgentRun(runId);
   if (existing) {
     return { ok: true as const, status: 200 as const, payload: existing };

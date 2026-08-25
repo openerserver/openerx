@@ -8,6 +8,8 @@ import { buildTaskRouteRegistrations } from "./task-route-registrations";
 import { registerTaskSessionRoutes } from "./task-session-routes";
 import { registerTaskRouteModulesFromRegistrars } from "./task-route-assembly";
 
+type TaskRouteRegistrations = ReturnType<typeof buildTaskRouteRegistrations>;
+
 export function registerTaskRouteModulesWithRegistrars(
   taskRoutes: Hono<AppEnv>,
   registrars: {
@@ -19,7 +21,10 @@ export function registerTaskRouteModulesWithRegistrars(
     registerProjections: typeof registerTaskProjectionRoutes;
   },
 ) {
-  registerTaskRouteModulesFromRegistrars(taskRoutes, registrars);
+  registerTaskRouteModulesFromRegistrars<Hono<AppEnv>, TaskRouteRegistrations>(
+    taskRoutes,
+    registrars,
+  );
 }
 
 export function registerTaskRouteModules(taskRoutes: Hono<AppEnv>) {

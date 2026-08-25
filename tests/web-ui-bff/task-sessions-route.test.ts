@@ -83,8 +83,9 @@ const runtimeProviderModule = createRuntimeProviderModuleMock({
   updateAgentRunStatus: mock(() => undefined),
 });
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  runtimeProviderModule,
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider",
+  () => runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
@@ -454,7 +455,11 @@ describe("task sessions route", () => {
       meta: { currentSessionId: string | null; currentPhaseId: string | null };
     };
     const historicalBody = (await historicalResponse.json()) as {
-      data: Array<{ id: string; candidateIndex?: number | null; executionModeSnapshot?: string | null }>;
+      data: Array<{
+        id: string;
+        candidateIndex?: number | null;
+        executionModeSnapshot?: string | null;
+      }>;
       meta: { currentSessionId: string | null; currentPhaseId: string | null };
     };
 
@@ -679,7 +684,13 @@ describe("task sessions route", () => {
       data: Array<{ runtimeSessionId: string; children: Array<{ runtimeSessionId: string }> }>;
     };
     const historicalBody = (await historicalResponse.json()) as {
-      data: Array<{ runtimeSessionId: string; children: Array<{ runtimeSessionId: string; children: Array<{ runtimeSessionId: string }> }> }>;
+      data: Array<{
+        runtimeSessionId: string;
+        children: Array<{
+          runtimeSessionId: string;
+          children: Array<{ runtimeSessionId: string }>;
+        }>;
+      }>;
     };
 
     expect(defaultBody.data.map((node) => node.runtimeSessionId)).toEqual([
@@ -755,9 +766,9 @@ describe("task sessions route", () => {
           id: "session-1",
           taskSessionId: "task-session:task-1:session-1",
           phaseId: "phase-root",
-          title: "[Task task-1] finished session",
+          title: "",
           isActive: true,
-          summary: { additions: 1, deletions: 0, files: 1 },
+          summary: null,
           createdAt: "2026-03-14T10:00:00.000Z",
           updatedAt: "2026-03-14T10:05:00.000Z",
         }),
@@ -898,7 +909,7 @@ describe("task sessions route", () => {
           phaseId: null,
           title: "finished task — 分析现状",
           isActive: true,
-          summary: { additions: 0, deletions: 0, files: 0 },
+          summary: null,
           createdAt: "2026-03-14T10:00:00.000Z",
           updatedAt: "2026-03-14T10:05:00.000Z",
           executionStatus: "running",
@@ -1127,9 +1138,9 @@ describe("task sessions route", () => {
       "session-anchor",
       "session-branch",
     ]);
-    expect(
-      lineageBody.data[0]?.children[0]?.children.map((node) => node.runtimeSessionId),
-    ).toEqual(["session-candidate"]);
+    expect(lineageBody.data[0]?.children[0]?.children.map((node) => node.runtimeSessionId)).toEqual(
+      ["session-candidate"],
+    );
   });
 
   test("surfaces explicit parallel sourceType on the session-lineage tree alias", async () => {
@@ -1457,7 +1468,7 @@ describe("task sessions route", () => {
     });
   });
 
-  test("reads task session messages from the session-first cache before runtime fallback", async () => {
+  test("reads task session messages from the session-first cache only", async () => {
     setCpFetchImplementation(async (url: string) => {
       if (url === "/api/tasks/task-1/sessions") {
         return {
@@ -1688,7 +1699,7 @@ describe("task sessions route", () => {
           meta: {
             readSource: "task-session-first",
             sessionId: "task-session:task-1:session-root",
-              snapshotVersion: 19,
+            snapshotVersion: 19,
             messageCount: 2,
             cacheState: "complete",
             complete: true,
@@ -1722,7 +1733,7 @@ describe("task sessions route", () => {
           meta: {
             readSource: "task-session-first",
             sessionId: "task-session:task-1:session-candidate-a",
-              snapshotVersion: 13,
+            snapshotVersion: 13,
             messageCount: 1,
             cacheState: "complete",
             complete: true,
@@ -1841,7 +1852,9 @@ describe("task sessions route", () => {
       }),
     });
 
-    expect(cpFetchMock.mock.calls.map(([url]) => String(url))).toEqual(["/api/tasks/task-1/sessions"]);
+    expect(cpFetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/tasks/task-1/sessions",
+    ]);
 
     const roundMessagesResponse = await taskRoutes.request(
       "http://localhost/task-1/rounds/task-session%3Atask-1%3Asession-root/messages",
@@ -2953,7 +2966,7 @@ describe("task sessions route", () => {
     });
   });
 
-  test("merges runtime workflow sub-sessions into the dedicated workflow block and preserves an explicit root context step when projected", async () => {
+  test("preserves an explicit root context workflow step from persisted messages", async () => {
     listSessionsMock.mockResolvedValue({
       ok: true,
       data: [
@@ -3305,53 +3318,9 @@ describe("task sessions route", () => {
       (item: { _type?: string }) => item?._type === "workflow_group",
     );
     expect(workflowGroup).toBeTruthy();
-    expect(workflowGroup.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          agentName: "产品 Agent",
-          sessionId: "session-product",
-          messages: expect.any(Array),
-        }),
-        expect.objectContaining({
-          agentName: "架构师 Agent",
-          sessionId: "session-architect-final",
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              info: expect.objectContaining({ role: "user" }),
-            }),
-            expect.objectContaining({
-              info: expect.objectContaining({ role: "assistant", finish: "stop" }),
-            }),
-          ]),
-        }),
-        expect.objectContaining({
-          agentName: "安全 Agent",
-          sessionId: "session-security-final",
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              info: expect.objectContaining({ role: "assistant", finish: "stop" }),
-            }),
-          ]),
-        }),
-      ]),
-    );
-
-    const stepCounts = new Map(
-      workflowGroup.steps.map((step: { agentName: string; messages: unknown[] }) => [
-        step.agentName,
-        step.messages.length,
-      ]),
-    );
-    expect(stepCounts.get("产品 Agent")).toBe(2);
-    expect(stepCounts.get("架构师 Agent")).toBe(2);
-    expect(stepCounts.get("安全 Agent")).toBe(2);
-
-    const contextStep = workflowGroup.steps.find(
-      (step: { agentName?: string }) => step.agentName === "需求进入",
-    );
-    expect(contextStep).toBeTruthy();
-    expect(contextStep).toEqual(
+    expect(workflowGroup.steps).toEqual([
       expect.objectContaining({
+        agentName: "需求进入",
         sessionId: "session-root",
         messages: [
           expect.objectContaining({
@@ -3359,6 +3328,13 @@ describe("task sessions route", () => {
           }),
         ],
       }),
+    ]);
+
+    const stepCounts = new Map(
+      workflowGroup.steps.map((step: { agentName: string; messages: unknown[] }) => [
+        step.agentName,
+        step.messages.length,
+      ]),
     );
     expect(stepCounts.get("需求进入")).toBe(1);
   });

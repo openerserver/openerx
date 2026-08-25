@@ -106,10 +106,6 @@ mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-runtime", () 
   releasePaidExecutionReservation: mock(async () => ({ ok: true, releasedUsd: 0 })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/runtime-pipeline", () => ({
-  buildRuntimePipeline: mock(async () => ({ stages: [] })),
-}));
-
 const runtimeProviderModule = createRuntimeProviderModuleMock({
   continueSession: mock(async () => ({ ok: true })),
   createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
@@ -138,8 +134,9 @@ const runtimeProviderModule = createRuntimeProviderModuleMock({
   updateAgentRunStatus: mock(() => undefined),
 });
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  runtimeProviderModule,
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider",
+  () => runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
@@ -172,12 +169,30 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
 
 mock.module("../../control-plane/web-ui-bff/src/modules/tasks/reconcile", () => ({
   repairTaskMessagesFromRuntime: mock(async () => ({
+    scope: "task",
+    lineageResolved: true,
+    scannedSessions: 0,
+    repairedSessions: 0,
+    failedSessions: 0,
+    skippedSessions: 0,
+    scannedMessages: 0,
+    repairableMessages: 0,
+    repairedMessages: 0,
+    failedMessages: 0,
     repaired: false,
     totalMessages: 0,
     userMessages: 0,
     assistantMessages: 0,
   })),
-  reconcileRunningTasksOnStartup: mock(async () => undefined),
+  reconcileRunningTasksOnStartup: mock(async () => ({
+    scanned: 0,
+    completed: 0,
+    failed: 0,
+    recovered: 0,
+    skipped: 0,
+    runtimeAvailable: true,
+    affectedTasks: [],
+  })),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-stage-execution", () => ({
@@ -1377,7 +1392,7 @@ describe("task execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("falls back to runtime messages when service timeline only has non-displayable conversation shells", async () => {
+  test("uses persisted conversation when projection shells are not displayable", async () => {
     setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
@@ -1540,7 +1555,7 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "runtime-fallback",
+      readSource: "conversation-table",
       cacheState: "complete",
       complete: true,
     });
@@ -1552,39 +1567,21 @@ describe("task execution trace route", () => {
           text: "任务进入 running 状态",
         }),
         expect.objectContaining({
-          id: "msg-1",
+          id: "empty-user-1",
           role: "user",
-          text: expect.stringContaining("第二轮用户输入"),
+          text: "",
         }),
         expect.objectContaining({
-          id: "msg-4",
+          id: "empty-assistant-1",
           role: "assistant",
-          text: "第二轮模型回复",
+          text: "",
         }),
       ]),
     );
-    expect(payload.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "msg-1",
-          role: "user",
-          text: expect.stringContaining("第二轮用户输入"),
-        }),
-        expect.objectContaining({
-          id: "msg-4",
-          role: "assistant",
-          text: "第二轮模型回复",
-        }),
-      ]),
-    );
-    expect(payload.messages).toHaveLength(2);
-    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(
-      true,
-    );
-    expect(payload.latestResponse).toBe("第二轮模型回复");
-    expectNoPromptBackfillSegment(payload, "第一轮用户输入");
-    expect(getSessionMessagesMock).toHaveBeenCalledTimes(1);
-    expect(getSessionMessagesMock.mock.calls[0]?.[0]).toBe("ses-1");
+    expect(payload.messages).toEqual([]);
+    expect(payload.finalPrompt).toBeNull();
+    expect(payload.latestResponse).toBe("placeholder result");
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   test("keeps displayable service timeline placeholders without loading task conversation messages", async () => {
@@ -1799,7 +1796,7 @@ describe("task execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("falls back to runtime messages when projection and session timeline are both empty", async () => {
+  test("keeps DB read model empty when projection and session timeline are both empty", async () => {
     setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
@@ -1915,47 +1912,15 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "runtime-fallback",
-      cacheState: "complete",
-      complete: true,
-      itemCount: 2,
+      cacheState: "none",
+      complete: false,
+      itemCount: 0,
     });
-    expect(payload.timeline).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "msg-1",
-          role: "user",
-          text: expect.stringContaining("第二轮用户输入"),
-        }),
-        expect.objectContaining({
-          id: "msg-4",
-          role: "assistant",
-          text: "第二轮模型回复",
-        }),
-      ]),
-    );
-    expect(payload.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "msg-1",
-          role: "user",
-          text: expect.stringContaining("第二轮用户输入"),
-        }),
-        expect.objectContaining({
-          id: "msg-4",
-          role: "assistant",
-          text: "第二轮模型回复",
-        }),
-      ]),
-    );
-    expect(payload.messages).toHaveLength(2);
-    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(
-      true,
-    );
-    expect(payload.latestResponse).toBe("第二轮模型回复");
-    expectNoPromptBackfillSegment(payload, "第一轮用户输入");
-    expect(getSessionMessagesMock).toHaveBeenCalledTimes(1);
-    expect(getSessionMessagesMock.mock.calls[0]?.[0]).toBe("ses-1");
+    expect(payload.timeline).toEqual([]);
+    expect(payload.messages).toEqual([]);
+    expect(payload.finalPrompt).toBeNull();
+    expect(payload.latestResponse).toBe("snapshot only response");
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   test("keeps projection incomplete meta when service timeline is unavailable", async () => {

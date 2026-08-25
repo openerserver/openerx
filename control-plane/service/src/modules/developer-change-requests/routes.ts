@@ -77,7 +77,7 @@ developerChangeRequestRoutes.post(
   async (c) => {
     const taskId = requireTaskId(c);
     const body = c.req.valid("json");
-    const task = await ensureDeveloperChangeRequestsAvailable(taskId);
+    const task = await ensureDeveloperChangeRequestsAvailability(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
     const requestId = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -111,7 +111,7 @@ developerChangeRequestRoutes.patch(
   async (c) => {
     const taskId = requireTaskId(c);
     const body = c.req.valid("json");
-    const task = await ensureDeveloperChangeRequestsAvailable(taskId);
+    const task = await ensureDeveloperChangeRequestsAvailability(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
     const existing = await db.query.developerChangeRequests.findFirst({
       where: and(

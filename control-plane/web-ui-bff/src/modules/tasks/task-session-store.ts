@@ -70,7 +70,6 @@ export type TaskSessionTimelineReadSource =
   | "conversation-table"
   | "task-domain-events"
   | "conversation-table+task-domain-events"
-  | "runtime-fallback"
   | "task-domain-projection"
   | "task-session-projection"
   | "task-session-first";
@@ -180,51 +179,49 @@ function mapServiceTaskSessionsToLineageRecords(
 ) {
   const byId = new Map(sessions.map((session) => [session.id, session] as const));
 
-  return sessions.map(
-    (session) => {
-      const normalizedSourceType = resolvePublicTaskSessionSourceType({
-        sourceType: session.sourceType ?? null,
-        sessionKind: session.sessionKind,
-        parentSessionId: session.parentSessionId,
-        parentRuntimeSessionId: session.parentRuntimeSessionId,
-        phaseId: session.phaseId,
-        candidateIndex: session.candidateIndex,
-        executionModeSnapshot: session.executionModeSnapshot,
-      });
-      const persistedSourceType = typeof session.sourceType === "string" ? session.sourceType.trim() : "";
+  return sessions.map((session) => {
+    const normalizedSourceType = resolvePublicTaskSessionSourceType({
+      sourceType: session.sourceType ?? null,
+      sessionKind: session.sessionKind,
+      parentSessionId: session.parentSessionId,
+      parentRuntimeSessionId: session.parentRuntimeSessionId,
+      phaseId: session.phaseId,
+      candidateIndex: session.candidateIndex,
+      executionModeSnapshot: session.executionModeSnapshot,
+    });
+    const persistedSourceType =
+      typeof session.sourceType === "string" ? session.sourceType.trim() : "";
 
-      return {
-        id: session.id,
-        taskId: session.taskId,
-        runtimeSessionId: session.runtimeSessionId ?? session.id,
-        parentRuntimeSessionId: session.parentSessionId
-          ? (byId.get(session.parentSessionId)?.runtimeSessionId ?? session.parentSessionId)
-          : (session.parentRuntimeSessionId ?? null),
-        forkedFromMessageId: session.forkedFromMessageId ?? null,
-        branchName: session.branchName ?? null,
-        sourceType: normalizedSourceType,
-        needsSourceTypeRepair: persistedSourceType !== normalizedSourceType,
-        isActive: currentSessionId
-          ? session.id === currentSessionId
-          : session.executionStatus === "running" && !session.archivedAt,
-        phaseId: session.phaseId ?? null,
-        phaseRole: session.phaseRole ?? null,
-        phaseItemIndex:
-          typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
-        coordinationKey: session.coordinationKey ?? null,
-        winnerSessionId: session.winnerSessionId ?? null,
-        executionStatus: session.executionStatus ?? null,
-        sessionKind: session.sessionKind ?? null,
-        candidateIndex: typeof session.candidateIndex === "number" ? session.candidateIndex : null,
-        stepIndex: typeof session.stepIndex === "number" ? session.stepIndex : null,
-        selectedModel: session.selectedModel ?? null,
-        executionModeSnapshot: session.executionModeSnapshot ?? null,
-        createdAt: session.createdAt ?? null,
-        updatedAt: session.updatedAt ?? null,
-        archivedAt: session.archivedAt ?? null,
-      } satisfies TaskSessionLineageRecord;
-    },
-  );
+    return {
+      id: session.id,
+      taskId: session.taskId,
+      runtimeSessionId: session.runtimeSessionId ?? session.id,
+      parentRuntimeSessionId: session.parentSessionId
+        ? (byId.get(session.parentSessionId)?.runtimeSessionId ?? session.parentSessionId)
+        : (session.parentRuntimeSessionId ?? null),
+      forkedFromMessageId: session.forkedFromMessageId ?? null,
+      branchName: session.branchName ?? null,
+      sourceType: normalizedSourceType,
+      needsSourceTypeRepair: persistedSourceType !== normalizedSourceType,
+      isActive: currentSessionId
+        ? session.id === currentSessionId
+        : session.executionStatus === "running" && !session.archivedAt,
+      phaseId: session.phaseId ?? null,
+      phaseRole: session.phaseRole ?? null,
+      phaseItemIndex: typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
+      coordinationKey: session.coordinationKey ?? null,
+      winnerSessionId: session.winnerSessionId ?? null,
+      executionStatus: session.executionStatus ?? null,
+      sessionKind: session.sessionKind ?? null,
+      candidateIndex: typeof session.candidateIndex === "number" ? session.candidateIndex : null,
+      stepIndex: typeof session.stepIndex === "number" ? session.stepIndex : null,
+      selectedModel: session.selectedModel ?? null,
+      executionModeSnapshot: session.executionModeSnapshot ?? null,
+      createdAt: session.createdAt ?? null,
+      updatedAt: session.updatedAt ?? null,
+      archivedAt: session.archivedAt ?? null,
+    } satisfies TaskSessionLineageRecord;
+  });
 }
 
 function mapTimelineRole(item: ServiceTaskTimelineItem) {
@@ -325,6 +322,14 @@ export async function persistTaskSessionMessageSnapshot(
     message: unknown;
   },
 ) {
+  if (!taskId.trim() || !input.runtimeSessionId.trim() || !input.message) {
+    return {
+      ok: false as const,
+      status: 400,
+      data: { error: "taskId, runtimeSessionId, and message are required" },
+    };
+  }
+
   return cpFetch<{
     ok?: boolean;
     skipped?: boolean;
@@ -368,6 +373,14 @@ export async function upsertTaskSessionLineageRecord(
   authorization: string,
   input: UpsertTaskSessionLineageInput,
 ) {
+  if (!taskId.trim() || !input.runtimeSessionId.trim()) {
+    return {
+      ok: false as const,
+      status: 400,
+      data: { error: "taskId and runtimeSessionId are required" },
+    };
+  }
+
   return cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/sessions`, {
     method: "POST",
     body: {

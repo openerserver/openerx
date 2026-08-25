@@ -37,6 +37,10 @@
 
 1. [product/README.md](product/README.md)
 
+如果你的问题是“OpenerX 2.0 的个人 AI 客户端应该重构成什么”，先看：
+
+1. [v2/README.md](v2/README.md)：已批准并已进入实施准备的 Electron + React 跨平台桌面个人客户端产品合同；目录描述目标与实施边界，不自动取代 `current/`。当前启动记录见 [v2/12-implementation-bootstrap.md](v2/12-implementation-bootstrap.md)。
+
 如果你的问题是“以前怎么讨论过、和外部方案怎么比、为什么没走某条路”，先看：
 
 1. [research/README.md](research/README.md)
@@ -63,6 +67,7 @@
 
 1. [current/README.md](current/README.md)：当前有效文档入口，偏“已核验后仍保留为现行依据”的文档集合
 2. [archive/README.md](archive/README.md)：历史文档总入口，包含 runtime、task-detail、paid-model 与本轮整理记录
+3. [v2/README.md](v2/README.md)：面向企业普通用户的 Electron + React 个人 AI 桌面客户端合同包；当前处于实施准备阶段
 
 ## 4. 根目录保留项
 

@@ -62,9 +62,13 @@ function hasActiveRunId(task: Task) {
   );
 }
 
-function hasExplicitTaskExecutionEvidence(task: Task, _currentPhaseId?: string | null) {
+function hasExplicitTaskExecutionEvidence(task: Task, currentPhaseId?: string | null) {
   // An active run id is the strongest signal of ongoing execution.
   if (hasActiveRunId(task)) {
+    return true;
+  }
+
+  if (typeof currentPhaseId === "string" && currentPhaseId.trim().length > 0) {
     return true;
   }
 

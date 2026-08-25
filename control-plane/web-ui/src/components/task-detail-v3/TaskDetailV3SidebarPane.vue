@@ -2,7 +2,7 @@
   <aside class="task-detail-v3-sidebar" :class="{ 'task-detail-v3-sidebar--collapsed': sidebar.collapsed }">
     <template v-if="sidebar.showSidebarContent">
       <TaskFilePreviewPanel
-        v-if="sidebar.showFilePreview"
+        v-if="sidebar.showFilePreview && sidebar.previewFile"
         :file-path="sidebar.previewFile.filePath"
         :content="sidebar.previewFile.content"
         @close="sidebar.handleCloseFilePreview"

@@ -144,12 +144,16 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-
   updateAgentRunStatus: updateAgentRunStatusMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-message-utils", () => ({
-  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
-}));
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/runtime-message-utils",
+  () => ({
+    extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+  }),
+);
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  runtimeProviderModule,
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider",
+  () => runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
@@ -665,41 +669,33 @@ describe("agent control routes", () => {
   });
 
   test("queues route carries runtime subSessionId when persisted summaries expose canonical task session ids", async () => {
-    listAgentRunsMock.mockReturnValue([
-      {
-        agentRunId: "run-1",
-        subSessionId: "session-1",
-        taskId: "task-1",
-        projectId: "proj-1",
-        status: "running",
-        startedAt: Date.parse("2026-03-18T08:00:00.000Z"),
-        lastPromptAt: Date.parse("2026-03-18T08:05:00.000Z"),
-        model: { providerId: "github-copilot", modelId: "gpt-5-mini" },
-      },
-    ]);
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url] = args as [string];
 
-      if (url === "/api/agent-runs/run-1/summary") {
+      if (url === "/api/agent-runs/summaries") {
         return {
           ok: true,
           data: {
-            agentRunId: "run-1",
-            taskId: "task-1",
-            taskTitle: "Task 1",
-            projectId: "proj-1",
-            projectName: "Project 1",
-            agentType: "builder",
-            status: "running",
-            sessionId: "task-session:task-1:session-1",
-            modelUsed: "github-copilot:gpt-5-mini",
-            startedAt: "2026-03-18T08:00:00.000Z",
-            lastActivityAt: "2026-03-18T08:05:00.000Z",
-            durationMs: 300000,
-            guidanceCount: 1,
-            blockerType: null,
-            blockerLabel: "",
-            latestEvents: [],
+            data: [
+              {
+                agentRunId: "run-1",
+                taskId: "task-1",
+                taskTitle: "Task 1",
+                projectId: "proj-1",
+                projectName: "Project 1",
+                agentType: "builder",
+                status: "running",
+                sessionId: "task-session:task-1:session-1",
+                modelUsed: "github-copilot:gpt-5-mini",
+                startedAt: "2026-03-18T08:00:00.000Z",
+                lastActivityAt: "2026-03-18T08:05:00.000Z",
+                durationMs: 300000,
+                guidanceCount: 1,
+                blockerType: null,
+                blockerLabel: "",
+                latestEvents: [],
+              },
+            ],
           },
         };
       }
@@ -844,79 +840,54 @@ describe("agent control routes", () => {
   });
 
   test("aggregates agent overview from filtered run summaries", async () => {
-    listAgentRunsMock.mockReturnValue([
-      {
-        agentRunId: "run-1",
-        subSessionId: "session-1",
-        taskId: "task-1",
-        projectId: "proj-1",
-        status: "running",
-        startedAt: Date.parse("2026-03-18T08:00:00.000Z"),
-        lastPromptAt: Date.parse("2026-03-18T08:05:00.000Z"),
-        model: { providerId: "github-copilot", modelId: "gpt-5-mini" },
-      },
-      {
-        agentRunId: "run-2",
-        subSessionId: "session-2",
-        taskId: "task-2",
-        projectId: "proj-1",
-        status: "failed",
-        startedAt: Date.parse("2026-03-18T09:00:00.000Z"),
-        finishedAt: "2026-03-18T09:10:00.000Z",
-        lastPromptAt: Date.parse("2026-03-18T09:10:00.000Z"),
-        model: { providerId: "github-copilot", modelId: "claude-opus-4.6" },
-      },
-    ]);
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url] = args as [string];
 
-      if (url === "/api/agent-runs/run-1/summary") {
+      if (url === "/api/agent-runs/summaries") {
         return {
           ok: true,
           data: {
-            agentRunId: "run-1",
-            taskId: "task-1",
-            taskTitle: "Task 1",
-            projectId: "proj-1",
-            projectName: "Project 1",
-            agentType: "builder",
-            status: "running",
-            sessionId: "session-1",
-            modelUsed: "github-copilot:gpt-5-mini",
-            startedAt: "2026-03-18T08:00:00.000Z",
-            lastActivityAt: "2026-03-18T08:05:00.000Z",
-            durationMs: 300000,
-            guidanceCount: 1,
-            blockerType: null,
-            blockerLabel: "",
-            latestEvents: [],
-          },
-        };
-      }
-
-      if (url === "/api/agent-runs/run-2/summary") {
-        return {
-          ok: true,
-          data: {
-            agentRunId: "run-2",
-            taskId: "task-2",
-            taskTitle: "Task 2",
-            projectId: "proj-1",
-            projectName: "Project 1",
-            agentType: "reviewer",
-            status: "failed",
-            sessionId: "session-2",
-            modelUsed: "github-copilot:claude-opus-4.6",
-            startedAt: "2026-03-18T09:00:00.000Z",
-            finishedAt: "2026-03-18T09:10:00.000Z",
-            lastActivityAt: "2026-03-18T09:10:00.000Z",
-            durationMs: 600000,
-            blockerType: "failed",
-            blockerLabel: "执行失败待处理",
-            error: "tool crashed",
-            riskLevel: "high",
-            guidanceCount: 0,
-            latestEvents: [],
+            data: [
+              {
+                agentRunId: "run-1",
+                taskId: "task-1",
+                taskTitle: "Task 1",
+                projectId: "proj-1",
+                projectName: "Project 1",
+                agentType: "builder",
+                status: "running",
+                sessionId: "session-1",
+                modelUsed: "github-copilot:gpt-5-mini",
+                startedAt: "2026-03-18T08:00:00.000Z",
+                lastActivityAt: "2026-03-18T08:05:00.000Z",
+                durationMs: 300000,
+                guidanceCount: 1,
+                blockerType: null,
+                blockerLabel: "",
+                latestEvents: [],
+              },
+              {
+                agentRunId: "run-2",
+                taskId: "task-2",
+                taskTitle: "Task 2",
+                projectId: "proj-1",
+                projectName: "Project 1",
+                agentType: "reviewer",
+                status: "failed",
+                sessionId: "session-2",
+                modelUsed: "github-copilot:claude-opus-4.6",
+                startedAt: "2026-03-18T09:00:00.000Z",
+                finishedAt: "2026-03-18T09:10:00.000Z",
+                lastActivityAt: "2026-03-18T09:10:00.000Z",
+                durationMs: 600000,
+                blockerType: "failed",
+                blockerLabel: "执行失败待处理",
+                error: "tool crashed",
+                riskLevel: "high",
+                guidanceCount: 0,
+                latestEvents: [],
+              },
+            ],
           },
         };
       }
@@ -928,9 +899,12 @@ describe("agent control routes", () => {
       "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
     );
 
-    const response = await agentControlRoutes.request("http://localhost/overview?projectId=proj-1", {
-      headers: { Authorization: "Bearer test" },
-    });
+    const response = await agentControlRoutes.request(
+      "http://localhost/overview?projectId=proj-1",
+      {
+        headers: { Authorization: "Bearer test" },
+      },
+    );
 
     expect(response.status).toBe(200);
     const payload = await response.json();
@@ -961,81 +935,56 @@ describe("agent control routes", () => {
   });
 
   test("builds analytics payloads for agent console routes", async () => {
-    listAgentRunsMock.mockReturnValue([
-      {
-        agentRunId: "run-1",
-        subSessionId: "session-1",
-        taskId: "task-1",
-        projectId: "proj-1",
-        status: "running",
-        startedAt: Date.parse("2026-03-18T08:00:00.000Z"),
-        lastPromptAt: Date.parse("2026-03-18T08:05:00.000Z"),
-        model: { providerId: "github-copilot", modelId: "gpt-5-mini" },
-      },
-      {
-        agentRunId: "run-2",
-        subSessionId: "session-2",
-        taskId: "task-2",
-        projectId: "proj-1",
-        status: "failed",
-        startedAt: Date.parse("2026-03-18T09:00:00.000Z"),
-        finishedAt: "2026-03-18T09:10:00.000Z",
-        lastPromptAt: Date.parse("2026-03-18T09:10:00.000Z"),
-        model: { providerId: "github-copilot", modelId: "claude-opus-4.6" },
-      },
-    ]);
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url] = args as [string];
 
-      if (url === "/api/agent-runs/run-1/summary") {
+      if (url === "/api/agent-runs/summaries") {
         return {
           ok: true,
           data: {
-            agentRunId: "run-1",
-            taskId: "task-1",
-            taskTitle: "Task 1",
-            projectId: "proj-1",
-            projectName: "Project 1",
-            agentType: "builder",
-            status: "running",
-            sessionId: "session-1",
-            modelUsed: "github-copilot:gpt-5-mini",
-            startedAt: "2026-03-18T08:00:00.000Z",
-            lastActivityAt: "2026-03-18T08:05:00.000Z",
-            durationMs: 300000,
-            guidanceCount: 1,
-            blockerType: null,
-            blockerLabel: "",
-            tokenUsed: 40,
-            latestEvents: [],
-          },
-        };
-      }
-
-      if (url === "/api/agent-runs/run-2/summary") {
-        return {
-          ok: true,
-          data: {
-            agentRunId: "run-2",
-            taskId: "task-2",
-            taskTitle: "Task 2",
-            projectId: "proj-1",
-            projectName: "Project 1",
-            agentType: "reviewer",
-            status: "failed",
-            sessionId: "session-2",
-            modelUsed: "github-copilot:claude-opus-4.6",
-            startedAt: "2026-03-18T09:00:00.000Z",
-            finishedAt: "2026-03-18T09:10:00.000Z",
-            lastActivityAt: "2026-03-18T09:10:00.000Z",
-            durationMs: 600000,
-            blockerType: "failed",
-            blockerLabel: "执行失败待处理",
-            error: "tool crashed",
-            riskLevel: "high",
-            guidanceCount: 0,
-            tokenUsed: 20,
-            latestEvents: [],
+            data: [
+              {
+                agentRunId: "run-1",
+                taskId: "task-1",
+                taskTitle: "Task 1",
+                projectId: "proj-1",
+                projectName: "Project 1",
+                agentType: "builder",
+                status: "running",
+                sessionId: "session-1",
+                modelUsed: "github-copilot:gpt-5-mini",
+                startedAt: "2026-03-18T08:00:00.000Z",
+                lastActivityAt: "2026-03-18T08:05:00.000Z",
+                durationMs: 300000,
+                guidanceCount: 1,
+                blockerType: null,
+                blockerLabel: "",
+                tokenUsed: 40,
+                latestEvents: [],
+              },
+              {
+                agentRunId: "run-2",
+                taskId: "task-2",
+                taskTitle: "Task 2",
+                projectId: "proj-1",
+                projectName: "Project 1",
+                agentType: "reviewer",
+                status: "failed",
+                sessionId: "session-2",
+                modelUsed: "github-copilot:claude-opus-4.6",
+                startedAt: "2026-03-18T09:00:00.000Z",
+                finishedAt: "2026-03-18T09:10:00.000Z",
+                lastActivityAt: "2026-03-18T09:10:00.000Z",
+                durationMs: 600000,
+                blockerType: "failed",
+                blockerLabel: "执行失败待处理",
+                error: "tool crashed",
+                riskLevel: "high",
+                guidanceCount: 0,
+                tokenUsed: 20,
+                latestEvents: [],
+              },
+            ],
           },
         };
       }

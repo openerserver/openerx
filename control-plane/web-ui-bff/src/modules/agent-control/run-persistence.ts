@@ -115,6 +115,12 @@ interface ModelUsageRecord {
 }
 
 export async function createAgentRunRecord(input: CreateAgentRunRecordInput): Promise<void> {
+  if (!input.taskId.trim() || !input.agentRunId.trim() || !input.sessionId?.trim()) {
+    throw new Error(
+      "[agent-run-persistence] taskId, agentRunId, and sessionId are required to create a run",
+    );
+  }
+
   const authorization = await createInternalAuthorization();
   const response = await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}/runs`, {
     method: "POST",
@@ -135,9 +141,8 @@ export async function createAgentRunRecord(input: CreateAgentRunRecordInput): Pr
   });
 
   if (!response.ok) {
-    console.warn(
-      `[agent-run-persistence] failed to create agent run ${input.agentRunId} for task ${input.taskId}:`,
-      response.data,
+    throw new Error(
+      `[agent-run-persistence] failed to create agent run ${input.agentRunId} for task ${input.taskId}: status=${response.status} body=${JSON.stringify(response.data)}`,
     );
   }
 }

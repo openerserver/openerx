@@ -17,7 +17,7 @@
 - test:ui:file 兼容旧写法 ../../tests/web-ui/...，但新命令统一使用根目录相对路径 tests/web-ui/....
 - Phase 2 实时链路回归可直接运行 bun run test:bff:realtime-regression；它会顺序执行 BFF 侧 realtime 单测、completion-sync 集成和 hooks 集成，避免 Bun 跨文件 mock 串扰。
 - 付费执行治理相关的强 mock BFF 回归可直接运行 bun run test:bff:paid-execution-regression；它会按单文件顺序执行 lifecycle hooks、realtime pipeline、project preflight、integration guard 与 judge usage 几组用例，避免 Bun 在同一进程里复用模块 mock 导致串扰。
-- BFF 默认全量测试 bun run test:bff 或 bun run test:all 会按单文件顺序执行 tests/web-ui-bff 下的 Bun 测试，避免跨文件 mock 串扰和 Bun 并发导致的 137 假性卡死；它仍不包含 RUN_EXECUTION_INTEGRATION 门控的真实执行集成用例。
+- BFF 默认全量测试 bun run test:bff 或 bun run test:all 会按单文件顺序执行 tests/web-ui-bff 下的 Bun 单元/强 mock 测试，避免跨文件 mock 串扰和 Bun 并发导致的 137 假性卡死；它默认跳过需要本地 BFF/Control Plane 服务的 live 文件。如需把这些 live 文件纳入同一顺序脚本，显式设置 RUN_BFF_LIVE_TESTS=1。
 - 如需运行完整的 BFF 执行集成通道，使用 bun run test:bff:execution-integration；它会顺序执行 identity execute、completion sync、hooks integration、workflow evaluation 四组真实执行用例。
 - 如需只跑某一组真实执行用例，可在 control-plane/web-ui-bff 下分别运行 bun run test:integration:identity-execute、bun run test:integration:completion-sync、bun run test:integration:hooks、bun run test:integration:workflow-evaluation。
 - 这组真实执行用例默认只要求 RUN_EXECUTION_INTEGRATION=1，并会统一从设置页的测试模型策略读取受控模型；当前强制允许的测试模型只有 github-copilot:gpt-5-mini 和 github-copilot:gpt-4o。
@@ -34,7 +34,7 @@
 命名约定：
 
 - `execution-trace-contract` 只用于 task/project 两条公开 execution trace route 的 contract 测试与 helper；它关注 projection-first、restricted secondary source、显式 incomplete，以及“不触碰 prompt backfill / public trace fallback”这类公开读面语义。
-- `session-message-compatibility` 只用于非公开 session consumer 的 contract 测试与 helper；它关注 lineage messages、cached messages、runtime session message fallback，以及“不得误触公开 execution trace route”这类兼容读面语义。
+- `session-message-compatibility` 只用于非公开 session consumer 的 contract 测试与 helper；它关注 lineage messages、cached messages、persisted session message compatibility，以及“不得误触公开 execution trace route”这类兼容读面语义。
 - 若某个测试主体是 branch lineage、session preview、runtime pipeline、reconcile、adapter finalization 这类内部/非公开读面，应优先复用 `tests/web-ui-bff/session-message-compatibility-test-helpers.ts`，而不是引用 `execution-trace-contract` 术语。
 - 若某个测试主体是 task/project 的 `/execution-trace` 或其公开聚合响应，应优先复用 `tests/web-ui-bff/execution-trace-contract-test-helpers.ts`，不要把它命名成 session compatibility。
 - `realtime-pipeline-events.test.ts` 这类 realtime 测试可以局部包含非公开 session consumer 断言，例如 completion/finalization 读取 session messages；这类场景可以接入 `session-message-compatibility` helper，但文件整体仍应以 realtime/event emitter 语义命名。

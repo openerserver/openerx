@@ -451,10 +451,7 @@ function hasDisplayTextPart(parts: Array<Record<string, unknown>>) {
   });
 }
 
-function shouldSuppressAssistantTextFallback(
-  role: string,
-  parts: Array<Record<string, unknown>>,
-) {
+function shouldSuppressAssistantTextFallback(role: string, parts: Array<Record<string, unknown>>) {
   return role === "assistant" && hasTypedThinkingPart(parts) && !hasDisplayTextPart(parts);
 }
 
@@ -546,9 +543,7 @@ function extractStructuredReadPreview(output: unknown) {
       return null;
     }
 
-    const filePath = normalizeWorkspaceFilePath(
-      asString(record.path) ?? asString(record.filePath),
-    );
+    const filePath = normalizeWorkspaceFilePath(asString(record.path) ?? asString(record.filePath));
     const rawContent =
       extractReadOutputText(record.content) ?? extractReadOutputText(record.entries);
 
@@ -941,10 +936,7 @@ export function collectLiveAssistantState(
     }
 
     if (partType === "thinking" || partType === "reasoning") {
-      thinkingById.set(
-        messageId,
-        mergeStreamingText(thinkingById.get(messageId), incomingText),
-      );
+      thinkingById.set(messageId, mergeStreamingText(thinkingById.get(messageId), incomingText));
     }
   };
 
@@ -997,12 +989,12 @@ export function normalizeMessage(
     normalizeText(parts) ??
     (suppressAssistantTextFallback
       ? undefined
-      : asString(record?.textContent) ??
+      : (asString(record?.textContent) ??
         asString(record?.contentText) ??
         asString(record?.summaryText) ??
         asString(record?.text) ??
         asString(record?.content) ??
-        asString(info?.preview));
+        asString(info?.preview)));
   const liveText = liveState.textById.get(key);
   const liveThinkingText = liveState.thinkingById.get(key);
   const text =
@@ -1029,18 +1021,13 @@ export function normalizeMessage(
   const rawFinalSentText = asString(record?.finalSentText);
   const normalizedUserInputText =
     role === "user"
-      ? extractWrappedOriginalTaskText(rawUserInputText) ??
+      ? (extractWrappedOriginalTaskText(rawUserInputText) ??
         extractWrappedOriginalTaskText(rawFinalSentText) ??
         extractWrappedOriginalTaskText(text) ??
-        rawUserInputText
+        rawUserInputText)
       : rawUserInputText;
 
-  if (
-    !text &&
-    !thinkingText &&
-    toolCalls.length === 0 &&
-    !isStreaming
-  ) {
+  if (!text && !thinkingText && toolCalls.length === 0 && !isStreaming) {
     return null;
   }
 
@@ -1081,7 +1068,7 @@ export function normalizeSessionConversationItems(
 
 /**
  * Detect and extract workflow group items from raw API messages.
- * Workflow groups are synthetic items produced by the BFF runtime fallback
+ * Workflow groups are synthetic items produced by persisted task-session reads
  * with `_type: "workflow_group"` and `info.role: "workflow"`.
  */
 export function normalizeWorkflowGroup(message: unknown): TaskConversationWorkflowItem | null {

@@ -640,8 +640,8 @@ export function createTaskPhaseWriteApi(deps: {
     await db
       .update(taskSessions)
       .set({
-        executionStatus: "paused",
-        status: "paused",
+        executionStatus: "running",
+        status: "interrupted",
         updatedAt: now,
       })
       .where(and(eq(taskSessions.taskId, args.taskId), eq(taskSessions.phaseId, args.phaseId)));

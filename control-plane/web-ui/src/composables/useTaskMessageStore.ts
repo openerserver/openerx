@@ -3,6 +3,7 @@ import {
   createEmptyLiveAssistantState,
   normalizeMessage,
   normalizeWorkflowGroup,
+  type LiveAssistantState,
   type TaskConversationListItem,
   type TaskConversationMessageItem,
   type TaskConversationWorkflowItem,

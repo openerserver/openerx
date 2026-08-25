@@ -411,12 +411,12 @@ const knownModelValues = computed(() => {
 const canValidateDefaultModel = computed(() => knownModelValues.value.size > 0);
 
 const hasInvalidDefaultModel = computed(() => {
-  const currentModel = form.defaultModel.trim();
+  const currentModel = (form.defaultModel ?? "").trim();
   return Boolean(currentModel) && canValidateDefaultModel.value && !knownModelValues.value.has(currentModel);
 });
 
 const modelOptions = computed(() => {
-  const currentModel = form.defaultModel || "";
+  const currentModel = form.defaultModel ?? "";
   const options = (modelsData.value?.list || [])
     .map((model) => {
       const id = typeof model.id === "string" ? model.id : "";

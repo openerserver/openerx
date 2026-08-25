@@ -20,7 +20,7 @@ describe("useTaskExecutionTrace", () => {
     apiMocks.getTaskExecutionTraceView.mockReset();
   });
 
-  it("surfaces runtime read source in summary items", async () => {
+  it("surfaces session projection read source in summary items", async () => {
     apiMocks.getTaskExecutionTraceView.mockResolvedValue({
       taskId: "task-1",
       sessionId: "session-1",
@@ -41,7 +41,7 @@ describe("useTaskExecutionTrace", () => {
       ],
       hookExecutions: [],
       timelineMeta: {
-        readSource: "runtime-fallback",
+        readSource: "task-session-projection",
         complete: true,
         snapshotVersion: 4,
         persistedThroughRevision: 5,
@@ -57,7 +57,7 @@ describe("useTaskExecutionTrace", () => {
     expect(state.summaryItems.value).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "追踪范围", value: "当前任务" }),
-        expect.objectContaining({ label: "时间线来源", value: "运行时回退" }),
+        expect.objectContaining({ label: "时间线来源", value: "会话投影" }),
       ]),
     );
     expect(state.summaryItems.value).not.toEqual(

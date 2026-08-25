@@ -377,7 +377,7 @@ describe("Task conversation composables", () => {
     });
   });
 
-  it("keeps user prompts visible when execution trace falls back to runtime messages", async () => {
+  it("keeps user prompts visible when execution trace uses persisted messages", async () => {
     apiMocks.getTaskExecutionTraceView.mockResolvedValue({
       taskId: "task-1",
       sessionId: "session-1",
@@ -453,7 +453,7 @@ describe("Task conversation composables", () => {
       ],
       timeline: [],
       timelineMeta: {
-        readSource: "runtime-fallback",
+        readSource: "task-session-projection",
         cacheState: "complete",
         complete: true,
         includeLineage: true,

@@ -319,10 +319,10 @@ export function buildPhaseParallelRuns(args: {
   phaseViews: TaskPhaseViewRecord[];
   agentRuns: TaskAgentRunRecord[];
   configuredCandidates?: ConfiguredParallelCandidate[];
-}) {
+}): ProjectionRunRecord[] {
   return args.phases
     .filter((phase) => phase.phaseKind === "parallel")
-    .map((phase) => {
+    .map((phase): ProjectionRunRecord | null => {
       const phaseView = findPhaseView(phase.id, args.phaseViews);
       if (!phaseView) {
         return null;

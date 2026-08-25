@@ -272,7 +272,18 @@ describe("task branch write", () => {
     const result = await api.activateTaskBranch("task-1", "branch-node-1");
 
     expect(result.ok).toBe(true);
-    expect(syncTaskBranchCompatTreeNode).not.toHaveBeenCalled();
+    expect(syncTaskBranchCompatTreeNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "task-1",
+        runtimeSessionId: "fork-session-1",
+        parentRuntimeSessionId: "root-session-1",
+        forkedFromMessageId: "msg-activate-1",
+        branchName: "feature/fork-activate",
+        sourceType: "fork",
+        isActive: true,
+        archivedAt: null,
+      }),
+    );
 
     expect(upsertConversationSessionRecord).toHaveBeenCalledWith(
       expect.objectContaining({

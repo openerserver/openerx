@@ -64,9 +64,11 @@ describe("continue latency tracer", () => {
     });
 
     noteContinueLatencyRuntimeEvent("session-1", "agent_start");
-    noteContinueLatencyRuntimeEvent("session-1", "message_start");
+    noteContinueLatencyRuntimeEvent("session-1", "message_start", { role: "assistant" });
     noteContinueLatencyTaskDomainEvent("session-1", "task.snapshot.updated");
-    noteContinueLatencyTaskDomainEvent("session-1", "task.message.updated");
+    noteContinueLatencyTaskDomainEvent("session-1", "task.message.updated", {
+      role: "assistant",
+    });
 
     const trace = __peekContinueLatencyTraceForTests("session-1");
     expect(trace).toMatchObject({
@@ -93,8 +95,8 @@ describe("continue latency tracer", () => {
     });
 
     noteContinueLatencyRuntimeEvent("session-2", "agent_start");
-    noteContinueLatencyRuntimeEvent("session-2", "message_update");
-    noteContinueLatencyTaskDomainEvent("session-2", "task.message.delta");
+    noteContinueLatencyRuntimeEvent("session-2", "message_update", { role: "assistant" });
+    noteContinueLatencyTaskDomainEvent("session-2", "task.message.delta", { partType: "text" });
     noteContinueLatencyTaskDomainEvent("session-2", "task.message.updated");
 
     const trace = __peekContinueLatencyTraceForTests("session-2");
@@ -102,7 +104,7 @@ describe("continue latency tracer", () => {
       firstRawRuntimeEventType: "agent_start",
       firstAssistantRuntimeEventType: "message_update",
       firstTaskDomainEventType: "task.message.delta",
-      firstTaskMessageEventType: "task.message.delta",
+      firstTaskMessageEventType: "task.message.delta:text",
     });
   });
 

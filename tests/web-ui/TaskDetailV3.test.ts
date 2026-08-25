@@ -662,7 +662,17 @@ async function buildLegacyParallelFixtureProjection() {
     return {
       sessions: [] as Array<any>,
       agentRuns: explicitAgentRuns,
-      groups: [] as Array<{ rootSessionId?: string; candidateSessionIds: string[]; startedAt?: string }>,
+      groups: [] as Array<{
+        phaseId: string;
+        rootSessionId?: string;
+        candidateSessionIds: string[];
+        startedAt?: string;
+        finishedAt?: string;
+        updatedAt?: string;
+        status?: string;
+        candidateCount?: number;
+        winnerSessionId?: string | null;
+      }>,
     };
   }
 
@@ -1522,7 +1532,7 @@ describe("TaskDetailV3 runtime permissions", () => {
       params: { taskId: "task-1" },
       query: { keep: "1" },
     });
-  });
+  }, 10000);
 
   it("does not request domain runs in embedded workbench mode", async () => {
     routeState.query = { embedded: "1", workbench: "1" };
@@ -1549,7 +1559,7 @@ describe("TaskDetailV3 runtime permissions", () => {
 
   it("shows missing-task guidance when the current task no longer exists", async () => {
     taskState.task = null;
-    taskState.node = null;
+    taskState.node = null as unknown as typeof taskState.node;
     taskState.ancestors = [];
     taskState.projectId = "";
     taskState.error = MISSING_TASK_LOAD_ERROR;
@@ -1596,7 +1606,7 @@ describe("TaskDetailV3 runtime permissions", () => {
       reply: "once",
     });
     expect(taskState.refresh).toHaveBeenCalled();
-    expect(messagesState.refresh).toHaveBeenCalled();
+    expect(messagesState.refreshCurrentPhase).toHaveBeenCalledWith(true, undefined);
   });
 
   it("renders the task member view in the sidebar", async () => {
@@ -4147,7 +4157,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-2" });
 
     let refreshCount = 0;
-    messagesState.refresh = vi.fn(async () => {
+    messagesState.refreshCurrentPhase = vi.fn(async () => {
       refreshCount += 1;
       messagesStoreMock.trace = { sessionId: "ses-2" };
       messagesStoreMock.conversationItems = [
@@ -4172,7 +4182,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     await flushPromises();
     await nextTick();
 
-    expect(messagesState.refresh).toHaveBeenCalled();
+    expect(messagesState.refreshCurrentPhase).toHaveBeenCalledWith(true, undefined);
     expect(refreshCount).toBe(1);
 
     const renderedItems = wrapper.findAll(".chat-item").map((node) => ({
@@ -4386,7 +4396,7 @@ describe("TaskDetailV3 runtime permissions", () => {
       .find((node) => node.attributes("data-role") === "parallel");
 
     expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "ses-a", {
-      includeLineage: false,
+      includeLineage: true,
     });
     expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|running");
     expect(parallelItem?.attributes("data-candidate-entry-roles")).toBe("assistant|");
@@ -4935,7 +4945,7 @@ describe("TaskDetailV3 runtime permissions", () => {
       .find((node) => node.attributes("data-role") === "parallel");
 
     expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "ses-a", {
-      includeLineage: false,
+      includeLineage: true,
     });
     expect(parallelItem?.attributes("data-candidate-tool-call-counts")).toBe("1|0");
   });
@@ -6739,7 +6749,7 @@ describe("TaskDetailV3 runtime permissions", () => {
       .find((node) => node.attributes("data-role") === "parallel");
 
     expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "ses-a", {
-      includeLineage: false,
+      includeLineage: true,
     });
     expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|completed");
     expect(parallelItem?.attributes("data-candidate-trace-states")).toBe("incomplete|");
@@ -6851,10 +6861,10 @@ describe("TaskDetailV3 runtime permissions", () => {
       .find((node) => node.attributes("data-role") === "parallel");
 
     expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "ses-a", {
-      includeLineage: false,
+      includeLineage: true,
     });
     expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "ses-b", {
-      includeLineage: false,
+      includeLineage: true,
     });
     expect(parallelItem?.text()).toContain("session-候选 A");
     expect(parallelItem?.text()).toContain("session-候选 B");

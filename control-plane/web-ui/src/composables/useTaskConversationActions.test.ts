@@ -1,6 +1,10 @@
 import { effectScope, nextTick, ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TaskExecutionTrace, TaskSessionRecord } from "../lib/api";
+import type {
+  TaskExecutionReconcileEnvelope,
+  TaskExecutionTrace,
+  TaskSessionRecord,
+} from "../lib/api";
 import type { TaskConversationListItem } from "../lib/message-normalize";
 import { useTaskConversationActions } from "./useTaskConversationActions";
 
@@ -93,7 +97,7 @@ describe("useTaskConversationActions", () => {
     const refreshTask = vi.fn(async () => undefined);
     const refreshSessions = vi.fn(async () => undefined);
     const refreshTaskSnapshot = vi.fn(async () => undefined);
-    const reconcileExecutionEnvelope = vi.fn(async (envelope?: Record<string, unknown> | null) => {
+    const reconcileExecutionEnvelope = vi.fn(async (envelope?: TaskExecutionReconcileEnvelope | null) => {
       const nextSessionId =
         envelope && typeof envelope.nextSessionId === "string" ? envelope.nextSessionId : undefined;
       if (nextSessionId) {

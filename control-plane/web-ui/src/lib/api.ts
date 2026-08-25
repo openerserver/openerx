@@ -942,7 +942,14 @@ export interface TaskPhaseRecord {
     | "candidate_adopt"
     | "manual_branch"
     | "hook_spawn";
-  status: "pending" | "running" | "paused" | "awaiting_adoption" | "completed" | "failed" | "cancelled";
+  status:
+    | "pending"
+    | "running"
+    | "paused"
+    | "awaiting_adoption"
+    | "completed"
+    | "failed"
+    | "cancelled";
   parentPhaseId?: string | null;
   resumedFromPhaseId?: string | null;
   awaitingAdoptionSince?: string | null;
@@ -989,7 +996,10 @@ export interface TaskPhaseMessageGroupRecord {
   title?: string | null;
   selectedModel?: string | null;
   executionStatus?: string | null;
-  timelineMeta?: Pick<ExecutionTraceTimelineMeta, "cacheState" | "complete" | "itemCount" | "reconcileRequired">;
+  timelineMeta?: Pick<
+    ExecutionTraceTimelineMeta,
+    "cacheState" | "complete" | "itemCount" | "reconcileRequired"
+  >;
   messages: unknown[];
 }
 
@@ -1100,12 +1110,7 @@ export interface ProjectSettings {
 }
 
 export type ProjectModelFundStatus = "active" | "depleted";
-export type ProjectModelFundLedgerType =
-  | "grant"
-  | "reserve"
-  | "consume"
-  | "refund"
-  | "adjust";
+export type ProjectModelFundLedgerType = "grant" | "reserve" | "consume" | "refund" | "adjust";
 
 export interface ProjectModelFund {
   id: string | null;
@@ -1574,6 +1579,7 @@ export async function getTaskPipeline(taskId: string, sessionId?: string) {
 export interface SessionInfo {
   id: string;
   taskSessionId?: string | null;
+  runtimeSessionId?: string | null;
   phaseId?: string | null;
   phaseRole?: string | null;
   phaseItemIndex?: number | null;
@@ -1629,12 +1635,7 @@ export interface TaskRoundListDto {
 }
 
 export type TaskRoundMessageRole = "user" | "assistant" | "tool" | "system";
-export type TaskRoundMessageStatus =
-  | "pending"
-  | "streaming"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type TaskRoundMessageStatus = "pending" | "streaming" | "completed" | "failed" | "cancelled";
 export type TaskRoundMessagePartType =
   | "text"
   | "thinking"
@@ -1657,7 +1658,7 @@ export interface TaskRoundMessageDto {
   sessionId: string;
   role: TaskRoundMessageRole;
   status: TaskRoundMessageStatus;
-  text: string;
+  text: string | null;
   errorText?: string | null;
   parts: TaskRoundMessagePartDto[];
   createdAt: string;
@@ -1705,6 +1706,9 @@ export interface TaskTreeSessionRecord {
   taskId: string;
   parentSessionId?: string | null;
   runtimeSessionId?: string | null;
+  phaseId?: string | null;
+  phaseRole?: string | null;
+  phaseItemIndex?: number | null;
   coordinationKey?: string | null;
   sessionKind?: string | null;
   sessionType?: string | null;
@@ -1713,6 +1717,7 @@ export interface TaskTreeSessionRecord {
   stepIndex?: number | null;
   selectedModel?: string | null;
   winnerSessionId?: string | null;
+  isActive?: boolean;
   sourceMessageId?: string | null;
   userPromptSummary?: string | null;
   headMessageId?: string | null;
@@ -2312,7 +2317,10 @@ function projectTaskTreeToSessionSummaries(
   const currentSessionId = tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined;
   const sessions = Array.isArray(tree.sessions) ? tree.sessions : [];
   const runtimeSessionIdByTaskSessionId = new Map(
-    sessions.map((session) => [session.id, asTaskTreeString(session.runtimeSessionId) ?? session.id]),
+    sessions.map((session) => [
+      session.id,
+      asTaskTreeString(session.runtimeSessionId) ?? session.id,
+    ]),
   );
 
   return sessions
@@ -2332,7 +2340,8 @@ function projectTaskTreeToSessionSummaries(
         phaseRole: asTaskTreeString(session.phaseRole) ?? null,
         phaseItemIndex: typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
         parentRuntimeSessionId: session.parentSessionId
-          ? (runtimeSessionIdByTaskSessionId.get(session.parentSessionId) ?? session.parentSessionId)
+          ? (runtimeSessionIdByTaskSessionId.get(session.parentSessionId) ??
+            session.parentSessionId)
           : null,
         title: promptSummary,
         isActive: runtimeSessionId === currentSessionId || session.id === currentSessionId,
@@ -2388,8 +2397,7 @@ function projectTaskSessionListToSummaries(
         taskSessionId,
         phaseId: asTaskTreeString(session.phaseId) ?? null,
         phaseRole: asTaskTreeString(session.phaseRole) ?? null,
-        phaseItemIndex:
-          typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
+        phaseItemIndex: typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
         parentRuntimeSessionId,
         title,
         isActive,
@@ -2778,19 +2786,16 @@ export async function continueTask(
   return request<
     TaskPhaseExecutionEnvelope &
       TaskExecutionActionResponse & {
-      parentSessionId?: string;
-      parentTaskSessionId?: string | null;
-      executionMode?: ExecutionMode;
-      candidates?: ProjectionRunCandidate[];
-      round?: TaskRoundDto;
-    }
-  >(
-    `/tasks/${taskId}/continue`,
-    {
-      method: "POST",
-      body: JSON.stringify({ prompt, sessionId, executionMode }),
-    },
-  );
+        parentSessionId?: string;
+        parentTaskSessionId?: string | null;
+        executionMode?: ExecutionMode;
+        candidates?: ProjectionRunCandidate[];
+        round?: TaskRoundDto;
+      }
+  >(`/tasks/${taskId}/continue`, {
+    method: "POST",
+    body: JSON.stringify({ prompt, sessionId, executionMode }),
+  });
 }
 
 export async function forkTaskSession(
@@ -3679,12 +3684,9 @@ export async function archiveProject(projectId: string) {
 }
 
 export async function deleteProject(projectId: string) {
-  return request<{ ok: boolean; id: string; deletedTaskCount?: number }>(
-    `/projects/${projectId}`,
-    {
-      method: "DELETE",
-    },
-  );
+  return request<{ ok: boolean; id: string; deletedTaskCount?: number }>(`/projects/${projectId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function executeTask(
@@ -3716,18 +3718,21 @@ export async function adoptParallelCandidate(
 ) {
   return request<
     TaskExecutionActionResponse & { ok: boolean; phaseId: string; winnerCandidateIndex: number }
-  >(
-    `/tasks/${taskId}/phases/${encodeURIComponent(phaseId)}/candidates/${candidateIndex}/adopt`,
-    {
-      method: "POST",
-    },
-  );
+  >(`/tasks/${taskId}/phases/${encodeURIComponent(phaseId)}/candidates/${candidateIndex}/adopt`, {
+    method: "POST",
+  });
 }
 
 export async function cancelTaskPhase(
   taskId: string,
   phaseId: string,
-  reason: "winner_adopted" | "user_cancelled" | "runtime_terminated" | "runtime_failed" | "timeout" | "superseded" = "user_cancelled",
+  reason:
+    | "winner_adopted"
+    | "user_cancelled"
+    | "runtime_terminated"
+    | "runtime_failed"
+    | "timeout"
+    | "superseded" = "user_cancelled",
 ) {
   return request<{ ok: boolean; phaseId: string; status?: string }>(
     `/tasks/${taskId}/phases/${encodeURIComponent(phaseId)}/cancel`,
@@ -5392,8 +5397,8 @@ export type ExecutionTraceReadSource =
   | "task-domain-events"
   | "conversation-table+task-domain-events"
   | "task-session-first"
+  | "task-phase-first"
   | "task-session-projection"
-  | "runtime-fallback"
   | "task-domain-projection";
 
 export interface ExecutionTraceTimelineMeta {

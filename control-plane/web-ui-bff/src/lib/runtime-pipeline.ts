@@ -1,4 +1,4 @@
-import { getSessionMessages } from "../modules/agent-control/runtime-provider";
+import { fetchTaskSessionCachedCompatMessages } from "../modules/tasks/task-session-read-compat";
 import { cpFetch } from "./control-plane-client";
 import {
   type ExecutionCandidate,
@@ -480,10 +480,17 @@ async function loadRuntimePipelineResources(args: {
     args.prefetchedMessages
       ? Promise.resolve({ ok: true, data: args.prefetchedMessages } as const)
       : args.requestedSessionId
-        ? getSessionMessages(args.requestedSessionId, {
-            taskId: args.taskId,
-            authorization: args.authorization,
-          })
+        ? fetchTaskSessionCachedCompatMessages(
+            args.taskId,
+            args.requestedSessionId,
+            args.authorization,
+            {
+              includeLineage: false,
+            },
+          ).then((result) => ({
+            ok: result.ok,
+            data: Array.isArray(result.data?.data) ? result.data.data : [],
+          }))
         : Promise.resolve({ ok: false } as const),
   ]);
 
@@ -492,10 +499,7 @@ async function loadRuntimePipelineResources(args: {
 
 function resolveRuntimePipelineResources(args: {
   lineageResult: Awaited<ReturnType<typeof cpFetch<ServiceTaskSessionListResponse>>>;
-  messagesResult:
-    | { ok: true; data: unknown[] }
-    | { ok: false }
-    | Awaited<ReturnType<typeof getSessionMessages>>;
+  messagesResult: { ok: boolean; data?: unknown[] };
   requestedSessionId?: string;
   task: TaskRecord;
 }) {

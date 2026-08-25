@@ -1,9 +1,15 @@
-export function buildTaskRouteRegistrationsFromBuilders<TShared>(builders: {
+export function buildTaskRouteRegistrationsFromBuilders<
+  TShared,
+  TCore,
+  TAgentRunWrites,
+  TSessions,
+  TProjections,
+>(builders: {
   buildShared: () => TShared;
-  buildCore: (shared: TShared) => unknown;
-  buildAgentRunWrites: (shared: TShared) => unknown;
-  buildSessions: (shared: TShared) => unknown;
-  buildProjections: (shared: TShared) => unknown;
+  buildCore: (shared: TShared) => TCore;
+  buildAgentRunWrites: (shared: TShared) => TAgentRunWrites;
+  buildSessions: (shared: TShared) => TSessions;
+  buildProjections: (shared: TShared) => TProjections;
 }) {
   const shared = builders.buildShared();
 

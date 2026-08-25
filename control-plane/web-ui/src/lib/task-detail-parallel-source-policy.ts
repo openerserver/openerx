@@ -12,7 +12,8 @@ export type ParallelCandidateSessionState = {
 type ParallelCandidateFallbackState = Pick<
   ParallelCandidateSessionState,
   "items" | "hasSettledReply"
->;
+> &
+  Partial<Pick<ParallelCandidateSessionState, "traceState">>;
 
 type ParallelCandidateDisplaySource = "phase-view" | "session";
 
@@ -87,7 +88,7 @@ function hasTraceState(traceState?: ParallelCandidateTraceState | null) {
 
 function resolvePhaseBaselineTraceState(
   displaySource: ParallelCandidateDisplaySource,
-  phaseBaseline?: ParallelCandidateSessionState | Pick<ParallelCandidateSessionState, "traceState">,
+  phaseBaseline?: { traceState?: ParallelCandidateTraceState },
 ) {
   if (displaySource !== "phase-view") {
     return undefined;

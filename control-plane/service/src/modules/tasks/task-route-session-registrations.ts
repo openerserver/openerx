@@ -62,6 +62,7 @@ export function buildTaskSessionRegistrations(
     listTaskPhases: shared.phaseWriteApi.listTaskPhases,
     upsertTaskPhase: shared.phaseWriteApi.upsertTaskPhase,
     adoptTaskPhase: shared.phaseWriteApi.adoptTaskPhase,
+    pauseTaskPhase: shared.phaseWriteApi.pauseTaskPhase,
     cancelTaskPhase: shared.phaseWriteApi.cancelTaskPhase,
     resumeTaskPhase: shared.phaseWriteApi.resumeTaskPhase,
     activateTaskSession: shared.branchWriteApi.activateTaskBranch,

@@ -96,6 +96,7 @@ describe("useTaskConversationFeature", () => {
           refreshTask: vi.fn(async () => undefined),
           refreshSessions: vi.fn(async () => undefined),
           refreshTaskSnapshot: vi.fn(async () => undefined),
+          reconcileExecutionEnvelope: vi.fn(async () => undefined),
           seedPendingAssistantDraft: vi.fn(),
         },
         messageTrace,

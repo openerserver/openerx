@@ -378,7 +378,7 @@ describe("task message/session projection", () => {
   it("keeps an explicitly requested child session on direct session-first reads", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/tasks/task-1/sessions/ses-child/messages") {
+      if (url === "/api/tasks/task-1/query/normalized-conversation?sessionId=ses-child") {
         return {
           ok: true,
           status: 200,

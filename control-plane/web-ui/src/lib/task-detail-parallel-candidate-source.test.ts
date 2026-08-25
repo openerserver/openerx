@@ -17,7 +17,7 @@ function buildAssistantItem(key: string, text: string) {
     toolCalls: [],
     raw: null,
     createdAt: "2026-04-16T03:44:49.000Z",
-  } as const;
+  };
 }
 
 function buildUserItem(key: string, text: string) {
@@ -29,7 +29,7 @@ function buildUserItem(key: string, text: string) {
     toolCalls: [],
     raw: null,
     createdAt: "2026-04-16T03:44:35.000Z",
-  } as const;
+  };
 }
 
 describe("task-detail-parallel-candidate-source", () => {
@@ -39,7 +39,7 @@ describe("task-detail-parallel-candidate-source", () => {
   });
 
   it("keeps the cached candidate display during silent refresh progress", async () => {
-    let resolveTrace: ((value: unknown) => void) | null = null;
+    let resolveTrace: (value: unknown) => void = () => undefined;
     getTaskConversationMessagesMock.mockResolvedValue({
       data: [buildUserItem("user-1", "pi-monorepo 项目 是什么？")],
     });
@@ -84,7 +84,7 @@ describe("task-detail-parallel-candidate-source", () => {
       }),
     );
 
-    resolveTrace?.({
+    resolveTrace({
       taskId: "task-1",
       sessionId: "candidate-1",
       latestResponse: "trace reply",

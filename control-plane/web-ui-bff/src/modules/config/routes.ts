@@ -150,7 +150,7 @@ export function setConfiguredPluginState(
 ): void {
   config.plugin = [...new Set(activePaths)];
   config._disabledPlugins = [...new Set(disabledPaths)];
-  config.plugins = undefined;
+  delete config.plugins;
 }
 
 function validateModelsPayload(list: Array<Record<string, unknown>>): string | null {

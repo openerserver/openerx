@@ -190,6 +190,9 @@ function resetAggregatorState() {
     sessionToCandidateMap: Map<string, { taskId: string; candidateIndex: number }>;
     sequentialChainTasks: Map<string, unknown>;
     sessionToChainStepMap: Map<string, unknown>;
+    sessionToTaskCache: Map<string, { taskId: string; projectId?: string }>;
+    pendingSessionLookups: Map<string, Promise<{ taskId: string; projectId?: string } | null>>;
+    pendingUnresolvedRuntimeEvents: Array<Record<string, unknown>>;
     judgingTasks: Set<string>;
     paidExecutionRuntime: Map<string, { tripped: boolean; reason?: string }>;
   };
@@ -202,6 +205,9 @@ function resetAggregatorState() {
   aggregator.sessionToCandidateMap.clear();
   aggregator.sequentialChainTasks.clear();
   aggregator.sessionToChainStepMap.clear();
+  aggregator.sessionToTaskCache.clear();
+  aggregator.pendingSessionLookups.clear();
+  aggregator.pendingUnresolvedRuntimeEvents.splice(0);
   aggregator.judgingTasks.clear();
   aggregator.paidExecutionRuntime.clear();
 }
@@ -290,6 +296,100 @@ beforeEach(() => {
 });
 
 describe("SSEAggregator pipeline emitters", () => {
+  test("runtime events without task mapping stay pending and do not emit product events", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue(undefined);
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/tasks/lookup/session-task/orphan-session") {
+        return { ok: false, status: 404, data: {} };
+      }
+      return { ok: true, status: 200, data: {} };
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "orphan-session",
+        info: {
+          id: "msg-orphan",
+          role: "assistant",
+          time: { created: 1774794038540 },
+        },
+      });
+      await flushBackgroundPersistencePipeline();
+
+      expect(emitted).toHaveLength(0);
+      expect(
+        cpFetchMock.mock.calls.some(
+          ([url, options]) =>
+            url === "/api/tasks/task-1/sessions/messages" &&
+            (options as { method?: string } | undefined)?.method === "POST",
+        ),
+      ).toBe(false);
+
+      const aggregator = sseAggregator as unknown as {
+        pendingUnresolvedRuntimeEvents: Array<Record<string, unknown>>;
+      };
+      expect(aggregator.pendingUnresolvedRuntimeEvents).toEqual([
+        expect.objectContaining({
+          reason: "unmapped_session",
+          sessionId: "orphan-session",
+          type: "message.updated",
+        }),
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("runtime events resolved through service lookup emit with task context", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue(undefined);
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/tasks/lookup/session-task/ses-db") {
+        return { ok: true, status: 200, data: { taskId: "task-1", projectId: "proj-1" } };
+      }
+      return { ok: true, status: 200, data: {} };
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "ses-db",
+        info: {
+          id: "msg-db",
+          role: "assistant",
+          time: { created: 1774794038540 },
+        },
+      });
+
+      expect(emitted).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "task.message.updated",
+            taskId: "task-1",
+            projectId: "proj-1",
+            sessionId: "ses-db",
+          }),
+          expect.objectContaining({
+            type: "message.updated",
+            taskId: "task-1",
+            projectId: "proj-1",
+            sessionId: "ses-db",
+          }),
+        ]),
+      );
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("session.status events are forwarded with runtime burst metadata", async () => {
     findAgentRunBySessionIdMock.mockReturnValue({
       subSessionId: "ses-1",

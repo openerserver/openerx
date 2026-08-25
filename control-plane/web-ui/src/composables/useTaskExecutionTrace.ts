@@ -111,8 +111,6 @@ function buildTraceReadSourceLabel(
       return { value: "会话表+领域事件", tone: "default" };
     case "task-session-first":
       return { value: "会话时间线", tone: "default" };
-    case "runtime-fallback":
-      return { value: "运行时回退", tone: "warning" };
     default:
       return { value: "未知", tone: "default" };
   }

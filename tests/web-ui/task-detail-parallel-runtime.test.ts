@@ -84,7 +84,7 @@ describe("task detail parallel runtime visibility", () => {
         id: "task-1",
         sessionId: "task-main-session",
       },
-    });
+    } as any);
 
     expect(visibleRuns.map((run) => run.parallelRunId)).toEqual(["run-old", "run-current"]);
   });
@@ -172,7 +172,7 @@ describe("task detail parallel runtime visibility", () => {
         id: "task-1",
         sessionId: "task-main-session",
       },
-    });
+    } as any);
 
     expect(visibleRuns.map((run) => run.parallelRunId)).toEqual(["run-current"]);
   });
@@ -196,7 +196,7 @@ describe("task detail parallel runtime visibility", () => {
       currentParallelRun: null,
       adoptedCandidateSessionId: undefined,
       isCurrentParallelRunPendingAdoption: false,
-    });
+    } as any);
 
     expect(nextSessionId).toBe("child-1");
   });
@@ -220,7 +220,7 @@ describe("task detail parallel runtime visibility", () => {
       currentParallelRun: null,
       adoptedCandidateSessionId: undefined,
       isCurrentParallelRunPendingAdoption: false,
-    });
+    } as any);
 
     expect(nextSessionId).toBe("parent-1");
   });
@@ -244,7 +244,7 @@ describe("task detail parallel runtime visibility", () => {
       currentParallelRun: null,
       adoptedCandidateSessionId: undefined,
       isCurrentParallelRunPendingAdoption: false,
-    });
+    } as any);
 
     expect(nextSessionId).toBeUndefined();
   });
@@ -296,7 +296,7 @@ describe("task detail parallel runtime visibility", () => {
       },
       adoptedCandidateSessionId: undefined,
       isCurrentParallelRunPendingAdoption: true,
-    });
+    } as any);
 
     expect(nextSessionId).toBe("root-session");
   });

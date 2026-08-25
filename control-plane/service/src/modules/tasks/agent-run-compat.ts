@@ -119,6 +119,10 @@ export async function listCanonicalTaskAgentRuns(taskId: string) {
   return queryCanonicalAgentRuns(postgresSql`op.task_id = ${taskId}`);
 }
 
+export async function listCanonicalAgentRuns() {
+  return queryCanonicalAgentRuns(postgresSql`true`);
+}
+
 export async function loadCanonicalAgentRun(agentRunId: string) {
   const rows = await queryCanonicalAgentRuns(
     postgresSql`

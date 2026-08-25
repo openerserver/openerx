@@ -93,6 +93,44 @@ function mockCpFetchRoutes(handlers: MockRouteHandler[]) {
   });
 }
 
+function createNormalizedConversationRoute(
+  taskId: string,
+  taskSessionId: string,
+  text: string,
+): MockRouteHandler {
+  return {
+    url: `/api/tasks/${encodeURIComponent(taskId)}/query/normalized-conversation?sessionId=${encodeURIComponent(taskSessionId)}&includeLineage=false`,
+    response: {
+      ok: true,
+      data: {
+        data: [
+          {
+            id: `${taskSessionId}:message:assistant`,
+            sessionId: taskSessionId,
+            runtimeMessageId: `${taskSessionId}:runtime-message:assistant`,
+            role: "assistant",
+            status: "completed",
+            textContent: text,
+            completedAt: "2026-03-19T10:00:12.000Z",
+            parts: [
+              {
+                id: `${taskSessionId}:part:text`,
+                partType: "text",
+                textContent: text,
+              },
+            ],
+          },
+        ],
+        meta: {
+          readSource: "task-session-first",
+          cacheState: "complete",
+          complete: true,
+        },
+      },
+    },
+  };
+}
+
 async function loadTaskRoutes() {
   return import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 }
@@ -408,6 +446,11 @@ describe("task completion routes", () => {
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
+      createNormalizedConversationRoute(
+        "task-adopt-1",
+        "task-session:task-adopt-1:session-a",
+        "候选 A 结果",
+      ),
     ]);
 
     const { taskRoutes } = await loadTaskRoutes();
@@ -707,6 +750,11 @@ describe("task completion routes", () => {
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
+      createNormalizedConversationRoute(
+        "task-adopt-awaiting",
+        "task-session:task-adopt-awaiting:session-b",
+        "候选 B 结果",
+      ),
     ]);
 
     const { taskRoutes } = await loadTaskRoutes();
@@ -961,6 +1009,11 @@ describe("task completion routes", () => {
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
+      createNormalizedConversationRoute(
+        "task-adopt-complete-status",
+        "task-session:task-adopt-complete-status:session-a",
+        "候选 A 结果",
+      ),
       {
         url: "/api/tasks/task-adopt-complete-status/sessions/task-session%3Atask-adopt-complete-status%3Asession-a/activate",
         method: "POST",

@@ -11,7 +11,7 @@ import {
 } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
-import { loadCanonicalAgentRun } from "./agent-run-compat";
+import { listCanonicalAgentRuns, loadCanonicalAgentRun } from "./agent-run-compat";
 
 export const agentRunRoutes = new Hono<AppEnv>();
 
@@ -26,6 +26,75 @@ function parseIsoMs(value?: string | null) {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
+
+function durationMs(startedAt?: string | null, finishedAt?: string | null) {
+  const startedAtMs = parseIsoMs(startedAt);
+  const finishedAtMs = parseIsoMs(finishedAt);
+  return startedAtMs != null && finishedAtMs != null && finishedAtMs >= startedAtMs
+    ? finishedAtMs - startedAtMs
+    : null;
+}
+
+agentRunRoutes.get("/summaries", async (c) => {
+  const rows = await listCanonicalAgentRuns();
+  const taskIds = Array.from(new Set(rows.map((run) => run.taskId)));
+  const taskRows =
+    taskIds.length > 0 ? await db.query.tasks.findMany({ where: inArray(tasks.id, taskIds) }) : [];
+  const projectIds = Array.from(new Set(taskRows.map((task) => task.projectId)));
+  const projectRows =
+    projectIds.length > 0
+      ? await db.query.projects.findMany({ where: inArray(projects.id, projectIds) })
+      : [];
+  const taskById = new Map(taskRows.map((task) => [task.id, task]));
+  const projectById = new Map(projectRows.map((project) => [project.id, project]));
+
+  return c.json({
+    data: rows
+      .map((run) => {
+        const task = taskById.get(run.taskId);
+        if (!task) return null;
+        const project = projectById.get(task.projectId);
+        return {
+          agentRunId: run.id,
+          taskId: task.id,
+          taskTitle: task.title,
+          projectId: task.projectId,
+          projectName: project?.name ?? null,
+          agentType: run.agentType,
+          status: run.status,
+          sessionId: run.sessionId,
+          modelUsed: run.modelUsed,
+          startedAt: run.startedAt,
+          finishedAt: run.finishedAt,
+          lastActivityAt: run.finishedAt ?? run.startedAt ?? run.createdAt,
+          durationMs: durationMs(run.startedAt, run.finishedAt),
+          tokenUsed: run.tokenUsed,
+          blockerType: null,
+          blockerLabel: "",
+          riskLevel: null,
+          guidanceCount: 0,
+          resultSummary: run.result ?? null,
+          result: run.result ?? null,
+          error: run.error,
+          longSummary: null,
+          latestEvents: [],
+          actionPermissions: {
+            canPause: run.status === "running",
+            canResume: run.status === "paused",
+            canTerminate: run.status === "running" || run.status === "paused",
+            canInjectGuidance: true,
+            canViewApproval: true,
+            canViewAudit: true,
+            canViewCodeChanges: true,
+            canExport: true,
+          },
+          governance: null,
+          codeChanges: null,
+        };
+      })
+      .filter(Boolean),
+  });
+});
 
 agentRunRoutes.get("/:agentRunId/summary", async (c) => {
   const agentRunId = c.req.param("agentRunId");
@@ -60,9 +129,6 @@ agentRunRoutes.get("/:agentRunId/summary", async (c) => {
       : [];
 
   const latestChange = taskCodeChanges[0] ?? null;
-  const startedAtMs = parseIsoMs(run.startedAt);
-  const finishedAtMs = parseIsoMs(run.finishedAt);
-
   return c.json({
     agentRunId,
     taskId: task.id,
@@ -76,10 +142,7 @@ agentRunRoutes.get("/:agentRunId/summary", async (c) => {
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     lastActivityAt: run.finishedAt ?? run.startedAt ?? run.createdAt,
-    durationMs:
-      startedAtMs != null && finishedAtMs != null && finishedAtMs >= startedAtMs
-        ? finishedAtMs - startedAtMs
-        : null,
+    durationMs: durationMs(run.startedAt, run.finishedAt),
     tokenUsed: run.tokenUsed,
     blockerType: null,
     blockerLabel: "",

@@ -24,6 +24,7 @@ describe("useTaskDetailMainPaneFeature", () => {
           canTerminateExecution: ref(true),
           conversationItems: ref([]),
           handleAdoptCandidate: async () => undefined,
+          phaseBlocks: ref([]),
         },
         conversation: {
           assistantMessageModelFallback: ref("gpt-5.4"),

@@ -5,7 +5,7 @@ import {
 } from "./task-trace-conversation";
 
 describe("resolveTraceTimelineItems", () => {
-  it("falls back to execution trace messages when timeline is empty", () => {
+  it("falls back to persisted execution trace messages when timeline is empty", () => {
     const items = resolveTraceTimelineItems({
       taskId: "task-1",
       sessionId: "ses-1",
@@ -16,14 +16,14 @@ describe("resolveTraceTimelineItems", () => {
         {
           id: "msg-1",
           role: "assistant",
-          text: "runtime fallback message",
+          text: "persisted projection message",
           createdAt: "2026-03-26T09:00:00.000Z",
           raw: { source: "runtime" },
         },
       ],
       timeline: [],
       timelineMeta: {
-        readSource: "runtime-fallback",
+        readSource: "task-session-projection",
         complete: true,
         includeLineage: true,
       },
@@ -33,12 +33,12 @@ describe("resolveTraceTimelineItems", () => {
     expect(items[0]).toMatchObject({
       id: "msg-1",
       role: "assistant",
-      text: "runtime fallback message",
+      text: "persisted projection message",
       createdAt: "2026-03-26T09:00:00.000Z",
     });
   });
 
-  it("expands runtime tool parts into tool timeline items", () => {
+  it("expands persisted raw tool parts into tool timeline items", () => {
     const items = resolveTraceTimelineItems({
       taskId: "task-tools",
       sessionId: "ses-tools",
@@ -100,7 +100,7 @@ describe("resolveTraceTimelineItems", () => {
       ],
       timeline: [],
       timelineMeta: {
-        readSource: "runtime-fallback",
+        readSource: "task-session-projection",
         complete: true,
         includeLineage: true,
       },
@@ -204,7 +204,7 @@ describe("resolveTraceTimelineItems", () => {
     });
   });
 
-  it("merges existing status timeline with runtime conversation and tool items", () => {
+  it("merges existing status timeline with persisted conversation and tool items", () => {
     const items = buildMergedTraceTimelineItems(
       {
         taskId: "task-merge",
@@ -266,7 +266,7 @@ describe("resolveTraceTimelineItems", () => {
           },
         ],
         timelineMeta: {
-          readSource: "runtime-fallback",
+          readSource: "task-session-projection",
           complete: true,
           includeLineage: true,
         },

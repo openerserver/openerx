@@ -55,6 +55,19 @@ import { summarizeRealtimeEvent, traceServerRealtime } from "./realtime-debug";
 
 type EventHandler = (event: RealtimeEvent) => void;
 
+type PendingUnresolvedRuntimeEvent = {
+  receivedAt: string;
+  reason: "missing_session_id" | "unmapped_session";
+  type: RealtimeEventType;
+  rawType?: string;
+  sessionId?: string;
+  phaseId?: string;
+  event: RealtimeEvent;
+  receivedType?: string;
+  payload?: Record<string, unknown> | null;
+  parsed?: Record<string, unknown>;
+};
+
 interface CompletedTaskContext {
   id: string;
   title: string;
@@ -247,6 +260,7 @@ class SSEAggregator {
     string,
     Promise<{ taskId: string; projectId?: string } | null>
   >();
+  private pendingUnresolvedRuntimeEvents: PendingUnresolvedRuntimeEvent[] = [];
 
   private isPaidExecutionBreakerTripped(taskId: string): boolean {
     return this.paidExecutionRuntime.get(taskId)?.tripped === true;
@@ -1335,6 +1349,7 @@ class SSEAggregator {
       runtimeSessionId: event.sessionId,
       message,
     });
+    const persistData = persistResult.ok ? persistResult.data : undefined;
     this.emitTaskPersistenceAck({
       ts: event.ts,
       taskId,
@@ -1342,9 +1357,9 @@ class SSEAggregator {
       phaseId: asString(event.data.phaseId) ?? event.phaseId,
       runtimeSessionId: event.sessionId,
       agentRunId: event.agentRunId,
-      persistedMessageId: persistResult.data?.messageId,
-      persistedSessionId: persistResult.data?.sessionId,
-      seq: persistResult.data?.seq,
+      persistedMessageId: persistData?.messageId,
+      persistedSessionId: persistData?.sessionId,
+      seq: persistData?.seq,
     });
     await this.emitTaskRoundSyncOrReconcile({
       authorization,
@@ -1354,9 +1369,9 @@ class SSEAggregator {
       phaseId: asString(event.data.phaseId) ?? event.phaseId,
       runtimeSessionId: event.sessionId,
       agentRunId: event.agentRunId,
-      persistedMessageId: persistResult.data?.messageId,
-      persistedSessionId: persistResult.data?.sessionId,
-      seq: persistResult.data?.seq,
+      persistedMessageId: persistData?.messageId,
+      persistedSessionId: persistData?.sessionId,
+      seq: persistData?.seq,
     });
   }
 
@@ -1832,6 +1847,7 @@ class SSEAggregator {
       runtimeSessionId: event.sessionId,
       message,
     });
+    const persistData = persistResult.ok ? persistResult.data : undefined;
     this.emitTaskPersistenceAck({
       ts: event.ts,
       taskId,
@@ -1839,9 +1855,9 @@ class SSEAggregator {
       phaseId: asString(event.data.phaseId) ?? event.phaseId,
       runtimeSessionId: event.sessionId,
       agentRunId: event.agentRunId,
-      persistedMessageId: persistResult.data?.messageId,
-      persistedSessionId: persistResult.data?.sessionId,
-      seq: persistResult.data?.seq,
+      persistedMessageId: persistData?.messageId,
+      persistedSessionId: persistData?.sessionId,
+      seq: persistData?.seq,
     });
     await this.emitTaskRoundSyncOrReconcile({
       authorization,
@@ -1851,9 +1867,9 @@ class SSEAggregator {
       phaseId: asString(event.data.phaseId) ?? event.phaseId,
       runtimeSessionId: event.sessionId,
       agentRunId: event.agentRunId,
-      persistedMessageId: persistResult.data?.messageId,
-      persistedSessionId: persistResult.data?.sessionId,
-      seq: persistResult.data?.seq,
+      persistedMessageId: persistData?.messageId,
+      persistedSessionId: persistData?.sessionId,
+      seq: persistData?.seq,
     });
   }
 
@@ -2003,11 +2019,123 @@ class SSEAggregator {
     return pending;
   }
 
+  private bufferUnresolvedRuntimeEvent(
+    event: RealtimeEvent,
+    reason: PendingUnresolvedRuntimeEvent["reason"],
+    source?: {
+      receivedType?: string;
+      payload?: Record<string, unknown> | null;
+      parsed?: Record<string, unknown>;
+    },
+  ) {
+    const pending = {
+      receivedAt: new Date().toISOString(),
+      reason,
+      type: event.type,
+      rawType: asString(event.data.rawType),
+      sessionId: event.sessionId,
+      phaseId: event.phaseId,
+      event,
+      receivedType: source?.receivedType,
+      payload: source?.payload,
+      parsed: source?.parsed,
+    };
+    this.pendingUnresolvedRuntimeEvents.push(pending);
+    if (this.pendingUnresolvedRuntimeEvents.length > 500) {
+      this.pendingUnresolvedRuntimeEvents.splice(0, this.pendingUnresolvedRuntimeEvents.length - 500);
+    }
+    traceServerRealtime("aggregator:runtime-event-pending", pending);
+  }
+
+  private drainPendingRuntimeEvents(sessionId: string) {
+    const drained: PendingUnresolvedRuntimeEvent[] = [];
+    const retained: PendingUnresolvedRuntimeEvent[] = [];
+    for (const pending of this.pendingUnresolvedRuntimeEvents) {
+      if (pending.sessionId === sessionId) {
+        drained.push(pending);
+      } else {
+        retained.push(pending);
+      }
+    }
+    this.pendingUnresolvedRuntimeEvents = retained;
+    return drained;
+  }
+
+  private async replayPendingRuntimeEvents(resolvedContext: RealtimeEvent) {
+    if (!resolvedContext.sessionId || !resolvedContext.taskId) {
+      return;
+    }
+    const pendingEvents = this.drainPendingRuntimeEvents(resolvedContext.sessionId);
+    for (const pending of pendingEvents) {
+      const replayEvent: RealtimeEvent = {
+        ...pending.event,
+        taskId: resolvedContext.taskId,
+        projectId: pending.event.projectId ?? resolvedContext.projectId,
+      };
+      traceServerRealtime("aggregator:runtime-event-replay", {
+        sessionId: resolvedContext.sessionId,
+        taskId: resolvedContext.taskId,
+        projectId: replayEvent.projectId,
+        type: replayEvent.type,
+        rawType: pending.rawType,
+        reason: pending.reason,
+        receivedAt: pending.receivedAt,
+      });
+      await this.processResolvedProductEvent(
+        replayEvent,
+        pending.receivedType ?? replayEvent.type,
+        pending.payload ?? null,
+        pending.parsed ?? {},
+      );
+    }
+  }
+
+  private async resolveProductEventContext(
+    event: RealtimeEvent,
+    source?: {
+      receivedType?: string;
+      payload?: Record<string, unknown> | null;
+      parsed?: Record<string, unknown>;
+    },
+  ): Promise<RealtimeEvent | null> {
+    if (!event.sessionId) {
+      this.bufferUnresolvedRuntimeEvent(event, "missing_session_id", source);
+      return null;
+    }
+
+    if (event.taskId) {
+      if (event.projectId) {
+        return event;
+      }
+      const resolved = await this.resolveTaskForSession(event.sessionId);
+      if (!resolved) {
+        return event;
+      }
+      return {
+        ...event,
+        projectId: event.projectId ?? resolved.projectId,
+      };
+    }
+
+    const resolved = await this.resolveTaskForSession(event.sessionId);
+    if (!resolved) {
+      this.bufferUnresolvedRuntimeEvent(event, "unmapped_session", source);
+      return null;
+    }
+
+    return {
+      ...event,
+      taskId: resolved.taskId,
+      projectId: event.projectId ?? resolved.projectId,
+    };
+  }
+
   private async maybeSyncDag(
     type: string,
     payload: Record<string, unknown> | null,
     parsed: Record<string, unknown>,
     workspaceDirectory?: string,
+    resolvedEvent?: RealtimeEvent,
   ): Promise<void> {
     const graphMutation = this.isGraphMutationTool(type, payload);
     if (!graphMutation?.sessionId) {
@@ -2015,7 +2143,10 @@ class SSEAggregator {
     }
 
     const runtimeRun = findAgentRunBySessionId(graphMutation.sessionId);
-    if (!runtimeRun?.taskId || !runtimeRun.projectId) {
+    const taskId = runtimeRun?.taskId ?? resolvedEvent?.taskId;
+    const projectId = runtimeRun?.projectId ?? resolvedEvent?.projectId;
+    const agentRunId = runtimeRun?.agentRunId ?? resolvedEvent?.agentRunId;
+    if (!taskId || !projectId) {
       return;
     }
 
@@ -2032,9 +2163,9 @@ class SSEAggregator {
       type: "task.node.updated",
       ts: new Date().toISOString(),
       sessionId: graphMutation.sessionId,
-      taskId: runtimeRun.taskId,
-      projectId: runtimeRun.projectId,
-      agentRunId: runtimeRun.agentRunId,
+      taskId,
+      projectId,
+      agentRunId,
       data: {
         sourceEvent: type,
         toolName: graphMutation.toolName,
@@ -2042,10 +2173,10 @@ class SSEAggregator {
     });
 
     await this.emitPipelineStageUpdates({
-      taskId: runtimeRun.taskId,
+      taskId,
       sessionId: graphMutation.sessionId,
-      projectId: runtimeRun.projectId,
-      agentRunId: runtimeRun.agentRunId,
+      projectId,
+      agentRunId,
       authorization,
       reason: "task.node.updated",
     });
@@ -2099,55 +2230,80 @@ class SSEAggregator {
     });
 
     if (event) {
-      const rawType = typeof event.data.rawType === "string" ? event.data.rawType : undefined;
-      const effectiveRawType = rawType ?? event.type;
-      const resolvedMessageSnapshot =
-        event.type === "message.updated" &&
-        effectiveRawType === "message.updated" &&
-        !this.hasInlineMessageContent(event.data)
-          ? await this.resolvePersistableMessageSnapshot(event)
-          : undefined;
-
-      const derivedEvents = this.buildTaskDomainEvents(event, resolvedMessageSnapshot);
-      traceServerRealtime("aggregator:derived-events", {
-        ...summarizeRealtimeEvent(event),
-        isCompletionSignal: this.isCompletionSignal(event),
-        resolvedMessageSnapshotId: this.extractRealtimeMessageId(resolvedMessageSnapshot ?? {}),
-        derivedCount: derivedEvents.length,
-        derivedTypes: derivedEvents.map((derivedEvent) => derivedEvent.type),
-        derivedEvents: derivedEvents.map((derivedEvent) => summarizeRealtimeEvent(derivedEvent)),
+      const productEvent = await this.resolveProductEventContext(event, {
+        receivedType: type,
+        payload,
+        parsed,
       });
-      for (const derivedEvent of derivedEvents) {
-        this.emit(derivedEvent);
+      if (!productEvent) {
+        return;
       }
-      this.emit(event);
-      if (event.type === "message.updated") {
-        void this.persistSessionMessageSnapshot(event, resolvedMessageSnapshot).catch((error) => {
-          console.error(`Failed to persist message snapshot for task ${event.taskId}:`, error);
-        });
-      }
-      if (event.type === "tool.execute.before" || event.type === "tool.execute.after") {
-        void this.persistToolExecutionSnapshot(event).catch((error) => {
-          console.error(`Failed to persist tool snapshot for task ${event.taskId}:`, error);
-        });
-      }
-      if (event.type === "tool.execute.after") {
-        await this.maybeSyncDag(
-          String(payload?.type || type),
-          payload,
-          parsed,
-          this.readWorkspaceDirectory(parsed),
-        );
-      }
-      if (event.type === "session.error") {
-        void this.maybeEmitAuthError(event);
-        void this.maybeFinalizeFailure(event);
-      }
-      if (event.type === "tool.execute.before") {
-        void this.maybeFailParallelQuestionTool(event);
-      }
-      void this.maybeFinalizeRun(event);
+      await this.replayPendingRuntimeEvents(productEvent);
+      await this.processResolvedProductEvent(productEvent, type, payload, parsed);
     }
+  }
+
+  private async processResolvedProductEvent(
+    productEvent: RealtimeEvent,
+    type: string,
+    payload: Record<string, unknown> | null,
+    parsed: Record<string, unknown>,
+  ): Promise<void> {
+    const rawType =
+      typeof productEvent.data.rawType === "string" ? productEvent.data.rawType : undefined;
+    const effectiveRawType = rawType ?? productEvent.type;
+    const resolvedMessageSnapshot =
+      productEvent.type === "message.updated" &&
+      effectiveRawType === "message.updated" &&
+      !this.hasInlineMessageContent(productEvent.data)
+        ? await this.resolvePersistableMessageSnapshot(productEvent)
+        : undefined;
+
+    const derivedEvents = this.buildTaskDomainEvents(productEvent, resolvedMessageSnapshot);
+    traceServerRealtime("aggregator:derived-events", {
+      ...summarizeRealtimeEvent(productEvent),
+      isCompletionSignal: this.isCompletionSignal(productEvent),
+      resolvedMessageSnapshotId: this.extractRealtimeMessageId(resolvedMessageSnapshot ?? {}),
+      derivedCount: derivedEvents.length,
+      derivedTypes: derivedEvents.map((derivedEvent) => derivedEvent.type),
+      derivedEvents: derivedEvents.map((derivedEvent) => summarizeRealtimeEvent(derivedEvent)),
+    });
+    for (const derivedEvent of derivedEvents) {
+      this.emit(derivedEvent);
+    }
+    this.emit(productEvent);
+    if (productEvent.type === "message.updated") {
+      void this.persistSessionMessageSnapshot(productEvent, resolvedMessageSnapshot).catch(
+        (error) => {
+          console.error(
+            `Failed to persist message snapshot for task ${productEvent.taskId}:`,
+            error,
+          );
+        },
+      );
+    }
+    if (productEvent.type === "tool.execute.before" || productEvent.type === "tool.execute.after") {
+      void this.persistToolExecutionSnapshot(productEvent).catch((error) => {
+        console.error(`Failed to persist tool snapshot for task ${productEvent.taskId}:`, error);
+      });
+    }
+    if (productEvent.type === "tool.execute.after") {
+      await this.maybeSyncDag(
+        String(payload?.type || type),
+        payload,
+        parsed,
+        this.readWorkspaceDirectory(parsed),
+        productEvent,
+      );
+    }
+    if (productEvent.type === "session.error") {
+      void this.maybeEmitAuthError(productEvent);
+      void this.maybeFinalizeFailure(productEvent);
+    }
+    if (productEvent.type === "tool.execute.before") {
+      void this.maybeFailParallelQuestionTool(productEvent);
+    }
+    void this.maybeFinalizeRun(productEvent);
   }
 
   private buildTaskDomainEvents(
@@ -2551,7 +2707,16 @@ class SSEAggregator {
             resultText,
             event.projectId ?? "",
             authorization,
-          );
+          ).catch((error) => {
+            void this.finalizeSequentialChainTask(
+              chainStepInfo.taskId,
+              event.projectId ?? "",
+              authorization,
+              error instanceof Error && error.message.trim()
+                ? error.message
+                : "Failed to start next chain step",
+            );
+          });
           return;
         }
       }
@@ -3659,22 +3824,7 @@ class SSEAggregator {
       model: resolvedModel,
     });
 
-    if (execResult.agentRunId) {
-      await createAgentRunRecord({
-        taskId,
-        agentRunId: execResult.agentRunId,
-        sessionId: execResult.sessionId,
-        agentType: "coder",
-        status: execResult.ok ? "running" : "failed",
-        model: resolvedModel,
-        candidateIndex: nextIndex,
-        error: execResult.ok ? undefined : execResult.error,
-        startedAt: new Date().toISOString(),
-        finishedAt: execResult.ok ? undefined : new Date().toISOString(),
-      });
-    }
-
-    if (!execResult.ok || !execResult.sessionId) {
+    if (!execResult.sessionId) {
       nextStep.status = "failed";
       void this.finalizeSequentialChainTask(
         taskId,
@@ -3684,9 +3834,6 @@ class SSEAggregator {
       );
       return;
     }
-
-    // Register the new session for tracking
-    this.sessionToChainStepMap.set(execResult.sessionId, { taskId, stepIndex: nextIndex });
 
     await upsertTaskSessionLineageRecord(taskId, authorization, {
       runtimeSessionId: execResult.sessionId,
@@ -3705,7 +3852,36 @@ class SSEAggregator {
         ? formatModelRoute(resolvedModel)
         : (task.selectedModel ?? undefined),
       operationId: chainCtx.operationId,
-    }).catch(() => null);
+    });
+
+    if (execResult.agentRunId) {
+      await createAgentRunRecord({
+        taskId,
+        agentRunId: execResult.agentRunId,
+        sessionId: execResult.sessionId,
+        agentType: "coder",
+        status: execResult.ok ? "running" : "failed",
+        model: resolvedModel,
+        candidateIndex: nextIndex,
+        error: execResult.ok ? undefined : execResult.error,
+        startedAt: new Date().toISOString(),
+        finishedAt: execResult.ok ? undefined : new Date().toISOString(),
+      });
+    }
+
+    if (!execResult.ok) {
+      nextStep.status = "failed";
+      void this.finalizeSequentialChainTask(
+        taskId,
+        projectId,
+        authorization,
+        execResult.error || "Failed to start next chain step",
+      );
+      return;
+    }
+
+    // Register the new session for tracking
+    this.sessionToChainStepMap.set(execResult.sessionId, { taskId, stepIndex: nextIndex });
 
     // Update plan with new session info
     plan.candidates[0] = {

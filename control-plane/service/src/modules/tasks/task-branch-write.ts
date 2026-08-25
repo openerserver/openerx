@@ -426,6 +426,17 @@ export function createTaskBranchWriteApi(deps: {
 
     const effectiveIsActive = !isTerminalTaskRecord(task);
 
+    await deps.syncTaskBranchCompatTreeNode({
+      taskId,
+      runtimeSessionId: record.runtimeSessionId,
+      parentRuntimeSessionId: record.parentRuntimeSessionId ?? null,
+      forkedFromMessageId: record.forkedFromMessageId ?? null,
+      branchName: record.branchName ?? null,
+      sourceType: record.sourceType,
+      isActive: effectiveIsActive,
+      archivedAt: null,
+    });
+
     await deps.upsertConversationSessionRecord({
       task,
       runtimeSessionId: record.runtimeSessionId,

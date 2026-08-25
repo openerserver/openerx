@@ -64,14 +64,14 @@ describe("phase parallel runs", () => {
               phaseRole: "candidate",
               candidateIndex: 0,
               executionStatus: "completed",
-            },
+            } as any,
             {
               id: "candidate-2",
               runtimeSessionId: "runtime-candidate-2",
               phaseId: "phase-2",
               phaseRole: "candidate",
               candidateIndex: 1,
-            },
+            } as any,
           ],
           messageGroups: [
             {
@@ -93,7 +93,7 @@ describe("phase parallel runs", () => {
                   createdAt: "2026-04-12T10:00:12.000Z",
                 },
               ],
-            },
+            } as any,
             {
               taskSessionId: "candidate-2",
               runtimeSessionId: "runtime-candidate-2",
@@ -107,7 +107,7 @@ describe("phase parallel runs", () => {
                   createdAt: "2026-04-12T10:00:21.000Z",
                 },
               ],
-            },
+            } as any,
           ],
           meta: {},
         },
@@ -141,7 +141,7 @@ describe("phase parallel runs", () => {
               phaseRole: "candidate",
               candidateIndex: 0,
               executionStatus: "completed",
-            },
+            } as any,
           ],
           messageGroups: [
             {
@@ -163,7 +163,7 @@ describe("phase parallel runs", () => {
                   createdAt: "2026-04-12T10:00:12.000Z",
                 },
               ],
-            },
+            } as any,
           ],
           meta: {},
         },
@@ -192,7 +192,7 @@ describe("phase parallel runs", () => {
               phaseRole: "candidate",
               candidateIndex: 0,
               executionStatus: "running",
-            },
+            } as any,
           ],
           messageGroups: [
             {
@@ -250,7 +250,7 @@ describe("phase parallel runs", () => {
               phaseRole: "candidate",
               candidateIndex: 0,
               executionStatus: "completed",
-            },
+            } as any,
           ],
           messageGroups: [
             {
@@ -308,7 +308,7 @@ describe("phase parallel runs", () => {
               phaseRole: "candidate",
               candidateIndex: 0,
               executionStatus: "paused",
-            },
+            } as any,
           ],
           messageGroups: [
             {

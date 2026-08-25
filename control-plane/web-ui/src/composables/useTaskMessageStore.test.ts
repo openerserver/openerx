@@ -1,6 +1,7 @@
 import { computed, effectScope, nextTick, reactive, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  TaskConversationListItem,
   TaskConversationMessageItem,
   TaskConversationWorkflowItem,
 } from "../lib/message-normalize";
@@ -44,6 +45,16 @@ function createEvent(overrides: Partial<RealtimeEvent>): RealtimeEvent {
     agentRunId: overrides.agentRunId,
     data: overrides.data ?? {},
   };
+}
+
+function isConversationMessageItem(
+  item: TaskConversationListItem,
+): item is TaskConversationMessageItem {
+  return item.role !== "parallel" && item.role !== "workflow";
+}
+
+function isAssistantMessageItem(item: TaskConversationListItem): item is TaskConversationMessageItem {
+  return isConversationMessageItem(item) && item.role === "assistant";
 }
 
 describe("useTaskMessageStore", () => {
@@ -912,7 +923,7 @@ describe("useTaskMessageStore", () => {
       "task-1",
       "session-1",
     );
-    expect(state.conversationItems.value.map((item) => item.text)).toEqual([
+    expect(state.conversationItems.value.filter(isConversationMessageItem).map((item) => item.text)).toEqual([
       "session-first prompt",
       "session-first reply",
     ]);
@@ -1001,7 +1012,7 @@ describe("useTaskMessageStore", () => {
     expect(state.conversationAuthority.value).toBe("realtime");
     expect(state.hasStreamingAssistant.value).toBe(true);
     expect(
-      state.conversationItems.value.find((item) => item.role === "assistant")?.text,
+      state.conversationItems.value.find(isAssistantMessageItem)?.text,
     ).toBe("live reply");
 
     realtimeStoreMock.events = [
@@ -1024,7 +1035,7 @@ describe("useTaskMessageStore", () => {
     expect(state.conversationAuthority.value).toBe("realtime");
     expect(state.hasStreamingAssistant.value).toBe(true);
     expect(
-      state.conversationItems.value.find((item) => item.role === "assistant")?.text,
+      state.conversationItems.value.find(isAssistantMessageItem)?.text,
     ).toBe("live reply");
 
     await state.refresh(true);
@@ -1033,7 +1044,7 @@ describe("useTaskMessageStore", () => {
     expect(state.conversationAuthority.value).toBe("persisted");
     expect(state.hasStreamingAssistant.value).toBe(false);
     expect(
-      state.conversationItems.value.find((item) => item.role === "assistant")?.text,
+      state.conversationItems.value.find(isAssistantMessageItem)?.text,
     ).toBe("persisted reply");
   });
 });

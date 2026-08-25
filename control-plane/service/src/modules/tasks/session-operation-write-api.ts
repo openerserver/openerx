@@ -162,11 +162,11 @@ type AgentRunWriteContext = {
   runtimeSessionId: string;
   taskOperationId: string;
   taskSessionId: string;
+  taskSessionRunId: string;
   phaseId: string | null;
   operationIndex: number;
   tokenUsed: number;
   taskNodeStatus: TaskSessionNodeStatus;
-  defaultRunId: string;
   now: string;
   operationKind: ReturnType<typeof mapAgentTypeToTaskOperationKind>;
   usageEntryKind: TaskUsageEntryKind;
@@ -225,8 +225,10 @@ async function buildAgentRunWriteContext(
   deps: CreateTaskOperationWriteApiDeps,
   args: SyncExecutionFactsForAgentRunArgs,
 ): Promise<AgentRunWriteContext> {
-  const runtimeSessionId =
-    normalizeRuntimeSessionId(args.task.id, args.sessionId) ?? `agent-run:${args.agentRunId}`;
+  const runtimeSessionId = normalizeRuntimeSessionId(args.task.id, args.sessionId);
+  if (!runtimeSessionId) {
+    throw new Error("sessionId is required to sync agent run execution facts");
+  }
   const taskOperationId = buildTaskOperationWriteId(args.task.id, args.agentRunId);
   const taskSessionId = await ensureTaskSessionForAgentRun(
     deps,
@@ -245,11 +247,11 @@ async function buildAgentRunWriteContext(
     runtimeSessionId,
     taskOperationId,
     taskSessionId,
+    taskSessionRunId: buildTaskSessionDefaultRunId(taskSessionId),
     phaseId: taskSessionRecord?.phaseId ?? null,
     operationIndex: await resolveTaskOperationIndex(taskOperationId, taskSessionId),
     tokenUsed: args.tokenUsed ?? 0,
     taskNodeStatus: mapAgentRunStatusToTaskNodeStatus(args.status),
-    defaultRunId: buildTaskSessionDefaultRunId(taskSessionId),
     now: new Date().toISOString(),
     operationKind,
     usageEntryKind: mapAgentTypeToUsageEntryKind(args.agentType),
@@ -264,7 +266,7 @@ async function upsertTaskSessionRunFacts(
   await db
     .insert(taskSessionRuns)
     .values({
-      id: context.defaultRunId,
+      id: context.taskSessionRunId,
       taskId: args.task.id,
       sessionId: context.taskSessionId,
       phaseId: context.phaseId,
@@ -317,7 +319,7 @@ async function upsertTaskOperationFacts(
       id: context.taskOperationId,
       taskId: args.task.id,
       sessionId: context.taskSessionId,
-      runId: context.defaultRunId,
+      runId: context.taskSessionRunId,
       messageId: null,
       parentOperationId: null,
       runtimeOperationId: `agent-run:${args.agentRunId}`,
@@ -336,7 +338,7 @@ async function upsertTaskOperationFacts(
       target: taskOperations.id,
       set: {
         sessionId: context.taskSessionId,
-        runId: context.defaultRunId,
+        runId: context.taskSessionRunId,
         runtimeOperationId: `agent-run:${args.agentRunId}`,
         operationKind: context.operationKind,
         title: args.agentType,

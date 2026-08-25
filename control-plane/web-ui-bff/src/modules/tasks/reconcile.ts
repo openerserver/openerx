@@ -556,6 +556,32 @@ function inferTerminalStatus(task: RunningTaskRecord): "completed" | "failed" | 
   return null;
 }
 
+function readCompletedAssistantFallback(messages: unknown[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = asRecord(messages[index]);
+    const info = asRecord(message?.info);
+    if (info?.role !== "assistant") {
+      continue;
+    }
+    const time = asRecord(info.time);
+    const completed = time?.completed;
+    if (typeof completed !== "string" && typeof completed !== "number") {
+      continue;
+    }
+    const parts = Array.isArray(message?.parts) ? message.parts : [];
+    const text = parts
+      .map((part) => asRecord(part))
+      .filter((part): part is Record<string, unknown> => Boolean(part))
+      .filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => String(part.text).trim())
+      .filter(Boolean)
+      .join("\n\n");
+    return { completed: true as const, text: text || undefined };
+  }
+
+  return { completed: false as const, text: undefined };
+}
+
 function taskNeedsRecentTerminalSessionRepair(task: RunningTaskRecord) {
   const terminalStatus = inferTerminalStatus(task);
   if (terminalStatus !== "completed" || !task.sessionId) {
@@ -620,7 +646,10 @@ async function reconcileCompletedTaskWithActiveSession(
     );
   }
 
-  if (!assistantResult.completed) {
+  const completedFallback = readCompletedAssistantFallback(
+    Array.isArray(messagesResult.data) ? messagesResult.data : [],
+  );
+  if (!assistantResult.completed && !completedFallback.completed) {
     return "skipped";
   }
 
@@ -634,7 +663,7 @@ async function reconcileCompletedTaskWithActiveSession(
   const updated = await markTaskCompleted(
     context.authorization,
     task,
-    assistantResult.text ?? task.result ?? undefined,
+    assistantResult.text ?? completedFallback.text ?? task.result ?? undefined,
   );
 
   return updated ? "completed" : "skipped";
@@ -758,6 +787,24 @@ async function reconcileSingleRunningTask(
       messages: Array.isArray(messagesResult.data) ? messagesResult.data : [],
     });
     const updated = await markTaskCompleted(context.authorization, task, assistantResult.text);
+    return updated ? "completed" : "skipped";
+  }
+
+  const completedFallback = readCompletedAssistantFallback(
+    Array.isArray(messagesResult.data) ? messagesResult.data : [],
+  );
+  if (completedFallback.completed) {
+    await repairRuntimeAssistantMessages({
+      taskId: task.id,
+      runtimeSessionId: task.sessionId,
+      authorization: context.authorization,
+      messages: Array.isArray(messagesResult.data) ? messagesResult.data : [],
+    });
+    const updated = await markTaskCompleted(
+      context.authorization,
+      task,
+      completedFallback.text ?? assistantResult.text,
+    );
     return updated ? "completed" : "skipped";
   }
 

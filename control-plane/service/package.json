@@ -22,7 +22,7 @@
     "db:backfill:parallel-candidate-user-prompts": "bun run src/db/migration/backfill-parallel-candidate-user-prompts.ts",
     "db:backfill:assistant-toolcall-stop-duplicates": "bun run src/db/migration/backfill-assistant-toolcall-stop-duplicates.ts",
     "cli:task": "bun run src/cli/create-task.ts",
-    "test": "bun test ../../tests/service --timeout 30000",
+    "test": "AUTH_RATE_LIMIT_LOGIN_IP_MAX=10000 AUTH_RATE_LIMIT_LOGIN_IDENTIFIER_MAX=10000 AUTH_RATE_LIMIT_REGISTER_IP_MAX=10000 AUTH_RATE_LIMIT_REGISTER_IDENTIFIER_MAX=10000 bun test ../../tests/service --timeout 30000",
     "test:identity": "bun test ../../tests/service/identity-binding.test.ts --timeout 30000",
     "test:user-management": "bun test ../../tests/service/user-management.test.ts --timeout 30000"
   },

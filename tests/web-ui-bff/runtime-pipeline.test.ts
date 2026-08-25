@@ -4,10 +4,7 @@ import type {
   RuntimePlan,
 } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
-import {
-  expectNoPublicTraceRequests,
-  expectSessionMessageReaderCalls,
-} from "./session-message-compatibility-test-helpers";
+import { expectNoPublicTraceRequests } from "./session-message-compatibility-test-helpers";
 
 const cpFetchMock = mock(async (_url: string, _options?: { authorization?: string }) => ({
   ok: false,
@@ -210,9 +207,18 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
+      if (url.startsWith("/api/tasks/task-followup/query/normalized-conversation")) {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: { readSource: "task-session-first", complete: false },
+          },
+        };
+      }
+
       return { ok: false, data: undefined };
     });
-    getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
 
     const { buildRuntimePipeline } = await loadRuntimePipelineModule();
     const pipeline = await buildRuntimePipeline({
@@ -272,10 +278,18 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
+      if (url.startsWith("/api/tasks/task-parallel/query/normalized-conversation")) {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: { readSource: "task-session-first", complete: false },
+          },
+        };
+      }
+
       throw new Error(`Unexpected cpFetch url: ${url}`);
     });
-
-    getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
 
     const { buildRuntimePipeline } = await loadRuntimePipelineModule();
     const pipeline = await buildRuntimePipeline({
@@ -284,7 +298,7 @@ describe("buildRuntimePipeline", () => {
       authorization: "Bearer test",
     });
 
-    expectSessionMessageReaderCalls(getSessionMessagesMock, ["ses-root"]);
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
     expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
     expect(pipeline.taskId).toBe("task-parallel");
     expect(pipeline.sessionId).toBe("ses-root");
@@ -327,6 +341,16 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
+      if (url.startsWith("/api/tasks/task-2/query/normalized-conversation")) {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: { readSource: "task-session-first", complete: false },
+          },
+        };
+      }
+
       if (url === "/api/tasks/task-2/graph") {
         return {
           ok: true,
@@ -360,7 +384,7 @@ describe("buildRuntimePipeline", () => {
         replanCount: 0,
       },
     });
-    expectSessionMessageReaderCalls(getSessionMessagesMock, ["ses-not-owned"]);
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
     expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
 
@@ -394,6 +418,41 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
+      if (url.startsWith("/api/tasks/task-3/query/normalized-conversation")) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "msg-plan-only",
+                sessionId: "ts-root",
+                runtimeMessageId: "msg-plan-only",
+                role: "assistant",
+                status: "completed",
+                textContent: "给出风险清单",
+                rawPayload: {
+                  info: {
+                    id: "msg-plan-only",
+                    role: "assistant",
+                    agent: "momus-enterprise",
+                    modelID: "gpt-5.4",
+                    tokens: { input: 30, output: 25 },
+                    time: {
+                      created: Date.parse("2026-03-12T12:00:10.000Z"),
+                      completed: Date.parse("2026-03-12T12:00:12.000Z"),
+                    },
+                  },
+                  parts: [{ type: "text", text: "给出风险清单" }],
+                },
+                createdAt: "2026-03-12T12:00:10.000Z",
+                completedAt: "2026-03-12T12:00:12.000Z",
+              },
+            ],
+            meta: { readSource: "task-session-first", complete: true },
+          },
+        };
+      }
+
       if (url === "/api/tasks/task-3/graph") {
         return {
           ok: true,
@@ -402,26 +461,6 @@ describe("buildRuntimePipeline", () => {
       }
 
       throw new Error(`Unexpected cpFetch url: ${url}`);
-    });
-
-    getSessionMessagesMock.mockResolvedValue({
-      ok: true,
-      data: [
-        {
-          info: {
-            id: "msg-plan-only",
-            role: "assistant",
-            agent: "momus-enterprise",
-            modelID: "gpt-5.4",
-            tokens: { input: 30, output: 25 },
-            time: {
-              created: Date.parse("2026-03-12T12:00:10.000Z"),
-              completed: Date.parse("2026-03-12T12:00:12.000Z"),
-            },
-          },
-          parts: [{ type: "text", text: "给出风险清单" }],
-        },
-      ],
     });
 
     const { buildRuntimePipeline } = await loadRuntimePipelineModule();

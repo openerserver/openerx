@@ -341,6 +341,7 @@ describe("task operation write api", () => {
 
     const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;
     expect(insertedRun).toMatchObject({
+      id: "run_task-session:task-1:judge-session",
       sessionId: "task-session:task-1:judge-session",
       phaseId: "phase-judge-1",
       runtimeSessionId: "judge-session",

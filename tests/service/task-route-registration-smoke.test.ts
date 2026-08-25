@@ -347,7 +347,7 @@ describe("task route registration smoke", () => {
     }>(`/api/tasks/${task.id}/sessions`);
     expect(sessionsList.status).toBe(200);
     expect(sessionsList.data.meta).toMatchObject({
-      readSource: "task-session-first",
+      readSource: "task-phase-first",
       sessionCount: 1,
     });
     expect(sessionsList.data.data).toEqual(
