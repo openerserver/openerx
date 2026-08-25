@@ -8,6 +8,7 @@ import { ChatRepository } from "@openerx/storage";
 import type { MessagePortMain } from "electron";
 import { ChatAppService } from "./chat-app-service";
 import { MessagePortPiHostClient } from "./pi-host-client";
+import { HttpAccountSyncTransport, SyncCoordinator } from "./sync-coordinator";
 
 const parentPort = process.parentPort;
 if (!parentPort) throw new Error("App Service requires an Electron utility-process parent port");
@@ -19,8 +20,19 @@ parentPort.once("message", async (bootstrapEvent) => {
 
   const piHost = new MessagePortPiHostClient(piHostPort, bootstrap.piHostNonce);
   await piHost.ready();
-  const repository = new ChatRepository(path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"));
-  const service = new ChatAppService(repository, piHost);
+  const repository = new ChatRepository(
+    path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
+    {
+      ownerProfileId: bootstrap.ownerProfileId,
+      selectedModelRef: "platform/standard",
+      deviceId: bootstrap.deviceId,
+    },
+  );
+  const service = new ChatAppService(
+    repository,
+    piHost,
+    new SyncCoordinator(repository, new HttpAccountSyncTransport()),
+  );
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.initialize();
 
@@ -28,7 +40,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     const request = appServiceRequestFrameSchema.safeParse(event.data);
     if (!request.success) return;
     try {
-      const data = await service.handle(request.data.request);
+      const data = await service.handle(request.data.request, request.data.authorization);
       mainPort.postMessage({
         kind: "app-service.response",
         requestId: request.data.requestId,

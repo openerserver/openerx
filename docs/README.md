@@ -12,5 +12,6 @@
 6. [实施启动记录](v2/12-implementation-bootstrap.md)
 7. [总体架构](v2/14-overall-architecture.md)
 8. [开发执行计划](v2/13-development-plan.md)
+9. [Remote Control 合同](v2/15-remote-control-contract.md)
 
 新文档不得继续扩展旧 Project、Task、AgentOps、组织治理或 Vue 控制平面主线。

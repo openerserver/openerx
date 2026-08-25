@@ -1,6 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
+  type AppServiceAuthorization,
   appServiceEventFrameSchema,
   appServiceResponseFrameSchema,
   type ChatCommandEnvelope,
@@ -23,7 +25,9 @@ interface PendingRequest {
 }
 
 export class AppServiceSupervisor {
-  readonly #profileDirectory: string;
+  #profileDirectory: string;
+  #ownerProfileId: string;
+  readonly #deviceId: string;
   readonly #piHostEntry: string;
   readonly #listeners = new Set<(event: ChatEvent) => void>();
   readonly #pending = new Map<string, PendingRequest>();
@@ -37,9 +41,16 @@ export class AppServiceSupervisor {
   #restartCount = 0;
   #handshakeComplete = false;
 
-  constructor(profileDirectory: string, piHostEntry = "pi-host.js") {
+  constructor(
+    profileDirectory: string,
+    piHostEntry = "pi-host.js",
+    ownerProfileId = "local-default",
+    deviceId = "00000000-0000-4000-8000-000000000000",
+  ) {
     this.#profileDirectory = profileDirectory;
     this.#piHostEntry = piHostEntry;
+    this.#ownerProfileId = ownerProfileId;
+    this.#deviceId = deviceId;
   }
 
   async start(): Promise<void> {
@@ -48,6 +59,19 @@ export class AppServiceSupervisor {
     const ready = this.#ready;
     if (!ready) throw new Error("App Service readiness was not initialized");
     return ready;
+  }
+
+  async switchProfile(profileDirectory: string, ownerProfileId: string): Promise<void> {
+    if (this.#profileDirectory === profileDirectory && this.#ownerProfileId === ownerProfileId) {
+      return;
+    }
+    this.stop();
+    this.#profileDirectory = profileDirectory;
+    this.#ownerProfileId = ownerProfileId;
+    this.#stopping = false;
+    this.#ready = null;
+    this.#restartCount = 0;
+    await this.start();
   }
 
   stop(): void {
@@ -73,7 +97,10 @@ export class AppServiceSupervisor {
     this.#appProcess?.kill();
   }
 
-  async request(request: ChatCommandEnvelope): Promise<unknown> {
+  async request(
+    request: ChatCommandEnvelope,
+    authorization?: AppServiceAuthorization,
+  ): Promise<unknown> {
     await this.start();
     const port = this.#mainPort;
     if (!port) throw new Error("App Service is unavailable");
@@ -84,11 +111,17 @@ export class AppServiceSupervisor {
         reject(new Error(`App Service request timed out: ${request.command}`));
       }, 15_000);
       this.#pending.set(requestId, { command: request.command, resolve, reject, timeout });
-      port.postMessage({ kind: "app-service.request", requestId, request });
+      port.postMessage({
+        kind: "app-service.request",
+        requestId,
+        request,
+        ...(authorization ? { authorization } : {}),
+      });
     });
   }
 
   #spawn(): void {
+    mkdirSync(this.#profileDirectory, { recursive: true });
     const appNonce = randomBytes(32).toString("hex");
     const piHostNonce = randomBytes(32).toString("hex");
     this.#emitStatus(this.#restartCount === 0 ? "starting" : "restarting");
@@ -123,13 +156,17 @@ export class AppServiceSupervisor {
         nonce: appNonce,
         piHostNonce,
         profileDirectory: this.#profileDirectory,
+        ownerProfileId: this.#ownerProfileId,
+        deviceId: this.#deviceId,
       },
       [mainChannel.port2, piHostChannel.port2],
     );
     this.#mainPort.on("message", (event) => this.#handleMessage(event.data, appNonce));
     this.#mainPort.start();
-    this.#appProcess.once("exit", () => this.#handleExit("App Service"));
-    this.#piHostProcess.once("exit", () => this.#handleExit("Pi Host"));
+    const appProcess = this.#appProcess;
+    const piHostProcess = this.#piHostProcess;
+    appProcess.once("exit", () => this.#handleExit("App Service", appProcess));
+    piHostProcess.once("exit", () => this.#handleExit("Pi Host", piHostProcess));
   }
 
   #handleMessage(data: unknown, expectedNonce: string): void {
@@ -175,7 +212,9 @@ export class AppServiceSupervisor {
     if (event.success) this.#emit(event.data.event);
   }
 
-  #handleExit(processName: string): void {
+  #handleExit(processName: "App Service" | "Pi Host", exitedProcess: UtilityProcess): void {
+    const currentProcess = processName === "App Service" ? this.#appProcess : this.#piHostProcess;
+    if (exitedProcess !== currentProcess) return;
     if (this.#stopping || (!this.#appProcess && !this.#piHostProcess)) return;
     this.#appProcess?.kill();
     this.#piHostProcess?.kill();

@@ -1,0 +1,149 @@
+import { createHash } from "node:crypto";
+import {
+  type ModelCatalogEntry,
+  type ModelGatewayRequestDto,
+  type ModelGatewayResponse,
+  type ModelRequirement,
+  type ModelSelectionCheck,
+  modelCatalogEntrySchema,
+  modelGatewayRequestSchema,
+  modelGatewayResponseSchema,
+  modelSelectionCheckSchema,
+  type UsageRecord,
+  type UsageStorePort,
+  usageRecordSchema,
+} from "@openerx/contracts";
+
+export interface ModelExecutionUsage {
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+  providerReported: boolean;
+  missingReasons: Record<string, string>;
+}
+
+export interface ModelExecutionResult {
+  text: string;
+  effectiveModelRef: string;
+  fallbackReason?: string;
+  usage: ModelExecutionUsage;
+}
+
+export interface ModelExecutor {
+  execute(
+    request: ModelGatewayRequestDto,
+    signal: AbortSignal | undefined,
+  ): Promise<ModelExecutionResult>;
+}
+
+export interface ModelGatewayServiceOptions {
+  catalog: ModelCatalogEntry[];
+  executor: ModelExecutor;
+  usageStore: Pick<UsageStorePort, "record">;
+  now?: () => Date;
+}
+
+const capabilityKeys = ["imageInput", "fileInput", "tools", "mcp", "imageGeneration"] as const;
+
+function deterministicUsageId(accountId: string, dedupeKey: string): string {
+  const hex = createHash("sha256").update(`${accountId}\0${dedupeKey}`, "utf8").digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+export class ModelGatewayService {
+  readonly #catalog: ModelCatalogEntry[];
+  readonly #executor: ModelExecutor;
+  readonly #usageStore: Pick<UsageStorePort, "record">;
+  readonly #now: () => Date;
+  readonly #responses = new Map<string, ModelGatewayResponse>();
+
+  constructor(options: ModelGatewayServiceOptions) {
+    this.#catalog = options.catalog.map((entry) => modelCatalogEntrySchema.parse(entry));
+    this.#executor = options.executor;
+    this.#usageStore = options.usageStore;
+    this.#now = options.now ?? (() => new Date());
+  }
+
+  catalog(): ModelCatalogEntry[] {
+    return structuredClone(this.#catalog);
+  }
+
+  checkSelection(modelRef: string, requirements: ModelRequirement): ModelSelectionCheck {
+    const selected = this.#catalog.find((entry) => entry.modelRef === modelRef);
+    if (selected?.status !== "available") {
+      return modelSelectionCheckSchema.parse({
+        supported: false,
+        modelRef,
+        missingCapabilities: [selected ? `status:${selected.status}` : "model_not_found"],
+        suggestedModelRefs: this.#catalog
+          .filter((entry) => entry.status === "available")
+          .map(({ modelRef: candidate }) => candidate),
+      });
+    }
+    const missingCapabilities = capabilityKeys.filter(
+      (capability) => requirements[capability] === true && !selected.capabilities[capability],
+    );
+    if (missingCapabilities.length === 0) return { supported: true };
+    const suggestedModelRefs = this.#catalog
+      .filter(
+        (entry) =>
+          entry.status === "available" &&
+          missingCapabilities.every((capability) => entry.capabilities[capability]),
+      )
+      .map(({ modelRef: candidate }) => candidate);
+    return modelSelectionCheckSchema.parse({
+      supported: false,
+      modelRef,
+      missingCapabilities,
+      suggestedModelRefs,
+    });
+  }
+
+  async execute(
+    input: ModelGatewayRequestDto,
+    signal?: AbortSignal,
+  ): Promise<ModelGatewayResponse> {
+    const request = modelGatewayRequestSchema.parse(input);
+    const responseKey = `${request.accountId}:${request.requestDedupeKey}`;
+    const replay = this.#responses.get(responseKey);
+    if (replay) return structuredClone(replay);
+    const selection = this.checkSelection(request.selectedModelRef, request.requirements);
+    if (!selection.supported) {
+      throw new Error(
+        `MODEL_CAPABILITY_UNSUPPORTED:${selection.missingCapabilities.join(",")}:${selection.suggestedModelRefs.join(",")}`,
+      );
+    }
+    if (signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
+    const execution = await this.#executor.execute(request, signal);
+    if (execution.effectiveModelRef !== request.selectedModelRef) {
+      if (request.approvedFallbackModelRef !== execution.effectiveModelRef) {
+        throw new Error("MODEL_SILENT_FALLBACK_REJECTED");
+      }
+      if (!execution.fallbackReason) throw new Error("MODEL_FALLBACK_REASON_REQUIRED");
+    }
+    const usage = usageRecordSchema.parse({
+      usageId: deterministicUsageId(request.accountId, request.requestDedupeKey),
+      accountId: request.accountId,
+      conversationId: request.conversationId,
+      messageId: request.messageId,
+      runId: null,
+      toolCallId: null,
+      selectedModelRef: request.selectedModelRef,
+      effectiveModelRef: execution.effectiveModelRef,
+      ...execution.usage,
+      dedupeKey: request.requestDedupeKey,
+      recordedAt: this.#now().toISOString(),
+    } satisfies UsageRecord);
+    const stored = this.#usageStore.record(usage).record;
+    const response = modelGatewayResponseSchema.parse({
+      text: execution.text,
+      effectiveModelRef: execution.effectiveModelRef,
+      fallbackReason: execution.fallbackReason ?? null,
+      usage: stored,
+    });
+    this.#responses.set(responseKey, response);
+    return structuredClone(response);
+  }
+}

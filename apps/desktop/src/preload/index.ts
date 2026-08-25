@@ -1,4 +1,8 @@
 import {
+  accountRequestCodeInputSchema,
+  accountRevokeDeviceInputSchema,
+  accountStateSchema,
+  accountVerifyCodeInputSchema,
   type ChatCommandEnvelope,
   type ChatCommandResultMap,
   chatActivateBranchInputSchema,
@@ -12,12 +16,17 @@ import {
   chatRegenerateInputSchema,
   chatRenameInputSchema,
   chatSearchInputSchema,
+  chatSelectModelInputSchema,
   chatSendInputSchema,
   chatStopInputSchema,
   type DesktopBridge,
   desktopEnvironmentSchema,
+  emailChallengeSchema,
   ipcChannels,
+  modelCatalogEntrySchema,
   parseChatCommandResult,
+  usageAggregateSchema,
+  usageQueryInputSchema,
 } from "@openerx/contracts";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -35,6 +44,47 @@ const bridge: DesktopBridge = {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.environmentGet);
     return desktopEnvironmentSchema.parse(result);
   },
+  getAccountState: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.accountState);
+    return accountStateSchema.parse(result);
+  },
+  requestEmailCode: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.accountRequestCode,
+      accountRequestCodeInputSchema.parse(input),
+    );
+    return emailChallengeSchema.parse(result);
+  },
+  verifyEmailCode: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.accountVerifyCode,
+      accountVerifyCodeInputSchema.parse(input),
+    );
+    return accountStateSchema.parse(result);
+  },
+  signOut: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.accountSignOut);
+    return accountStateSchema.parse(result);
+  },
+  revokeDevice: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.accountRevokeDevice,
+      accountRevokeDeviceInputSchema.parse(input),
+    );
+    return accountStateSchema.parse(result);
+  },
+  listModels: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.modelList);
+    return modelCatalogEntrySchema.array().parse(result);
+  },
+  getUsage: async (input = {}) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.usageGet,
+      usageQueryInputSchema.parse(input),
+    );
+    return usageAggregateSchema.parse(result);
+  },
+  syncNow: async () => invokeChat(ipcChannels.syncNow, "sync.now", {}),
   listConversations: async (input = {}) =>
     invokeChat(ipcChannels.chatList, "chat.list", chatListInputSchema.parse(input)),
   getConversation: async (input) =>
@@ -57,6 +107,12 @@ const bridge: DesktopBridge = {
     invokeChat(ipcChannels.chatArchive, "chat.archive", chatArchiveInputSchema.parse(input)),
   deleteConversation: async (input) =>
     invokeChat(ipcChannels.chatDelete, "chat.delete", chatDeleteInputSchema.parse(input)),
+  selectConversationModel: async (input) =>
+    invokeChat(
+      ipcChannels.chatSelectModel,
+      "chat.selectModel",
+      chatSelectModelInputSchema.parse(input),
+    ),
   search: async (input) =>
     invokeChat(ipcChannels.chatSearch, "chat.search", chatSearchInputSchema.parse(input)),
   activateBranch: async (input) =>

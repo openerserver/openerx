@@ -4,12 +4,13 @@
 >
 > Date: 2026-08-25 (Asia/Shanghai)
 >
-> Scope: Electron Main, Preload, Renderer, App Service process and their local data/IPC boundaries
+> Scope: Electron Main, Preload, Renderer, App Service, Pi Host and planned Remote Host Connector boundaries
 
 ## Assets and security invariants
 
-Protected assets are account sessions, OS credential handles, local conversation/cache data, file
-grants, attachment/artifact content, model/payment credentials, tool approvals and update integrity.
+Protected assets are account sessions, OS credential handles, Remote device keys/pairings, local
+conversation/cache data, file grants, attachment/artifact content, model/payment credentials, tool
+approvals and update integrity.
 
 The M1 invariants are:
 
@@ -28,6 +29,7 @@ The M1 invariants are:
 - Renderer compromise is assumed possible; it must not become local code execution.
 - Another local unprivileged process may attempt IPC connection, file replacement or credential reuse.
 - A valid account on one device may attempt cross-account/cross-device access.
+- A lost or malicious phone, forged pairing QR, compromised Relay, replayed Remote command or competing controller may attempt to control the desktop.
 - Supply-chain packages and update infrastructure may be compromised.
 - Physical administrator/root compromise and a fully compromised operating system are outside the
   app's prevention boundary; recovery and credential revocation still apply.
@@ -45,10 +47,14 @@ The M1 invariants are:
 | App Service crash freezes UI or corrupts writes | utility process, bounded restart, transactional single-writer storage | live Electron crash injection plus interrupted-message recovery E2E |
 | Database theft reveals reusable credentials | credentials outside DB; OS-protected key and authenticated field encryption | M1 schema inspection proves no credential/token tables; OS store and encrypted account fields remain M2 |
 | Path traversal or symlink escapes a grant | canonical path checks at capability broker and operation time | file-scope E2E in M4 |
-| Pi/Skill/MCP expands its own authority | isolated Pi Host, V2 capability port, explicit scope and approval; Pi tool lifecycle does not grant side-effect authority | denial/revocation E2E in M5/M6 |
+| Pi/Skill/MCP expands its own authority | isolated Pi Host, V2 capability port, explicit scope and approval; Pi tool lifecycle does not grant side-effect authority | denial/revocation E2E in M5/M7 |
+| Remote exposes a desktop listener | supervised Connector makes outbound TLS/WSS connections only; no localhost/public Remote server | socket scan and packaged-host E2E in M6 |
+| Forged/replayed/expired Remote command controls Pi twice | same-account pairing, device signatures, E2EE, TTL, sequence, baseRevision and host idempotency | mutation, replay, reorder and duplicate E2E in M6 |
+| Lost/revoked phone continues approval or event access | protected device key, biometric gates, immediate pairing/session revocation and short-lived encrypted resources | lost-device/revocation E2E in M6 |
+| Relay or push leaks content | Relay routes ciphertext only; push uses opaque IDs; redacted metadata logs | ciphertext/log/push canary tests in M6 |
 | Duplicate event/retry creates repeated state or charge | stable IDs, sequence checks and idempotency keys | contract tests from M1; billing tests in M3 |
 | Client forges usage, balance or payment result | cloud Usage/Ledger/Payment services are sole truth | cross-account and replay E2E in M2/M3 |
-| Package/update tampering | exact lockfile, CI, Electron fuses, signed/notarized release and signed feed | package inspection in M0; signing gate in M8 |
+| Package/update tampering | exact lockfile, CI, Electron fuses, signed/notarized desktop release, signed mobile release and signed feed | package inspection in M0; signing gate in M9 |
 | Legacy implementation leaks into V2 | workspace isolation and source-boundary checker | `npm run check:boundaries:v2` |
 | Secrets leak through logs/errors | stable error envelopes and structured redaction | snapshot/secret-canary tests before M2 |
 
@@ -62,7 +68,7 @@ The M1 invariants are:
 
 ## Residual risks and follow-up gates
 
-- M0 output is unsigned and suitable only for development. Distribution waits for M8 signing and
+- M0 output is unsigned and suitable only for development. Distribution waits for M9 signing and
   notarization evidence.
 - Forge's Vite integration is experimental. Exact pins and three-target CI packaging contain, but do
   not eliminate, upstream compatibility risk.

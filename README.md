@@ -1,11 +1,12 @@
 # OpenerX 2.0
 
-OpenerX 2.0 是面向普通用户的个人 AI 工作客户端。V1 使用 Electron + React + TypeScript，围绕对话、文件、工具、Skill、账户同步、平台模型和个人计费构建 Windows/macOS 桌面体验。
+OpenerX 2.0 是面向普通用户的个人 AI 工作客户端。V1 使用 Electron + React + TypeScript 构建 Windows/macOS 执行主机，并提供 iOS/Android Remote Companion；对话、文件、工具、Skill、账户同步、平台模型和个人计费统一由桌面执行面与手机控制面呈现。
 
 ## 当前状态
 
-V2 产品合同已经批准；M0「工程与 ADR 基线」、M1「Chat Alpha」和 Pi Foundation 已完成，
-下一检查点是 M2「Account + Model」。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，不再属于新主线构建和依赖边界。
+V2 产品合同已经批准；M0「工程与 ADR 基线」、M1「Chat Alpha」、Pi Foundation 和
+M2「Account + Sync + Model + Usage + Remote Contract Foundation」已完成，下一检查点是
+M3「Billing Alpha」。Remote Control Alpha 在 M6 交付。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，不再属于新主线构建和依赖边界。
 
 ## 活跃目录
 
@@ -25,6 +26,7 @@ V2 产品合同已经批准；M0「工程与 ADR 基线」、M1「Chat Alpha」�
 1. [V2 产品合同包](docs/v2/README.md)
 2. [实施启动记录](docs/v2/12-implementation-bootstrap.md)
 3. [开发执行计划](docs/v2/13-development-plan.md)
+4. [Remote Control 合同](docs/v2/15-remote-control-contract.md)
 
 ## V2 本地命令
 

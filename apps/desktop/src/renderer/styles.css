@@ -156,12 +156,105 @@ select:focus-visible {
   background: #d46b61;
 }
 
+.sidebar-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 9px;
+  color: #c9ccc5;
+  text-decoration: none;
+  border-radius: 8px;
+}
+.sidebar-account:hover,
+.sidebar-account.active {
+  color: #fff;
+  background: #3b4039;
+}
+.sidebar-account span {
+  color: #92988f;
+  font-size: 10px;
+}
+
 .new-chat-page,
 .conversation-page,
 .search-page,
-.placeholder-page {
+.placeholder-page,
+.settings-page {
   width: min(840px, calc(100% - 64px));
   margin: 0 auto;
+}
+
+.settings-page {
+  padding: 56px 0;
+}
+.settings-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
+  gap: 30px;
+  padding: 24px;
+  background: #fff;
+  border: 1px solid #dcded7;
+  border-radius: 16px;
+}
+.settings-card h2 {
+  margin: 12px 0 4px;
+}
+.settings-card p,
+.settings-note {
+  color: #6b7068;
+}
+.account-status {
+  display: inline-flex;
+  padding: 4px 8px;
+  color: #725018;
+  background: #f6e8c7;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.account-status.account-signed_in {
+  color: #295d37;
+  background: #dcecdf;
+}
+.account-form,
+.device-card {
+  display: grid;
+  gap: 9px;
+  align-content: start;
+}
+.account-form label {
+  color: #5f645c;
+  font-size: 12px;
+  font-weight: 650;
+}
+.account-form input {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid #cfd2ca;
+  border-radius: 8px;
+}
+.device-card {
+  padding: 16px;
+  background: #f7f7f5;
+  border-radius: 12px;
+}
+.device-card span {
+  color: #777c73;
+  font-size: 12px;
+}
+.device-card button {
+  justify-self: start;
+  padding: 7px 10px;
+  color: #9b3e38;
+  background: #fff;
+  border: 1px solid #d7d9d2;
+  border-radius: 7px;
+}
+.settings-note {
+  max-width: 680px;
+  margin-top: 18px;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .new-chat-page {
@@ -186,6 +279,9 @@ h1 {
   font-size: clamp(27px, 3vw, 40px);
   line-height: 1.1;
   letter-spacing: -0.04em;
+}
+.settings-page h1 {
+  margin-bottom: 28px;
 }
 .welcome > p:last-child,
 .placeholder-page > p:last-child {
@@ -265,6 +361,14 @@ h1 {
   justify-content: space-between;
   padding-bottom: 18px;
   border-bottom: 1px solid #e1e2dd;
+  position: relative;
+}
+.conversation-usage {
+  position: absolute;
+  bottom: -20px;
+  left: 0;
+  color: #777c73;
+  font-size: 11px;
 }
 .conversation-toolbar h1 {
   max-width: 520px;
@@ -345,6 +449,13 @@ h1 {
   color: #858a81;
   font-size: 10px;
   text-transform: uppercase;
+}
+.usage-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: #777c73;
+  font-size: 10px;
 }
 .status-streaming {
   color: #3c7650;

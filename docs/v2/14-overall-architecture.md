@@ -1,18 +1,18 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M1_CHAT_ALPHA_AND_PI_FOUNDATION_COMPLETE / M2_ACCOUNT_ALPHA_NEXT`
+> 状态：`M2_ACCOUNT_SYNC_MODEL_USAGE_COMPLETE / M3_BILLING_ALPHA_NEXT`
 >
 > 更新日期：2026-08-25（Asia/Shanghai）
 >
-> 适用范围：Windows 10 22H2+/Windows 11 x64、macOS 14+ arm64/x64 个人桌面客户端
+> 适用范围：Windows 10 22H2+/Windows 11 x64、macOS 14+ arm64/x64 桌面执行主机与 iOS 17+/Android 11+ Remote Companion
 
 ## 1. 架构变化结论
 
-整体架构已经发生根本变化。旧版是以浏览器、BFF、企业 Control Plane 和 Task/Workflow 为中心的控制平面；V2 改为以 Electron 个人客户端、Conversation/Message、账户云同步和安全本地执行为中心。
+整体架构已经发生根本变化。旧版是以浏览器、BFF、企业 Control Plane 和 Task/Workflow 为中心的控制平面；V2 改为以 Electron 桌面执行主机、iOS/Android 手机控制面、Conversation/Message、账户云同步和安全本地执行为中心。
 
 | 维度 | 旧架构 | V2 架构 |
 | --- | --- | --- |
-| 用户入口 | 浏览器 Web UI | Electron + React 桌面客户端 |
+| 用户入口 | 浏览器 Web UI | Electron + React 桌面执行主机；React Native iOS/Android Remote Companion |
 | 用户心智 | Project、Task、Workflow、Agent 控制 | Conversation、Message、File、Artifact |
 | 前端边界 | Web UI 通过 BFF 访问 Control Plane | Renderer 通过类型化 Preload Bridge 访问本地 App Service |
 | 本地权限 | 浏览器、BFF 和旧执行模块分散处理 | Electron Main 与 V2 Broker 管理权限；Pi Host 独立隔离 |
@@ -21,16 +21,18 @@
 | 模型 | 旧执行引擎自行配置 Provider | Pi `ModelRuntime` 接 Platform Model Gateway，统一凭证、Usage 和实际模型记录 |
 | 商业系统 | 成本/预算治理视图 | 报价、预留、额度、积分、充值余额、复式账本、支付和账单 |
 | 工具能力 | 旧执行引擎和插件各自配置 | Pi 管理工具调用生命周期；V2 Capability Broker 统一 Web、Browser、Shell、Desktop、MCP、Skill 权限与副作用 |
+| Remote | 无稳定个人远程控制边界 | 手机发送产品命令；桌面 App Service 直接映射 Pi 原生 API；出站加密 Relay 不拥有 harness |
 | 企业能力 | Organization、Project、审批、治理是主线 | 移出 V1，旧系统保留为 Legacy |
 
 ## 2. V2 总体逻辑架构图
 
-下图是完整 V1 目标态；其中账户云、模型网关、计费和工具域将在后续检查点接入。M1
-不会用占位实现伪装这些尚未交付的能力。
+下图是完整 V1 目标态。M2 已接入账户云、内容同步、模型网关和 Token Usage；计费、文件、
+工具、Skill 与 Remote 运行面仍按后续检查点交付，不以占位实现伪装完成。
 
 ```mermaid
 flowchart LR
   USER([个人用户])
+  MOBILE["iOS / Android Remote Companion<br/>Hosts / Tasks / Inbox / Settings"]
 
   subgraph DESKTOP["桌面客户端 · apps/"]
     direction TB
@@ -39,6 +41,7 @@ flowchart LR
     MAIN["Electron Main<br/>窗口 / 系统权限 / 凭证库 / 更新"]
     APP["Personal App Service<br/>Conversation / Message / Search / Settings"]
     SYNC_CLIENT["Sync Service<br/>Outbox / Cursor / Conflict / Tombstone"]
+    REMOTE_CONNECTOR["Remote Host Connector<br/>出站 WSS / 验签 / 去重"]
   end
 
   subgraph LOCAL_DATA["本地数据 · packages/storage"]
@@ -65,6 +68,8 @@ flowchart LR
     PRICING["Pricing Service<br/>价格目录 / 报价 / 快照"]
     BILLING["Billing & Ledger Service<br/>预留 / 结算 / 额度 / 积分 / 余额 / 账单"]
     PAYMENT["Payment Adapter<br/>支付宝 / 微信 / 验签 / 退款 / 对账"]
+    REMOTE_GATEWAY["Remote Control Gateway<br/>Presence / 密文路由 / Event Cursor"]
+    NOTIFY["Notification Service<br/>APNs / FCM"]
     ACCOUNT_DB[("账户云数据<br/>Conversation / Message / Settings")]
     OBJECT_STORE[("云对象存储<br/>Attachment / Artifact")]
     LEDGER_DB[("不可变账本<br/>订单 / 分录 / Statement")]
@@ -74,10 +79,12 @@ flowchart LR
     PROVIDERS["平台模型 Provider"]
     CHECKOUT["无 Bridge 托管收银台"]
     PAYMENT_PROVIDER["支付宝 / 微信支付平台"]
-    REMOTE["公网 / MCP / 用户桌面应用"]
+    UNTRUSTED["公网 / MCP / 用户桌面应用"]
+    PUSH_PROVIDER["APNs / FCM"]
   end
 
   USER --> RENDERER
+  USER --> MOBILE
   RENDERER --> PRELOAD
   PRELOAD --> MAIN
   MAIN --> APP
@@ -86,19 +93,29 @@ flowchart LR
   APP --> FILES
   APP --> SYNC_CLIENT
   APP --> SUPERVISOR
+  MAIN --> REMOTE_CONNECTOR
+  REMOTE_CONNECTOR --> APP
 
   SUPERVISOR --> HOST
   HOST --> PI
   PI --> TOOL_GATEWAY
   TOOL_GATEWAY --> CAPABILITIES
   CAPABILITIES --> FILES
-  CAPABILITIES --> REMOTE
+  CAPABILITIES --> UNTRUSTED
 
   SYNC_CLIENT --> IDENTITY
   SYNC_CLIENT --> SYNC_API
   IDENTITY --> ACCOUNT_DB
   SYNC_API --> ACCOUNT_DB
   SYNC_API --> OBJECT_STORE
+  MOBILE --> IDENTITY
+  MOBILE --> SYNC_API
+  MOBILE <-->|"TLS + E2EE payload"| REMOTE_GATEWAY
+  REMOTE_CONNECTOR <-->|"主机发起 TLS/WSS"| REMOTE_GATEWAY
+  REMOTE_GATEWAY --> IDENTITY
+  REMOTE_GATEWAY --> NOTIFY
+  NOTIFY --> PUSH_PROVIDER
+  PUSH_PROVIDER --> MOBILE
 
   PI --> MODEL
   MODEL --> PROVIDERS
@@ -141,6 +158,35 @@ Pi Host 已直接加载 `@earendil-works/pi-coding-agent@0.84.3`；每次生成�
 
 确定性测试只在测试文件中注入 Pi 的 `faux` Model Provider；生产源码没有替代 harness
 或固定回答模型。
+
+### 2.2 M2 当前已实现拓扑
+
+```mermaid
+flowchart LR
+  USER([个人用户]) --> UI[React Renderer<br/>Chat / Account / Model / Usage]
+  UI --> PRELOAD[Typed Preload Bridge]
+  PRELOAD --> MAIN[Electron Main<br/>IPC / Profile Supervisor]
+  MAIN --> KEYCHAIN[(OS safeStorage<br/>Device refresh credential)]
+  MAIN --> ID[Identity API<br/>Challenge / Refresh / Revoke]
+  MAIN --> APP[Account-scoped App Service<br/>utility process]
+  APP --> LOCAL[(SQLite<br/>Conversation / Message / Outbox)]
+  APP --> SYNC[Account Sync API<br/>Revision / Cursor / Conflict / Tombstone]
+  APP --> PIHOST[Isolated Pi Host<br/>utility process]
+  PIHOST --> PI[Pi AgentSession<br/>ModelRuntime]
+  PI --> PROVIDER[Pi-native Platform Provider]
+  PROVIDER --> GATEWAY[Platform Model Gateway<br/>Catalog / Capability / Explicit Fallback]
+  GATEWAY --> UPSTREAM[Platform model Provider]
+  GATEWAY --> USAGE[Token Usage Store<br/>Authoritative UsageRecord]
+  MAIN --> USAGE
+```
+
+账户登录后 Main 切换到账户独立 Profile；旧 utility process 的退出事件按进程实例隔离，
+不会误杀新 Profile。Conversation、Branch、Message 与选模在同一 SQLite 事务写入 Outbox。
+同步活跃期间产生的新流式终态会触发下一轮 drain；云端旧快照不得覆盖本地 pending/conflict
+版本。模型请求只通过 Pi 原生 Provider 进入 Platform Gateway，上游凭证不进入客户端。
+
+M2 同时冻结 `RemoteHost`、一次性配对、签名/加密命令、回执、`AttentionRequest`、脱敏加密
+事件和游标的 V1 Schema；Remote Connector、Relay 和移动端仍属于 M6。
 
 ## 3. 主链路
 
@@ -205,6 +251,41 @@ sequenceDiagram
 
 同步只负责账户内容。设备权限、绝对路径、Cookie、Shell 历史、平台密钥、商业余额和账本均不进入普通离线同步队列。
 
+### 3.3 手机 Remote 控制
+
+```mermaid
+sequenceDiagram
+  participant M as Mobile Companion
+  participant R as Remote Gateway
+  participant C as Remote Host Connector
+  participant APP as App Service
+  participant PI as Pi AgentSession
+  participant B as Capability Broker
+
+  M->>R: signed + encrypted RemoteCommand
+  R->>C: route ciphertext to online host
+  C->>C: verify, decrypt, TTL/revision/idempotency check
+  C->>APP: typed product command
+  alt Start / idle continue
+    APP->>PI: prompt()
+  else Steer
+    APP->>PI: steer()
+  else Queue
+    APP->>PI: followUp()
+  else Stop
+    APP->>PI: abort()
+  else permission decision
+    APP->>B: validate pending request and scope
+    B-->>PI: approved or denied tool result
+  end
+  PI-->>APP: Pi native events
+  APP-->>C: sanitized product events
+  C-->>R: encrypted event + cursor
+  R-->>M: ciphertext + receipt
+```
+
+Relay 的投递重放只解决网络至少一次语义，不是 Agent 队列。Pi 仍唯一决定 `steer()` 与 `followUp()` 的运行时顺序；桌面 Broker 仍是审批和设备副作用的最终边界。主机离线时 Remote 只读取已同步历史，不接受新执行或审批。完整合同见 [15-remote-control-contract.md](15-remote-control-contract.md)。
+
 ## 4. 信任边界
 
 | 区域 | 信任级别 | 可以做什么 | 明确禁止 |
@@ -213,9 +294,12 @@ sequenceDiagram
 | Preload Bridge | 最小桥接层 | 版本化 DTO、参数校验、业务动作 | 暴露原始 `ipcRenderer` 或通用执行接口 |
 | Electron Main | 桌面权限 Broker | 窗口、系统对话框、Keychain、进程监督 | AI 长任务、文档解析、支付事实判定 |
 | App Service | 本地业务协调 | 本地缓存、对话、同步队列、模型/账单 API | 修改服务端余额、保存 Provider 密钥 |
+| Mobile Companion | 不可信远程控制端 | 展示账户内容、发送签名产品命令、作出受限用户决定 | 直接访问 Pi/桌面、扩大 Scope、保存主机凭证 |
+| Remote Host Connector | 网络隔离边界 | 出站连接、设备挑战、验签/解密/去重、加密产品事件 | 公开监听、直接调用 Pi、替 Broker 批准 |
 | Pi Host | 不可信执行区 | 在授权工作目录运行 Pi `AgentSession` | 扫描 Home、读取全局凭证、任意网络 |
 | Capability & Permission Broker | 能力安全边界 | 接受 Pi 工具调用，执行 Scope、审批、沙箱、审计和副作用幂等 | 自行规划 Agent 步骤；Skill/MCP/Shell 绕过权限系统 |
 | 云平台 | 账户与商业真值 | 身份、同步、模型路由、用量、账本、支付 | 接受客户端提交的余额或支付成功状态 |
+| Remote Gateway | 不可信内容 Relay | Presence、密文路由、短 TTL 重投、游标、回执 | 解密正文、规划任务、持有设备私钥或永久保存本地运行详情 |
 
 ## 5. 数据真值
 
@@ -229,13 +313,17 @@ sequenceDiagram
 | 费用 | ChargeRecord + PricingSnapshot | 只读展示缓存 |
 | 额度、积分、充值余额 | 不可变账本投影 | 不进入离线写队列 |
 | 支付结果 | 服务端查单/验签回调 | 客户端只轮询和展示 |
+| Remote 配对/撤销 | Identity API 设备注册 | 手机和主机保留受保护私钥与只读配对投影 |
+| Remote 命令应用结果 | 桌面 App Service + Pi/Broker 产品事件 | Gateway 只保留短期密文与回执；手机按游标缓存 |
 
 ## 6. 仓库映射
 
 ```text
 apps/desktop                     Electron Main / Preload / React Renderer
+apps/mobile                      React Native + Expo Remote Companion
 packages/app-service             Personal App Service 核心与 utility-process 入口
 packages/pi-host                 Pi AgentSession 组合与 utility-process 入口
+packages/remote-host             Remote Host Connector 核心与 utility-process 入口
 services/identity-api            账户与设备会话
 services/account-sync-api        云同步 API
 services/model-gateway           平台模型目录与统一调用
@@ -243,6 +331,8 @@ services/token-usage-store       UsageRecord 与 Token 聚合
 services/pricing-service         价格目录、报价与快照
 services/billing-ledger-service  预留、结算、额度、积分、余额、账本与账单
 services/payment-adapter         支付宝/微信支付、退款与对账
+services/remote-control-gateway  Presence、配对协调、密文命令/事件路由与回执
+services/notification-service    APNs/FCM 推送令牌与不透明通知
 packages/domain                  Conversation-first 领域模型
 packages/contracts               IPC/API/Event Schema
 packages/tool-sdk                Tool/Permission 合同
@@ -256,7 +346,7 @@ packages/observability           脱敏日志、Trace 和诊断
 
 旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。
 
-## 8. M1 已实现映射
+## 8. M1/M2 已实现映射
 
 - 根 workspace 使用 npm 11；`apps`/`services` 只通过 `packages` 共享合同和实现。
 - Electron 44 + Forge 7 + Vite 6 分别构建 Main、Preload、App Service、Pi Host 和
@@ -266,10 +356,20 @@ packages/observability           脱敏日志、Trace 和诊断
 - Main 以独立 utility process 监督 App Service 和 Pi Host；进程间使用私有
   MessagePort、256-bit 启动 nonce、版本化合同和有界重启。
 - App Service 独占 `node:sqlite`，实现迁移校验、Conversation/Message/Part、分支、revision、
-  幂等键、单调事件和中断恢复。M1 数据库不包含账户凭证。
+  幂等键、单调事件、中断恢复，以及账户内容 Outbox、cursor、冲突和墓碑。本地数据库不包含
+  可复用账户凭证。
 - Pi Host 直接运行维护中的 Pi 0.84.3，使用 `AgentSession`、原生流式事件和 `abort()`；
-  当前禁用工具，Platform Model Gateway、文件和工具能力分别由 M2、M4、M5 门禁约束。
+  M2 已以 Pi-native Provider 接入 Platform Model Gateway，文件和工具能力分别由 M4、M5 门禁约束。
+- Identity API、Account Sync API、Model Gateway、Token Usage Store 和 Platform Alpha HTTP
+  组合层均已实现账户作用域；服务之间只通过 `packages/contracts` 端口连接。
+- Main 使用 Electron `safeStorage` 异步接口保护可复用 DeviceSession 凭证；访问令牌只在 Main
+  内存中流转，Renderer、SQLite 同步 payload 和 Pi 历史均不持有凭证。
+- Token Usage Store 以账户和稳定 dedupe key 去重，保留输入、缓存、输出、推理和总 Token 的
+  `null + missingReason` 语义；消息、对话和账户聚合不把未知冒充为 0。
 - Pi 测试 Provider 只存在于测试代码；生产路径只有 Pi harness。
 - Windows x64、macOS arm64 和 macOS x64 进入 CI 打包矩阵。
+
+Remote M2 协议合同已冻结；M6 完成移动端、Connector、Gateway、推送及真机/主机矩阵。
+该目标态不改变已冻结的 Pi 唯一 harness 和私有进程边界。
 
 规范性细节见 [ADR 索引](adr/README.md) 和 [Electron/App Service 威胁模型](security/electron-threat-model.md)。

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { syncStatusSchema } from "./sync";
 
 export const entityIdSchema = z.uuid();
 export const timestampSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
@@ -155,6 +156,13 @@ export const chatArchiveInputSchema = z
 
 export const chatDeleteInputSchema = z.object({ conversationId: entityIdSchema }).strict();
 
+export const chatSelectModelInputSchema = z
+  .object({
+    conversationId: entityIdSchema,
+    modelRef: z.string().regex(/^platform\/[a-z0-9][a-z0-9._-]*$/),
+  })
+  .strict();
+
 export const chatSearchInputSchema = z
   .object({
     query: z.string().trim().min(1).max(500),
@@ -177,6 +185,7 @@ export const chatEventsInputSchema = z
   .strict();
 
 export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
+  z.object({ command: z.literal("sync.now"), input: z.object({}).strict() }).strict(),
   z.object({ command: z.literal("chat.list"), input: chatListInputSchema }).strict(),
   z.object({ command: z.literal("chat.get"), input: chatGetInputSchema }).strict(),
   z.object({ command: z.literal("chat.send"), input: chatSendInputSchema }).strict(),
@@ -186,6 +195,7 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
   z.object({ command: z.literal("chat.rename"), input: chatRenameInputSchema }).strict(),
   z.object({ command: z.literal("chat.archive"), input: chatArchiveInputSchema }).strict(),
   z.object({ command: z.literal("chat.delete"), input: chatDeleteInputSchema }).strict(),
+  z.object({ command: z.literal("chat.selectModel"), input: chatSelectModelInputSchema }).strict(),
   z.object({ command: z.literal("chat.search"), input: chatSearchInputSchema }).strict(),
   z
     .object({ command: z.literal("chat.activateBranch"), input: chatActivateBranchInputSchema })
@@ -243,6 +253,7 @@ export type ChatCommandEnvelope = z.infer<typeof chatCommandEnvelopeSchema>;
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 
 export interface ChatCommandResultMap {
+  "sync.now": z.infer<typeof syncStatusSchema>;
   "chat.list": ConversationSummary[];
   "chat.get": ConversationSnapshot;
   "chat.send": GenerationReceipt;
@@ -252,6 +263,7 @@ export interface ChatCommandResultMap {
   "chat.rename": Conversation;
   "chat.archive": Conversation;
   "chat.delete": z.infer<typeof deletedConversationResultSchema>;
+  "chat.selectModel": Conversation;
   "chat.search": SearchResult[];
   "chat.activateBranch": ConversationSnapshot;
   "chat.events": ChatEvent[];
@@ -263,6 +275,9 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
 ): ChatCommandResultMap[C] {
   let parsed: unknown;
   switch (command) {
+    case "sync.now":
+      parsed = syncStatusSchema.parse(value);
+      break;
     case "chat.list":
       parsed = z.array(conversationSummarySchema).parse(value);
       break;
@@ -280,6 +295,7 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "chat.rename":
     case "chat.archive":
+    case "chat.selectModel":
       parsed = conversationSchema.parse(value);
       break;
     case "chat.delete":
@@ -307,6 +323,7 @@ export interface ChatBridge {
   deleteConversation(
     input: z.input<typeof chatDeleteInputSchema>,
   ): Promise<z.infer<typeof deletedConversationResultSchema>>;
+  selectConversationModel(input: z.input<typeof chatSelectModelInputSchema>): Promise<Conversation>;
   search(input: z.input<typeof chatSearchInputSchema>): Promise<SearchResult[]>;
   activateBranch(
     input: z.input<typeof chatActivateBranchInputSchema>,

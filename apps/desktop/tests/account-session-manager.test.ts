@@ -1,0 +1,119 @@
+import { randomUUID } from "node:crypto";
+import type { DeviceSessionGrant } from "@openerx/contracts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  AccountSessionManager,
+  type CredentialVaultPort,
+  type IdentityTransport,
+} from "../src/main/account-session-manager";
+import type { PersistedDeviceCredential } from "../src/main/credential-vault";
+
+function grant(): DeviceSessionGrant {
+  const accountId = randomUUID();
+  return {
+    account: {
+      accountId,
+      email: "session@example.com",
+      displayName: "Session",
+      createdAt: "2026-08-25T10:00:00.000Z",
+    },
+    session: {
+      sessionId: randomUUID(),
+      accountId,
+      device: {
+        deviceId: randomUUID(),
+        name: "Test Mac",
+        platform: "darwin",
+        arch: "arm64",
+      },
+      sessionVersion: 1,
+      createdAt: "2026-08-25T10:00:00.000Z",
+      lastActiveAt: "2026-08-25T10:00:00.000Z",
+      revokedAt: null,
+    },
+    refreshCredential: "refresh-session-manager-credential-123456",
+    accessToken: "access-session-manager-credential-12345678",
+    accessTokenExpiresAt: "2099-08-25T10:05:00.000Z",
+  };
+}
+
+function setup(persisted: PersistedDeviceCredential | null = null) {
+  let saved = persisted;
+  const save = vi.fn(async (next: Omit<PersistedDeviceCredential, "version">) => {
+    saved = { version: 1, ...next };
+  });
+  const clear = vi.fn(async () => {
+    saved = null;
+  });
+  const vault: CredentialVaultPort = {
+    save,
+    clear,
+    load: async () => saved,
+  };
+  const nextGrant = grant();
+  const transport: IdentityTransport = {
+    requestChallenge: vi.fn(async (email) => ({
+      challengeId: randomUUID(),
+      email,
+      expiresAt: "2099-08-25T10:10:00.000Z",
+    })),
+    verifyChallenge: vi.fn(async () => nextGrant),
+    refresh: vi.fn(async () => nextGrant),
+    revoke: vi.fn(async () => {}),
+  };
+  const manager = new AccountSessionManager({
+    vault,
+    transport,
+    device: nextGrant.session.device,
+  });
+  return { manager, transport, vault, nextGrant, save, clear };
+}
+
+describe("AccountSessionManager", () => {
+  it("keeps reusable credentials behind the vault and exposes only public state", async () => {
+    const { manager, transport, nextGrant, save } = setup();
+    const challenge = await manager.requestCode(nextGrant.account.email);
+    const state = await manager.verifyCode(challenge.challengeId, "123456");
+    expect(state).toMatchObject({ status: "signed_in", account: nextGrant.account });
+    expect(JSON.stringify(state)).not.toContain(nextGrant.refreshCredential);
+    expect(save).toHaveBeenCalledWith({
+      account: nextGrant.account,
+      session: nextGrant.session,
+      refreshCredential: nextGrant.refreshCredential,
+    });
+    expect(await manager.accessToken()).toBe(nextGrant.accessToken);
+    expect(transport.verifyChallenge).toHaveBeenCalled();
+  });
+
+  it("refreshes a persisted credential on startup and clears invalid sessions", async () => {
+    const initial = grant();
+    const persisted = {
+      version: 1 as const,
+      account: initial.account,
+      session: initial.session,
+      refreshCredential: initial.refreshCredential,
+    };
+    const success = setup(persisted);
+    expect(await success.manager.initialize()).toMatchObject({ status: "signed_in" });
+
+    const failed = setup(persisted);
+    vi.mocked(failed.transport.refresh).mockRejectedValueOnce(new Error("REFRESH_REPLAY_REVOKED"));
+    expect(await failed.manager.initialize()).toMatchObject({
+      status: "reauth_required",
+      reason: "REFRESH_REPLAY_REVOKED",
+    });
+    expect(failed.clear).toHaveBeenCalled();
+  });
+
+  it("revokes the current device and removes local credentials", async () => {
+    const { manager, nextGrant, transport, clear } = setup();
+    await manager.verifyCode(randomUUID(), "123456");
+    const state = await manager.revokeDevice(nextGrant.session.sessionId);
+    expect(transport.revoke).toHaveBeenCalledWith(
+      nextGrant.accessToken,
+      nextGrant.session.sessionId,
+    );
+    expect(clear).toHaveBeenCalled();
+    expect(state.status).toBe("signed_out");
+  });
+});

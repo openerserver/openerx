@@ -2,7 +2,7 @@
 
 > 状态：`APPROVED_PRODUCT_SCOPE / PI_FOUNDATION_COMPLETE`
 >
-> 合同类型：个人客户端壳、应用服务、Pi Host 和能力 Broker
+> 合同类型：桌面执行主机、手机控制面、应用服务、Pi Host、Remote Relay 和能力 Broker
 
 ## 1. 架构目标
 
@@ -12,16 +12,21 @@ V1 技术架构首先服务个人客户端：
 2. 流式响应稳定，停止和重试可靠。
 3. 文件与工具能力在清晰权限内工作。
 4. 长任务可以离开界面后继续或恢复。
-5. 账户历史在 Windows 与 macOS 间可靠同步和恢复。
+5. 账户历史在 Windows、macOS 与 iOS/Android Remote Companion 间可靠同步和恢复。
 6. 平台统一模型的 Token、价格、实际费用和账户扣减可逐笔核对。
 7. 额度、积分、充值余额、支付和账单由服务端商业系统保持唯一真值。
 8. 模型可替换，Pi 版本可在稳定宿主边界内升级，产品历史不依赖 Pi 内部状态。
-9. 不建设暂时没有用户价值的企业管理面。
+9. 手机可以安全控制已配对的在线桌面主机，但所有实际执行仍由桌面上的 Pi 和设备能力完成。
+10. 不建设暂时没有用户价值的企业管理面。
 
 ## 2. 目标拓扑
 
 ```mermaid
 flowchart TD
+  MOBILE[iOS and Android Remote Companion] --> RELAY[Remote Control Gateway]
+  MAIN --> CONNECTOR[Remote Host Connector]
+  CONNECTOR <-->|"主机发起 WSS"| RELAY
+  CONNECTOR --> APP
   UI[React Renderer] --> PRELOAD[Typed Preload Bridge]
   PRELOAD --> MAIN[Electron Main Process]
   MAIN --> APP[Personal App Service / Utility Process]
@@ -46,7 +51,7 @@ V1 不包含 Admin Web、组织服务和团队控制平面。
 
 ## 3. 已选技术方案
 
-`已确定`：V1 为跨平台桌面客户端，内嵌 Web UI。
+`已确定`：V1 以跨平台桌面执行主机为核心，内嵌 Web UI，并提供 iOS/Android Remote Companion 控制面。
 
 `已确定`：Renderer 使用 React + TypeScript 重写，不复用 Vue 页面和 Ant Design Vue 组件。
 
@@ -70,6 +75,8 @@ V1 已确认系统矩阵：
 | Windows 10 22H2、Windows 11 | x64 | 必须支持 |
 | macOS 14 Sonoma 及以上 | Apple Silicon arm64 | 必须支持 |
 | macOS 14 Sonoma 及以上 | Intel x64 | 必须支持 |
+| iOS 17 及以上 | arm64 | Remote Companion 必须支持 |
+| Android 11 及以上 | arm64-v8a | Remote Companion 必须支持；x86_64 仅作模拟器测试 |
 | Windows 10/11 | ARM64 | V1 不支持 |
 
 实现阶段选择的 Electron、Chromium、Node 和 Pi 版本必须仍在维护期，并通过上述矩阵实机验证。
@@ -125,6 +132,20 @@ V1 已确认系统矩阵：
 - 浏览器、Shell、桌面控制和 Skill 脚本使用独立能力 Broker，不通过 Renderer 直接启动。
 - 结束后保留成果，清理临时数据。
 
+### 4.7 iOS/Android Remote Companion
+
+- 使用 React Native + Expo 与 TypeScript，共享产品 DTO，不共享 Electron Bridge 或 Pi 依赖。
+- 展示主机 Presence、对话、活动任务、Queue/Steer/Stop、待审批、Diff、测试、终端、截图和 Artifact。
+- 通过账户云读取持久内容，通过 Remote Gateway 收发端到端加密的短期命令与运行事件。
+- 不执行本地 Agent、工具或桌面能力，不授予新的桌面文件 Scope 或操作系统权限。
+
+### 4.8 Remote Host Connector 与云服务
+
+- 桌面 Remote Host Connector 是受监督 utility process，只发起出站 TLS/WSS，不开放本地或公网监听端口。
+- Connector 负责设备挑战、命令验签/解密/去重和产品事件加密，只通过私有 MessagePort 调用 App Service。
+- Remote Control Gateway 负责 Presence、密文路由、短 TTL 重放、游标和回执；Notification Service 负责不含敏感正文的 APNs/FCM 推送。
+- Relay、Connector 和手机都不直接调用 Pi；完整合同见 [15-remote-control-contract.md](15-remote-control-contract.md)。
+
 ## 5. 建议仓库结构
 
 ```text
@@ -135,6 +156,7 @@ apps/
     src/renderer/
   app-service/
   sync-service/
+  mobile/
 services/
   identity-api/
   account-sync-api/
@@ -143,10 +165,13 @@ services/
   pricing-service/
   billing-ledger-service/
   payment-adapter/
+  remote-control-gateway/
+  notification-service/
 packages/
   domain/
   contracts/
   pi-host/
+  remote-host/
   tool-sdk/
   skills/
   ui-react/
@@ -181,19 +206,18 @@ Message -> WorkItem/ExecutionRun product projection -> Pi AgentSession
 
 ## 7. Pi Host 进程合同
 
-当前合同直接表达 Pi 会话动作，不定义抽象 harness：
+目标合同直接表达 Pi 会话动作，不定义抽象 harness：
 
 | Frame | 方向 | 含义 |
 | --- | --- | --- |
 | `pi-host.bootstrap` / `pi-host.ready` | Main ↔ Pi Host | 版本、profile 和启动 nonce 握手 |
 | `pi.session.prompt` | App Service → Pi Host | 把已批准产品上下文提交给新的 Pi `AgentSession` |
+| `pi.session.steer` | App Service → Pi Host | 调用 Pi `AgentSession.steer()`，在当前 turn 的工具调用后改变下一次模型调用 |
+| `pi.session.follow-up` | App Service → Pi Host | 调用 Pi `AgentSession.followUp()`，在当前工作完成后提交排队指令 |
 | `pi.session.abort` | App Service → Pi Host | 调用 Pi `AgentSession.abort()` |
 | `pi.product-event` | Pi Host → App Service | 把 Pi 事件投影为有序、幂等的产品增量或终态 |
 
-合同实现在 `packages/contracts/src/pi.ts`，Pi 会话组合与进程入口在 `packages/pi-host`。
-当前文本子集覆盖 delta、completed、stopped 和 failed；文件/工具阶段在同一合同中增加 Pi
-工具、权限、压缩、重试、用量和 Session 投影。原始 Pi payload 只用于受控诊断，不能成为
-Renderer 合同或产品数据真值。
+M1 当前实现在 `packages/contracts/src/pi.ts` 和 `packages/pi-host`，覆盖 bootstrap/ready、prompt、abort 及 delta、completed、stopped、failed 投影。`steer`/`follow-up` 在 M6 按上表直接接入 Pi；文件/工具阶段在同一合同中增加权限、压缩、重试、用量和 Session 投影。原始 Pi payload 只用于受控诊断，不能成为 Renderer 合同或产品数据真值。
 
 ## 7.1 平台模型目录与 Gateway
 
@@ -236,6 +260,7 @@ harness，但不是产品数据、权限或商业真值。
 6. 工具使用 Pi 原生工具模型；实际文件、网络、浏览器、Shell、桌面、MCP 和 Skill 副作用全部经过 V2 Broker。
 7. 固定 Pi 版本；升级必须通过事件、Session、停止、恢复、工具、压缩和打包回归。
 8. 测试 Provider 只能位于测试文件；生产和 Release 路径不能包含固定回答模型。
+9. Remote Start、Steer、Queue 和 Stop 分别复用 Pi `prompt()`、`steer()`、`followUp()` 和 `abort()`；V2 不为手机另建运行时队列。
 
 不存在通用 harness 抽象、多 harness 注册表或 V2 自有 Agent 执行器。完整决策见
 [ADR-V2-007](adr/007-pi-harness-boundary.md)。
@@ -271,12 +296,13 @@ V1 已确定支持账户云同步；已确认架构采用账户云真值与本�
 - 本地绝对路径、设备权限、Cookie、Shell 历史、密钥、日志和临时工作区禁止同步。
 - 用户可以查看同步状态、重试、导出和删除个人数据。不提供匿名本地模式；断网时允许读取缓存和排队受支持的内容写入。
 - 额度、积分、充值余额、支付、费用和账单不进入普通离线写队列；本机只能缓存服务端只读快照，联网后重新核对。
+- RemoteHost、设备公钥、配对状态和撤销记录属于账户安全数据；短期 Remote 命令/运行详情按端到端加密与 TTL 处理，不混入普通内容冲突合并。
 
 ## 11. 可观测性
 
 - 共享 Conversation ID、Message ID、可选 WorkItem/Run ID、Trace ID，以及仅供内部关联的 Pi package/version、Session ref 和 event cursor。
 - 记录 Pi 消息、工具、权限、压缩、重试和用量事件到产品投影的关联结果，但默认不记录完整原始 payload。
-- 指标覆盖启动、首个内容时间、生成时长、停止成功率、工具失败率、同步延迟/冲突率、Token/费用记录完整率、重复扣费率、支付入账延迟、对账差异、恢复率和成果打开率。
+- 指标覆盖启动、首个内容时间、生成时长、停止成功率、工具失败率、同步延迟/冲突率、Remote 配对/命令/事件恢复成功率、Token/费用记录完整率、重复扣费率、支付入账延迟、对账差异、恢复率和成果打开率。
 - 日志默认不记录完整对话、文件内容和 API Key。
 - 用户可以导出脱敏诊断包。
 
@@ -301,9 +327,9 @@ V1 已确定支持账户云同步；已确认架构采用账户云真值与本�
 
 ## 13. 打包、签名与更新
 
-- V1 只构建和发布 Windows、macOS，不为 Linux、移动端或其他平台创建安装包与测试矩阵。
+- V1 构建和发布 Windows/macOS 桌面执行主机及 iOS/Android Remote Companion；不构建 Linux 主机或独立移动 AI 运行时。
 - 每个平台和 CPU 架构由对应 CI Runner 构建并验证。
-- 正式包必须签名；macOS 完成公证，Windows 使用代码签名。
+- 正式包必须签名；macOS 完成公证，Windows 使用代码签名，iOS/Android 通过对应商店签名与发布检查。
 - 更新元数据和安装包必须校验来源与签名。
 - 支持稳定、测试等发布通道，但 V1 可以先只开放内部通道。
 - 更新前保护 Conversation 数据，更新失败不得删除用户历史。

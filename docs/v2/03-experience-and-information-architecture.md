@@ -2,9 +2,9 @@
 
 > 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
 >
-> 合同类型：ChatGPT/WorkBuddy 式个人客户端导航、聊天界面和交互边界
+> 合同类型：ChatGPT/WorkBuddy 式个人客户端导航、桌面聊天与手机 Remote 交互边界
 
-> 交付形态：Electron 跨平台桌面壳 + React/TypeScript Web Renderer
+> 交付形态：Electron 跨平台桌面执行主机 + React/TypeScript Web Renderer + React Native iOS/Android Remote Companion
 
 ## 1. 主体验
 
@@ -27,7 +27,7 @@ V1 的主界面由三部分组成：
 | 最近对话 | 返回和继续历史 | V1 |
 | 个人文件/成果 | 管理上传文件和生成成果 | V1，可作为次级页面 |
 | 助手/技能 | 选择或管理个人能力 | V1 最小版 |
-| 设置 | 账户同步、模型、用量与账单、权限、数据、外观和诊断 | V1 |
+| 设置 | 账户同步、模型、用量与账单、Remote 设备、权限、数据、外观和诊断 | V1 |
 
 不设置 Dashboard、项目、团队、Agent 控制台、审批中心或管理员中心作为 V1 主导航。
 
@@ -40,7 +40,7 @@ V1 的主界面由三部分组成：
 | `/search` | 个人搜索 |
 | `/files` | 个人文件与成果 |
 | `/assistants` | 个人助手与技能 |
-| `/settings/account` | 账户、设备和云同步 |
+| `/settings/account` | 账户、设备、Remote 配对和云同步 |
 | `/settings/models` | 平台模型目录和默认选择 |
 | `/settings/usage` | Token 与费用记录 |
 | `/settings/billing` | 额度、积分、充值余额、消费和月度账单 |
@@ -203,6 +203,8 @@ React Renderer 使用应用内部路由。V1 不以公开 Web 站点作为主客
 | 支付确认中 | 支付结果正在确认 | 保持页面或稍后在充值记录查看 |
 | 支付失败/关闭 | 本次充值未完成 | 重试或更换支付方式，不重复入账 |
 | 账单调整 | 本期有一笔退款或冲正 | 查看原记录和调整原因 |
+| Remote 主机离线 | 电脑当前不可用 | 查看历史、切换主机或在电脑上线后重试 |
+| Remote 命令冲突/过期 | 这项远程操作没有执行 | 刷新最新状态后重新选择 Queue 或 Steer |
 
 V1 不向用户展示 `candidate`、`judge`、`phaseRole`、`task graph` 等内部状态。
 
@@ -224,3 +226,20 @@ V1 桌面壳至少负责：
 - 崩溃恢复和脱敏诊断。
 
 React Renderer 只通过类型化 Bridge 请求桌面能力，不直接调用 Node、文件系统或进程 API。
+
+## 15. 手机 Remote 体验
+
+iOS/Android Remote Companion 不是桌面界面的缩小版。主导航固定为 `Hosts`、`Tasks`、`Inbox` 和 `Settings`：
+
+- `Hosts` 显示已配对 Windows/macOS 主机、在线状态、版本、当前工作区和撤销入口。
+- `Tasks` 用于在在线主机开始/继续对话，查看流式回答、工具活动和成果。
+- `Inbox` 聚合待补充、待审批、完成和失败提醒；推送通过深链接进入准确对象。
+- `Settings` 管理账户、通知、设备密钥、配对、隐私和退出。
+
+活动任务必须把三个动作清楚区分：
+
+- `Steer`：改变正在进行的工作，直接采用 Pi `steer()` 语义。
+- `Queue`：不打断当前工作，直接采用 Pi `followUp()` 语义。
+- `Stop`：终止当前执行，直接采用 Pi `abort()` 语义。
+
+手机可只读审阅 Diff、测试、终端、截图和 Artifact，并上传手机图片/文件作为账户附件；不能浏览任意桌面路径、授予新文件夹 Scope、操作系统权限或接管桌面画面。主机离线时只允许读取已同步历史，不显示“已排队”造成稍后意外执行。完整边界见 [15-remote-control-contract.md](15-remote-control-contract.md)。

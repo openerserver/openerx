@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { chatCommandEnvelopeSchema, chatEventSchema } from "./chat";
+import {
+  chatCommandEnvelopeSchema,
+  chatEventSchema,
+  entityIdSchema,
+  timestampSchema,
+} from "./chat";
 import { errorEnvelopeSchema } from "./errors";
 
 export const appServiceContractVersion = 1 as const;
@@ -12,6 +17,8 @@ export const appServiceBootstrapSchema = z
     nonce: processNonceSchema,
     piHostNonce: processNonceSchema,
     profileDirectory: z.string().min(1),
+    ownerProfileId: z.string().min(1),
+    deviceId: entityIdSchema,
   })
   .strict();
 
@@ -23,11 +30,21 @@ export const appServiceReadyFrameSchema = z
   })
   .strict();
 
+export const appServiceAuthorizationSchema = z
+  .object({
+    accountId: entityIdSchema,
+    accessToken: z.string().min(32),
+    accessTokenExpiresAt: timestampSchema,
+    platformBaseUrl: z.url(),
+  })
+  .strict();
+
 export const appServiceRequestFrameSchema = z
   .object({
     kind: z.literal("app-service.request"),
     requestId: z.uuid(),
     request: chatCommandEnvelopeSchema,
+    authorization: appServiceAuthorizationSchema.optional(),
   })
   .strict();
 
@@ -67,5 +84,6 @@ export const appServicePortFrameSchema = z.union([
 export type AppServiceBootstrap = z.infer<typeof appServiceBootstrapSchema>;
 export type AppServiceReadyFrame = z.infer<typeof appServiceReadyFrameSchema>;
 export type AppServiceRequestFrame = z.infer<typeof appServiceRequestFrameSchema>;
+export type AppServiceAuthorization = z.infer<typeof appServiceAuthorizationSchema>;
 export type AppServiceResponseFrame = z.infer<typeof appServiceResponseFrameSchema>;
 export type AppServiceEventFrame = z.infer<typeof appServiceEventFrameSchema>;

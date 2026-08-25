@@ -16,7 +16,7 @@
    until Windows signing and macOS Developer ID signing/notarization credentials are configured.
 5. Update checks run only in Electron Main. Each platform, architecture and release channel has a
    signed manifest. Renderer receives typed status events but never a feed URL or signing secret.
-6. Publishing and automatic update activation are deferred to M7, but release metadata and rollback
+6. Publishing and automatic update activation are deferred to M9, but release metadata and rollback
    must preserve an installable previous signed version.
 7. The Forge Vite plugin is documented as experimental, so exact pins and a package smoke test are
    mandatory on every dependency update. Vite stays on the latest compatible 6.x baseline because

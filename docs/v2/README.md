@@ -4,7 +4,7 @@
 >
 > 修订日期：2026-08-25
 >
-> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1 与 Pi Foundation 已完成，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
+> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation 与 M2 已完成，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
 
 ## 1. 当前已经确定的方向
 
@@ -15,13 +15,14 @@
 5. `已确定`：V1 首发为跨平台桌面客户端，使用桌面壳内嵌本地 Web UI。
 6. `已确定`：V1 前端从 Vue 切换为 React + TypeScript。
 7. `已确定`：桌面壳采用 Electron，Web UI 由 Vite 构建后打包进客户端。
-8. `已确定`：V1 只支持 Windows 和 macOS，不考虑 Linux、移动端或其他平台。
+8. `已确定`：V1 的执行主机只支持 Windows 和 macOS；同时发布 iOS/Android Remote Companion 作为手机控制面，不在移动端运行 Pi 或本地工具。
 9. `已确定`：V1 支持个人账户云同步和跨设备历史恢复。
 10. `已确定`：V1 使用 OpenerX 平台统一提供的模型，不要求用户配置 API Key；用户可以明确选择平台模型。
 11. `已确定`：V1 在 Token 使用记录基础上提供个人额度、费用、积分、充值、支付和账单完整闭环。
 12. `已确定`：文件、工具和 Skill 按 Codex 桌面能力基线建设和验收。
 13. `已确定`：Windows 支持 Windows 10 以上；“较新的 macOS”当前具体化为 macOS 14 及以上。
 14. `已确定`：V1 的 agent harness 完全由维护中的 Pi 提供；V2 只实现宿主、产品投影和能力/权限 Broker，不重复实现 Agent Loop、Session、压缩、重试或工具调用生命周期。
+15. `已确定`：V1 提供 Codex Remote 同类远程能力；手机可开始、Queue、Steer、Stop、审批和审阅桌面任务，桌面保持唯一执行面。
 
 这里的“个人客户端”表示产品围绕单个用户的对话、文件、工具、历史和个人成果展开；用户可能处于企业工作环境，但首版不要求企业先完成组织部署、角色配置或团队治理。
 
@@ -61,10 +62,12 @@
 13. [12-implementation-bootstrap.md](12-implementation-bootstrap.md)：V2 新主线目录和旧资产保护边界。
 14. [13-development-plan.md](13-development-plan.md)：里程碑、依赖、首个迭代、质量门禁和风险清单。
 15. [14-overall-architecture.md](14-overall-architecture.md)：V2 总体逻辑架构、主链路、信任边界和数据真值。
-16. [adr/README.md](adr/README.md)：M0 已冻结的工程与安全架构决策。
-17. [security/electron-threat-model.md](security/electron-threat-model.md)：Electron 和本地 App Service 威胁模型。
-18. [evidence/m0-2026-08-25.md](evidence/m0-2026-08-25.md)：M0 检查点命令、结果和残余风险。
-19. [evidence/pi-foundation-2026-08-25.md](evidence/pi-foundation-2026-08-25.md)：Pi Foundation 的实现、测试、打包与边界证据。
+16. [15-remote-control-contract.md](15-remote-control-contract.md)：iOS/Android 手机控制面、桌面执行主机、Pi 映射和远程安全合同。
+17. [adr/README.md](adr/README.md)：M0 已冻结的工程与安全架构决策。
+18. [security/electron-threat-model.md](security/electron-threat-model.md)：Electron 和本地 App Service 威胁模型。
+19. [evidence/m0-2026-08-25.md](evidence/m0-2026-08-25.md)：M0 检查点命令、结果和残余风险。
+20. [evidence/pi-foundation-2026-08-25.md](evidence/pi-foundation-2026-08-25.md)：Pi Foundation 的实现、测试、打包与边界证据。
+21. [evidence/m2-2026-08-25.md](evidence/m2-2026-08-25.md)：M2 账户、同步、平台模型、Token 与 Remote 合同检查点证据。
 
 ## 5. V1 与未来方向边界
 
@@ -79,6 +82,7 @@
 | 个人成果预览、下载和再次使用 | 团队共享、评论和发布流程 |
 | 平台统一模型、显式选模、Token、个人额度/积分、充值和账单 | 组织预算中心、企业授信账期和私有模型治理 |
 | 模型可替换、Pi 版本可在宿主边界内升级 | 私有部署和组织级能力治理 |
+| iOS/Android 远程发起、Queue、Steer、Stop、审批和审阅桌面任务 | 云端代跑、远程唤醒和无人值守桌面登录 |
 
 未来能力不得以隐藏页面、预建复杂 Schema 或额外 V1 操作步骤的方式提前进入首版。
 
@@ -88,10 +92,10 @@
 
 1. 产品名称、导航、账户、系统范围、Pi 边界、权限、验收和商业规则均按 [00-product-decision-review.md](00-product-decision-review.md) 生效。
 2. 积分兑换数字、充值档位/上下限和支付商户参数作为运营参数，在 Billing Alpha 前配置，在发布前冻结。
-3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；当前直接进入 M2，不设置旧执行引擎迁移阶段。
+3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；M2 已完成，当前直接进入 M3，不设置旧执行引擎迁移阶段。
 
 `v1-backup/` 中的旧文档、旧控制平面和旧执行引擎依赖继续作为受保护资产；新 V2 主线不得从备份目录导入模块，或通过旧页面改名冒充完成。
 
 ## 7. 实施启动入口
 
-目录骨架和旧资产保护边界记录在 [12-implementation-bootstrap.md](12-implementation-bootstrap.md)，可执行阶段计划记录在 [13-development-plan.md](13-development-plan.md)，最新整体架构图见 [14-overall-architecture.md](14-overall-architecture.md)。
+目录骨架和旧资产保护边界记录在 [12-implementation-bootstrap.md](12-implementation-bootstrap.md)，可执行阶段计划记录在 [13-development-plan.md](13-development-plan.md)，最新整体架构图见 [14-overall-architecture.md](14-overall-architecture.md)，手机远程控制边界见 [15-remote-control-contract.md](15-remote-control-contract.md)。

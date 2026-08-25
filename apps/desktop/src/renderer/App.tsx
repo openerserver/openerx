@@ -4,6 +4,7 @@ import type {
   ConversationSummary,
   DesktopEnvironment,
   Message,
+  TokenAggregateField,
 } from "@openerx/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -23,8 +24,16 @@ const chatKeys = {
   conversation: (id: string) => ["chat", "conversation", id] as const,
 };
 
+const accountKey = ["account", "state"] as const;
+
 function idempotencyKey(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function tokenValue(field: TokenAggregateField): string {
+  return field.unknownRecords > 0
+    ? `${field.known.toLocaleString()} + ${field.unknownRecords} 条未知`
+    : field.known.toLocaleString();
 }
 
 function Composer({ conversationId }: { conversationId?: string }): React.JSX.Element {
@@ -150,6 +159,12 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
   });
   const text = message.parts.map((part) => part.text).join("");
   const running = message.role === "assistant" && ["pending", "streaming"].includes(message.status);
+  const usage = useQuery({
+    queryKey: ["usage", "message", message.id],
+    queryFn: () => window.openerx.getUsage({ messageId: message.id }),
+    enabled: message.role === "assistant" && !running,
+    retry: false,
+  });
 
   return (
     <article className={`message message-${message.role}`} data-message-status={message.status}>
@@ -202,6 +217,15 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
         <p className="user-text">{text}</p>
       )}
       {message.errorCode ? <p className="inline-error">失败原因：{message.errorCode}</p> : null}
+      {usage.data && usage.data.records > 0 ? (
+        <div className="usage-line" role="status" aria-label="消息 Token 用量">
+          <span>输入 {tokenValue(usage.data.inputTokens)}</span>
+          <span>缓存 {tokenValue(usage.data.cachedInputTokens)}</span>
+          <span>输出 {tokenValue(usage.data.outputTokens)}</span>
+          <span>推理 {tokenValue(usage.data.reasoningTokens)}</span>
+          <strong>总计 {tokenValue(usage.data.totalTokens)}</strong>
+        </div>
+      ) : null}
       {!editing ? (
         <footer className="message-actions">
           {text ? (
@@ -278,6 +302,26 @@ function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): 
       window.openerx.activateBranch({ conversationId: conversation.id, branchId }),
     onSuccess: (next) => queryClient.setQueryData(chatKeys.conversation(conversation.id), next),
   });
+  const models = useQuery({
+    queryKey: ["models", "catalog"],
+    queryFn: () => window.openerx.listModels(),
+    retry: false,
+  });
+  const usage = useQuery({
+    queryKey: ["usage", "conversation", conversation.id],
+    queryFn: () => window.openerx.getUsage({ conversationId: conversation.id }),
+    retry: false,
+  });
+  const selectModel = useMutation({
+    mutationFn: (modelRef: string) =>
+      window.openerx.selectConversationModel({ conversationId: conversation.id, modelRef }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<ConversationSnapshot>(
+        chatKeys.conversation(conversation.id),
+        (current) => (current ? { ...current, conversation: updated } : current),
+      );
+    },
+  });
 
   return (
     <header className="conversation-toolbar">
@@ -286,6 +330,27 @@ function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): 
         <h1>{conversation.title}</h1>
       </div>
       <div className="toolbar-actions">
+        {models.data?.length ? (
+          <label>
+            后续消息模型
+            <select
+              aria-label="后续消息模型"
+              value={conversation.selectedModelRef}
+              onChange={(event) => selectModel.mutate(event.target.value)}
+              disabled={selectModel.isPending}
+            >
+              {models.data.map((model) => (
+                <option
+                  value={model.modelRef}
+                  key={model.modelRef}
+                  disabled={model.status !== "available"}
+                >
+                  {model.displayName} · {model.status}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {snapshot.branches.length > 1 ? (
           <label>
             分支
@@ -338,6 +403,11 @@ function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): 
           删除
         </button>
       </div>
+      {usage.data && usage.data.records > 0 ? (
+        <div className="conversation-usage">
+          {usage.data.records} 次模型调用 · Token {tokenValue(usage.data.totalTokens)}
+        </div>
+      ) : null}
     </header>
   );
 }
@@ -422,6 +492,122 @@ function Placeholder({ title }: { title: string }): React.JSX.Element {
   );
 }
 
+function AccountSettings(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const account = useQuery({
+    queryKey: accountKey,
+    queryFn: () => window.openerx.getAccountState(),
+  });
+  const [email, setEmail] = useState("");
+  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const requestCode = useMutation({
+    mutationFn: () => window.openerx.requestEmailCode({ email }),
+    onSuccess: (challenge) => setChallengeId(challenge.challengeId),
+  });
+  const verify = useMutation({
+    mutationFn: () => {
+      if (!challengeId) throw new Error("请先获取验证码");
+      return window.openerx.verifyEmailCode({ challengeId, code });
+    },
+    onSuccess: (state) => {
+      queryClient.setQueryData(accountKey, state);
+      setCode("");
+      setChallengeId(null);
+    },
+  });
+  const signOut = useMutation({
+    mutationFn: () => window.openerx.signOut(),
+    onSuccess: async (state) => {
+      queryClient.setQueryData(accountKey, state);
+      await queryClient.invalidateQueries({ queryKey: ["chat"] });
+    },
+  });
+
+  if (account.isPending) return <main className="center-state">正在读取账户状态…</main>;
+  const state = account.data;
+  return (
+    <main className="settings-page">
+      <p className="eyebrow">Account Alpha</p>
+      <h1>账户与设备</h1>
+      <section className="settings-card" aria-label="账户状态">
+        <div>
+          <span className={`account-status account-${state?.status ?? "unavailable"}`}>
+            {state?.status ?? "unavailable"}
+          </span>
+          <h2>{state?.account?.displayName ?? "登录 OpenerX"}</h2>
+          <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
+        </div>
+        {state?.status === "signed_in" && state.session ? (
+          <div className="device-card">
+            <strong>{state.session.device.name}</strong>
+            <span>
+              {state.session.device.platform} · {state.session.device.arch} · session v
+              {state.session.sessionVersion}
+            </span>
+            <button type="button" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
+              退出此设备
+            </button>
+          </div>
+        ) : (
+          <form
+            className="account-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (challengeId) verify.mutate();
+              else requestCode.mutate();
+            }}
+          >
+            <label htmlFor="account-email">邮箱</label>
+            <input
+              id="account-email"
+              type="email"
+              value={email}
+              disabled={Boolean(challengeId)}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+            {challengeId ? (
+              <>
+                <label htmlFor="account-code">六位验证码</label>
+                <input
+                  id="account-code"
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  required
+                />
+              </>
+            ) : null}
+            <button
+              type="submit"
+              className="primary-action"
+              disabled={
+                requestCode.isPending ||
+                verify.isPending ||
+                (!challengeId && !email.trim()) ||
+                (Boolean(challengeId) && !/^\d{6}$/.test(code))
+              }
+            >
+              {challengeId ? "验证并登录" : "发送验证码"}
+            </button>
+            {requestCode.error || verify.error || state?.reason ? (
+              <p className="inline-error">
+                {requestCode.error?.message ?? verify.error?.message ?? state?.reason}
+              </p>
+            ) : null}
+          </form>
+        )}
+      </section>
+      <p className="settings-note">
+        Refresh 凭证只保存在系统凭证边界；退出设备会删除本机凭证并撤销该 DeviceSession，
+        不会删除云端对话。
+      </p>
+    </main>
+  );
+}
+
 function Sidebar({
   environment,
   serviceStatus,
@@ -433,6 +619,10 @@ function Sidebar({
   const history = useQuery({
     queryKey: chatKeys.list(showArchived),
     queryFn: () => window.openerx.listConversations({ includeArchived: showArchived }),
+  });
+  const account = useQuery({
+    queryKey: accountKey,
+    queryFn: () => window.openerx.getAccountState(),
   });
   const displayedStatus =
     history.isSuccess && serviceStatus === "starting" ? "ready" : serviceStatus;
@@ -467,6 +657,10 @@ function Sidebar({
         <span aria-hidden="true" />
         {environment ? `${environment.platform} · ${displayedStatus}` : "正在连接桌面服务"}
       </div>
+      <NavLink className="sidebar-account" to="/settings/account">
+        <strong>{account.data?.account?.displayName ?? "未登录"}</strong>
+        <span>{account.data?.status ?? "loading"}</span>
+      </NavLink>
     </aside>
   );
 }
@@ -518,6 +712,7 @@ export function App(): React.JSX.Element {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/files" element={<Placeholder title="个人文件与成果" />} />
         <Route path="/assistants" element={<Placeholder title="助手与 Skill" />} />
+        <Route path="/settings/account" element={<AccountSettings />} />
         <Route path="/settings/*" element={<Placeholder title="设置" />} />
         <Route path="*" element={<Navigate to="/chat/new" replace />} />
       </Routes>

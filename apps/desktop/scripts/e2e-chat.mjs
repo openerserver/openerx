@@ -20,6 +20,7 @@ async function launch() {
   });
   const page = await application.firstWindow();
   await page.waitForLoadState("domcontentloaded");
+  page.on("pageerror", (error) => console.error("E2E_PAGE_ERROR", error));
   return { application, page };
 }
 
@@ -41,7 +42,12 @@ try {
 
   await page.getByLabel("发送消息").fill("法国的首都是哪里？");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await page.locator(".message-assistant[data-message-status='completed']").waitFor();
+  try {
+    await page.locator(".message-assistant[data-message-status='completed']").waitFor();
+  } catch (error) {
+    console.error("E2E_CHAT_FIRST_TURN_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
   await page.getByLabel("对话消息").getByText("巴黎。", { exact: true }).waitFor();
   const conversationUrl = page.url();
   assert.match(conversationUrl, /#\/chat\/[0-9a-f-]+$/);
@@ -58,7 +64,7 @@ try {
   await page.getByRole("button", { name: "发送", exact: true }).click();
   const runningMessage = page.locator(".message-assistant").last();
   await runningMessage.locator(".status-streaming").waitFor();
-  await runningMessage.getByRole("button", { name: "停止" }).click();
+  await runningMessage.getByRole("button", { name: "停止" }).dispatchEvent("click");
   await page.locator(".message-assistant[data-message-status='stopped']").last().waitFor();
 
   await page.locator(".message-assistant").last().getByRole("button", { name: "重新生成" }).click();

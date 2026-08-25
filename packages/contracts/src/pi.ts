@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { entityIdSchema, timestampSchema } from "./chat";
+import { usageRecordSchema } from "./model";
 import { processNonceSchema } from "./process";
 
 export const piHostContractVersion = 1 as const;
@@ -35,6 +36,17 @@ export const piPromptFrameSchema = z
     conversationId: entityIdSchema,
     assistantMessageId: entityIdSchema,
     history: z.array(piHistoryMessageSchema).min(1),
+    platform: z
+      .object({
+        accountId: entityIdSchema,
+        accessToken: z.string().min(32),
+        platformBaseUrl: z.url(),
+        selectedModelRef: z.string().min(1),
+        approvedFallbackModelRef: z.string().min(1).nullable(),
+        requestDedupeKey: z.string().min(8).max(240),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((frame, context) => {
@@ -66,6 +78,7 @@ export const piHostEventFrameSchema = z
     type: z.enum(["delta", "completed", "stopped", "failed"]),
     delta: z.string().optional(),
     errorCode: z.string().min(1).optional(),
+    usage: usageRecordSchema.optional(),
   })
   .strict();
 

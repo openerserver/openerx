@@ -8,7 +8,7 @@
 
 1. 个人客户端是新产品，不把旧 Dashboard、Project、Task、AgentOps 页面改名后继续使用。
 2. V1 使用维护中的 Pi 包完整提供 agent harness；V2 复用并验证 Pi 行为，不从旧代码或新协调层复制 Agent Loop、Session、压缩、重试和工具调用生命周期。
-3. 先建立桌面聊天骨架，再并行建设账户/模型与个人商业平台，随后接文件、Codex 级工具、Skill 和复杂任务。
+3. 先建立桌面聊天骨架，再并行建设账户/模型与个人商业平台，随后接文件、Codex 级工具、手机 Remote、Skill 和复杂任务。
 4. 产品/团队负责人和企业治理能力不进入 V1 迁移清单。
 5. 旧平台保留可恢复快照，未经批准不删除。
 
@@ -62,15 +62,16 @@ V1 默认不做大规模旧数据迁移。
 
 ## 5. 交付阶段
 
-账户云同步、平台模型、Token/计费、额度/积分、充值/支付/账单及 Codex 文件、工具、Skill 基线都已进入 V1，原 12 至 16 周估算失效。
+账户云同步、平台模型、Token/计费、额度/积分、充值/支付/账单、Codex 文件/工具/Skill 基线及 iOS/Android Remote Control 都已进入 V1，原 12 至 16 周估算失效。
 
-`已确认规划基线`：6 至 8 人具备桌面、安全、云同步、支付计费和 Pi 集成经验的团队约 24 至 32 周；若只有 4 至 6 人，按 32 至 42 周规划。该估算允许账户/商业平台与桌面骨架并行，仍需在支付渠道和属地合规确认后重估。
+`已确认规划基线`：加入 Remote 后，6 至 8 人具备桌面、移动端、安全、云同步、支付计费和 Pi 集成经验的团队约 29 至 39 周；若只有 4 至 6 人，按 38 至 50 周规划。该估算允许账户/商业平台、Remote 基础合同与桌面骨架并行，仍需在支付渠道、移动商店审核和属地合规确认后重估。
 
 ### Phase 0：产品决策，1 至 2 周
 
 - 冻结 Windows 10 22H2+/macOS 14+ 的 CPU 架构矩阵、匿名/离线模式、保留周期和工具默认授权策略。
 - 完成 Electron、React、Vite、打包签名和更新 ADR。
 - 固化账户同步、平台模型、Token/费用、额度/积分、充值/账单和 Codex 能力兼容合同。
+- 固化 Remote 的手机控制面、桌面执行面、Pi 原生命令映射、配对、Relay 和远程审批合同。
 - 固化人民币结算、额度单位、扣减顺序、不透支、支付宝+微信支付、退款和非订阅边界；积分具体兑换数值作为上线配置参数。
 - 完成聊天主界面原型。
 - 确认 50 条黄金任务和固定测试数据。
@@ -95,6 +96,7 @@ V1 默认不做大规模旧数据迁移。
 - Model Catalog、Platform Model Gateway、明确选模和实际模型记录。
 - 消息/对话/账户 Token 使用记录、价格目录骨架及账户用量页。
 - 两账户隔离、设备撤销、Token 去重和 Windows/macOS 跨设备恢复。
+- 为 Remote 预留设备公钥、配对/撤销、产品事件游标和命令幂等合同，不在本阶段实现手机执行或第二套队列。
 
 退出条件：同一账户可以在两台支持设备恢复聊天，模型与 Token 记录可核对，跨账户访问为零。
 
@@ -132,7 +134,18 @@ V1 默认不做大规模旧数据迁移。
 
 退出条件：TOOL-01 至 TOOL-10 在 Windows 和 macOS 达到安全和可靠性门禁。
 
-### Phase 6：Skill 系统与能力对齐，3 至 4 周
+### Phase 6：Remote Control Alpha，5 至 7 周
+
+- React Native + Expo 的 iOS/Android Remote Companion：登录、主机、任务、Inbox 和设置。
+- 同账户二维码配对、设备密钥、主机 Presence、撤销和多主机切换。
+- Remote Host Connector、Remote Control Gateway、APNs/FCM Notification Service 和加密事件游标。
+- Start、Steer、Queue、Stop 分别直接映射 Pi `prompt()`、`steer()`、`followUp()`、`abort()`。
+- 问题回复、移动审批、Diff/测试/终端/截图/Artifact 审阅和手机附件。
+- 主机离线、断线恢复、多控制器、重放/乱序、命令幂等、跨账户和手机丢失测试。
+
+退出条件：[15-remote-control-contract.md](15-remote-control-contract.md) 全部硬门禁在 iOS/Android 真机与 Windows/macOS 主机矩阵通过，且依赖图中不存在 Remote 专用 harness、SessionManager 或 Agent 队列。
+
+### Phase 7：Skill 系统与能力对齐，3 至 4 周
 
 - `SKILL.md`、scripts、references、assets 与依赖声明。
 - 内置、个人和工作区 Scope；显式/自动触发和渐进加载。
@@ -141,14 +154,23 @@ V1 默认不做大规模旧数据迁移。
 
 退出条件：FILE、TOOL、SKILL 全部能力行都有双平台端到端证据。
 
-### Phase 7：个人 Beta，3 至 4 周
+### Phase 8：个人 Beta，3 至 4 周
 
-- 5 至 20 名个人用户试用。
+- 5 至 20 名个人用户使用桌面与手机 Remote 试用。
 - 启动、历史、搜索、数据清理和诊断完善。
 - 安全、性能和高频失败修复。
 - 50 条黄金任务达到 Beta 门槛。
 
 退出条件：用户批准 V1 发布或继续迭代。
+
+### Phase 9：V1 Release，2 至 3 周
+
+- Windows/macOS 签名、公证、安装、升级、回滚和更新源验证。
+- iOS/Android 商店签名、隐私清单、推送生产环境、更新和紧急撤回验证。
+- 安全、隐私、支付、税务、数据保留和 Remote 设备撤销演练。
+- 依赖图证明所有执行只通过 Pi harness，手机、Relay 和 Connector 不包含第二套 Session、队列或工具生命周期。
+
+退出条件：桌面/手机发布矩阵、[08-acceptance-contract.md](08-acceptance-contract.md) 与 [15-remote-control-contract.md](15-remote-control-contract.md) 全部硬门禁通过，用户批准发布。
 
 ## 6. 功能开关
 
@@ -158,11 +180,12 @@ V1 建议使用本地/账户级功能开关控制：
 - 文件和成果。
 - 高风险工具。
 - Skill/MCP 分批启用。
+- Remote Host Connector、手机配对、远程审批和推送可独立紧急关闭；关闭后不得保留可执行的待投递命令。
 - 云同步迁移或紧急只读模式。
 - 收费执行紧急只读/停止开关；不得通过关闭记录来继续产生无法结算的用量。
 - 充值渠道独立开关；关闭渠道不能改变已有订单、余额或账本。
 
-不使用 Organization 级灰度作为 V1 前置。功能开关只用于开发和分批发布；账户云同步及 [10-codex-capability-baseline.md](10-codex-capability-baseline.md) 锁定能力在 V1 Release 中必须可发现并通过，不得以关闭开关冒充完成。
+不使用 Organization 级灰度作为 V1 前置。功能开关只用于开发和分批发布；账户云同步、[10-codex-capability-baseline.md](10-codex-capability-baseline.md) 锁定能力及 [15-remote-control-contract.md](15-remote-control-contract.md) 锁定的 Remote 能力在 V1 Release 中必须可发现并通过，不得以关闭开关冒充完成。
 
 ## 7. 回滚
 

@@ -2,7 +2,7 @@
 
 > 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
 >
-> 合同类型：Conversation-first 个人客户端对象、长任务执行对象与接口边界
+> 合同类型：Conversation-first 个人客户端对象、长任务、Remote Control 与接口边界
 
 ## 1. V1 业务真值
 
@@ -33,6 +33,13 @@
 - BillingStatement
 - SyncOperation
 - SyncConflict
+- RemoteHost
+- RemoteDevicePairing
+- RemoteCommand
+- RemoteCommandReceipt
+- AttentionRequest
+- RemoteEventCursor
+- PushSubscription
 - AppSettings
 
 只有需要产品级后台状态、恢复或审计的复杂执行才使用以下投影对象：
@@ -56,6 +63,11 @@ erDiagram
   USER_PROFILE ||--o{ CONVERSATION : owns
   ACCOUNT_IDENTITY ||--|| USER_PROFILE : identifies
   ACCOUNT_IDENTITY ||--o{ DEVICE_SESSION : signs_in
+  ACCOUNT_IDENTITY ||--o{ REMOTE_HOST : owns
+  ACCOUNT_IDENTITY ||--o{ REMOTE_DEVICE_PAIRING : pairs
+  REMOTE_HOST ||--o{ REMOTE_DEVICE_PAIRING : authorizes
+  REMOTE_DEVICE_PAIRING ||--o{ REMOTE_COMMAND : submits
+  REMOTE_COMMAND ||--|| REMOTE_COMMAND_RECEIPT : resolves
   CONVERSATION ||--o{ MESSAGE : contains
   MESSAGE ||--o{ MESSAGE_PART : contains
   MESSAGE ||--o{ ATTACHMENT : references
@@ -88,7 +100,7 @@ erDiagram
 
 ### 3.1 UserProfile
 
-代表当前个人用户及其偏好。V1 的云同步数据通过 AccountIdentity 归属个人账户；DeviceSession 表示某一 Windows 或 macOS 客户端登录会话。
+代表当前个人用户及其偏好。V1 的云同步数据通过 AccountIdentity 归属个人账户；DeviceSession 表示某一 Windows/macOS 执行主机或 iOS/Android Remote Companion 的登录会话。
 
 不得为了未来企业能力强制 V1 用户创建 Organization、Team 或 Workspace。
 
@@ -207,6 +219,17 @@ UsageRecord 是原始计量真值，不直接修改余额。服务端统一记�
 - 删除使用可同步墓碑和保留期；本地清缓存不等于删除云端数据。
 - 同步对象白名单和设备级禁止同步字段写入版本化 Schema。
 
+### 3.10 RemoteHost、Pairing、Command 与 AttentionRequest
+
+- `RemoteHost` 代表一台可执行 Pi 和本地工具的 Windows/macOS 主机，Presence 为 `online | degraded | offline | revoked`。
+- `RemoteDevicePairing` 只在同一账户内建立，保存设备公钥、创建/过期/撤销状态；设备私钥不进入云同步。
+- `RemoteCommand` 是有签名、时效、`baseRevision`、单调 `sessionSequence` 和幂等键的产品命令；状态通过 `RemoteCommandReceipt` 表达为 `submitted | accepted | applied | rejected | expired`。
+- `AttentionRequest` 表示仍需回答或审批的产品等待点；状态为 `pending | approved | denied | expired`，手机不能创建空白永久授权。
+- `RemoteEventCursor` 只用于补读脱敏产品事件。Diff、终端、测试、截图等本地敏感详情使用短期端到端加密资源，不成为普通同步真值。
+- Remote Start、Steer、Queue、Stop 分别映射 Pi `prompt()`、`steer()`、`followUp()`、`abort()`；这些领域对象不构成第二套 Session、Agent 队列或调度器。
+
+完整字段和安全合同见 [15-remote-control-contract.md](15-remote-control-contract.md)。
+
 ## 4. 复杂执行对象
 
 ### 4.1 WorkItem
@@ -279,6 +302,17 @@ created -> pending_payment -> paid -> credited
 paid/credited -> partially_refunded | refunded
 ```
 
+### 5.5 Remote 状态
+
+```text
+pairing: created -> active -> expired | revoked
+command: submitted -> accepted -> applied
+                              -> rejected | expired
+attention: pending -> approved | denied | expired
+```
+
+`accepted` 只表示在线桌面已验证并接收产品命令；`applied` 才表示命令已交给 Pi 或 Broker。Relay 接收密文不能生成 `accepted` 或 `applied`。
+
 ## 6. 对话分支
 
 - 编辑旧用户消息或重新生成可以创建新分支。
@@ -326,8 +360,16 @@ V1 至少支持：
 - `sync.completed`
 - `sync.conflicted`
 - `sync.failed`
+- `host.presence_changed`
+- `remote.command_accepted`
+- `remote.command_applied`
+- `remote.command_rejected`
+- `attention.requested`
+- `attention.resolved`
+- `attention.expired`
+- `review.available`
 
-事件至少包含 `eventId`、`conversationId`、可选 `workItemId/runId`、`sequence`、`occurredAt`、`payloadVersion` 和 `payload`。
+事件至少包含 `eventId`、可选 `conversationId/workItemId/runId/hostDeviceId`、`sequence`、`occurredAt`、`payloadVersion` 和 `payload`；具体事件必须声明自己的必填归属键。
 
 Pi 的消息、工具、权限、压缩、重试、用量和 Session 事件在 Pi Host Supervisor 中映射为上述稳定产品事件。原始 Pi payload、内部步骤和 Session 快照不是 UI 或同步合同。
 
@@ -361,6 +403,11 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 /api/v2/billing/recharge-orders
 /api/v2/billing/refunds
 /api/v2/sync
+/api/v2/remote/hosts
+/api/v2/remote/pairings
+/api/v2/remote/commands
+/api/v2/remote/events
+/api/v2/remote/push-subscriptions
 /api/v2/permissions
 /api/v2/settings
 /api/v2/events
@@ -377,6 +424,8 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 - Pi 原始消息不得成为 UI 的唯一读取来源。
 - V1 默认优先 IPC/进程通道，不为方便而暴露无鉴权 localhost 敏感服务。
 - 云 API 与本地 IPC 复用业务 Schema，但独立处理认证、重放、设备撤销和账户隔离。
+- Remote Gateway 只路由有签名、端到端加密和短 TTL 的命令/事件；桌面 Host Connector 只出站连接，最终由 App Service/Broker 复核账户、revision、序列、Scope 和幂等。
+- Remote 命令只能映射 Pi 原生 `prompt/steer/followUp/abort` 或 Broker 决策，不得成为另一套 Agent 执行 API。
 - 金额使用币种最小单位整数，积分使用整数；货币计算不得使用二进制浮点数。
 - 客户端只能创建报价和充值订单，不能提交余额、新账本分录或“支付成功”状态。
 - 支付回调由服务端验签、查单、防重放并幂等入账；页面跳转和深链接仅用于提示刷新状态。

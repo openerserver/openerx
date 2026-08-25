@@ -14,7 +14,7 @@
 - Pi 私有 Session 不作为历史真值。
 - Token 结果来自服务端统一记录；消息、对话和账户聚合分开断言。
 - 费用结果来自服务端价格快照、ChargeRecord 和不可变账本；客户端状态不作为资金真值。
-- 核心任务必须在批准的 Windows 和 macOS 基准环境执行；不建立其他平台矩阵。
+- 50 条核心任务必须在批准的 Windows 和 macOS 桌面基准环境执行；iOS/Android Remote 使用 [15-remote-control-contract.md](15-remote-control-contract.md) 的独立真机/主机组合矩阵，不把手机当作执行平台。
 - React Renderer 只能通过类型化 Preload Bridge 使用桌面能力。
 
 表中“硬”表示该任务必须通过，不能被 90% 总通过率抵消。

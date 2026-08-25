@@ -16,7 +16,13 @@ import {
   type Message,
   messageSchema,
   type SearchResult,
+  type SyncConflict,
+  type SyncOperation,
+  type SyncPullResult,
+  type SyncPushResult,
   searchResultSchema,
+  syncConflictSchema,
+  syncOperationSchema,
 } from "@openerx/contracts";
 import {
   assertMessageTransition,
@@ -32,6 +38,7 @@ interface RepositoryOptions {
   selectedModelRef?: string;
   now?: () => string;
   idFactory?: () => string;
+  deviceId?: string;
 }
 
 export interface GenerationDraft {
@@ -55,6 +62,7 @@ export class ChatRepository {
   readonly #selectedModelRef: string;
   readonly #now: () => string;
   readonly #idFactory: () => string;
+  readonly #deviceId: string | null;
 
   constructor(databasePath: string, options: RepositoryOptions = {}) {
     this.#database = new DatabaseSync(databasePath);
@@ -62,6 +70,7 @@ export class ChatRepository {
     this.#selectedModelRef = options.selectedModelRef ?? "pi/default";
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#idFactory = options.idFactory ?? randomUUID;
+    this.#deviceId = options.deviceId ?? null;
     migrateDatabase(this.#database);
   }
 
@@ -177,6 +186,15 @@ export class ChatRepository {
         now,
       });
       this.#touchConversation(conversation.id, now);
+      this.#queueSyncUpsert(
+        "conversation",
+        conversation.id,
+        this.#getConversationEntity(conversation.id),
+        now,
+      );
+      this.#queueSyncUpsert("branch", branchId, this.#getBranch(branchId), now);
+      this.#queueSyncUpsert("message", userMessage.id, userMessage, now);
+      this.#queueSyncUpsert("message", assistantMessage.id, assistantMessage, now);
       events.push(
         this.#appendEvent({
           type: "message.accepted",
@@ -274,6 +292,13 @@ export class ChatRepository {
         .run(nextStatus, errorCode, event.occurredAt, event.sequence, assistantMessageId);
       const message = this.#message(assistantMessageId);
       this.#touchConversation(message.conversationId, event.occurredAt);
+      this.#queueSyncUpsert("message", message.id, message, event.occurredAt);
+      this.#queueSyncUpsert(
+        "conversation",
+        message.conversationId,
+        this.#getConversationEntity(message.conversationId),
+        event.occurredAt,
+      );
       return this.#appendEvent({
         type: eventType,
         conversationId: message.conversationId,
@@ -349,6 +374,24 @@ export class ChatRepository {
     return this.#updateConversation(conversationId, "title = ?", [title]);
   }
 
+  selectConversationModel(
+    conversationId: string,
+    modelRef: string,
+  ): { conversation: Conversation; event: ChatEvent } {
+    return this.#updateConversation(conversationId, "selected_model_ref = ?", [modelRef]);
+  }
+
+  selectedModelForMessage(messageId: string): string {
+    const row = this.#database
+      .prepare(
+        `SELECT c.selected_model_ref FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id WHERE m.id = ?`,
+      )
+      .get(messageId) as SqlRow | undefined;
+    if (!row) throw new Error("Message not found");
+    return String(row.selected_model_ref);
+  }
+
   setConversationArchived(
     conversationId: string,
     archived: boolean,
@@ -376,6 +419,7 @@ export class ChatRepository {
         )
         .run(deletedAt, deletedAt, conversationId);
       const updated = this.#getConversationEntity(conversationId);
+      this.#queueSyncDelete("conversation", conversationId, deletedAt);
       const event = this.#appendEvent({
         type: "conversation.deleted",
         conversationId,
@@ -402,6 +446,7 @@ export class ChatRepository {
         )
         .run(branchId, now, conversationId);
       const snapshot = this.getConversation(conversationId);
+      this.#queueSyncUpsert("conversation", conversationId, snapshot.conversation, now);
       const event = this.#appendEvent({
         type: "branch.activated",
         conversationId,
@@ -450,6 +495,163 @@ export class ChatRepository {
         excerpt: text.slice(Math.max(0, index - 40), Math.max(0, index - 40) + 140),
         updatedAt: String(row.updated_at),
       });
+    });
+  }
+
+  pendingSyncOperations(): SyncOperation[] {
+    if (!this.#syncEnabled()) return [];
+    return (
+      this.#database
+        .prepare(
+          `SELECT * FROM sync_outbox WHERE account_id = ? AND status = 'pending'
+           ORDER BY rowid`,
+        )
+        .all(this.#ownerProfileId) as SqlRow[]
+    ).map((row) =>
+      syncOperationSchema.parse({
+        operationId: row.operation_id,
+        accountId: row.account_id,
+        deviceId: row.device_id,
+        objectType: row.object_type,
+        objectId: row.object_id,
+        mutation: row.mutation,
+        baseRevision: row.base_revision,
+        payloadVersion: row.payload_version,
+        payload: row.payload_json === null ? null : JSON.parse(String(row.payload_json)),
+        idempotencyKey: row.idempotency_key,
+        createdAt: row.created_at,
+      }),
+    );
+  }
+
+  acknowledgeSync(result: SyncPushResult): void {
+    if (!this.#syncEnabled()) return;
+    this.#transaction(() => {
+      const row = this.#database
+        .prepare("SELECT * FROM sync_outbox WHERE operation_id = ? AND account_id = ?")
+        .get(result.operationId, this.#ownerProfileId) as SqlRow | undefined;
+      if (!row) throw new Error("SYNC_OUTBOX_OPERATION_NOT_FOUND");
+      if (result.status === "committed") {
+        this.#database
+          .prepare("UPDATE sync_outbox SET status = 'committed' WHERE operation_id = ?")
+          .run(result.operationId);
+        this.#database
+          .prepare(
+            `INSERT INTO sync_object_state
+             (account_id, object_type, object_id, cloud_revision, last_synced_payload_json)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(account_id, object_type, object_id) DO UPDATE SET
+               cloud_revision = excluded.cloud_revision,
+               last_synced_payload_json = excluded.last_synced_payload_json`,
+          )
+          .run(
+            this.#ownerProfileId,
+            String(row.object_type),
+            String(row.object_id),
+            result.revision,
+            row.payload_json === null ? null : String(row.payload_json),
+          );
+      } else {
+        this.#database
+          .prepare("UPDATE sync_outbox SET status = 'conflict' WHERE operation_id = ?")
+          .run(result.operationId);
+        this.#database
+          .prepare(
+            `INSERT OR IGNORE INTO sync_local_conflicts
+             (conflict_id, account_id, conflict_json, created_at) VALUES (?, ?, ?, ?)`,
+          )
+          .run(
+            result.conflict.conflictId,
+            this.#ownerProfileId,
+            JSON.stringify(result.conflict),
+            result.conflict.createdAt,
+          );
+      }
+    });
+  }
+
+  applySyncPull(result: SyncPullResult): void {
+    if (!this.#syncEnabled()) return;
+    this.#transaction(() => {
+      for (const change of result.changes) {
+        if (change.accountId !== this.#ownerProfileId) throw new Error("ACCOUNT_SCOPE_VIOLATION");
+        const localWrite = this.#database
+          .prepare(
+            `SELECT 1 FROM sync_outbox
+             WHERE account_id = ? AND object_type = ? AND object_id = ?
+               AND status IN ('pending', 'conflict')
+             LIMIT 1`,
+          )
+          .get(this.#ownerProfileId, change.objectType, change.objectId);
+        if (!localWrite) {
+          this.#applySyncChange(
+            change.objectType,
+            change.objectId,
+            change.tombstone,
+            change.payload,
+          );
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO sync_object_state
+             (account_id, object_type, object_id, cloud_revision, last_synced_payload_json)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(account_id, object_type, object_id) DO UPDATE SET
+               cloud_revision = excluded.cloud_revision,
+               last_synced_payload_json = excluded.last_synced_payload_json`,
+          )
+          .run(
+            this.#ownerProfileId,
+            change.objectType,
+            change.objectId,
+            change.revision,
+            change.payload === null ? null : JSON.stringify(change.payload),
+          );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO sync_replica_state(account_id, cursor) VALUES (?, ?)
+           ON CONFLICT(account_id) DO UPDATE SET cursor = excluded.cursor`,
+        )
+        .run(this.#ownerProfileId, result.nextCursor);
+    });
+  }
+
+  syncCursor(): string | null {
+    if (!this.#syncEnabled()) return null;
+    const row = this.#database
+      .prepare("SELECT cursor FROM sync_replica_state WHERE account_id = ?")
+      .get(this.#ownerProfileId) as SqlRow | undefined;
+    return row ? String(row.cursor) : null;
+  }
+
+  syncConflicts(): SyncConflict[] {
+    if (!this.#syncEnabled()) return [];
+    return (
+      this.#database
+        .prepare(
+          "SELECT conflict_json FROM sync_local_conflicts WHERE account_id = ? ORDER BY created_at",
+        )
+        .all(this.#ownerProfileId) as SqlRow[]
+    ).map((row) => syncConflictSchema.parse(JSON.parse(String(row.conflict_json))));
+  }
+
+  clearLocalCache(): void {
+    if (this.pendingSyncOperations().length > 0) throw new Error("SYNC_PENDING_WRITES_EXIST");
+    if (this.syncConflicts().length > 0) throw new Error("SYNC_UNRESOLVED_CONFLICTS_EXIST");
+    this.#transaction(() => {
+      this.#database.exec(`
+        DELETE FROM events;
+        DELETE FROM message_parts;
+        DELETE FROM messages;
+        DELETE FROM branches;
+        DELETE FROM conversations;
+        DELETE FROM idempotency;
+        DELETE FROM sync_object_state;
+        DELETE FROM sync_replica_state;
+        DELETE FROM sync_local_conflicts;
+        DELETE FROM sync_outbox;
+      `);
     });
   }
 
@@ -504,6 +706,7 @@ export class ChatRepository {
           now,
         );
       let userMessageId: string | null = null;
+      let replacementUser: Message | null = null;
       let parentMessageId = forkedFromMessageId;
       if (input.replacementText !== null) {
         const user = this.#insertMessage({
@@ -517,6 +720,7 @@ export class ChatRepository {
           now,
         });
         userMessageId = user.id;
+        replacementUser = user;
         parentMessageId = user.id;
       }
       const assistant = this.#insertMessage({
@@ -535,6 +739,17 @@ export class ChatRepository {
            WHERE id = ?`,
         )
         .run(branchId, now, input.conversationId);
+      this.#queueSyncUpsert("branch", branchId, this.#getBranch(branchId), now);
+      if (replacementUser) {
+        this.#queueSyncUpsert("message", replacementUser.id, replacementUser, now);
+      }
+      this.#queueSyncUpsert("message", assistant.id, assistant, now);
+      this.#queueSyncUpsert(
+        "conversation",
+        input.conversationId,
+        this.#getConversationEntity(input.conversationId),
+        now,
+      );
       const events = [
         this.#appendEvent({
           type: "branch.activated",
@@ -784,6 +999,7 @@ export class ChatRepository {
         )
         .run(...values, now, conversationId);
       const conversation = this.#getConversationEntity(conversationId);
+      this.#queueSyncUpsert("conversation", conversationId, conversation, now);
       const event = this.#appendEvent({
         type: "conversation.updated",
         conversationId,
@@ -792,6 +1008,192 @@ export class ChatRepository {
       });
       return { conversation, event };
     });
+  }
+
+  #syncEnabled(): boolean {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    return uuid.test(this.#ownerProfileId) && this.#deviceId !== null && uuid.test(this.#deviceId);
+  }
+
+  #queueSyncUpsert(
+    objectType: "conversation" | "branch" | "message",
+    objectId: string,
+    payload: Conversation | Branch | Message,
+    createdAt: string,
+  ): void {
+    this.#queueSync(objectType, objectId, "upsert", JSON.parse(JSON.stringify(payload)), createdAt);
+  }
+
+  #queueSyncDelete(objectType: "conversation", objectId: string, createdAt: string): void {
+    this.#queueSync(objectType, objectId, "delete", null, createdAt);
+  }
+
+  #queueSync(
+    objectType: "conversation" | "branch" | "message",
+    objectId: string,
+    mutation: "upsert" | "delete",
+    payload: Record<string, unknown> | null,
+    createdAt: string,
+  ): void {
+    if (!this.#syncEnabled() || !this.#deviceId) return;
+    const state = this.#database
+      .prepare(
+        `SELECT cloud_revision FROM sync_object_state
+         WHERE account_id = ? AND object_type = ? AND object_id = ?`,
+      )
+      .get(this.#ownerProfileId, objectType, objectId) as SqlRow | undefined;
+    const pending = this.#database
+      .prepare(
+        `SELECT COUNT(*) AS count FROM sync_outbox
+         WHERE account_id = ? AND object_type = ? AND object_id = ? AND status = 'pending'`,
+      )
+      .get(this.#ownerProfileId, objectType, objectId) as { count: number };
+    const operationId = this.#idFactory();
+    this.#database
+      .prepare(
+        `INSERT INTO sync_outbox
+         (operation_id, account_id, device_id, object_type, object_id, mutation,
+          base_revision, payload_version, payload_json, idempotency_key, created_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'pending')`,
+      )
+      .run(
+        operationId,
+        this.#ownerProfileId,
+        this.#deviceId,
+        objectType,
+        objectId,
+        mutation,
+        Number(state?.cloud_revision ?? 0) + Number(pending.count),
+        payload === null ? null : JSON.stringify(payload),
+        `sync:${operationId}`,
+        createdAt,
+      );
+  }
+
+  #applySyncChange(
+    objectType: string,
+    objectId: string,
+    tombstone: boolean,
+    payload: Record<string, unknown> | null,
+  ): void {
+    if (tombstone) {
+      if (objectType === "conversation") {
+        this.#database
+          .prepare("UPDATE conversations SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?")
+          .run(this.#now(), objectId);
+      }
+      return;
+    }
+    if (!payload) throw new Error("SYNC_PAYLOAD_MISSING");
+    if (objectType === "conversation") {
+      const conversation = conversationSchema.parse(payload);
+      if (conversation.ownerProfileId !== this.#ownerProfileId) {
+        throw new Error("ACCOUNT_SCOPE_VIOLATION");
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO conversations
+           (id, owner_profile_id, title, active_branch_id, selected_model_ref, created_at,
+            updated_at, archived_at, deleted_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             owner_profile_id = excluded.owner_profile_id,
+             title = excluded.title,
+             active_branch_id = excluded.active_branch_id,
+             selected_model_ref = excluded.selected_model_ref,
+             updated_at = excluded.updated_at,
+             archived_at = excluded.archived_at,
+             deleted_at = excluded.deleted_at,
+             revision = excluded.revision`,
+        )
+        .run(
+          conversation.id,
+          conversation.ownerProfileId,
+          conversation.title,
+          conversation.activeBranchId,
+          conversation.selectedModelRef,
+          conversation.createdAt,
+          conversation.updatedAt,
+          conversation.archivedAt,
+          conversation.deletedAt,
+          conversation.revision,
+        );
+      return;
+    }
+    if (objectType === "branch") {
+      const branch = branchSchema.parse(payload);
+      this.#database
+        .prepare(
+          `INSERT INTO branches
+           (id, conversation_id, parent_branch_id, forked_from_message_id, label, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             parent_branch_id = excluded.parent_branch_id,
+             forked_from_message_id = excluded.forked_from_message_id,
+             label = excluded.label`,
+        )
+        .run(
+          branch.id,
+          branch.conversationId,
+          branch.parentBranchId,
+          branch.forkedFromMessageId,
+          branch.label,
+          branch.createdAt,
+        );
+      return;
+    }
+    if (objectType === "message") {
+      const message = messageSchema.parse(payload);
+      const existing = this.#database
+        .prepare("SELECT position FROM messages WHERE id = ?")
+        .get(message.id) as SqlRow | undefined;
+      const position = existing
+        ? Number(existing.position)
+        : Number(
+            (
+              this.#database
+                .prepare(
+                  "SELECT COALESCE(MAX(position), 0) + 1 AS position FROM messages WHERE branch_id = ?",
+                )
+                .get(message.branchId) as { position: number }
+            ).position,
+          );
+      this.#database
+        .prepare(
+          `INSERT INTO messages
+           (id, conversation_id, branch_id, parent_message_id, role, status, error_code, attempt,
+            created_at, updated_at, revision, position, runtime_sequence)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+           ON CONFLICT(id) DO UPDATE SET
+             status = excluded.status,
+             error_code = excluded.error_code,
+             updated_at = excluded.updated_at,
+             revision = excluded.revision`,
+        )
+        .run(
+          message.id,
+          message.conversationId,
+          message.branchId,
+          message.parentMessageId,
+          message.role,
+          message.status,
+          message.errorCode,
+          message.attempt,
+          message.createdAt,
+          message.updatedAt,
+          message.revision,
+          position,
+        );
+      this.#database.prepare("DELETE FROM message_parts WHERE message_id = ?").run(message.id);
+      message.parts.forEach((part, index) => {
+        this.#database
+          .prepare(
+            `INSERT INTO message_parts(id, message_id, position, type, text)
+             VALUES (?, ?, ?, 'text', ?)`,
+          )
+          .run(part.id, message.id, index + 1, part.text);
+      });
+    }
   }
 
   #idempotentResult(key: string, command: string): GenerationReceipt | null {

@@ -18,7 +18,7 @@
 - OpenerX 使用自己的产品语言、领域模型和安全实现，不复制 Codex 私有协议、界面或品牌。
 - 本基线冻结 V1 范围；Codex 在 2026-08-25 之后新增的能力不会自动进入 V1。
 
-本合同不把 Codex 的代码审查、Git 工作流、远程移动端接力、团队管理、语音或定时任务自动纳入 V1；这些不属于本轮明确锁定的“文件、工具和 Skill”范围。
+本合同不把 Codex 的代码审查、Git 工作流、团队管理、语音或定时任务自动纳入 V1；这些不属于本轮明确锁定的“文件、工具和 Skill”范围。远程移动端控制已经由最新产品决定单独纳入 V1，范围和门禁以 [15-remote-control-contract.md](15-remote-control-contract.md) 为准。
 
 实现边界同样冻结：上述能力作为工具和上下文注册给 Pi，由 Pi 完整负责 Agent Loop、Session、上下文压缩、内部重试以及工具调用开始/结果回填/继续运行。V2 Capability and Permission Broker 只负责 Scope、审批、沙箱、实际系统调用、副作用幂等和审计，不实现另一套 agent harness。
 

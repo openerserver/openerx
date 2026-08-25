@@ -79,6 +79,46 @@ const migrations: readonly Migration[] = [
       CREATE INDEX events_replay_idx ON events(conversation_id, sequence);
     `,
   },
+  {
+    version: 2,
+    checksum: "account-sync-outbox-v2-20260825",
+    sql: `
+      CREATE TABLE sync_object_state (
+        account_id TEXT NOT NULL,
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        cloud_revision INTEGER NOT NULL CHECK (cloud_revision >= 0),
+        last_synced_payload_json TEXT,
+        PRIMARY KEY(account_id, object_type, object_id)
+      ) STRICT;
+      CREATE TABLE sync_outbox (
+        operation_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        mutation TEXT NOT NULL CHECK (mutation IN ('upsert', 'delete')),
+        base_revision INTEGER NOT NULL CHECK (base_revision >= 0),
+        payload_version INTEGER NOT NULL CHECK (payload_version = 1),
+        payload_json TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'committed', 'conflict'))
+      ) STRICT;
+      CREATE TABLE sync_replica_state (
+        account_id TEXT PRIMARY KEY,
+        cursor TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE sync_local_conflicts (
+        conflict_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        conflict_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX sync_outbox_pending_idx
+        ON sync_outbox(account_id, status, created_at, operation_id);
+    `,
+  },
 ];
 
 export function migrateDatabase(database: DatabaseSync): void {

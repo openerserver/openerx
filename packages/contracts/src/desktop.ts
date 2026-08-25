@@ -1,7 +1,18 @@
 import { z } from "zod";
+import type { AccountBridge } from "./account";
+import type { ModelUsageBridge } from "./model";
+import type { SyncBridge } from "./sync";
 
 export const ipcChannels = Object.freeze({
   environmentGet: "desktop:environment:get",
+  accountState: "account:state:get",
+  accountRequestCode: "account:email-code:request",
+  accountVerifyCode: "account:email-code:verify",
+  accountSignOut: "account:device:sign-out",
+  accountRevokeDevice: "account:device:revoke",
+  modelList: "model:catalog:list",
+  usageGet: "usage:aggregate:get",
+  syncNow: "sync:run",
   chatList: "chat:conversations:list",
   chatGet: "chat:conversation:get",
   chatSend: "chat:message:send",
@@ -11,6 +22,7 @@ export const ipcChannels = Object.freeze({
   chatRename: "chat:conversation:rename",
   chatArchive: "chat:conversation:archive",
   chatDelete: "chat:conversation:delete",
+  chatSelectModel: "chat:conversation:model:select",
   chatSearch: "chat:search",
   chatActivateBranch: "chat:branch:activate",
   chatEvents: "chat:events:list",
@@ -27,7 +39,7 @@ export const desktopEnvironmentSchema = z
 
 export type DesktopEnvironment = z.infer<typeof desktopEnvironmentSchema>;
 
-export interface DesktopBridge extends ChatBridge {
+export interface DesktopBridge extends ChatBridge, AccountBridge, ModelUsageBridge, SyncBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
 }
 
