@@ -2,7 +2,7 @@
 
 import type { ConversationSnapshot, DesktopBridge } from "@openerx/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -159,6 +159,36 @@ describe("M1 chat renderer", () => {
     expect(bridge.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: null, text: "生成代码块和表格" }),
     );
+  });
+
+  it("lets users select and persist system, dark and light themes", async () => {
+    window.localStorage.removeItem("openerx.theme");
+    const bridge = createBridge();
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("radiogroup", { name: "主题" })).toBeTruthy();
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect((screen.getByRole("radio", { name: /跟随系统/ }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    await waitFor(() => expect(document.documentElement.dataset.themePreference).toBe("system"));
+
+    await user.click(screen.getByRole("radio", { name: /浅色/ }));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    expect(document.documentElement.dataset.themePreference).toBe("light");
+    expect(window.localStorage.getItem("openerx.theme")).toBe("light");
+
+    await user.click(screen.getByRole("radio", { name: /深色/ }));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    expect(document.documentElement.dataset.themePreference).toBe("dark");
+    expect(window.localStorage.getItem("openerx.theme")).toBe("dark");
+
+    await user.click(screen.getByRole("radio", { name: /跟随系统/ }));
+    await waitFor(() => expect(document.documentElement.dataset.themePreference).toBe("system"));
+    expect(window.localStorage.getItem("openerx.theme")).toBe("system");
+
+    window.localStorage.removeItem("openerx.theme");
   });
 
   it("exposes M2 device, sync, usage and data boundaries in account settings", async () => {

@@ -20,12 +20,14 @@ import {
   CaretDown,
   ChatCircle,
   CheckCircle,
+  Desktop,
   DotsThreeVertical,
   FileText,
   FolderSimple,
   GearSix,
   Info,
   MagnifyingGlass,
+  Moon,
   Paperclip,
   PaperPlaneTilt,
   Plus,
@@ -33,6 +35,7 @@ import {
   SidebarSimple,
   SlidersHorizontal,
   Sparkle,
+  Sun,
   UserCircle,
   X,
 } from "@phosphor-icons/react";
@@ -64,6 +67,51 @@ const chatKeys = {
 
 const accountKey = ["account", "state"] as const;
 const billingKey = ["billing"] as const;
+const themeStorageKey = "openerx.theme";
+
+type ThemePreference = "system" | "dark" | "light";
+
+const themeOptions = [
+  {
+    value: "system",
+    label: "跟随系统",
+    description: "随 macOS 或 Windows 外观自动切换",
+    icon: Desktop,
+  },
+  {
+    value: "dark",
+    label: "深色",
+    description: "保持当前 Codex 风格的深色工作区",
+    icon: Moon,
+  },
+  {
+    value: "light",
+    label: "浅色",
+    description: "适合明亮环境的柔和浅色工作区",
+    icon: Sun,
+  },
+] as const;
+
+function isThemePreference(value: string | null): value is ThemePreference {
+  return value === "system" || value === "dark" || value === "light";
+}
+
+function initialThemePreference(): ThemePreference {
+  try {
+    const saved = window.localStorage.getItem(themeStorageKey);
+    return isThemePreference(saved) ? saved : "system";
+  } catch {
+    return "system";
+  }
+}
+
+function resolvedTheme(preference: ThemePreference): "dark" | "light" {
+  if (preference !== "system") return preference;
+  return typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: light)").matches
+    ? "light"
+    : "dark";
+}
 
 function idempotencyKey(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -201,7 +249,9 @@ function NewChat(): React.JSX.Element {
     <main className="new-chat-page">
       <header className="new-chat-topbar">
         <span className="topbar-product">OpenerX 2.0</span>
-        <span className="topbar-state"><span className="status-dot" /> 已同步</span>
+        <span className="topbar-state">
+          <span className="status-dot" /> 已同步
+        </span>
       </header>
       <section className="welcome" aria-labelledby="welcome-title">
         <p className="eyebrow">OpenerX 2.0 · Chat Alpha</p>
@@ -308,10 +358,16 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
                 <strong title={file.name}>{file.name}</strong>
                 <span>{file.size}</span>
               </div>
-              <span className={`context-file-status status-${file.status === "已解析" ? "ready" : "pending"}`}>
+              <span
+                className={`context-file-status status-${file.status === "已解析" ? "ready" : "pending"}`}
+              >
                 {file.status}
               </span>
-              <button type="button" className="icon-button context-file-menu" aria-label={`管理 ${file.name}`}>
+              <button
+                type="button"
+                className="icon-button context-file-menu"
+                aria-label={`管理 ${file.name}`}
+              >
                 <DotsThreeVertical size={17} weight="bold" />
               </button>
             </article>
@@ -320,8 +376,12 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
       </section>
 
       <footer className="context-dock-footer">
-        <span><CheckCircle size={16} weight="fill" /> 内容不会用于模型训练</span>
-        <button type="button" className="text-button">了解更多</button>
+        <span>
+          <CheckCircle size={16} weight="fill" /> 内容不会用于模型训练
+        </span>
+        <button type="button" className="text-button">
+          了解更多
+        </button>
       </footer>
     </aside>
   );
@@ -586,7 +646,12 @@ function ConversationToolbar({
             <strong>{selectedModel.priceSummary}</strong>
           </div>
         ) : null}
-        <button type="button" className="toolbar-icon-button" aria-label="切换上下文" onClick={onToggleContext}>
+        <button
+          type="button"
+          className="toolbar-icon-button"
+          aria-label="切换上下文"
+          onClick={onToggleContext}
+        >
           <SidebarSimple size={17} weight="regular" />
         </button>
         <button type="button" className="toolbar-icon-button" aria-label="更多操作">
@@ -743,7 +808,56 @@ function Placeholder({ title }: { title: string }): React.JSX.Element {
   );
 }
 
-function AccountSettings(): React.JSX.Element {
+function ThemeSettings({
+  value,
+  onChange,
+}: {
+  value: ThemePreference;
+  onChange: (theme: ThemePreference) => void;
+}): React.JSX.Element {
+  return (
+    <section className="settings-card settings-stack theme-settings" aria-label="外观主题">
+      <div className="settings-heading">
+        <div>
+          <h2>外观</h2>
+          <p>选择工作区主题，修改会立即生效。</p>
+        </div>
+      </div>
+      <div className="theme-options" role="radiogroup" aria-label="主题">
+        {themeOptions.map(({ value: option, label, description, icon: Icon }) => {
+          const selected = value === option;
+          return (
+            <label key={option} className={`theme-option ${selected ? "is-selected" : ""}`}>
+              <input
+                type="radio"
+                name="workspace-theme"
+                value={option}
+                checked={selected}
+                onChange={() => onChange(option)}
+              />
+              <span className={`theme-preview theme-preview-${option}`} aria-hidden="true">
+                <Icon size={19} weight={selected ? "fill" : "regular"} />
+              </span>
+              <span className="theme-option-copy">
+                <strong>{label}</strong>
+                <small>{description}</small>
+              </span>
+              {selected ? <CheckCircle size={17} weight="fill" aria-hidden="true" /> : null}
+            </label>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function AccountSettings({
+  themePreference,
+  onThemeChange,
+}: {
+  themePreference: ThemePreference;
+  onThemeChange: (theme: ThemePreference) => void;
+}): React.JSX.Element {
   const queryClient = useQueryClient();
   const account = useQuery({
     queryKey: accountKey,
@@ -871,6 +985,7 @@ function AccountSettings(): React.JSX.Element {
     <main className="settings-page">
       <p className="eyebrow">Account Alpha</p>
       <h1>账户与设备</h1>
+      <ThemeSettings value={themePreference} onChange={onThemeChange} />
       <section className="settings-card" aria-label="账户状态">
         <div>
           <span className={`account-status account-${state?.status ?? "unavailable"}`}>
@@ -1487,7 +1602,9 @@ function Sidebar({
   return (
     <aside className="sidebar">
       <div className="brand-row">
-        <div className="brand"><span className="brand-mark">O</span>OpenerX</div>
+        <div className="brand">
+          <span className="brand-mark">O</span>OpenerX
+        </div>
         <button type="button" className="icon-button sidebar-collapse" aria-label="收起侧栏">
           <SidebarSimple size={18} weight="regular" />
         </button>
@@ -1497,16 +1614,36 @@ function Sidebar({
           <Plus size={17} weight="bold" />
           <span>新对话</span>
         </NavLink>
-        <NavLink to="/search"><MagnifyingGlass size={17} /><span>搜索</span><kbd>⌘K</kbd></NavLink>
-        <NavLink to="/files"><FolderSimple size={17} /><span>个人文件</span></NavLink>
-        <NavLink to="/assistants"><Sparkle size={17} /><span>助手与 Skill</span></NavLink>
-        <NavLink to="/settings/billing"><Receipt size={17} /><span>费用与账单</span></NavLink>
-        <NavLink to="/settings/account"><GearSix size={17} /><span>设置</span></NavLink>
+        <NavLink to="/search">
+          <MagnifyingGlass size={17} />
+          <span>搜索</span>
+          <kbd>⌘K</kbd>
+        </NavLink>
+        <NavLink to="/files">
+          <FolderSimple size={17} />
+          <span>个人文件</span>
+        </NavLink>
+        <NavLink to="/assistants">
+          <Sparkle size={17} />
+          <span>助手与 Skill</span>
+        </NavLink>
+        <NavLink to="/settings/billing">
+          <Receipt size={17} />
+          <span>费用与账单</span>
+        </NavLink>
+        <NavLink to="/settings/account">
+          <GearSix size={17} />
+          <span>设置</span>
+        </NavLink>
       </nav>
       <section className="history-list" aria-label="对话历史">
         <div className="history-heading">
           <span>历史</span>
-          <button type="button" aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"} onClick={() => setShowArchived((value) => !value)}>
+          <button
+            type="button"
+            aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"}
+            onClick={() => setShowArchived((value) => !value)}
+          >
             <SlidersHorizontal size={15} />
           </button>
         </div>
@@ -1522,12 +1659,20 @@ function Sidebar({
         ))}
       </section>
       <div className={`sync-state service-${displayedStatus}`}>
-        {displayedStatus === "ready" ? <CheckCircle size={16} weight="fill" /> : <ArrowClockwise size={16} />}
+        {displayedStatus === "ready" ? (
+          <CheckCircle size={16} weight="fill" />
+        ) : (
+          <ArrowClockwise size={16} />
+        )}
         <div>
           <strong>{displayedStatus === "ready" ? "已同步" : "正在同步"}</strong>
-          <span>{environment ? `${environment.platform} · ${displayedStatus}` : "正在连接桌面服务"}</span>
+          <span>
+            {environment ? `${environment.platform} · ${displayedStatus}` : "正在连接桌面服务"}
+          </span>
         </div>
-        <button type="button" className="icon-button" aria-label="立即同步"><ArrowClockwise size={16} /></button>
+        <button type="button" className="icon-button" aria-label="立即同步">
+          <ArrowClockwise size={16} />
+        </button>
       </div>
       <NavLink className="sidebar-account" to="/settings/account">
         <UserCircle size={23} weight="regular" />
@@ -1543,12 +1688,37 @@ export function App(): React.JSX.Element {
   const [environment, setEnvironment] = useState<DesktopEnvironment | null>(null);
   const [serviceStatus, setServiceStatus] = useState("starting");
   const [contextOpen, setContextOpen] = useState(false);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
   const location = useLocation();
-  const isConversationRoute = location.pathname.startsWith("/chat/") && location.pathname !== "/chat/new";
+  const isConversationRoute =
+    location.pathname.startsWith("/chat/") && location.pathname !== "/chat/new";
 
   useEffect(() => {
     setContextOpen(isConversationRoute);
   }, [isConversationRoute]);
+
+  useEffect(() => {
+    const mediaQuery =
+      themePreference === "system" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: light)")
+        : null;
+    const applyTheme = (): void => {
+      const theme = resolvedTheme(themePreference);
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.themePreference = themePreference;
+      document.documentElement.style.colorScheme = theme;
+    };
+
+    applyTheme();
+    try {
+      window.localStorage.setItem(themeStorageKey, themePreference);
+    } catch {
+      // Theme switching still works when storage is unavailable.
+    }
+    mediaQuery?.addEventListener("change", applyTheme);
+    return () => mediaQuery?.removeEventListener("change", applyTheme);
+  }, [themePreference]);
+
   const sequenceByConversation = useRef(new Map<string, number>());
   const queryClient = useQueryClient();
 
@@ -1589,23 +1759,31 @@ export function App(): React.JSX.Element {
       <Sidebar environment={environment} serviceStatus={serviceStatus} />
       <div className="app-main">
         <Routes>
-        <Route path="/chat/new" element={<NewChat />} />
-        <Route
-          path="/chat/:conversationId"
-          element={
-            <ChatPage
-              contextOpen={contextOpen}
-              onToggleContext={() => setContextOpen((current) => !current)}
-            />
-          }
-        />
-        <Route path="/search" element={<SearchPage />} />
-        <Route path="/files" element={<Placeholder title="个人文件与成果" />} />
-        <Route path="/assistants" element={<Placeholder title="助手与 Skill" />} />
-        <Route path="/settings/billing" element={<BillingSettings />} />
-        <Route path="/settings/account" element={<AccountSettings />} />
-        <Route path="/settings/*" element={<Placeholder title="设置" />} />
-        <Route path="*" element={<Navigate to="/chat/new" replace />} />
+          <Route path="/chat/new" element={<NewChat />} />
+          <Route
+            path="/chat/:conversationId"
+            element={
+              <ChatPage
+                contextOpen={contextOpen}
+                onToggleContext={() => setContextOpen((current) => !current)}
+              />
+            }
+          />
+          <Route path="/search" element={<SearchPage />} />
+          <Route path="/files" element={<Placeholder title="个人文件与成果" />} />
+          <Route path="/assistants" element={<Placeholder title="助手与 Skill" />} />
+          <Route path="/settings/billing" element={<BillingSettings />} />
+          <Route
+            path="/settings/account"
+            element={
+              <AccountSettings
+                themePreference={themePreference}
+                onThemeChange={setThemePreference}
+              />
+            }
+          />
+          <Route path="/settings/*" element={<Placeholder title="设置" />} />
+          <Route path="*" element={<Navigate to="/chat/new" replace />} />
         </Routes>
       </div>
       {contextOpen ? <ContextDock onClose={() => setContextOpen(false)} /> : null}

@@ -142,7 +142,7 @@ try {
   await page.getByText(/已接受/).waitFor();
   await page.getByText("credited", { exact: true }).waitFor();
 
-  await page.getByRole("link", { name: "＋ 新对话" }).click();
+  await page.getByRole("link", { name: "新对话", exact: true }).click();
   await page.getByLabel("发送消息").fill("账户模型测试");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   try {
@@ -185,7 +185,7 @@ try {
   await application.close();
   running = await launch();
   ({ application, page } = running);
-  await page.locator(".sidebar-account").getByText("signed_in", { exact: true }).waitFor();
+  await page.locator(".sidebar-account").getByText("已登录", { exact: true }).waitFor();
   const accountConversation = page.getByRole("link", { name: /账户模型测试/ });
   await accountConversation.waitFor();
   await accountConversation.click();
@@ -221,13 +221,13 @@ try {
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "清理本机缓存" }).click();
   await page.getByText("本机缓存已清理。", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "立即同步" }).click();
+  await page.getByLabel("同步状态").getByRole("button", { name: "立即同步" }).click();
   await page.getByRole("link", { name: /账户模型测试/ }).waitFor();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "删除云端对话数据" }).click();
   await page.getByText(/墓碑保留至/).waitFor();
-  await page.getByRole("button", { name: "立即同步" }).click();
+  await page.getByLabel("同步状态").getByRole("button", { name: "立即同步" }).click();
   await page.getByRole("link", { name: /账户模型测试/ }).waitFor({ state: "detached" });
 
   page.once("dialog", (dialog) => dialog.accept());

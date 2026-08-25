@@ -101,7 +101,7 @@ try {
   await page.getByRole("link", { name: /M1 端到端对话/ }).click();
   await page.getByText("修改后的第一问", { exact: true }).waitFor();
 
-  await page.getByRole("link", { name: "＋ 新对话" }).click();
+  await page.getByRole("link", { name: "新对话", exact: true }).click();
   await page.waitForURL(/#\/chat\/new$/);
   await page.getByRole("heading", { name: "今天想完成什么？" }).waitFor();
   await page.getByLabel("发送消息").fill("生成一个代码块和表格");

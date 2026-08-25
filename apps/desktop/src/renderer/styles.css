@@ -803,6 +803,47 @@ h1 {
   --workspace-accent: #9be8b7;
   --workspace-accent-strong: #71d89b;
   --workspace-accent-ink: #15241b;
+  --workspace-accent-hover: #b2efc7;
+  --workspace-accent-muted-ink: #477c5b;
+  --workspace-accent-soft: rgb(113 216 155 / 10%);
+  --workspace-code-bg: #0b0d0e;
+  --workspace-user-message: #202827;
+  --workspace-dock: #171a1b;
+  --workspace-icon-surface: #26342d;
+  --workspace-success-surface: #1b2b23;
+  --workspace-success-border: #315b43;
+  --workspace-status-surface: #29302c;
+  --workspace-shadow: 0 14px 42px rgb(0 0 0 / 22%);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color: #20231f;
+  background: #f5f6f2;
+  --workspace-bg: #f5f6f2;
+  --workspace-surface: #ffffff;
+  --workspace-surface-raised: #ecefea;
+  --workspace-sidebar: #eef0eb;
+  --workspace-border: rgb(25 33 27 / 12%);
+  --workspace-border-strong: rgb(25 33 27 / 21%);
+  --workspace-text: #20231f;
+  --workspace-muted: #707870;
+  --workspace-muted-strong: #4e574f;
+  --workspace-accent: #31744c;
+  --workspace-accent-strong: #2a6944;
+  --workspace-accent-ink: #ffffff;
+  --workspace-accent-hover: #3f845b;
+  --workspace-accent-muted-ink: rgb(255 255 255 / 78%);
+  --workspace-accent-soft: rgb(49 116 76 / 9%);
+  --workspace-code-bg: #171a1c;
+  --workspace-user-message: #e6eee8;
+  --workspace-dock: #f0f2ed;
+  --workspace-icon-surface: #dfeae2;
+  --workspace-success-surface: #e5f1e8;
+  --workspace-success-border: #bfd7c6;
+  --workspace-status-surface: #e3e7e2;
+  --workspace-shadow: 0 14px 42px rgb(25 33 27 / 10%);
+  color-scheme: light;
 }
 
 body,
@@ -816,10 +857,6 @@ select {
 body,
 #root {
   background: var(--workspace-bg);
-}
-
-body {
-  color-scheme: dark;
 }
 
 .app-shell {
@@ -960,7 +997,7 @@ body {
 .main-nav a.new-chat-link:hover,
 .main-nav a.new-chat-link.active {
   color: var(--workspace-accent-ink);
-  background: #b2efc7;
+  background: var(--workspace-accent-hover);
 }
 
 .history-list {
@@ -1026,7 +1063,7 @@ body {
   border-top: 1px solid var(--workspace-border);
 }
 
-.sync-state > svg {
+.app-shell .sync-state > svg {
   color: var(--workspace-accent-strong);
 }
 
@@ -1194,7 +1231,7 @@ h1 {
   background: var(--workspace-surface);
   border-color: var(--workspace-border-strong);
   border-radius: 11px;
-  box-shadow: 0 14px 42px rgb(0 0 0 / 22%);
+  box-shadow: var(--workspace-shadow);
 }
 
 .composer textarea {
@@ -1267,13 +1304,13 @@ h1 {
 }
 
 .primary-action:hover {
-  background: #b2efc7;
-  border-color: #b2efc7;
+  background: var(--workspace-accent-hover);
+  border-color: var(--workspace-accent-hover);
 }
 
-.primary-action kbd {
+.composer .primary-action kbd {
   padding-left: 4px;
-  color: #477c5b;
+  color: var(--workspace-accent-muted-ink);
   font-size: 10px;
   font-family: inherit;
 }
@@ -1360,7 +1397,7 @@ h1 {
 
 .message-user {
   color: var(--workspace-text);
-  background: #202827;
+  background: var(--workspace-user-message);
   border: 1px solid rgb(155 232 183 / 8%);
 }
 
@@ -1379,7 +1416,7 @@ h1 {
 }
 
 .markdown-body pre {
-  background: #0b0d0e;
+  background: var(--workspace-code-bg);
   border: 1px solid var(--workspace-border);
 }
 
@@ -1395,7 +1432,7 @@ h1 {
   min-height: 100vh;
   padding: 24px 20px 20px;
   color: var(--workspace-text);
-  background: #171a1b;
+  background: var(--workspace-dock);
   border-left: 1px solid var(--workspace-border);
 }
 
@@ -1419,7 +1456,7 @@ h1 {
   letter-spacing: -0.02em;
 }
 
-.context-title-row svg {
+.context-dock .context-title-row svg {
   color: var(--workspace-muted);
 }
 
@@ -1478,7 +1515,7 @@ h1 {
   display: none;
 }
 
-.context-dropzone svg {
+.context-dock .context-dropzone svg {
   color: var(--workspace-muted-strong);
 }
 
@@ -1517,7 +1554,7 @@ h1 {
   height: 28px;
   place-items: center;
   color: var(--workspace-accent);
-  background: #26342d;
+  background: var(--workspace-icon-surface);
   border-radius: 6px;
 }
 
@@ -1618,6 +1655,102 @@ h1 {
   color: var(--workspace-muted);
 }
 
+.theme-settings {
+  gap: 14px;
+}
+
+.theme-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.theme-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 17px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 11px;
+  color: var(--workspace-text);
+  text-align: left;
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.theme-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.theme-option:focus-within {
+  outline: 2px solid var(--workspace-accent-strong);
+  outline-offset: 2px;
+}
+
+.theme-option:hover {
+  border-color: var(--workspace-border-strong);
+}
+
+.theme-option.is-selected {
+  background: var(--workspace-accent-soft);
+  border-color: var(--workspace-accent-strong);
+  box-shadow: inset 0 0 0 1px var(--workspace-accent-soft);
+}
+
+.theme-options .theme-option > svg {
+  color: var(--workspace-accent);
+}
+
+.theme-preview {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid var(--workspace-border);
+  border-radius: 9px;
+}
+
+.theme-preview-system {
+  color: #71d89b;
+  background: linear-gradient(135deg, #202326 0 50%, #fafaf7 50%);
+}
+
+.theme-preview-dark {
+  color: #9be8b7;
+  background: #202326;
+}
+
+.theme-preview-light {
+  color: #31744c;
+  background: #fafaf7;
+}
+
+.theme-option-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.theme-option-copy strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.theme-option-copy small {
+  overflow: hidden;
+  color: var(--workspace-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .settings-heading button,
 .settings-actions button,
 .settings-stack > button,
@@ -1630,8 +1763,8 @@ h1 {
 
 .billing-server-note {
   color: var(--workspace-muted-strong);
-  background: #1b2b23;
-  border-color: #315b43;
+  background: var(--workspace-success-surface);
+  border-color: var(--workspace-success-border);
 }
 
 .billing-row,
@@ -1641,7 +1774,7 @@ h1 {
 
 .billing-status {
   color: var(--workspace-muted-strong);
-  background: #29302c;
+  background: var(--workspace-status-surface);
 }
 
 .billing-status.status-credited,
@@ -1649,6 +1782,10 @@ h1 {
 .account-status.account-signed_in {
   color: var(--workspace-accent-ink);
   background: var(--workspace-accent);
+}
+
+:root[data-theme="light"] .markdown-body pre {
+  color: #f1f2ee;
 }
 
 .account-status {
@@ -1710,6 +1847,10 @@ h1 {
     right: 0;
     width: min(320px, 86vw);
     box-shadow: -18px 0 40px rgb(0 0 0 / 28%);
+  }
+
+  .theme-options {
+    grid-template-columns: 1fr;
   }
 }
 
