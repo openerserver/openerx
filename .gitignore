@@ -9,8 +9,13 @@ dist/
 *.db-wal
 *.tsbuildinfo
 .opencode/state/
-opencode-fork/.opencode/state/
-opencode-fork/.copilot-token.json
 .DS_Store
 tmp/*
 bun.lock
+
+# Archived V1 local state is preserved on disk but is not part of source history.
+/v1-backup/.opencode/state/
+/v1-backup/opencode-fork/.opencode/state/
+/v1-backup/opencode-fork/.copilot-token.json
+/v1-backup/tmp/
+/v1-backup/test-results/

@@ -44,6 +44,8 @@ flowchart TD
 
 V1 不包含 Admin Web、组织服务和团队控制平面。
 
+包含云同步、模型、计费、工具与数据信任边界的最新完整图见 [14-overall-architecture.md](14-overall-architecture.md)。
+
 ## 3. 已选技术方案
 
 `已确定`：V1 为跨平台桌面客户端，内嵌 Web UI。
@@ -151,10 +153,10 @@ packages/
   storage/
   observability/
 docs/v2/
-legacy/
+v1-backup/
 ```
 
-这是目标结构，不授权立即移动现有代码。
+这是当前目标结构。旧控制平面、旧 Runtime、旧测试和旧运维资产已经按用户授权移动到 `v1-backup/`，新主线不得直接依赖该目录。
 
 建议 Renderer 基线为 React、TypeScript、Vite、Vitest、React Testing Library 和 Playwright。路由、异步状态和组件库另行通过 ADR 确定，不在合同阶段堆叠依赖。
 

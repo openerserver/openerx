@@ -1,6 +1,0 @@
--- No-op migration.
---
--- `0006_project_tree_foundation.sql` contains the real DDL/data initialization for
--- project tree storage. This file is intentionally left empty so we can keep the
--- auto-generated `0007_snapshot.json` as the latest Drizzle snapshot baseline
--- without replaying duplicate CREATE TABLE / ALTER TABLE statements at runtime.

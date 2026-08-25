@@ -1,6 +1,6 @@
 # V2 实施启动记录
 
-> 状态：`IMPLEMENTATION_BOOTSTRAP_IN_PROGRESS`
+> 状态：`IMPLEMENTATION_BOOTSTRAP_COMPLETE`
 >
 > 日期：2026-08-25（Asia/Shanghai）
 >
@@ -38,16 +38,17 @@ packages/
   ui-react/
   storage/
   observability/
-legacy/              # 旧资产保护说明；本轮不搬迁现有目录
+v1-backup/           # 旧代码、配置、测试、文档和本地运行状态
 ```
 
 该结构来自 [05-platform-and-runtime-contract.md](05-platform-and-runtime-contract.md)。本轮只提交目录说明和空的源码入口，不引入 Electron、React、计费或同步实现依赖。
 
 ## 3. 旧资产边界
 
-- 现有 `control-plane/` 保持原路径，继续用于旧控制平面开发、回归和运行验证。
-- `opencode-fork/`、`claude-code-main/`、`pi-mono/` 继续保留为受保护参考/运行资产；在 Runtime Spike 完成前不删除、不覆盖、不强行接入新主线。
-- `docs/current/` 继续描述旧平台事实；V2 合同和启动记录只放在 `docs/v2/`。
+- 旧 `control-plane/` 已移动到 `v1-backup/control-plane/`，不再进入新主线构建。
+- `opencode-fork/`、`claude-code-main/`、`pi-mono/` 已移动到 `v1-backup/`，只作为受保护参考/运行资产。
+- 旧文档已移动到 `v1-backup/docs/`；活跃文档只保留在 `docs/v2/`。
+- 旧测试、脚本、部署配置、官网和根 workspace 配置均已归档，避免继续误用旧入口。
 - 本轮不做大规模数据迁移，不修改旧数据库表来模拟 V2 领域模型。
 
 ## 4. 后续实现顺序
@@ -59,9 +60,11 @@ legacy/              # 旧资产保护说明；本轮不搬迁现有目录
 
 每一步都必须有独立测试和可回滚提交；未完成的 V2 能力不得通过旧控制平面页面改名冒充完成。
 
+完整里程碑、依赖、首个两周迭代和完成定义见 [13-development-plan.md](13-development-plan.md)。
+
 ## 5. 本轮验收
 
 - 新主线目录可从仓库根目录直接找到。
-- 旧控制平面路径和工作方式不变。
+- 旧系统在 `v1-backup/` 内保持完整相对目录结构和恢复说明。
 - 文档导航能从 `docs/README.md` 进入 V2 启动记录。
 - `git diff --check` 通过。

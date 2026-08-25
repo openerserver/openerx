@@ -1,10 +1,10 @@
 # OpenerX 2.0 产品合同包
 
-> 状态：`PRODUCT_CONTRACT_APPROVED / IMPLEMENTATION_BOOTSTRAP_IN_PROGRESS`
+> 状态：`PRODUCT_CONTRACT_APPROVED / IMPLEMENTATION_IN_PROGRESS`
 >
 > 修订日期：2026-08-25
 >
-> 当前效力：已批准的个人客户端产品合同；它描述目标而不是当前实现，不自动取代 `docs/current`。用户已明确授权开始实施准备，当前先建立新主线目录和可回滚的代码边界。
+> 当前效力：已批准的个人客户端产品合同；它描述目标而不是当前实现。用户已明确授权开始实施，旧系统已归档到 `v1-backup/`，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
 
 ## 1. 当前已经确定的方向
 
@@ -41,7 +41,7 @@
 1. 用户最新明确决定。
 2. [00-product-decision-review.md](00-product-decision-review.md) 中已确认事项。
 3. 本合同包专项文档。
-4. 旧 `docs/current`、`docs/product` 和其他历史方案。
+4. `v1-backup/docs/current`、`v1-backup/docs/product` 和其他历史方案。
 
 ## 4. 建议审阅顺序
 
@@ -57,6 +57,9 @@
 10. [09-golden-task-catalog.md](09-golden-task-catalog.md)：50 条端到端个人任务。
 11. [10-codex-capability-baseline.md](10-codex-capability-baseline.md)：文件、工具与 Skill 的 Codex 对标矩阵。
 12. [11-billing-and-commerce-contract.md](11-billing-and-commerce-contract.md)：个人额度、计费、积分、充值、支付、账单与对账合同。
+13. [12-implementation-bootstrap.md](12-implementation-bootstrap.md)：V2 新主线目录和旧资产保护边界。
+14. [13-development-plan.md](13-development-plan.md)：里程碑、依赖、首个迭代、质量门禁和风险清单。
+15. [14-overall-architecture.md](14-overall-architecture.md)：V2 总体逻辑架构、主链路、信任边界和数据真值。
 
 ## 5. V1 与未来方向边界
 
@@ -82,8 +85,8 @@
 2. 积分兑换数字、充值档位/上下限和支付商户参数作为运营参数，在 Billing Alpha 前配置，在发布前冻结。
 3. 用户已明确要求按本合同开始实施准备；本轮先建立目录骨架和实施记录，后续代码、数据库和基础设施修改仍按阶段退出条件推进。
 
-旧 `docs/current`、旧控制平面和旧 Runtime 依赖继续作为受保护资产；新 V2 主线不得通过改名或覆盖旧路径进入生产。
+`v1-backup/` 中的旧文档、旧控制平面和旧 Runtime 依赖继续作为受保护资产；新 V2 主线不得从备份目录导入模块，或通过旧页面改名冒充完成。
 
 ## 7. 实施启动入口
 
-目录骨架、旧资产保护边界和下一步顺序记录在 [12-implementation-bootstrap.md](12-implementation-bootstrap.md)。
+目录骨架和旧资产保护边界记录在 [12-implementation-bootstrap.md](12-implementation-bootstrap.md)，可执行阶段计划记录在 [13-development-plan.md](13-development-plan.md)，最新整体架构图见 [14-overall-architecture.md](14-overall-architecture.md)。
