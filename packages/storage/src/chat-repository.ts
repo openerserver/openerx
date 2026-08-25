@@ -636,6 +636,41 @@ export class ChatRepository {
     ).map((row) => syncConflictSchema.parse(JSON.parse(String(row.conflict_json))));
   }
 
+  resolveSyncConflict(conflictId: string, resolution: "local" | "cloud"): SyncConflict {
+    return this.#transaction(() => {
+      const row = this.#database
+        .prepare(
+          "SELECT conflict_json FROM sync_local_conflicts WHERE conflict_id = ? AND account_id = ?",
+        )
+        .get(conflictId, this.#ownerProfileId) as SqlRow | undefined;
+      if (!row) throw new Error("SYNC_CONFLICT_NOT_FOUND");
+      const conflict = syncConflictSchema.parse(JSON.parse(String(row.conflict_json)));
+      this.#database
+        .prepare("DELETE FROM sync_outbox WHERE operation_id = ? AND account_id = ?")
+        .run(conflict.operationId, this.#ownerProfileId);
+      if (resolution === "cloud") {
+        this.#applySyncChange(
+          conflict.objectType,
+          conflict.objectId,
+          conflict.serverPayload === null,
+          conflict.serverPayload,
+        );
+      } else {
+        this.#queueSync(
+          conflict.objectType,
+          conflict.objectId,
+          conflict.clientPayload === null ? "delete" : "upsert",
+          conflict.clientPayload,
+          this.#now(),
+        );
+      }
+      this.#database
+        .prepare("DELETE FROM sync_local_conflicts WHERE conflict_id = ?")
+        .run(conflictId);
+      return syncConflictSchema.parse({ ...conflict, resolvedAt: this.#now() });
+    });
+  }
+
   clearLocalCache(): void {
     if (this.pendingSyncOperations().length > 0) throw new Error("SYNC_PENDING_WRITES_EXIST");
     if (this.syncConflicts().length > 0) throw new Error("SYNC_UNRESOLVED_CONFLICTS_EXIST");
@@ -1029,7 +1064,7 @@ export class ChatRepository {
   }
 
   #queueSync(
-    objectType: "conversation" | "branch" | "message",
+    objectType: SyncOperation["objectType"],
     objectId: string,
     mutation: "upsert" | "delete",
     payload: Record<string, unknown> | null,

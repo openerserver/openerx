@@ -39,6 +39,7 @@ export const usageRecordSchema = z
     toolCallId: entityIdSchema.nullable(),
     selectedModelRef: z.string().min(1),
     effectiveModelRef: z.string().min(1),
+    fallbackReason: z.string().min(1).nullable().optional(),
     inputTokens: nullableTokenCountSchema,
     cachedInputTokens: nullableTokenCountSchema,
     outputTokens: nullableTokenCountSchema,
@@ -142,7 +143,10 @@ export const usageQueryInputSchema = z
   })
   .strict();
 
+export const automaticModelRef = "platform/auto" as const;
+
 export interface ModelUsageBridge {
   listModels(): Promise<ModelCatalogEntry[]>;
   getUsage(input?: z.input<typeof usageQueryInputSchema>): Promise<UsageAggregate>;
+  getUsageRecords(input?: z.input<typeof usageQueryInputSchema>): Promise<UsageRecord[]>;
 }

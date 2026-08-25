@@ -1,6 +1,6 @@
 # ADR-V2-008: Cloud objects, sync cursor and conflict strategy
 
-- Status: Accepted
+- Status: Accepted; M2 Conversation/Branch/Message slice implemented
 - Date: 2026-08-25
 - Owners: Account Sync and Data Platform
 
@@ -24,11 +24,13 @@
    hashes and object references. Absolute paths, local file grants, credentials, cookies, tool grants
    and Pi Session handles are device-only fields and are rejected by sync schemas.
 
-## M1 boundary
+## Implementation status
 
-M1 implements local revisions, ordered replay events, archive state and a single local deletion
-tombstone. It does not claim cloud synchronization. M2 must add transactional outbox, cursor replay,
-conflict fixtures and two-device tests before Account Alpha exits.
+M1 implemented local revisions, ordered replay events, archive state and a single local deletion
+tombstone. M2 now implements transactional Outbox, cursor replay, visible local/cloud conflict
+resolution, retained cloud tombstones, cache restoration and independent-replica tests for
+Conversation, Branch and Message. Attachment/Artifact object synchronization remains M4, and native
+Windows/macOS two-device evidence remains a release-environment gate.
 
 ## Consequences
 

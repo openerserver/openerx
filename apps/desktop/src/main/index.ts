@@ -21,8 +21,11 @@ import {
   chatSendInputSchema,
   chatStopInputSchema,
   desktopEnvironmentSchema,
+  emptyInputSchema,
   ipcChannels,
+  syncResolveConflictInputSchema,
   usageQueryInputSchema,
+  usageRecordSchema,
 } from "@openerx/contracts";
 import { app, BrowserWindow, ipcMain, net, protocol, shell } from "electron";
 import started from "electron-squirrel-startup";
@@ -79,6 +82,10 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     return accountStateSchema.parse(accounts.state());
   });
+  ipcMain.handle(ipcChannels.accountDevices, async (event) => {
+    assertTrustedIpcSender(event);
+    return await accounts.listDevices();
+  });
   ipcMain.handle(ipcChannels.accountRequestCode, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const parsed = accountRequestCodeInputSchema.parse(input);
@@ -99,6 +106,12 @@ function registerIpcHandlers(
   ipcMain.handle(ipcChannels.accountSignOut, async (event) => {
     assertTrustedIpcSender(event);
     const state = await accounts.signOut();
+    await supervisor.switchProfile(baseProfileDirectory, "local-default");
+    return state;
+  });
+  ipcMain.handle(ipcChannels.accountSignOutAll, async (event) => {
+    assertTrustedIpcSender(event);
+    const state = await accounts.signOutAll();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
   });
@@ -124,6 +137,27 @@ function registerIpcHandlers(
       await accounts.accessToken(),
       usageQueryInputSchema.parse(input ?? {}),
     );
+  });
+  ipcMain.handle(ipcChannels.usageRecords, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    return usageRecordSchema
+      .array()
+      .parse(
+        await platformClient.usageRecords(
+          await accounts.accessToken(),
+          usageQueryInputSchema.parse(input ?? {}),
+        ),
+      );
+  });
+  ipcMain.handle(ipcChannels.cloudDataDelete, async (event) => {
+    assertTrustedIpcSender(event);
+    if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    const accessToken = await accounts.accessToken();
+    await supervisor.request(
+      chatCommandEnvelopeSchema.parse({ command: "cache.clear", input: {} }),
+    );
+    return await platformClient.deleteCloudData(accessToken);
   });
 
   const registerChatHandler = <T>(
@@ -172,7 +206,15 @@ function registerIpcHandlers(
     true,
   );
   registerChatHandler(ipcChannels.chatEvents, "chat.events", chatEventsInputSchema);
-  registerChatHandler(ipcChannels.syncNow, "sync.now", { parse: () => ({}) }, true);
+  registerChatHandler(ipcChannels.syncNow, "sync.now", emptyInputSchema, true);
+  registerChatHandler(ipcChannels.syncConflicts, "sync.conflicts", emptyInputSchema);
+  registerChatHandler(
+    ipcChannels.syncResolveConflict,
+    "sync.resolve",
+    syncResolveConflictInputSchema,
+    true,
+  );
+  registerChatHandler(ipcChannels.localCacheClear, "cache.clear", emptyInputSchema);
 }
 
 function registerAppProtocol(): void {

@@ -6,5 +6,6 @@ export * from "./model";
 export * from "./pi";
 export * from "./platform";
 export * from "./process";
+export * from "./redaction";
 export * from "./remote";
 export * from "./sync";

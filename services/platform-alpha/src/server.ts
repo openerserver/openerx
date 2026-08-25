@@ -4,11 +4,14 @@ import {
   accountRequestCodeInputSchema,
   accountRevokeDeviceInputSchema,
   accountVerifyCodeInputSchema,
+  cloudDataDeletionResultSchema,
   deviceDescriptorSchema,
   modelGatewayRequestSchema,
   type PlatformAlphaServices,
   type SyncPrincipal,
+  safeErrorMessage,
   syncOperationSchema,
+  syncResolveConflictInputSchema,
 } from "@openerx/contracts";
 
 function send(response: ServerResponse, status: number, body: unknown): void {
@@ -93,6 +96,10 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         send(response, 200, services.identity.listDevices(principal));
         return;
       }
+      if (request.method === "DELETE" && url.pathname === "/api/v2/devices") {
+        send(response, 200, services.identity.revokeAllDevices(principal));
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/v2/models") {
         send(response, 200, services.models.catalog());
         return;
@@ -120,6 +127,39 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         send(response, 200, services.sync.listConflicts(syncPrincipal(principal)));
         return;
       }
+      const conflictMatch = /^\/api\/v2\/sync\/conflicts\/([^/]+)\/resolve$/.exec(url.pathname);
+      if (request.method === "POST" && conflictMatch) {
+        const input = syncResolveConflictInputSchema.parse({
+          ...((await jsonBody(request)) as object),
+          conflictId: conflictMatch[1],
+        });
+        send(
+          response,
+          200,
+          services.sync.resolveConflict(syncPrincipal(principal), input.conflictId),
+        );
+        return;
+      }
+      if (request.method === "DELETE" && url.pathname === "/api/v2/sync/account-data") {
+        send(
+          response,
+          200,
+          cloudDataDeletionResultSchema.parse(
+            services.sync.deleteAccountData(syncPrincipal(principal)),
+          ),
+        );
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/usage/records") {
+        const conversationId = url.searchParams.get("conversationId") ?? undefined;
+        const messageId = url.searchParams.get("messageId") ?? undefined;
+        send(
+          response,
+          200,
+          services.usage.list({ accountId: principal.accountId, conversationId, messageId }),
+        );
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/v2/usage") {
         const conversationId = url.searchParams.get("conversationId") ?? undefined;
         const messageId = url.searchParams.get("messageId") ?? undefined;
@@ -132,7 +172,7 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
       }
       send(response, 404, { error: { code: "NOT_FOUND", message: "Not found" } });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = safeErrorMessage(error, "Unknown error");
       const code = message.split(":", 1)[0] || "PLATFORM_ERROR";
       const authenticationError = code.startsWith("ACCESS_") || code.startsWith("DEVICE_SESSION_");
       send(response, authenticationError ? 401 : 400, { error: { code, message } });

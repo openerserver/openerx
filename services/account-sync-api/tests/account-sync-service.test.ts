@@ -82,6 +82,12 @@ describe("AccountSyncService", () => {
       expect(conflict.conflict.serverPayload).toEqual({ title: "设备 A" });
     }
     expect(service.listConflicts(firstDevice)).toHaveLength(1);
+    if (conflict.status === "conflict") {
+      expect(
+        service.resolveConflict(firstDevice, conflict.conflict.conflictId).resolvedAt,
+      ).not.toBe(null);
+    }
+    expect(service.listConflicts(firstDevice)).toEqual([]);
   });
 
   it("creates revisioned tombstones and separates account scopes", () => {
@@ -117,5 +123,20 @@ describe("AccountSyncService", () => {
         }),
       ),
     ).toThrow("SYNC_FORBIDDEN_FIELD");
+  });
+
+  it("deletes every active cloud object with retained tombstones and account isolation", () => {
+    const { service } = setup();
+    const owner = principal();
+    const stranger = principal();
+    service.push(owner, operation(owner, randomUUID(), 0, { title: "One" }));
+    service.push(owner, operation(owner, randomUUID(), 0, { title: "Two" }));
+    service.push(stranger, operation(stranger, randomUUID(), 0, { title: "Private" }));
+    const result = service.deleteAccountData(owner);
+    expect(result).toMatchObject({ deletedObjects: 2, cursor: "cursor:4" });
+    expect(service.pull(owner, "cursor:2").changes).toHaveLength(2);
+    expect(service.pull(owner, "cursor:2").changes.every(({ tombstone }) => tombstone)).toBe(true);
+    expect(service.pull(stranger, null).changes).toHaveLength(1);
+    expect(service.deleteAccountData(owner).deletedObjects).toBe(0);
   });
 });

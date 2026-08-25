@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type {
-  ModelCatalogEntry,
-  ModelGatewayRequestDto,
-  UsageRecord,
-  UsageStorePort,
+import {
+  automaticModelRef,
+  type ModelCatalogEntry,
+  type ModelGatewayRequestDto,
+  type UsageRecord,
+  type UsageStorePort,
 } from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelGatewayService } from "../src/model-gateway-service";
@@ -106,6 +107,19 @@ function setup(effectiveModelRef = "platform/standard") {
 }
 
 describe("ModelGatewayService", () => {
+  it("publishes an automatic model and records its resolved effective model", async () => {
+    const { gateway } = setup();
+    expect(gateway.catalog()[0]).toMatchObject({
+      modelRef: automaticModelRef,
+      displayName: "自动",
+    });
+    const result = await gateway.execute(request({ selectedModelRef: automaticModelRef }));
+    expect(result.usage).toMatchObject({
+      selectedModelRef: automaticModelRef,
+      effectiveModelRef: "platform/standard",
+    });
+  });
+
   it("executes an explicit model and records authoritative token usage once", async () => {
     const { gateway, usageStore, execute } = setup();
     const input = request();

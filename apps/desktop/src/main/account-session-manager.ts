@@ -2,8 +2,10 @@ import {
   type AccountState,
   accountStateSchema,
   type DeviceDescriptor,
+  type DeviceSession,
   type DeviceSessionGrant,
   deviceSessionGrantSchema,
+  deviceSessionSchema,
   type EmailChallenge,
   emailChallengeSchema,
 } from "@openerx/contracts";
@@ -24,6 +26,8 @@ export interface IdentityTransport {
   }): Promise<DeviceSessionGrant>;
   refresh(sessionId: string, refreshCredential: string): Promise<DeviceSessionGrant>;
   revoke(accessToken: string, sessionId: string): Promise<void>;
+  revokeAll(accessToken: string): Promise<void>;
+  listDevices(accessToken: string): Promise<DeviceSession[]>;
 }
 
 interface ActiveGrant {
@@ -73,6 +77,22 @@ export class HttpIdentityTransport implements IdentityTransport {
       method: "DELETE",
       headers: { authorization: `Bearer ${accessToken}` },
     });
+  }
+
+  async revokeAll(accessToken: string): Promise<void> {
+    await this.#json("/api/v2/devices", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
+  async listDevices(accessToken: string): Promise<DeviceSession[]> {
+    return deviceSessionSchema.array().parse(
+      await this.#json("/api/v2/devices", {
+        method: "GET",
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    );
   }
 
   async #json(pathname: string, init: RequestInit): Promise<unknown> {
@@ -197,6 +217,18 @@ export class AccountSessionManager {
     if (!active) throw new Error("AUTHENTICATION_REQUIRED");
     await this.#requireTransport().revoke(active.grant.accessToken, sessionId);
     if (sessionId === active.grant.session.sessionId) await this.#clear("signed_out", null);
+    return this.state();
+  }
+
+  async listDevices(): Promise<DeviceSession[]> {
+    return await this.#requireTransport().listDevices(await this.accessToken());
+  }
+
+  async signOutAll(): Promise<AccountState> {
+    const active = this.#active;
+    if (!active) throw new Error("AUTHENTICATION_REQUIRED");
+    await this.#requireTransport().revokeAll(active.grant.accessToken);
+    await this.#clear("signed_out", null);
     return this.state();
   }
 

@@ -1,6 +1,6 @@
 # Electron and local App Service threat model
 
-> Baseline: M1 Chat Alpha
+> Baseline: M2 local implementation checkpoint
 >
 > Date: 2026-08-25 (Asia/Shanghai)
 >
@@ -12,7 +12,7 @@ Protected assets are account sessions, OS credential handles, Remote device keys
 conversation/cache data, file grants, attachment/artifact content, model/payment credentials, tool
 approvals and update integrity.
 
-The M1 invariants are:
+The current invariants are:
 
 1. Renderer has no Node, filesystem, process, credential, ledger-write or raw IPC authority.
 2. Main is the only broker for windows, navigation, OS credentials, dialogs and process startup.
@@ -36,7 +36,7 @@ The M1 invariants are:
 
 ## Threats, controls and verification
 
-| Threat | Required control | M0/M1 verification |
+| Threat | Required control | Milestone verification |
 | --- | --- | --- |
 | Renderer remote-code execution becomes Node execution | sandbox, no Node integration, context isolation, no webview | window-option unit test and packaged smoke test |
 | XSS or model output invokes privileged IPC | frozen domain bridge, no raw IPC, strict request schemas | bridge review and contract rejection tests |
@@ -45,7 +45,7 @@ The M1 invariants are:
 | Malicious URL uses `file:`, `javascript:` or custom protocol | URL parser and explicit `https:` policy | scheme test matrix |
 | Local process impersonates App Service | private MessagePort, random one-use boot nonce, contract negotiation | nonce mismatch, version mismatch and duplicate-handshake rejection tests |
 | App Service crash freezes UI or corrupts writes | utility process, bounded restart, transactional single-writer storage | live Electron crash injection plus interrupted-message recovery E2E |
-| Database theft reveals reusable credentials | credentials outside DB; OS-protected key and authenticated field encryption | M1 schema inspection proves no credential/token tables; OS store and encrypted account fields remain M2 |
+| Database theft reveals reusable credentials | credentials outside DB; OS-protected key and authenticated field encryption | schema inspection proves no credential/token tables; M2 vault tests and Electron E2E verify protected credential bytes and sign-out deletion |
 | Path traversal or symlink escapes a grant | canonical path checks at capability broker and operation time | file-scope E2E in M4 |
 | Pi/Skill/MCP expands its own authority | isolated Pi Host, V2 capability port, explicit scope and approval; Pi tool lifecycle does not grant side-effect authority | denial/revocation E2E in M5/M7 |
 | Remote exposes a desktop listener | supervised Connector makes outbound TLS/WSS connections only; no localhost/public Remote server | socket scan and packaged-host E2E in M6 |
@@ -56,7 +56,7 @@ The M1 invariants are:
 | Client forges usage, balance or payment result | cloud Usage/Ledger/Payment services are sole truth | cross-account and replay E2E in M2/M3 |
 | Package/update tampering | exact lockfile, CI, Electron fuses, signed/notarized desktop release, signed mobile release and signed feed | package inspection in M0; signing gate in M9 |
 | Legacy implementation leaks into V2 | workspace isolation and source-boundary checker | `npm run check:boundaries:v2` |
-| Secrets leak through logs/errors | stable error envelopes and structured redaction | snapshot/secret-canary tests before M2 |
+| Secrets leak through logs/errors | stable error envelopes and structured redaction | M2 canary test covers Bearer, refresh credential, API key, `sk-` and URL-token forms; App Service and Platform HTTP normalize exposed errors |
 
 ## Default-deny behavior
 

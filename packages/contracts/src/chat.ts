@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { syncStatusSchema } from "./sync";
+import {
+  localCacheClearResultSchema,
+  type SyncConflict,
+  syncConflictSchema,
+  syncResolveConflictInputSchema,
+  syncStatusSchema,
+} from "./sync";
 
 export const entityIdSchema = z.uuid();
 export const timestampSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
@@ -184,8 +190,13 @@ export const chatEventsInputSchema = z
   })
   .strict();
 
+export const emptyInputSchema = z.object({}).strict();
+
 export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
-  z.object({ command: z.literal("sync.now"), input: z.object({}).strict() }).strict(),
+  z.object({ command: z.literal("sync.now"), input: emptyInputSchema }).strict(),
+  z.object({ command: z.literal("sync.conflicts"), input: emptyInputSchema }).strict(),
+  z.object({ command: z.literal("sync.resolve"), input: syncResolveConflictInputSchema }).strict(),
+  z.object({ command: z.literal("cache.clear"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("chat.list"), input: chatListInputSchema }).strict(),
   z.object({ command: z.literal("chat.get"), input: chatGetInputSchema }).strict(),
   z.object({ command: z.literal("chat.send"), input: chatSendInputSchema }).strict(),
@@ -254,6 +265,9 @@ export type ChatEvent = z.infer<typeof chatEventSchema>;
 
 export interface ChatCommandResultMap {
   "sync.now": z.infer<typeof syncStatusSchema>;
+  "sync.conflicts": SyncConflict[];
+  "sync.resolve": z.infer<typeof syncStatusSchema>;
+  "cache.clear": z.infer<typeof localCacheClearResultSchema>;
   "chat.list": ConversationSummary[];
   "chat.get": ConversationSnapshot;
   "chat.send": GenerationReceipt;
@@ -276,7 +290,14 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
   let parsed: unknown;
   switch (command) {
     case "sync.now":
+    case "sync.resolve":
       parsed = syncStatusSchema.parse(value);
+      break;
+    case "sync.conflicts":
+      parsed = z.array(syncConflictSchema).parse(value);
+      break;
+    case "cache.clear":
+      parsed = localCacheClearResultSchema.parse(value);
       break;
     case "chat.list":
       parsed = z.array(conversationSummarySchema).parse(value);

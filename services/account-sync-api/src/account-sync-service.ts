@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
+  type CloudDataDeletionResult,
+  cloudDataDeletionResultSchema,
   type SyncChange,
   type SyncConflict,
   type SyncOperation,
@@ -276,6 +278,88 @@ export class AccountSyncService {
         )
         .all(principal.accountId) as SqlRow[]
     ).map((row) => this.#conflict(row));
+  }
+
+  resolveConflict(principal: SyncPrincipal, conflictId: string): SyncConflict {
+    return this.#transaction(() => {
+      const row = this.#database
+        .prepare("SELECT * FROM sync_conflicts WHERE conflict_id = ? AND account_id = ?")
+        .get(conflictId, principal.accountId) as SqlRow | undefined;
+      if (!row) throw new Error("SYNC_CONFLICT_NOT_FOUND");
+      if (row.resolved_at === null) {
+        this.#database
+          .prepare("UPDATE sync_conflicts SET resolved_at = ? WHERE conflict_id = ?")
+          .run(this.#now().toISOString(), conflictId);
+      }
+      const resolved = this.#database
+        .prepare("SELECT * FROM sync_conflicts WHERE conflict_id = ?")
+        .get(conflictId) as SqlRow;
+      return this.#conflict(resolved);
+    });
+  }
+
+  deleteAccountData(principal: SyncPrincipal): CloudDataDeletionResult {
+    return this.#transaction(() => {
+      const now = this.#now();
+      const changedAt = now.toISOString();
+      const retainUntil = new Date(now.getTime() + this.#tombstoneRetentionMs).toISOString();
+      const rows = this.#database
+        .prepare(
+          `SELECT * FROM sync_objects
+           WHERE account_id = ? AND tombstone = 0
+           ORDER BY object_type, object_id`,
+        )
+        .all(principal.accountId) as SqlRow[];
+      for (const row of rows) {
+        const nextCursor = this.#advanceCursor(principal.accountId);
+        const operationId = this.#idFactory();
+        const revision = Number(row.revision) + 1;
+        this.#database
+          .prepare(
+            `UPDATE sync_objects
+             SET revision = ?, tombstone = 1, payload_json = NULL, operation_id = ?,
+                 changed_at = ?, retain_until = ?
+             WHERE account_id = ? AND object_type = ? AND object_id = ?`,
+          )
+          .run(
+            revision,
+            operationId,
+            changedAt,
+            retainUntil,
+            principal.accountId,
+            String(row.object_type),
+            String(row.object_id),
+          );
+        this.#database
+          .prepare(
+            `INSERT INTO sync_changes
+             (account_id, cursor_sequence, object_type, object_id, revision, tombstone,
+              payload_version, payload_json, operation_id, changed_at, retain_until)
+             VALUES (?, ?, ?, ?, ?, 1, 1, NULL, ?, ?, ?)`,
+          )
+          .run(
+            principal.accountId,
+            nextCursor,
+            String(row.object_type),
+            String(row.object_id),
+            revision,
+            operationId,
+            changedAt,
+            retainUntil,
+          );
+      }
+      this.#database
+        .prepare(
+          `UPDATE sync_conflicts SET resolved_at = COALESCE(resolved_at, ?)
+           WHERE account_id = ?`,
+        )
+        .run(changedAt, principal.accountId);
+      return cloudDataDeletionResultSchema.parse({
+        deletedObjects: rows.length,
+        cursor: cursor(this.#currentCursor(principal.accountId)),
+        retainUntil,
+      });
+    });
   }
 
   #assertScope(principal: SyncPrincipal, operation: SyncOperation): void {

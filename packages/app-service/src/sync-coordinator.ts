@@ -1,15 +1,25 @@
-import type {
-  AppServiceAuthorization,
-  SyncOperation,
-  SyncPullResult,
-  SyncPushResult,
-  SyncStatus,
+import {
+  type AppServiceAuthorization,
+  type SyncConflict,
+  type SyncConflictResolution,
+  type SyncOperation,
+  type SyncPullResult,
+  type SyncPushResult,
+  type SyncStatus,
+  syncConflictSchema,
+  syncPullResultSchema,
+  syncPushResultSchema,
 } from "@openerx/contracts";
 import type { ChatRepository } from "@openerx/storage";
 
 export interface AccountSyncTransport {
   push(operation: SyncOperation, authorization: AppServiceAuthorization): Promise<SyncPushResult>;
   pull(cursor: string | null, authorization: AppServiceAuthorization): Promise<SyncPullResult>;
+  resolveConflict(
+    conflictId: string,
+    resolution: SyncConflictResolution,
+    authorization: AppServiceAuthorization,
+  ): Promise<SyncConflict>;
 }
 
 export class HttpAccountSyncTransport implements AccountSyncTransport {
@@ -17,10 +27,12 @@ export class HttpAccountSyncTransport implements AccountSyncTransport {
     operation: SyncOperation,
     authorization: AppServiceAuthorization,
   ): Promise<SyncPushResult> {
-    return (await this.#json("/api/v2/sync/push", authorization, {
-      method: "POST",
-      body: JSON.stringify(operation),
-    })) as SyncPushResult;
+    return syncPushResultSchema.parse(
+      await this.#json("/api/v2/sync/push", authorization, {
+        method: "POST",
+        body: JSON.stringify(operation),
+      }),
+    );
   }
 
   async pull(
@@ -28,9 +40,25 @@ export class HttpAccountSyncTransport implements AccountSyncTransport {
     authorization: AppServiceAuthorization,
   ): Promise<SyncPullResult> {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-    return (await this.#json(`/api/v2/sync/pull${query}`, authorization, {
-      method: "GET",
-    })) as SyncPullResult;
+    return syncPullResultSchema.parse(
+      await this.#json(`/api/v2/sync/pull${query}`, authorization, {
+        method: "GET",
+      }),
+    );
+  }
+
+  async resolveConflict(
+    conflictId: string,
+    resolution: SyncConflictResolution,
+    authorization: AppServiceAuthorization,
+  ): Promise<SyncConflict> {
+    return syncConflictSchema.parse(
+      await this.#json(
+        `/api/v2/sync/conflicts/${encodeURIComponent(conflictId)}/resolve`,
+        authorization,
+        { method: "POST", body: JSON.stringify({ resolution }) },
+      ),
+    );
   }
 
   async #json(
@@ -54,12 +82,28 @@ export class HttpAccountSyncTransport implements AccountSyncTransport {
 export class SyncCoordinator {
   readonly #repository: ChatRepository;
   readonly #transport: AccountSyncTransport;
+  readonly #now: () => string;
   #active: Promise<SyncStatus> | null = null;
   #rerunRequested = false;
 
-  constructor(repository: ChatRepository, transport: AccountSyncTransport) {
+  constructor(
+    repository: ChatRepository,
+    transport: AccountSyncTransport,
+    now: () => string = () => new Date().toISOString(),
+  ) {
     this.#repository = repository;
     this.#transport = transport;
+    this.#now = now;
+  }
+
+  async resolveConflict(
+    conflictId: string,
+    resolution: SyncConflictResolution,
+    authorization: AppServiceAuthorization,
+  ): Promise<SyncStatus> {
+    await this.#transport.resolveConflict(conflictId, resolution, authorization);
+    this.#repository.resolveSyncConflict(conflictId, resolution);
+    return await this.syncOnce(authorization);
   }
 
   async syncOnce(authorization: AppServiceAuthorization): Promise<SyncStatus> {
@@ -105,6 +149,7 @@ export class SyncCoordinator {
       pulled: pull.changes.length,
       pending: this.#repository.pendingSyncOperations().length,
       conflicts: this.#repository.syncConflicts().length,
+      syncedAt: this.#now(),
     };
   }
 }

@@ -4,7 +4,7 @@
 >
 > 修订日期：2026-08-25
 >
-> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation 与 M2 已完成，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
+> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation 与 M2 本地实现检查点已完成，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
 
 ## 1. 当前已经确定的方向
 
@@ -92,7 +92,7 @@
 
 1. 产品名称、导航、账户、系统范围、Pi 边界、权限、验收和商业规则均按 [00-product-decision-review.md](00-product-decision-review.md) 生效。
 2. 积分兑换数字、充值档位/上下限和支付商户参数作为运营参数，在 Billing Alpha 前配置，在发布前冻结。
-3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；M2 已完成，当前直接进入 M3，不设置旧执行引擎迁移阶段。
+3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；M2 本地实现检查点已完成，当前直接进入 M3，不设置旧执行引擎迁移阶段。原生双平台和真实 Provider 证据仍按发布 Gate 补齐。
 
 `v1-backup/` 中的旧文档、旧控制平面和旧执行引擎依赖继续作为受保护资产；新 V2 主线不得从备份目录导入模块，或通过旧页面改名冒充完成。
 

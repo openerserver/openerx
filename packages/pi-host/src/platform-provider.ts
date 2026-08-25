@@ -9,6 +9,7 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import {
+  automaticModelRef,
   type ModelCatalogEntry,
   type ModelGatewayRequestDto,
   type ModelGatewayResponse,
@@ -192,7 +193,10 @@ export function createPlatformModelProvider(
 ): PlatformProviderHandle {
   const catalog = options.catalog.map((entry) => modelCatalogEntrySchema.parse(entry));
   const models = catalog.map(toPiModel);
-  const selected = models.find(({ id }) => id === options.request.selectedModelRef);
+  const selected =
+    options.request.selectedModelRef === automaticModelRef
+      ? models.find(({ id }) => id !== automaticModelRef)
+      : models.find(({ id }) => id === options.request.selectedModelRef);
   if (!selected) throw new Error(`PLATFORM_MODEL_NOT_FOUND:${options.request.selectedModelRef}`);
   const provider = createProvider<string>({
     id: "openerx-platform",

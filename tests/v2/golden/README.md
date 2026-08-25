@@ -10,3 +10,7 @@
 Binary fixtures, account states, payment-sandbox states, and tool sandboxes are materialized by the
 milestone that first executes the task. Their fixture IDs must remain stable; incompatible changes
 create a new catalog version instead of silently replacing an input.
+
+Milestone-local implementation evidence is recorded separately from release-platform evidence. M2
+account entries are under `docs/v2/evidence/golden/local-implementation/`; they do not replace the
+catalog's Windows/macOS release evidence destinations or claim M4/M5 file/tool slices.

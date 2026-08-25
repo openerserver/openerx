@@ -106,4 +106,27 @@ describe("IdentityService", () => {
     advance(5 * 60_000 + 1);
     expect(() => service.authenticate(second.accessToken)).toThrow("ACCESS_TOKEN_EXPIRED");
   });
+
+  it("lists account devices and revokes every active session", async () => {
+    const { service } = setup();
+    const firstChallenge = await service.requestChallenge("all@example.com");
+    const first = service.verifyChallenge({
+      challengeId: firstChallenge.challengeId,
+      code: "123456",
+      device: device("First"),
+    });
+    const secondChallenge = await service.requestChallenge("all@example.com");
+    const second = service.verifyChallenge({
+      challengeId: secondChallenge.challengeId,
+      code: "123456",
+      device: device("Second", "win32"),
+    });
+    const principal = service.authenticate(first.accessToken);
+    expect(service.listDevices(principal)).toHaveLength(2);
+    expect(service.revokeAllDevices(principal).every(({ revokedAt }) => revokedAt !== null)).toBe(
+      true,
+    );
+    expect(() => service.authenticate(first.accessToken)).toThrow("DEVICE_SESSION_REVOKED");
+    expect(() => service.authenticate(second.accessToken)).toThrow("DEVICE_SESSION_REVOKED");
+  });
 });

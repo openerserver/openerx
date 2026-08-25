@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AccountSyncService } from "@openerx/account-sync-api";
-import type { ModelCatalogEntry } from "@openerx/contracts";
+import { automaticModelRef, type ModelCatalogEntry } from "@openerx/contracts";
 import { IdentityService } from "@openerx/identity-api";
 import { ModelGatewayService } from "@openerx/model-gateway";
 import { createPlatformAlphaServer, listenOnEphemeralPort } from "@openerx/platform-alpha";
@@ -112,7 +112,10 @@ describe("Platform Alpha HTTP composition", () => {
     expect(codes.get("http@example.com")).toBe("123456");
     const authorization = { authorization: `Bearer ${grant.accessToken}` };
     const models = await fetch(`${baseUrl}/api/v2/models`, { headers: authorization });
-    expect(await models.json()).toEqual(catalog);
+    expect(await models.json()).toEqual([
+      expect.objectContaining({ modelRef: automaticModelRef, displayName: "自动" }),
+      ...catalog,
+    ]);
     const response = await fetch(`${baseUrl}/api/v2/model/execute`, {
       method: "POST",
       headers: { ...authorization, "content-type": "application/json" },
@@ -128,6 +131,15 @@ describe("Platform Alpha HTTP composition", () => {
       }),
     });
     expect(await response.json()).toMatchObject({ text: "HTTP 平台回答" });
+    const records = await fetch(`${baseUrl}/api/v2/usage/records`, {
+      headers: authorization,
+    }).then((result) => result.json());
+    expect(records).toEqual([
+      expect.objectContaining({
+        selectedModelRef: "platform/standard",
+        effectiveModelRef: "platform/standard",
+      }),
+    ]);
     await fetch(`${baseUrl}/api/v2/devices/${grant.session.sessionId}`, {
       method: "DELETE",
       headers: authorization,

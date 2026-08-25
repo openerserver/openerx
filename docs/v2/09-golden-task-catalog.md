@@ -1,8 +1,8 @@
 # V1 黄金任务目录
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
+> 状态：`APPROVED_PRODUCT_SCOPE / MILESTONE_EXECUTION_IN_PROGRESS`
 >
-> 用途：用 50 条个人客户端任务验证聊天、文件、账户云同步、平台模型、Token/费用、额度/积分、充值/账单、Codex 级工具、Skill、长任务和安全。正式实施前需要为每条任务补充固定输入和预期结果。
+> 用途：用 50 条个人客户端任务验证聊天、文件、账户云同步、平台模型、Token/费用、额度/积分、充值/账单、Codex 级工具、Skill、长任务和安全。版本化固定输入、原始 Prompt 和预期结果位于 `tests/v2/golden/catalog.json`；各里程碑在实现相应切片时补执行记录。
 
 ## 1. 通用要求
 
@@ -64,6 +64,8 @@
 | GT-ACCOUNT-09 | 核对消息、对话和账户 Token 聚合 | 分类和总数一致；重放、重试、同步不重复累计 | 硬 |
 | GT-ACCOUNT-10 | 分别清本机缓存、退出设备和删除云数据 | 三种操作边界、墓碑与保留期说明一致 | 硬 |
 
+M2 本地证据只验收账户、Conversation/Branch/Message、同步、模型和 Usage 切片。GT-ACCOUNT-02 的附件/Artifact、GT-ACCOUNT-03 的文件重放、GT-ACCOUNT-05 的预签名资源随 M4 验收；GT-ACCOUNT-07 的真实文件/工具执行分别随 M4/M5 验收。逐条边界见 [M2 Golden Task evidence](evidence/m2-2026-08-25.md#gt-account-01-through-gt-account-10)。
+
 ## 5. 额度、积分、充值与账单：GT-BILLING-01 至 GT-BILLING-10
 
 | ID | 任务 | 核心校验 | 门禁 |
@@ -94,10 +96,9 @@
 | GT-TOOL-09 | 同步 Skill 安装记录到另一设备 | 安装记录恢复，本地文件/Shell/浏览器/桌面权限不继承 | 硬 |
 | GT-TOOL-10 | 长任务中离开、返回、停止并模拟 Pi Host/Skill 崩溃 | 持久化进度恢复，子进程停止，已有成果保留，普通聊天可继续 | 硬 |
 
-## 7. 每条任务待补字段
+## 7. 每次里程碑执行记录
 
-- 固定输入和版本。
-- 用户原始 Prompt。
+- Catalog 中固定输入、版本、原始 Prompt 和预期结果的引用。
 - 使用的模型目录版本、选择模型、实际模型和 Pi 版本。
 - 预期消息、同步、文件或工具行为。
 - 预期 Token 分类、总数、去重键和聚合记录。
@@ -106,7 +107,7 @@
 - 允许的非确定性范围。
 - 权限预期和禁止行为。
 - Windows/macOS 差异与最大时长、资源限制。
-- 自动测试入口、证据路径和人工评分。
+- 自动测试入口、证据路径、执行平台和人工评分。
 
 ## 8. 人工评分
 

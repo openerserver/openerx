@@ -56,10 +56,10 @@ export class UsageStore {
       .prepare(
         `INSERT INTO usage_records
          (usage_id, account_id, conversation_id, message_id, run_id, tool_call_id,
-          selected_model_ref, effective_model_ref, input_tokens, cached_input_tokens,
+          selected_model_ref, effective_model_ref, fallback_reason, input_tokens, cached_input_tokens,
           output_tokens, reasoning_tokens, total_tokens, provider_reported,
           missing_reasons_json, dedupe_key, recorded_at, record_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.usageId,
@@ -70,6 +70,7 @@ export class UsageStore {
         record.toolCallId,
         record.selectedModelRef,
         record.effectiveModelRef,
+        record.fallbackReason ?? null,
         record.inputTokens,
         record.cachedInputTokens,
         record.outputTokens,
@@ -146,6 +147,7 @@ export class UsageStore {
       toolCallId: row.tool_call_id,
       selectedModelRef: row.selected_model_ref,
       effectiveModelRef: row.effective_model_ref,
+      ...(row.fallback_reason === null ? {} : { fallbackReason: row.fallback_reason }),
       inputTokens: row.input_tokens,
       cachedInputTokens: row.cached_input_tokens,
       outputTokens: row.output_tokens,
@@ -169,6 +171,7 @@ export class UsageStore {
         tool_call_id TEXT,
         selected_model_ref TEXT NOT NULL,
         effective_model_ref TEXT NOT NULL,
+        fallback_reason TEXT,
         input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0),
         cached_input_tokens INTEGER CHECK (cached_input_tokens IS NULL OR cached_input_tokens >= 0),
         output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
@@ -186,6 +189,14 @@ export class UsageStore {
       CREATE INDEX IF NOT EXISTS usage_conversation_idx
         ON usage_records(account_id, conversation_id, recorded_at);
     `);
+    const columns = new Set(
+      (this.#database.prepare("PRAGMA table_info(usage_records)").all() as SqlRow[]).map((row) =>
+        String(row.name),
+      ),
+    );
+    if (!columns.has("fallback_reason")) {
+      this.#database.exec("ALTER TABLE usage_records ADD COLUMN fallback_reason TEXT");
+    }
   }
 }
 

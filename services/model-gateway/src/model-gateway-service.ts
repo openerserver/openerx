@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  automaticModelRef,
   type ModelCatalogEntry,
   type ModelGatewayRequestDto,
   type ModelGatewayResponse,
@@ -60,7 +61,25 @@ export class ModelGatewayService {
   readonly #responses = new Map<string, ModelGatewayResponse>();
 
   constructor(options: ModelGatewayServiceOptions) {
-    this.#catalog = options.catalog.map((entry) => modelCatalogEntrySchema.parse(entry));
+    const configured = options.catalog.map((entry) => modelCatalogEntrySchema.parse(entry));
+    const automatic = configured.find(({ modelRef }) => modelRef === automaticModelRef);
+    const firstAvailable = configured.find(
+      ({ modelRef, status }) => modelRef !== automaticModelRef && status === "available",
+    );
+    this.#catalog = automatic
+      ? configured
+      : firstAvailable
+        ? [
+            modelCatalogEntrySchema.parse({
+              ...firstAvailable,
+              modelRef: automaticModelRef,
+              displayName: "自动",
+              version: `auto:${firstAvailable.version}`,
+              priceSummary: `按请求自动选择 · ${firstAvailable.priceSummary}`,
+            }),
+            ...configured,
+          ]
+        : configured;
     this.#executor = options.executor;
     this.#usageStore = options.usageStore;
     this.#now = options.now ?? (() => new Date());
@@ -71,6 +90,23 @@ export class ModelGatewayService {
   }
 
   checkSelection(modelRef: string, requirements: ModelRequirement): ModelSelectionCheck {
+    if (modelRef === automaticModelRef) {
+      const candidates = this.#catalog.filter(
+        (entry) =>
+          entry.modelRef !== automaticModelRef &&
+          entry.status === "available" &&
+          capabilityKeys.every(
+            (capability) => requirements[capability] !== true || entry.capabilities[capability],
+          ),
+      );
+      if (candidates.length > 0) return { supported: true };
+      return modelSelectionCheckSchema.parse({
+        supported: false,
+        modelRef,
+        missingCapabilities: ["no_automatic_route"],
+        suggestedModelRefs: [],
+      });
+    }
     const selected = this.#catalog.find((entry) => entry.modelRef === modelRef);
     if (selected?.status !== "available") {
       return modelSelectionCheckSchema.parse({
@@ -78,7 +114,7 @@ export class ModelGatewayService {
         modelRef,
         missingCapabilities: [selected ? `status:${selected.status}` : "model_not_found"],
         suggestedModelRefs: this.#catalog
-          .filter((entry) => entry.status === "available")
+          .filter((entry) => entry.modelRef !== automaticModelRef && entry.status === "available")
           .map(({ modelRef: candidate }) => candidate),
       });
     }
@@ -89,6 +125,7 @@ export class ModelGatewayService {
     const suggestedModelRefs = this.#catalog
       .filter(
         (entry) =>
+          entry.modelRef !== automaticModelRef &&
           entry.status === "available" &&
           missingCapabilities.every((capability) => entry.capabilities[capability]),
       )
@@ -117,7 +154,11 @@ export class ModelGatewayService {
     }
     if (signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
     const execution = await this.#executor.execute(request, signal);
-    if (execution.effectiveModelRef !== request.selectedModelRef) {
+    if (request.selectedModelRef === automaticModelRef) {
+      if (execution.effectiveModelRef === automaticModelRef) {
+        throw new Error("MODEL_AUTO_ROUTE_UNRESOLVED");
+      }
+    } else if (execution.effectiveModelRef !== request.selectedModelRef) {
       if (request.approvedFallbackModelRef !== execution.effectiveModelRef) {
         throw new Error("MODEL_SILENT_FALLBACK_REJECTED");
       }
@@ -132,6 +173,7 @@ export class ModelGatewayService {
       toolCallId: null,
       selectedModelRef: request.selectedModelRef,
       effectiveModelRef: execution.effectiveModelRef,
+      fallbackReason: execution.fallbackReason ?? null,
       ...execution.usage,
       dedupeKey: request.requestDedupeKey,
       recordedAt: this.#now().toISOString(),

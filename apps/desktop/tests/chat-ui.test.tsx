@@ -88,13 +88,20 @@ function createBridge(): DesktopBridge {
       session: null,
       reason: null,
     }),
+    listDevices: vi.fn().mockResolvedValue([]),
     requestEmailCode: vi.fn(),
     verifyEmailCode: vi.fn(),
     signOut: vi.fn(),
+    signOutAll: vi.fn(),
     revokeDevice: vi.fn(),
     listModels: vi.fn().mockResolvedValue([]),
     getUsage: vi.fn(),
+    getUsageRecords: vi.fn().mockResolvedValue([]),
     syncNow: vi.fn(),
+    listSyncConflicts: vi.fn().mockResolvedValue([]),
+    resolveSyncConflict: vi.fn(),
+    clearLocalCache: vi.fn(),
+    deleteCloudData: vi.fn(),
     listConversations: vi.fn().mockResolvedValue([]),
     getConversation: vi.fn().mockResolvedValue(snapshot),
     sendMessage: vi.fn().mockResolvedValue({
@@ -117,12 +124,12 @@ function createBridge(): DesktopBridge {
   };
 }
 
-function renderApp(bridge: DesktopBridge): void {
+function renderApp(bridge: DesktopBridge, initialEntry = "/chat/new"): void {
   Object.defineProperty(window, "openerx", { configurable: true, value: bridge });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/chat/new"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -143,5 +150,86 @@ describe("M1 chat renderer", () => {
     expect(bridge.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: null, text: "生成代码块和表格" }),
     );
+  });
+
+  it("exposes M2 device, sync, usage and data boundaries in account settings", async () => {
+    const bridge = createBridge();
+    const accountId = crypto.randomUUID();
+    const currentSessionId = crypto.randomUUID();
+    const otherSessionId = crypto.randomUUID();
+    const accountState = {
+      status: "signed_in" as const,
+      account: {
+        accountId,
+        email: "account@example.com",
+        displayName: "Account",
+        createdAt: timestamp,
+      },
+      session: {
+        sessionId: currentSessionId,
+        accountId,
+        device: {
+          deviceId: crypto.randomUUID(),
+          name: "Current Mac",
+          platform: "darwin" as const,
+          arch: "arm64" as const,
+        },
+        sessionVersion: 1,
+        createdAt: timestamp,
+        lastActiveAt: timestamp,
+        revokedAt: null,
+      },
+      reason: null,
+    };
+    vi.mocked(bridge.getAccountState).mockResolvedValue(accountState);
+    vi.mocked(bridge.listDevices).mockResolvedValue([
+      accountState.session,
+      {
+        ...accountState.session,
+        sessionId: otherSessionId,
+        device: {
+          ...accountState.session.device,
+          deviceId: crypto.randomUUID(),
+          name: "Other Windows",
+          platform: "win32",
+          arch: "x64",
+        },
+      },
+    ]);
+    vi.mocked(bridge.syncNow).mockResolvedValue({
+      cursor: "cursor:2",
+      pushed: 0,
+      pulled: 0,
+      pending: 0,
+      conflicts: 0,
+      syncedAt: timestamp,
+    });
+    vi.mocked(bridge.getUsage).mockResolvedValue({
+      accountId,
+      conversationId: null,
+      messageId: null,
+      records: 1,
+      inputTokens: { known: 10, unknownRecords: 0 },
+      cachedInputTokens: { known: 2, unknownRecords: 0 },
+      outputTokens: { known: 5, unknownRecords: 0 },
+      reasoningTokens: { known: 0, unknownRecords: 1 },
+      totalTokens: { known: 17, unknownRecords: 0 },
+    });
+    vi.mocked(bridge.revokeDevice).mockResolvedValue(accountState);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(bridge.clearLocalCache).mockResolvedValue({ clearedAt: timestamp });
+
+    renderApp(bridge, "/settings/account");
+    expect(await screen.findByText("Current Mac", { exact: false })).toBeTruthy();
+    expect(await screen.findByText("Other Windows", { exact: false })).toBeTruthy();
+    expect(await screen.findByText("总计 17")).toBeTruthy();
+    expect(await screen.findByText(/待上传 0 · 冲突 0/)).toBeTruthy();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "撤销设备" }));
+    expect(bridge.revokeDevice).toHaveBeenCalledWith({ sessionId: otherSessionId });
+    await user.click(screen.getByRole("button", { name: "清理本机缓存" }));
+    expect(confirm).toHaveBeenCalled();
+    expect(bridge.clearLocalCache).toHaveBeenCalled();
   });
 });

@@ -60,6 +60,8 @@ function setup(persisted: PersistedDeviceCredential | null = null) {
     verifyChallenge: vi.fn(async () => nextGrant),
     refresh: vi.fn(async () => nextGrant),
     revoke: vi.fn(async () => {}),
+    revokeAll: vi.fn(async () => {}),
+    listDevices: vi.fn(async () => [nextGrant.session]),
   };
   const manager = new AccountSessionManager({
     vault,
@@ -113,6 +115,16 @@ describe("AccountSessionManager", () => {
       nextGrant.accessToken,
       nextGrant.session.sessionId,
     );
+    expect(clear).toHaveBeenCalled();
+    expect(state.status).toBe("signed_out");
+  });
+
+  it("lists devices and signs out every session", async () => {
+    const { manager, nextGrant, transport, clear } = setup();
+    await manager.verifyCode(randomUUID(), "123456");
+    expect(await manager.listDevices()).toEqual([nextGrant.session]);
+    const state = await manager.signOutAll();
+    expect(transport.revokeAll).toHaveBeenCalledWith(nextGrant.accessToken);
     expect(clear).toHaveBeenCalled();
     expect(state.status).toBe("signed_out");
   });

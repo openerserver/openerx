@@ -3,6 +3,7 @@ import {
   appServiceBootstrapSchema,
   appServiceRequestFrameSchema,
   type ErrorEnvelope,
+  safeErrorMessage,
 } from "@openerx/contracts";
 import { ChatRepository } from "@openerx/storage";
 import type { MessagePortMain } from "electron";
@@ -24,7 +25,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
     {
       ownerProfileId: bootstrap.ownerProfileId,
-      selectedModelRef: "platform/standard",
+      selectedModelRef: "platform/auto",
       deviceId: bootstrap.deviceId,
     },
   );
@@ -50,7 +51,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     } catch (error) {
       const envelope: ErrorEnvelope = {
         code: "APP_SERVICE_ERROR",
-        message: error instanceof Error ? error.message : "Unknown App Service error",
+        message: safeErrorMessage(error, "Unknown App Service error"),
         correlationId: request.data.requestId,
         retryable: false,
       };

@@ -6,6 +6,8 @@ import {
   errorEnvelopeSchema,
   parseChatCommandResult,
   piHostEventFrameSchema,
+  redactSensitiveText,
+  safeErrorMessage,
 } from "../src";
 
 describe("desktop environment contract", () => {
@@ -53,6 +55,21 @@ describe("error envelope contract", () => {
         retryable: false,
       }),
     ).toMatchObject({ code: "IPC_SENDER_REJECTED", retryable: false });
+  });
+
+  it("redacts credential canaries from structured error text", () => {
+    const canaries = [
+      "Bearer access-secret-canary-1234567890",
+      "refreshCredential=refresh-secret-canary-1234567890",
+      "api_key=sk-secret-canary-1234567890",
+      "https://example.test/callback?access_token=url-secret-canary-1234567890",
+    ];
+    for (const canary of canaries) {
+      const redacted = safeErrorMessage(new Error(`request failed: ${canary}`), "fallback");
+      expect(redacted).toContain("[REDACTED]");
+      expect(redacted).not.toContain("secret-canary");
+    }
+    expect(redactSensitiveText("MODEL_NOT_FOUND")).toBe("MODEL_NOT_FOUND");
   });
 
   it("rejects informal error codes", () => {

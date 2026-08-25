@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 开发计划
 
-> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2 COMPLETE / NEXT M3`
+> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2 LOCAL COMPLETE / NEXT M3`
 >
 > 更新日期：2026-08-25（Asia/Shanghai）
 >
@@ -40,7 +40,7 @@ V1 完成必须同时满足：
 | M0 工程与 ADR | COMPLETE | npm workspaces、Electron/React 骨架、边界检查、CI、威胁模型 | 发布签名属于 M9 |
 | M1 Chat Alpha | COMPLETE | Conversation/Message、分支、搜索、流式投影、停止、失败、重启恢复、桌面 UI | 双平台原生 CI 结果在发布前确认 |
 | Pi Foundation | COMPLETE | 直接依赖 Pi；`AgentSession` 原生事件；`pi.session.prompt/abort`；生产包仅含 Pi Host | [实现与质量证据](evidence/pi-foundation-2026-08-25.md) |
-| M2 Account + Model | COMPLETE | 账户/设备会话、Outbox/冲突/墓碑、Pi-native Model Gateway Provider、UsageRecord、Remote V1 Schema | [实现与质量证据](evidence/m2-2026-08-25.md) |
+| M2 Account + Model | LOCAL COMPLETE | 账户/设备会话、Outbox/冲突/墓碑、Pi-native Model Gateway Provider、UsageRecord、Remote V1 Schema | 原生 Windows/macOS 双设备与付费 Provider 验证属于发布环境门禁；[实现与质量证据](evidence/m2-2026-08-25.md) |
 
 当前生产路径在未配置平台模型时明确返回 `PI_MODEL_NOT_CONFIGURED`，不以测试模型伪装可用模型。
 
@@ -89,7 +89,7 @@ flowchart LR
 
 证据：[Pi Foundation checkpoint](evidence/pi-foundation-2026-08-25.md)。
 
-### M2：Account、Sync、Model 与 Usage — COMPLETE
+### M2：Account、Sync、Model 与 Usage — LOCAL IMPLEMENTATION COMPLETE
 
 - 邮箱登录、设备会话、刷新、撤销、退出和系统凭证库。
 - 账户云真值、本地 Outbox、revision、cursor、冲突、墓碑和跨设备恢复。
@@ -99,7 +99,7 @@ flowchart LR
 - 客户端不保存上游 Provider API Key。
 - 冻结 RemoteHost、设备公钥、配对/撤销、RemoteCommand/Receipt、AttentionRequest 和 RemoteEventCursor 合同；Identity API 预留账户内设备能力。
 
-退出条件：GT-ACCOUNT-01 至 GT-ACCOUNT-10；两设备恢复、两账户零串读、模型与 Token 可核对。
+本地退出条件：GT-ACCOUNT-01 至 GT-ACCOUNT-10 的 M2 实现切片；独立设备副本恢复、两账户零串读、模型与 Token 可核对。GT-ACCOUNT-02/03/05 中的附件、Artifact、文件和预签名资源随 M4 验收，GT-ACCOUNT-07 的真实文件/工具执行随 M4/M5 验收；不得用 M2 证据提前宣称这些切片通过。原生 Windows/macOS 双设备和真实付费 Provider 仍是发布环境门禁。
 
 证据：[M2 checkpoint](evidence/m2-2026-08-25.md)。Remote 在本检查点冻结版本化协议
 Schema；移动端、Connector、Relay、推送和真机矩阵仍由 M6 交付。
@@ -203,8 +203,8 @@ Schema；移动端、Connector、Relay、推送和真机矩阵仍由 M6 交付�
 | Gate | 自动化证据 | 环境/人工证据 |
 | --- | --- | --- |
 | Chat + Pi | Pi 原生事件、停止、恢复、IPC、Message、Renderer E2E | Windows/macOS 启动与交互 |
-| Account | 身份、同步、冲突、隔离、设备撤销 | 两设备恢复 |
-| Model + Usage | Pi Provider、选模、Token 去重、错误归一化 | 真实模型流式/停止 |
+| Account | 身份、同步、冲突、隔离、设备撤销、本机缓存/云删除边界 | 原生 Windows/macOS 双设备恢复 |
+| Model + Usage | Pi Provider、自动/明确选模、实际模型、Token 去重、错误归一化 | 真实付费模型流式/停止 |
 | Billing | 报价、预留、账本、Webhook、退款、对账 | 支付测试环境与合规确认 |
 | File | Scope、解析、引用、版本、渲染 | 每种办公成果真实打开 |
 | Tool | Pi tool lifecycle、Broker、取消、MCP | 浏览器/Shell/桌面双平台 |

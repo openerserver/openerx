@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M2_ACCOUNT_SYNC_MODEL_USAGE_COMPLETE / M3_BILLING_ALPHA_NEXT`
+> 状态：`M2_ACCOUNT_SYNC_MODEL_USAGE_LOCAL_COMPLETE / M3_BILLING_ALPHA_NEXT`
 >
 > 更新日期：2026-08-25（Asia/Shanghai）
 >
@@ -26,7 +26,7 @@
 
 ## 2. V2 总体逻辑架构图
 
-下图是完整 V1 目标态。M2 已接入账户云、内容同步、模型网关和 Token Usage；计费、文件、
+下图是完整 V1 目标态。M2 本地实现已接入账户云、内容同步、模型网关和 Token Usage；计费、文件、
 工具、Skill 与 Remote 运行面仍按后续检查点交付，不以占位实现伪装完成。
 
 ```mermaid
@@ -159,7 +159,7 @@ Pi Host 已直接加载 `@earendil-works/pi-coding-agent@0.84.3`；每次生成�
 确定性测试只在测试文件中注入 Pi 的 `faux` Model Provider；生产源码没有替代 harness
 或固定回答模型。
 
-### 2.2 M2 当前已实现拓扑
+### 2.2 M2 当前本地已实现拓扑
 
 ```mermaid
 flowchart LR
@@ -167,23 +167,26 @@ flowchart LR
   UI --> PRELOAD[Typed Preload Bridge]
   PRELOAD --> MAIN[Electron Main<br/>IPC / Profile Supervisor]
   MAIN --> KEYCHAIN[(OS safeStorage<br/>Device refresh credential)]
-  MAIN --> ID[Identity API<br/>Challenge / Refresh / Revoke]
+  MAIN --> ID[Identity API<br/>Challenge / Refresh / Device List / Revoke All]
   MAIN --> APP[Account-scoped App Service<br/>utility process]
   APP --> LOCAL[(SQLite<br/>Conversation / Message / Outbox)]
-  APP --> SYNC[Account Sync API<br/>Revision / Cursor / Conflict / Tombstone]
+  APP --> SYNC[Account Sync API<br/>Revision / Cursor / Conflict Resolution / Tombstone]
+  MAIN -->|Cloud Data Delete| SYNC
   APP --> PIHOST[Isolated Pi Host<br/>utility process]
   PIHOST --> PI[Pi AgentSession<br/>ModelRuntime]
   PI --> PROVIDER[Pi-native Platform Provider]
-  PROVIDER --> GATEWAY[Platform Model Gateway<br/>Catalog / Capability / Explicit Fallback]
+  PROVIDER --> GATEWAY[Platform Model Gateway<br/>Auto Route / Effective Model / Capability / Explicit Fallback]
   GATEWAY --> UPSTREAM[Platform model Provider]
   GATEWAY --> USAGE[Token Usage Store<br/>Authoritative UsageRecord]
   MAIN --> USAGE
 ```
 
-账户登录后 Main 切换到账户独立 Profile；旧 utility process 的退出事件按进程实例隔离，
+账户登录后 Main 切换到账户独立 Profile；用户可查看/定向撤销设备或退出全部设备。旧 utility process 的退出事件按进程实例隔离，
 不会误杀新 Profile。Conversation、Branch、Message 与选模在同一 SQLite 事务写入 Outbox。
 同步活跃期间产生的新流式终态会触发下一轮 drain；云端旧快照不得覆盖本地 pending/conflict
-版本。模型请求只通过 Pi 原生 Provider 进入 Platform Gateway，上游凭证不进入客户端。
+版本；本机缓存清理、设备退出和云端数据删除保持三个独立边界。模型请求只通过 Pi 原生
+Provider 进入 Platform Gateway，上游凭证不进入客户端；Renderer 同时显示选择模型、实际
+模型、降级原因和账户 Token 聚合。
 
 M2 同时冻结 `RemoteHost`、一次性配对、签名/加密命令、回执、`AttentionRequest`、脱敏加密
 事件和游标的 V1 Schema；Remote Connector、Relay 和移动端仍属于 M6。
@@ -346,7 +349,7 @@ packages/observability           脱敏日志、Trace 和诊断
 
 旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。
 
-## 8. M1/M2 已实现映射
+## 8. M1/M2 本地已实现映射
 
 - 根 workspace 使用 npm 11；`apps`/`services` 只通过 `packages` 共享合同和实现。
 - Electron 44 + Forge 7 + Vite 6 分别构建 Main、Preload、App Service、Pi Host 和
@@ -359,7 +362,7 @@ packages/observability           脱敏日志、Trace 和诊断
   幂等键、单调事件、中断恢复，以及账户内容 Outbox、cursor、冲突和墓碑。本地数据库不包含
   可复用账户凭证。
 - Pi Host 直接运行维护中的 Pi 0.84.3，使用 `AgentSession`、原生流式事件和 `abort()`；
-  M2 已以 Pi-native Provider 接入 Platform Model Gateway，文件和工具能力分别由 M4、M5 门禁约束。
+  M2 本地实现已以 Pi-native Provider 接入 Platform Model Gateway，文件和工具能力分别由 M4、M5 门禁约束。
 - Identity API、Account Sync API、Model Gateway、Token Usage Store 和 Platform Alpha HTTP
   组合层均已实现账户作用域；服务之间只通过 `packages/contracts` 端口连接。
 - Main 使用 Electron `safeStorage` 异步接口保护可复用 DeviceSession 凭证；访问令牌只在 Main
@@ -367,7 +370,7 @@ packages/observability           脱敏日志、Trace 和诊断
 - Token Usage Store 以账户和稳定 dedupe key 去重，保留输入、缓存、输出、推理和总 Token 的
   `null + missingReason` 语义；消息、对话和账户聚合不把未知冒充为 0。
 - Pi 测试 Provider 只存在于测试代码；生产路径只有 Pi harness。
-- Windows x64、macOS arm64 和 macOS x64 进入 CI 打包矩阵。
+- Windows x64、macOS arm64 和 macOS x64 进入 CI 打包矩阵；本地交叉打包不替代原生双平台运行证据。
 
 Remote M2 协议合同已冻结；M6 完成移动端、Connector、Gateway、推送及真机/主机矩阵。
 该目标态不改变已冻结的 Pi 唯一 harness 和私有进程边界。

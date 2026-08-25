@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { ModelCatalogEntry, ModelGatewayResponse } from "@openerx/contracts";
+import {
+  automaticModelRef,
+  type ModelCatalogEntry,
+  type ModelGatewayResponse,
+} from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProductPiSession, ModelRuntime } from "../src/agent-session";
 import { createPlatformModelProvider } from "../src/platform-provider";
@@ -36,6 +40,27 @@ const model: ModelCatalogEntry = {
 };
 
 describe("Platform Model Pi Provider", () => {
+  it("binds the automatic product selection to a concrete Pi model", () => {
+    const automatic: ModelCatalogEntry = {
+      ...model,
+      modelRef: automaticModelRef,
+      displayName: "自动",
+    };
+    const platform = createPlatformModelProvider({
+      catalog: [automatic, model],
+      transport: { execute: vi.fn() },
+      request: {
+        accountId: randomUUID(),
+        conversationId: randomUUID(),
+        messageId: randomUUID(),
+        selectedModelRef: automaticModelRef,
+        approvedFallbackModelRef: null,
+        requestDedupeKey: "model-call-auto-binding",
+      },
+    });
+    expect(platform.model.id).toBe(model.modelRef);
+  });
+
   it("streams a Gateway response through Pi and preserves authoritative unknown usage", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openerx-platform-provider-"));
     temporaryDirectories.push(root);

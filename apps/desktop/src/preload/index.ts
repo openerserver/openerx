@@ -19,14 +19,18 @@ import {
   chatSelectModelInputSchema,
   chatSendInputSchema,
   chatStopInputSchema,
+  cloudDataDeletionResultSchema,
   type DesktopBridge,
   desktopEnvironmentSchema,
+  deviceSessionSchema,
   emailChallengeSchema,
   ipcChannels,
   modelCatalogEntrySchema,
   parseChatCommandResult,
+  syncResolveConflictInputSchema,
   usageAggregateSchema,
   usageQueryInputSchema,
+  usageRecordSchema,
 } from "@openerx/contracts";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -48,6 +52,10 @@ const bridge: DesktopBridge = {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.accountState);
     return accountStateSchema.parse(result);
   },
+  listDevices: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.accountDevices);
+    return deviceSessionSchema.array().parse(result);
+  },
   requestEmailCode: async (input) => {
     const result: unknown = await ipcRenderer.invoke(
       ipcChannels.accountRequestCode,
@@ -64,6 +72,10 @@ const bridge: DesktopBridge = {
   },
   signOut: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.accountSignOut);
+    return accountStateSchema.parse(result);
+  },
+  signOutAll: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.accountSignOutAll);
     return accountStateSchema.parse(result);
   },
   revokeDevice: async (input) => {
@@ -84,7 +96,26 @@ const bridge: DesktopBridge = {
     );
     return usageAggregateSchema.parse(result);
   },
+  getUsageRecords: async (input = {}) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.usageRecords,
+      usageQueryInputSchema.parse(input),
+    );
+    return usageRecordSchema.array().parse(result);
+  },
   syncNow: async () => invokeChat(ipcChannels.syncNow, "sync.now", {}),
+  listSyncConflicts: async () => invokeChat(ipcChannels.syncConflicts, "sync.conflicts", {}),
+  resolveSyncConflict: async (input) =>
+    invokeChat(
+      ipcChannels.syncResolveConflict,
+      "sync.resolve",
+      syncResolveConflictInputSchema.parse(input),
+    ),
+  clearLocalCache: async () => invokeChat(ipcChannels.localCacheClear, "cache.clear", {}),
+  deleteCloudData: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.cloudDataDelete);
+    return cloudDataDeletionResultSchema.parse(result);
+  },
   listConversations: async (input = {}) =>
     invokeChat(ipcChannels.chatList, "chat.list", chatListInputSchema.parse(input)),
   getConversation: async (input) =>

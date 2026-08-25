@@ -113,12 +113,36 @@ describe("GT-ACCOUNT client sync replicas", () => {
     );
     expect(() => second.clearLocalCache()).toThrow("SYNC_UNRESOLVED_CONFLICTS_EXIST");
 
+    const [conflict] = second.syncConflicts();
+    if (!conflict) throw new Error("Expected a visible sync conflict");
+    cloud.resolveConflict(principal(accountId, deviceB), conflict.conflictId);
+    second.resolveSyncConflict(conflict.conflictId, "cloud");
+    expect(second.syncConflicts()).toEqual([]);
+    expect(second.getConversation(draft.receipt.conversationId).conversation.title).toBe(
+      "设备 A 标题",
+    );
+
+    first.renameConversation(draft.receipt.conversationId, "设备 A 再次编辑");
+    sync(first, principal(accountId, deviceA), cloud);
+    second.renameConversation(draft.receipt.conversationId, "设备 B 保留本机");
+    sync(second, principal(accountId, deviceB), cloud);
+    const [localWinner] = second.syncConflicts();
+    if (!localWinner) throw new Error("Expected a second visible sync conflict");
+    cloud.resolveConflict(principal(accountId, deviceB), localWinner.conflictId);
+    second.resolveSyncConflict(localWinner.conflictId, "local");
+    sync(second, principal(accountId, deviceB), cloud);
+    sync(first, principal(accountId, deviceA), cloud);
+    expect(second.syncConflicts()).toEqual([]);
+    expect(first.getConversation(draft.receipt.conversationId).conversation.title).toBe(
+      "设备 B 保留本机",
+    );
+
     sync(cleanReplica, principal(accountId, cleanDevice), cloud);
     cleanReplica.clearLocalCache();
     expect(cleanReplica.listConversations()).toEqual([]);
     sync(cleanReplica, principal(accountId, cleanDevice), cloud);
     expect(cleanReplica.getConversation(draft.receipt.conversationId).conversation.title).toBe(
-      "设备 A 标题",
+      "设备 B 保留本机",
     );
   });
 
@@ -149,5 +173,33 @@ describe("GT-ACCOUNT client sync replicas", () => {
     expect(() => peer.getConversation(draft.receipt.conversationId)).toThrow(
       "Conversation not found",
     );
+  });
+
+  it("keeps local cache clear separate from account cloud deletion", () => {
+    const cloud = new AccountSyncService(":memory:");
+    services.push(cloud);
+    const accountId = randomUUID();
+    const deviceA = randomUUID();
+    const deviceB = randomUUID();
+    const first = replica(accountId, deviceA);
+    const second = replica(accountId, deviceB);
+    first.createGeneration({
+      text: "删除边界",
+      idempotencyKey: "cloud-delete-boundary",
+    });
+    sync(first, principal(accountId, deviceA), cloud);
+    sync(second, principal(accountId, deviceB), cloud);
+
+    first.clearLocalCache();
+    expect(first.listConversations()).toEqual([]);
+    sync(first, principal(accountId, deviceA), cloud);
+    expect(first.listConversations()).toHaveLength(1);
+
+    const deletion = cloud.deleteAccountData(principal(accountId, deviceB));
+    expect(deletion.deletedObjects).toBeGreaterThan(0);
+    sync(first, principal(accountId, deviceA), cloud);
+    sync(second, principal(accountId, deviceB), cloud);
+    expect(first.listConversations()).toEqual([]);
+    expect(second.listConversations()).toEqual([]);
   });
 });

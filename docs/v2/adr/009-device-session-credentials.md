@@ -1,6 +1,6 @@
 # ADR-V2-009: Email verification, device credentials and session refresh
 
-- Status: Accepted
+- Status: Accepted and implemented
 - Date: 2026-08-25
 - Owners: Identity Platform and Desktop Security
 
@@ -23,14 +23,15 @@
 6. Device identity is not hardware fingerprinting. It is a generated identifier plus user-visible
    platform metadata and last-active/revoked timestamps.
 
-## M1 boundary
+## Implementation status
 
-M1 is local-only and creates no reusable account secret. The chat database contains no credential
-table or token field. M2 must implement Keychain/Credential Manager integration, refresh rotation,
-revocation and secret-leak scans before Account Alpha exits.
+M1 was local-only and created no reusable account secret. M2 now implements the Electron
+`safeStorage` credential boundary, refresh rotation/replay revocation, device inventory, targeted and
+all-device revocation, account-scoped profiles and credential canary redaction tests. Native
+Keychain/Credential Manager behavior remains part of the Windows/macOS release matrix.
 
 ## Consequences
 
 - Database theft alone does not yield a reusable cloud session.
 - Session revocation and local data deletion remain separate user actions.
-- Identity can be implemented in M2 without broadening the Renderer bridge.
+- Identity was implemented in M2 without exposing a generic credential API to Renderer.

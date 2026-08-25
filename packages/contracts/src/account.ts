@@ -81,8 +81,10 @@ export type AccountState = z.infer<typeof accountStateSchema>;
 
 export interface AccountBridge {
   getAccountState(): Promise<AccountState>;
+  listDevices(): Promise<DeviceSession[]>;
   requestEmailCode(input: z.input<typeof accountRequestCodeInputSchema>): Promise<EmailChallenge>;
   verifyEmailCode(input: z.input<typeof accountVerifyCodeInputSchema>): Promise<AccountState>;
   signOut(): Promise<AccountState>;
+  signOutAll(): Promise<AccountState>;
   revokeDevice(input: z.input<typeof accountRevokeDeviceInputSchema>): Promise<AccountState>;
 }

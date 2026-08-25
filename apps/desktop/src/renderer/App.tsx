@@ -3,8 +3,12 @@ import type {
   ConversationSnapshot,
   ConversationSummary,
   DesktopEnvironment,
+  DeviceSession,
   Message,
+  ModelCatalogEntry,
+  SyncConflict,
   TokenAggregateField,
+  UsageRecord,
 } from "@openerx/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -34,6 +38,28 @@ function tokenValue(field: TokenAggregateField): string {
   return field.unknownRecords > 0
     ? `${field.known.toLocaleString()} + ${field.unknownRecords} 条未知`
     : field.known.toLocaleString();
+}
+
+const capabilityLabels: Record<keyof ModelCatalogEntry["capabilities"], string> = {
+  text: "文本",
+  imageInput: "图片",
+  fileInput: "文件",
+  tools: "工具",
+  mcp: "MCP",
+  imageGeneration: "图片生成",
+};
+
+function modelCapabilities(model: ModelCatalogEntry): string {
+  return Object.entries(model.capabilities)
+    .filter(([, enabled]) => enabled)
+    .map(([capability]) => capabilityLabels[capability as keyof typeof capabilityLabels])
+    .join("、");
+}
+
+function conflictPayload(payload: SyncConflict["clientPayload"]): string {
+  if (payload === null) return "删除";
+  const title = typeof payload.title === "string" ? payload.title : null;
+  return title ?? JSON.stringify(payload).slice(0, 160);
 }
 
 function Composer({ conversationId }: { conversationId?: string }): React.JSX.Element {
@@ -165,6 +191,13 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
     enabled: message.role === "assistant" && !running,
     retry: false,
   });
+  const usageRecords = useQuery({
+    queryKey: ["usage", "records", "message", message.id],
+    queryFn: () => window.openerx.getUsageRecords({ messageId: message.id }),
+    enabled: message.role === "assistant" && !running,
+    retry: false,
+  });
+  const execution: UsageRecord | undefined = usageRecords.data?.at(-1);
 
   return (
     <article className={`message message-${message.role}`} data-message-status={message.status}>
@@ -224,6 +257,13 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
           <span>输出 {tokenValue(usage.data.outputTokens)}</span>
           <span>推理 {tokenValue(usage.data.reasoningTokens)}</span>
           <strong>总计 {tokenValue(usage.data.totalTokens)}</strong>
+        </div>
+      ) : null}
+      {execution ? (
+        <div className="model-execution" role="status" aria-label="消息模型执行详情">
+          <span>选择 {execution.selectedModelRef}</span>
+          <span>实际 {execution.effectiveModelRef}</span>
+          {execution.fallbackReason ? <strong>降级原因：{execution.fallbackReason}</strong> : null}
         </div>
       ) : null}
       {!editing ? (
@@ -322,6 +362,9 @@ function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): 
       );
     },
   });
+  const selectedModel = models.data?.find(
+    ({ modelRef }) => modelRef === conversation.selectedModelRef,
+  );
 
   return (
     <header className="conversation-toolbar">
@@ -350,6 +393,16 @@ function ConversationToolbar({ snapshot }: { snapshot: ConversationSnapshot }): 
               ))}
             </select>
           </label>
+        ) : null}
+        {selectedModel ? (
+          <div className="model-details">
+            <span>{modelCapabilities(selectedModel)}</span>
+            <span>
+              上下文 {selectedModel.contextWindow.toLocaleString()} · 最大输出{" "}
+              {selectedModel.maxOutputTokens.toLocaleString()}
+            </span>
+            <strong>{selectedModel.priceSummary}</strong>
+          </div>
         ) : null}
         {snapshot.branches.length > 1 ? (
           <label>
@@ -501,6 +554,35 @@ function AccountSettings(): React.JSX.Element {
   const [email, setEmail] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [code, setCode] = useState("");
+  const signedIn = account.data?.status === "signed_in";
+  const devices = useQuery({
+    queryKey: ["account", "devices"],
+    queryFn: () => window.openerx.listDevices(),
+    enabled: signedIn,
+    retry: false,
+  });
+  const sync = useQuery({
+    queryKey: ["sync", "status"],
+    queryFn: () => window.openerx.syncNow(),
+    enabled: signedIn,
+    retry: false,
+  });
+  const conflicts = useQuery({
+    queryKey: ["sync", "conflicts"],
+    queryFn: () => window.openerx.listSyncConflicts(),
+    enabled: signedIn,
+    retry: false,
+  });
+  const accountUsage = useQuery({
+    queryKey: ["usage", "account"],
+    queryFn: () => window.openerx.getUsage(),
+    enabled: signedIn,
+    retry: false,
+  });
+  useEffect(() => {
+    if (!sync.data?.syncedAt) return;
+    void queryClient.invalidateQueries({ queryKey: ["chat"] });
+  }, [queryClient, sync.data?.syncedAt]);
   const requestCode = useMutation({
     mutationFn: () => window.openerx.requestEmailCode({ email }),
     onSuccess: (challenge) => setChallengeId(challenge.challengeId),
@@ -514,6 +596,9 @@ function AccountSettings(): React.JSX.Element {
       queryClient.setQueryData(accountKey, state);
       setCode("");
       setChallengeId(null);
+      void queryClient.invalidateQueries({ queryKey: ["account", "devices"] });
+      void queryClient.invalidateQueries({ queryKey: ["sync"] });
+      void queryClient.invalidateQueries({ queryKey: ["usage"] });
     },
   });
   const signOut = useMutation({
@@ -521,6 +606,64 @@ function AccountSettings(): React.JSX.Element {
     onSuccess: async (state) => {
       queryClient.setQueryData(accountKey, state);
       await queryClient.invalidateQueries({ queryKey: ["chat"] });
+    },
+  });
+  const signOutAll = useMutation({
+    mutationFn: async () => {
+      if (!window.confirm("退出全部设备后，所有设备都需要重新验证邮箱。是否继续？")) {
+        return null;
+      }
+      return await window.openerx.signOutAll();
+    },
+    onSuccess: async (state) => {
+      if (!state) return;
+      queryClient.setQueryData(accountKey, state);
+      queryClient.removeQueries({ queryKey: ["account", "devices"] });
+      await queryClient.invalidateQueries({ queryKey: ["chat"] });
+    },
+  });
+  const revokeDevice = useMutation({
+    mutationFn: (sessionId: string) => window.openerx.revokeDevice({ sessionId }),
+    onSuccess: async (state) => {
+      queryClient.setQueryData(accountKey, state);
+      await queryClient.invalidateQueries({ queryKey: ["account", "devices"] });
+    },
+  });
+  const resolveConflict = useMutation({
+    mutationFn: (input: { conflictId: string; resolution: "local" | "cloud" }) =>
+      window.openerx.resolveSyncConflict(input),
+    onSuccess: async (status) => {
+      queryClient.setQueryData(["sync", "status"], status);
+      await queryClient.invalidateQueries({ queryKey: ["sync", "conflicts"] });
+      await queryClient.invalidateQueries({ queryKey: ["chat"] });
+    },
+  });
+  const clearLocalCache = useMutation({
+    mutationFn: async () => {
+      if (!window.confirm("仅清理本机缓存；云端对话会在下次同步时恢复。是否继续？")) return null;
+      return await window.openerx.clearLocalCache();
+    },
+    onSuccess: async (result) => {
+      if (!result) return;
+      await queryClient.invalidateQueries({ queryKey: ["chat"] });
+      await queryClient.invalidateQueries({ queryKey: ["sync", "conflicts"] });
+    },
+  });
+  const deleteCloudData = useMutation({
+    mutationFn: async () => {
+      if (
+        !window.confirm(
+          "删除账户云端对话会写入保留期墓碑，并同时清理本机缓存。该操作不同于退出设备。是否继续？",
+        )
+      ) {
+        return null;
+      }
+      return await window.openerx.deleteCloudData();
+    },
+    onSuccess: async (result) => {
+      if (!result) return;
+      await queryClient.invalidateQueries({ queryKey: ["chat"] });
+      await queryClient.invalidateQueries({ queryKey: ["sync"] });
     },
   });
 
@@ -538,18 +681,7 @@ function AccountSettings(): React.JSX.Element {
           <h2>{state?.account?.displayName ?? "登录 OpenerX"}</h2>
           <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
         </div>
-        {state?.status === "signed_in" && state.session ? (
-          <div className="device-card">
-            <strong>{state.session.device.name}</strong>
-            <span>
-              {state.session.device.platform} · {state.session.device.arch} · session v
-              {state.session.sessionVersion}
-            </span>
-            <button type="button" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
-              退出此设备
-            </button>
-          </div>
-        ) : (
+        {state?.status !== "signed_in" || !state.session ? (
           <form
             className="account-form"
             onSubmit={(event) => {
@@ -598,12 +730,172 @@ function AccountSettings(): React.JSX.Element {
               </p>
             ) : null}
           </form>
-        )}
+        ) : null}
       </section>
-      <p className="settings-note">
-        Refresh 凭证只保存在系统凭证边界；退出设备会删除本机凭证并撤销该 DeviceSession，
-        不会删除云端对话。
-      </p>
+      {state?.status === "signed_in" && state.session ? (
+        <>
+          <section className="settings-card settings-stack" aria-label="设备会话">
+            <div className="settings-heading">
+              <div>
+                <h2>设备会话</h2>
+                <p>Refresh 凭证只保存在各设备的系统凭证边界。</p>
+              </div>
+              <button type="button" onClick={() => void devices.refetch()}>
+                刷新设备
+              </button>
+            </div>
+            {(devices.data ?? [state.session]).map((session: DeviceSession) => {
+              const current = session.sessionId === state.session?.sessionId;
+              return (
+                <div className="device-card" key={session.sessionId}>
+                  <div>
+                    <strong>
+                      {session.device.name} {current ? "· 当前设备" : ""}
+                    </strong>
+                    <span>
+                      {session.device.platform} · {session.device.arch} · session v
+                      {session.sessionVersion}
+                    </span>
+                    <span>{session.revokedAt ? `已撤销 ${session.revokedAt}` : "可用"}</span>
+                  </div>
+                  {!session.revokedAt ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        current ? signOut.mutate() : revokeDevice.mutate(session.sessionId)
+                      }
+                      disabled={signOut.isPending || revokeDevice.isPending}
+                    >
+                      {current ? "退出此设备" : "撤销设备"}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="danger-action"
+              onClick={() => signOutAll.mutate()}
+              disabled={signOutAll.isPending}
+            >
+              退出全部设备
+            </button>
+            {devices.error || revokeDevice.error || signOut.error || signOutAll.error ? (
+              <p className="inline-error">
+                {
+                  (devices.error ?? revokeDevice.error ?? signOut.error ?? signOutAll.error)
+                    ?.message
+                }
+              </p>
+            ) : null}
+          </section>
+
+          <section className="settings-card settings-stack" aria-label="同步状态">
+            <div className="settings-heading">
+              <div>
+                <h2>账户同步</h2>
+                {sync.data ? (
+                  <p>
+                    最近成功 {new Date(sync.data.syncedAt).toLocaleString()} · 待上传{" "}
+                    {sync.data.pending} · 冲突 {sync.data.conflicts}
+                  </p>
+                ) : (
+                  <p>正在读取同步状态…</p>
+                )}
+              </div>
+              <button type="button" onClick={() => void sync.refetch()} disabled={sync.isFetching}>
+                立即同步
+              </button>
+            </div>
+            {sync.error ? (
+              <p className="inline-error">
+                同步失败：{sync.error.message}。本地内容仍在 Outbox，可稍后重试。
+              </p>
+            ) : null}
+            {conflicts.data?.map((conflict) => (
+              <div className="conflict-card" key={conflict.conflictId}>
+                <strong>
+                  {conflict.objectType} · {conflict.objectId}
+                </strong>
+                <span>本机版本：{conflictPayload(conflict.clientPayload)}</span>
+                <span>云端版本：{conflictPayload(conflict.serverPayload)}</span>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      resolveConflict.mutate({
+                        conflictId: conflict.conflictId,
+                        resolution: "local",
+                      })
+                    }
+                  >
+                    保留本机版本
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      resolveConflict.mutate({
+                        conflictId: conflict.conflictId,
+                        resolution: "cloud",
+                      })
+                    }
+                  >
+                    使用云端版本
+                  </button>
+                </div>
+              </div>
+            ))}
+            {resolveConflict.error ? (
+              <p className="inline-error">冲突处理失败：{resolveConflict.error.message}</p>
+            ) : null}
+          </section>
+
+          <section className="settings-card settings-stack" aria-label="账户 Token 用量">
+            <h2>账户 Token 用量</h2>
+            {accountUsage.data ? (
+              <div className="usage-line">
+                <span>{accountUsage.data.records} 次模型调用</span>
+                <span>输入 {tokenValue(accountUsage.data.inputTokens)}</span>
+                <span>缓存 {tokenValue(accountUsage.data.cachedInputTokens)}</span>
+                <span>输出 {tokenValue(accountUsage.data.outputTokens)}</span>
+                <span>推理 {tokenValue(accountUsage.data.reasoningTokens)}</span>
+                <strong>总计 {tokenValue(accountUsage.data.totalTokens)}</strong>
+              </div>
+            ) : (
+              <p>暂无可核对的账户用量。</p>
+            )}
+          </section>
+
+          <section className="settings-card settings-stack" aria-label="个人数据边界">
+            <h2>个人数据边界</h2>
+            <p>清本机缓存不会创建云端墓碑；退出设备不会删除本机历史或云端对话。</p>
+            <div className="settings-actions">
+              <button type="button" onClick={() => clearLocalCache.mutate()}>
+                清理本机缓存
+              </button>
+              <button
+                type="button"
+                className="danger-action"
+                onClick={() => deleteCloudData.mutate()}
+              >
+                删除云端对话数据
+              </button>
+            </div>
+            {clearLocalCache.data ? <p>本机缓存已清理。</p> : null}
+            {deleteCloudData.data ? (
+              <p>
+                已删除 {deleteCloudData.data.deletedObjects} 个云对象；墓碑保留至{" "}
+                {new Date(deleteCloudData.data.retainUntil).toLocaleString()}。
+              </p>
+            ) : null}
+            {clearLocalCache.error || deleteCloudData.error ? (
+              <p className="inline-error">
+                {(clearLocalCache.error ?? deleteCloudData.error)?.message}
+              </p>
+            ) : null}
+          </section>
+        </>
+      ) : null}
     </main>
   );
 }

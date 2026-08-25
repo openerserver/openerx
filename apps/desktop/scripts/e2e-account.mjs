@@ -41,6 +41,28 @@ async function launch() {
   return { application, page };
 }
 
+async function signInDevice(email, name) {
+  const challenge = await fetch(`${platformUrl}/api/v2/account/challenges`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email }),
+  }).then((response) => response.json());
+  return await fetch(`${platformUrl}/api/v2/account/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      challengeId: challenge.challengeId,
+      code: "123456",
+      device: {
+        deviceId: crypto.randomUUID(),
+        name,
+        platform: "win32",
+        arch: "x64",
+      },
+    }),
+  }).then((response) => response.json());
+}
+
 let running;
 try {
   running = await launch();
@@ -76,6 +98,8 @@ try {
     .waitFor();
   await page.getByLabel("消息 Token 用量").waitFor();
   await page.getByText(/总计 35/).waitFor();
+  await page.getByLabel("消息模型执行详情").getByText("选择 platform/auto").waitFor();
+  await page.getByLabel("消息模型执行详情").getByText("实际 platform/standard").waitFor();
   await page.getByLabel("后续消息模型").selectOption("platform/tools");
   await page.getByLabel("发送消息").fill("切换后的消息");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -98,12 +122,49 @@ try {
     .getByText(/平台 platform\/tools 已回答：切换后的消息/)
     .waitFor();
 
+  const otherDevice = await signInDevice("account-e2e@example.com", "E2E Windows");
+
   await page.getByRole("link", { name: "设置" }).click();
-  await page.getByRole("button", { name: "退出此设备" }).click();
+  await page.getByRole("button", { name: "刷新设备" }).click();
+  const otherDeviceCard = page.getByLabel("设备会话").locator(".device-card", {
+    hasText: "E2E Windows",
+  });
+  await otherDeviceCard.waitFor();
+  await otherDeviceCard.getByRole("button", { name: "撤销设备" }).click();
+  await otherDeviceCard.getByText(/已撤销/).waitFor();
+  const revokedResponse = await fetch(`${platformUrl}/api/v2/models`, {
+    headers: { authorization: `Bearer ${otherDevice.accessToken}` },
+  });
+  assert.equal(revokedResponse.status, 401);
+  await page
+    .getByLabel("账户 Token 用量")
+    .getByText(/总计 70/)
+    .waitFor();
+  await page
+    .getByLabel("同步状态")
+    .getByText(/待上传 0 · 冲突 0/)
+    .waitFor();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "清理本机缓存" }).click();
+  await page.getByText("本机缓存已清理。", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "立即同步" }).click();
+  await page.getByRole("link", { name: /账户模型测试/ }).waitFor();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "删除云端对话数据" }).click();
+  await page.getByText(/墓碑保留至/).waitFor();
+  await page.getByRole("button", { name: "立即同步" }).click();
+  await page.getByRole("link", { name: /账户模型测试/ }).waitFor({ state: "detached" });
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "退出全部设备" }).click();
   await page.getByLabel("账户状态").getByText("signed_out", { exact: true }).waitFor();
   assert.equal(existsSync(credentialPath), false);
 
-  console.log("E2E_ACCOUNT_OK login-keychain-model-usage-profile-restart-signout");
+  console.log(
+    "E2E_ACCOUNT_OK login-keychain-auto-model-effective-usage-device-revoke-cache-cloud-delete-signout-all",
+  );
   await application.close();
   running = undefined;
 } finally {

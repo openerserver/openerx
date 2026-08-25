@@ -11,7 +11,13 @@ import type {
   UsageAggregate,
   UsageRecord,
 } from "./model";
-import type { SyncConflict, SyncOperation, SyncPullResult, SyncPushResult } from "./sync";
+import type {
+  CloudDataDeletionResult,
+  SyncConflict,
+  SyncOperation,
+  SyncPullResult,
+  SyncPushResult,
+} from "./sync";
 
 export interface AccessPrincipal {
   accountId: string;
@@ -36,6 +42,7 @@ export interface IdentityServicePort {
   refresh(sessionId: string, refreshCredential: string): DeviceSessionGrant;
   authenticate(accessToken: string): AccessPrincipal;
   revokeDevice(principal: AccessPrincipal, sessionId: string): DeviceSession;
+  revokeAllDevices(principal: AccessPrincipal): DeviceSession[];
   listDevices(principal: AccessPrincipal): DeviceSession[];
 }
 
@@ -43,6 +50,8 @@ export interface AccountSyncServicePort {
   push(principal: SyncPrincipal, operation: SyncOperation): SyncPushResult;
   pull(principal: SyncPrincipal, cursor: string | null): SyncPullResult;
   listConflicts(principal: SyncPrincipal): SyncConflict[];
+  resolveConflict(principal: SyncPrincipal, conflictId: string): SyncConflict;
+  deleteAccountData(principal: SyncPrincipal): CloudDataDeletionResult;
 }
 
 export interface UsageStorePort {
@@ -52,6 +61,7 @@ export interface UsageStorePort {
     conversationId?: string;
     messageId?: string;
   }): UsageAggregate;
+  list(input: { accountId: string; conversationId?: string; messageId?: string }): UsageRecord[];
 }
 
 export interface ModelGatewayServicePort {

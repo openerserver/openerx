@@ -40,7 +40,7 @@ packages/
 v1-backup/           # 旧代码、配置、测试、文档和本地运行状态
 ```
 
-该结构来自 [05-platform-and-pi-contract.md](05-platform-and-pi-contract.md)。当前 M1、Pi Foundation 与 M2 已实现；后续依赖按开发计划逐阶段引入。
+该结构来自 [05-platform-and-pi-contract.md](05-platform-and-pi-contract.md)。当前 M1、Pi Foundation 与 M2 本地实现切片已落地；后续依赖和发布环境证据按开发计划逐阶段引入。
 
 ## 3. 旧资产边界
 

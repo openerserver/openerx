@@ -73,6 +73,9 @@ describe("SyncCoordinator", () => {
         pullCount += 1;
         return { changes: [], nextCursor: `cursor:${pullCount}` };
       },
+      async resolveConflict() {
+        throw new Error("not used");
+      },
     };
     coordinator = new SyncCoordinator(repository, transport);
 

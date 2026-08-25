@@ -244,6 +244,19 @@ export class IdentityService {
     });
   }
 
+  revokeAllDevices(principal: AccessPrincipal): DeviceSession[] {
+    return this.#transaction(() => {
+      const revokedAt = this.#now().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE device_sessions SET revoked_at = COALESCE(revoked_at, ?)
+           WHERE account_id = ?`,
+        )
+        .run(revokedAt, principal.accountId);
+      return this.listDevices(principal);
+    });
+  }
+
   listDevices(principal: AccessPrincipal): DeviceSession[] {
     return (
       this.#database

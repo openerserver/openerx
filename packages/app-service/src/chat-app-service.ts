@@ -53,6 +53,19 @@ export class ChatAppService {
       case "sync.now":
         if (!authorization || !this.#sync) throw new Error("AUTHENTICATION_REQUIRED");
         return await this.#sync.syncOnce(authorization);
+      case "sync.conflicts":
+        return this.#repository.syncConflicts();
+      case "sync.resolve":
+        if (!authorization || !this.#sync) throw new Error("AUTHENTICATION_REQUIRED");
+        return await this.#sync.resolveConflict(
+          request.input.conflictId,
+          request.input.resolution,
+          authorization,
+        );
+      case "cache.clear": {
+        this.#repository.clearLocalCache();
+        return { clearedAt: new Date().toISOString() };
+      }
       case "chat.list":
         return this.#repository.listConversations(request.input.includeArchived ?? false);
       case "chat.get":

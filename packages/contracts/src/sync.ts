@@ -116,11 +116,42 @@ export const syncStatusSchema = z
     pulled: z.number().int().nonnegative(),
     pending: z.number().int().nonnegative(),
     conflicts: z.number().int().nonnegative(),
+    syncedAt: timestampSchema,
+  })
+  .strict();
+
+export const syncConflictResolutionSchema = z.enum(["local", "cloud"]);
+
+export const syncResolveConflictInputSchema = z
+  .object({
+    conflictId: entityIdSchema,
+    resolution: syncConflictResolutionSchema,
+  })
+  .strict();
+
+export const localCacheClearResultSchema = z
+  .object({
+    clearedAt: timestampSchema,
+  })
+  .strict();
+
+export const cloudDataDeletionResultSchema = z
+  .object({
+    deletedObjects: z.number().int().nonnegative(),
+    cursor: z.string().regex(/^cursor:\d+$/),
+    retainUntil: timestampSchema,
   })
   .strict();
 
 export type SyncStatus = z.infer<typeof syncStatusSchema>;
+export type SyncConflictResolution = z.infer<typeof syncConflictResolutionSchema>;
+export type LocalCacheClearResult = z.infer<typeof localCacheClearResultSchema>;
+export type CloudDataDeletionResult = z.infer<typeof cloudDataDeletionResultSchema>;
 
 export interface SyncBridge {
   syncNow(): Promise<SyncStatus>;
+  listSyncConflicts(): Promise<SyncConflict[]>;
+  resolveSyncConflict(input: z.input<typeof syncResolveConflictInputSchema>): Promise<SyncStatus>;
+  clearLocalCache(): Promise<LocalCacheClearResult>;
+  deleteCloudData(): Promise<CloudDataDeletionResult>;
 }

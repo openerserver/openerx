@@ -90,4 +90,15 @@ describe("UsageStore", () => {
     expect(store.list({ accountId: stranger })).toEqual([]);
     expect(() => store.get(stranger, record.usageId)).toThrow("USAGE_NOT_FOUND");
   });
+
+  it("preserves selected, effective and fallback model evidence", () => {
+    const store = setup();
+    const accountId = randomUUID();
+    const record = usage(accountId, randomUUID(), randomUUID(), "model-call-fallback", {
+      effectiveModelRef: "platform/tools",
+      fallbackReason: "approved outage",
+    });
+    store.record(record);
+    expect(store.list({ accountId })).toEqual([record]);
+  });
 });

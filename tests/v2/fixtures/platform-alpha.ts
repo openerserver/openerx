@@ -1,6 +1,6 @@
 import type { Context } from "@earendil-works/pi-ai";
 import { AccountSyncService } from "@openerx/account-sync-api";
-import type { ModelCatalogEntry } from "@openerx/contracts";
+import { automaticModelRef, type ModelCatalogEntry } from "@openerx/contracts";
 import { IdentityService } from "@openerx/identity-api";
 import { ModelGatewayService } from "@openerx/model-gateway";
 import { createPlatformAlphaServer, listenOnEphemeralPort } from "@openerx/platform-alpha";
@@ -71,9 +71,13 @@ const models = new ModelGatewayService({
   executor: {
     async execute(request) {
       const text = latestUserText(request.context);
+      const effectiveModelRef =
+        request.selectedModelRef === automaticModelRef
+          ? "platform/standard"
+          : request.selectedModelRef;
       return {
-        text: `平台 ${request.selectedModelRef} 已回答：${text}`,
-        effectiveModelRef: request.selectedModelRef,
+        text: `平台 ${effectiveModelRef} 已回答：${text}`,
+        effectiveModelRef,
         usage: {
           inputTokens: 21,
           cachedInputTokens: 5,
