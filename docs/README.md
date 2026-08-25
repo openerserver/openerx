@@ -6,7 +6,7 @@
 
 1. [产品决策审阅清单](v2/00-product-decision-review.md)
 2. [产品合同](v2/01-product-contract.md)
-3. [平台与 Runtime 合同](v2/05-platform-and-runtime-contract.md)
+3. [平台与 Pi 合同](v2/05-platform-and-pi-contract.md)
 4. [迁移与交付合同](v2/07-migration-and-delivery-contract.md)
 5. [验收合同](v2/08-acceptance-contract.md)
 6. [实施启动记录](v2/12-implementation-bootstrap.md)

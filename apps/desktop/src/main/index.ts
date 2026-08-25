@@ -142,7 +142,9 @@ let supervisor: AppServiceSupervisor | null = null;
 app.whenReady().then(async () => {
   const profileDirectory = app.getPath("userData");
   mkdirSync(profileDirectory, { recursive: true });
-  supervisor = new AppServiceSupervisor(profileDirectory);
+  const piHostEntry =
+    process.env.OPENERX_E2E === "1" && !app.isPackaged ? "pi-host-test.js" : "pi-host.js";
+  supervisor = new AppServiceSupervisor(profileDirectory, piHostEntry);
   if (process.env.OPENERX_E2E === "1") {
     Object.assign(globalThis, {
       __openerxCrashAppServiceForTest: () => supervisor?.crashAppServiceForTest(),

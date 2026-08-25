@@ -15,7 +15,7 @@ const suggestions = [
   "法国的首都是哪里？",
   "请把这段文字改写成正式邮件",
   "生成一个代码块和表格",
-  "写 2000 字 [FAKE_SLOW]",
+  "写一篇 2000 字说明",
 ];
 
 const chatKeys = {
@@ -86,7 +86,7 @@ function NewChat(): React.JSX.Element {
       <section className="welcome" aria-labelledby="welcome-title">
         <p className="eyebrow">OpenerX 2.0 · Chat Alpha</p>
         <h1 id="welcome-title">今天想完成什么？</h1>
-        <p>当前由本地 Fake Runtime 提供可重复验证的流式回答。</p>
+        <p>对话由 Pi AgentSession 驱动；模型与能力由当前个人配置决定。</p>
       </section>
       <section className="suggestion-grid" aria-label="验收建议">
         {suggestions.map((suggestion) => (

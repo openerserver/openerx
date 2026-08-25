@@ -16,13 +16,14 @@ The M1 invariants are:
 1. Renderer has no Node, filesystem, process, credential, ledger-write or raw IPC authority.
 2. Main is the only broker for windows, navigation, OS credentials, dialogs and process startup.
 3. App Service is the only local database owner and cannot approve its own OS/tool capabilities.
-4. Runtime and tool processes receive explicit, expiring capabilities rather than ambient user access.
+4. Pi owns the agent harness but is not an authority boundary; Pi Host and tool processes receive
+   explicit, expiring capabilities rather than ambient user access.
 5. Client-provided balance, payment-success or model-usage totals are never commercial truth.
 6. V1 code and state cannot enter a V2 dependency graph or release artifact.
 
 ## Trust boundaries and attackers
 
-- Remote content, pasted HTML, model output, attachments, web pages, MCP servers, Skills and Runtime
+- Remote content, pasted HTML, model output, attachments, web pages, MCP servers, Skills and Pi
   output are hostile inputs.
 - Renderer compromise is assumed possible; it must not become local code execution.
 - Another local unprivileged process may attempt IPC connection, file replacement or credential reuse.
@@ -44,7 +45,7 @@ The M1 invariants are:
 | App Service crash freezes UI or corrupts writes | utility process, bounded restart, transactional single-writer storage | live Electron crash injection plus interrupted-message recovery E2E |
 | Database theft reveals reusable credentials | credentials outside DB; OS-protected key and authenticated field encryption | M1 schema inspection proves no credential/token tables; OS store and encrypted account fields remain M2 |
 | Path traversal or symlink escapes a grant | canonical path checks at capability broker and operation time | file-scope E2E in M4 |
-| Runtime/Skill/MCP expands its own authority | separate process, capability port, explicit scope and approval | denial/revocation E2E in M5/M6 |
+| Pi/Skill/MCP expands its own authority | isolated Pi Host, V2 capability port, explicit scope and approval; Pi tool lifecycle does not grant side-effect authority | denial/revocation E2E in M5/M6 |
 | Duplicate event/retry creates repeated state or charge | stable IDs, sequence checks and idempotency keys | contract tests from M1; billing tests in M3 |
 | Client forges usage, balance or payment result | cloud Usage/Ledger/Payment services are sole truth | cross-account and replay E2E in M2/M3 |
 | Package/update tampering | exact lockfile, CI, Electron fuses, signed/notarized release and signed feed | package inspection in M0; signing gate in M8 |

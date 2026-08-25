@@ -4,7 +4,8 @@ OpenerX 2.0 是面向普通用户的个人 AI 工作客户端。V1 使用 Electr
 
 ## 当前状态
 
-V2 产品合同已经批准，M0「工程与 ADR 基线」已通过，下一检查点是 M1「Chat Alpha」。V2 workspace、Electron/React 最小壳、合同包和独立质量命令已经建立。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，不再属于新主线构建和依赖边界。
+V2 产品合同已经批准；M0「工程与 ADR 基线」、M1「Chat Alpha」和 Pi Foundation 已完成，
+下一检查点是 M2「Account + Model」。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，不再属于新主线构建和依赖边界。
 
 ## 活跃目录
 
@@ -12,10 +13,10 @@ V2 产品合同已经批准，M0「工程与 ADR 基线」已通过，下一检�
 | --- | --- |
 | `apps/desktop` | Electron Main、Preload 和 React Renderer |
 | `apps/app-service` | 本地业务 API、Conversation/Message 和缓存协调 |
-| `apps/runtime-host` | Runtime Adapter、工具执行和隔离 |
 | `apps/sync-service` | 本地同步队列和云同步适配 |
 | `services` | 身份、同步、模型、Token、价格、账本和支付服务 |
-| `packages` | 领域、合同、SDK、UI、存储和可观测性共享包 |
+| `packages/pi-host` | Pi `AgentSession` 组合、事件投影和隔离进程入口 |
+| `packages` | 领域、合同、工具/Skill、UI、存储和可观测性共享包 |
 | `docs/v2` | 已批准的产品、架构、迁移、验收和开发合同 |
 | `v1-backup` | 只读旧系统快照和本地旧运行状态 |
 

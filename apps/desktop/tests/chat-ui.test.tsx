@@ -20,7 +20,7 @@ const snapshot: ConversationSnapshot = {
     ownerProfileId: "local-default",
     title: "Markdown 验收",
     activeBranchId: branchId,
-    selectedModelRef: "fake-runtime/v1",
+    selectedModelRef: "pi/default",
     createdAt: timestamp,
     updatedAt: timestamp,
     archivedAt: null,

@@ -40,7 +40,7 @@ export interface GenerationDraft {
   created: boolean;
 }
 
-export interface RuntimeProductEvent {
+export interface PiProductEvent {
   eventId: string;
   sequence: number;
   occurredAt: string;
@@ -59,7 +59,7 @@ export class ChatRepository {
   constructor(databasePath: string, options: RepositoryOptions = {}) {
     this.#database = new DatabaseSync(databasePath);
     this.#ownerProfileId = options.ownerProfileId ?? "local-default";
-    this.#selectedModelRef = options.selectedModelRef ?? "fake-runtime/v1";
+    this.#selectedModelRef = options.selectedModelRef ?? "pi/default";
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#idFactory = options.idFactory ?? randomUUID;
     migrateDatabase(this.#database);
@@ -229,7 +229,7 @@ export class ChatRepository {
     });
   }
 
-  appendRuntimeEvent(assistantMessageId: string, event: RuntimeProductEvent): ChatEvent | null {
+  appendPiEvent(assistantMessageId: string, event: PiProductEvent): ChatEvent | null {
     return this.#transaction(() => {
       const row = this.#messageRow(assistantMessageId);
       const currentSequence = Number(row.runtime_sequence);
@@ -457,7 +457,7 @@ export class ChatRepository {
     return this.#eventRows(conversationId, afterSequence);
   }
 
-  runtimeHistory(
+  piHistory(
     assistantMessageId: string,
   ): Array<{ role: "user" | "assistant" | "system"; text: string }> {
     const assistant = this.#message(assistantMessageId);

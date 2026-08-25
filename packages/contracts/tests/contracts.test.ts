@@ -5,7 +5,7 @@ import {
   desktopEnvironmentSchema,
   errorEnvelopeSchema,
   parseChatCommandResult,
-  runtimeEventFrameSchema,
+  piHostEventFrameSchema,
 } from "../src";
 
 describe("desktop environment contract", () => {
@@ -84,7 +84,7 @@ describe("M1 process and chat contracts", () => {
         kind: "app-service.bootstrap",
         contractVersion: 1,
         nonce,
-        runtimeNonce: nonce,
+        piHostNonce: nonce,
         profileDirectory: "/profile",
       }),
     ).toMatchObject({ contractVersion: 1 });
@@ -93,16 +93,16 @@ describe("M1 process and chat contracts", () => {
         kind: "app-service.bootstrap",
         contractVersion: 2,
         nonce: "weak",
-        runtimeNonce: nonce,
+        piHostNonce: nonce,
         profileDirectory: "/profile",
       }),
     ).toThrow();
   });
 
-  it("rejects malformed runtime events and malformed command responses", () => {
+  it("rejects malformed Pi Host events and malformed command responses", () => {
     expect(() =>
-      runtimeEventFrameSchema.parse({
-        kind: "runtime.event",
+      piHostEventFrameSchema.parse({
+        kind: "pi.product-event",
         generationId: crypto.randomUUID(),
         eventId: crypto.randomUUID(),
         sequence: 0,

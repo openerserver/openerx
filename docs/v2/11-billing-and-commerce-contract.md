@@ -1,6 +1,6 @@
 # V1 个人额度、计费与账单合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_NOT_AUTHORIZED / OPERATIONAL_CONFIG_PENDING`
+> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS / OPERATIONAL_CONFIG_PENDING`
 >
 > 合同类型：个人账户额度、费用、积分、充值、支付、账单与对账边界
 
@@ -103,7 +103,7 @@ V1 必须形成以下闭环：
 
 ### 5.3 充值余额
 
-`CashBalanceAccount` 按币种隔离。余额只由已确认支付、退款、消费、冲正或有权限的人工调账改变；客户端、同步队列和 Runtime 均无权直接写余额。
+`CashBalanceAccount` 按币种隔离。余额只由已确认支付、退款、消费、冲正或有权限的人工调账改变；客户端、同步队列和 Pi Host 均无权直接写余额。
 
 所有金额使用币种最小单位整数存储，禁止使用二进制浮点数保存货币。
 
@@ -270,7 +270,7 @@ paid/credited -> partially_refunded | refunded
 - 费用超过用户接受的最大金额或账户被静默透支。
 - 支付成功但未入账、支付失败却入账，且自动对账无法发现。
 - 不同账户可以读取或操作彼此的报价、订单、余额、费用或账单。
-- Renderer、Runtime、同步客户端或模型可以直接修改余额/账本。
+- Renderer、Pi Host、同步客户端或模型可以直接修改余额/账本。
 - 支付凭证、支付密钥或完整敏感回调进入客户端、消息或诊断日志。
 - 退款、调账和积分/额度发放没有原因、权限与审计记录。
 

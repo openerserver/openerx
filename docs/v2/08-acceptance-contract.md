@@ -1,8 +1,8 @@
 # V1 验收合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_NOT_AUTHORIZED`
+> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
 >
-> 合同类型：个人聊天客户端的产品、交互、可靠性、安全和真实 Runtime 门禁
+> 合同类型：个人聊天客户端的产品、交互、可靠性、安全和 Pi harness 门禁
 
 ## 1. 验收原则
 
@@ -63,7 +63,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 - 发送、停止或重试状态不清楚。
 - 文件是否上传、解析或被使用不可判断。
 - 权限卡无法理解读取/写入范围。
-- Runtime 中断导致历史消息消失。
+- Pi Host 中断导致历史消息消失。
 - 用户无法找到生成成果。
 - 同步冲突或失败不可见，或另一设备继承了本地路径/工具权限。
 - 明确选择的模型被静默替换，或 Token/费用缺失、重复累计/扣减却无提示。
@@ -144,13 +144,13 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 - 月度账单可按消费、充值、退款、冲正和调账核对并下载；账单明确不等于税务发票。
 - 积分兑换比例由版本化配置提供；未配置或无效配置时积分抵扣关闭且阻断正式发布，不使用隐含默认值。
 
-## 6. 真实 Pi Harness 门禁
+## 6. Pi Harness 门禁
 
 发布验证必须使用维护中的 Pi 包和真实配置的模型：
 
-- Pi 是正式构建中唯一的 agent harness；Fake Runtime 不得进入生产执行路径。
+- Pi 是正式构建中唯一的 agent harness；生产源码和 Release 路径不得包含测试 Provider 或固定回答模型。
 - Pi 负责 Agent Loop、AgentSession/SessionManager、上下文压缩、内部重试和工具调用生命周期。
-- V2 Runtime Supervisor、WorkItem/ExecutionRun 投影和 Capability Broker 中不存在平行 Agent Loop、步骤规划、Session 管理、压缩、重试或工具调度器。
+- Pi Host Supervisor、WorkItem/ExecutionRun 投影和 Capability Broker 中不存在平行 Agent Loop、步骤规划、Session 管理、压缩、重试或工具调度器。
 - Pi Host 的事件合同覆盖消息、工具、权限、压缩、重试、用量和 Session 状态，并有顺序、重放、终态与版本升级契约测试。
 - 工具由 Pi 发起并接收结果；Scope、审批、沙箱、系统副作用和审计由 V2 Capability and Permission Broker 执行。
 
@@ -160,7 +160,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 - 文件输入。
 - 工具调用和权限回复。
 - 长任务离开后继续。
-- Runtime 异常退出后的恢复或明确失败。
+- Pi Host 异常退出后的恢复或明确失败。
 - 用量记录和错误归一化。
 - 平台 Model Gateway、Token、价格快照、费用预留和结算回写。
 
@@ -173,7 +173,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 | 客户端刷新/重启 | 已完成历史可读，活动任务恢复或明确失败 |
 | 流式连接断开 | 按游标补读，不重复消息 |
 | App Service 重启 | 已接受消息不丢失 |
-| Pi Harness Host 退出 | 不删除历史，保留已有成果；Pi Session 可恢复时恢复，否则明确失败 |
+| Pi Host 退出 | 不删除历史，保留已有成果；Pi Session 可恢复时恢复，否则明确失败 |
 | 文件解析失败 | 不阻塞删除文件或继续纯文本对话 |
 | 工具超时 | 有限重试，用户可停止 |
 | 重复发送 | 幂等，不产生重复工具副作用 |
@@ -193,7 +193,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 
 以下任一失败阻断发布：
 
-- Runtime 读取未授权文件或文件夹。
+- Pi Host 读取未授权文件或文件夹。
 - API Key、Cookie 或令牌进入消息、日志或诊断包。
 - 高风险工具未经确认执行。
 - 权限范围变化后继续复用旧授权。
@@ -203,7 +203,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 - 已撤销设备仍可使用旧会话或预签名地址访问云数据。
 - 模型请求绕过 Platform Model Gateway 或客户端获得上游 Provider 密钥。
 - 同一模型调用因重试或同步被重复累计 Token 或费用。
-- 客户端、Runtime、Skill、MCP 或普通同步 API 可以直接修改余额或账本。
+- 客户端、Pi Host、Skill、MCP 或普通同步 API 可以直接修改余额或账本。
 - 支付回调未验签/未防重放，或支付凭证进入 Renderer、消息、日志或诊断包。
 - 价格变化追溯修改已完成费用、余额出现无分录变化、账本不平或账户被静默透支。
 
@@ -217,7 +217,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 - 数据迁移在新库和升级样本通过。
 - 事件顺序、重复、断线和补读测试通过。
 - Pi Host 消息、工具、权限、压缩、重试、用量和 Session 事件翻译契约测试通过。
-- 依赖图和代码扫描证明 V2 没有第二套 Agent Loop/Session/compaction/retry/tool-lifecycle 实现，Fake Runtime 不进入 Release 构建。
+- 依赖图和代码扫描证明 V2 没有第二套 Agent Loop/Session/compaction/retry/tool-lifecycle 实现，测试 Provider 不进入 Release 构建。
 - 工具调用具有幂等和权限测试。
 - 支持格式的成果经过渲染验证。
 - 云同步 Schema、冲突、删除墓碑、设备撤销和 Token/费用记录契约测试通过。
@@ -246,7 +246,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 ### Chat Alpha
 
 - 新对话、历史、流式、停止、重试稳定。
-- Fake Pi Host test double 的合同链路和真实 Pi harness 基本链路均通过；正式构建只启用 Pi。
+- Pi `AgentSession` 基本链路、事件投影和停止均通过；确定性测试只替换 Pi Model Provider。
 - Electron + React 在首批目标系统可安装、启动和退出。
 
 ### File Alpha

@@ -1,8 +1,8 @@
-# V1 平台与 Runtime 合同
+# V1 平台与 Pi 合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_NOT_AUTHORIZED`
+> 状态：`APPROVED_PRODUCT_SCOPE / PI_FOUNDATION_COMPLETE`
 >
-> 合同类型：个人客户端壳、应用服务、Pi-owned Harness、Runtime Host 和能力 Broker
+> 合同类型：个人客户端壳、应用服务、Pi Host 和能力 Broker
 
 ## 1. 架构目标
 
@@ -27,9 +27,9 @@ flowchart TD
   MAIN --> APP[Personal App Service / Utility Process]
   APP --> STORE[Conversation and File Store]
   APP --> SEARCH[Personal Search Index]
-  APP --> SUPERVISOR[V2 Runtime Supervisor]
-  SUPERVISOR --> HOST[Isolated Pi Harness Host]
-  HOST --> PI[Pi Agent Harness]
+  APP --> SUPERVISOR[Pi Host Supervisor]
+  SUPERVISOR --> HOST[Isolated Pi Host]
+  HOST --> PI[Pi AgentSession]
   PI --> TOOLS[V2 Capability and Permission Broker]
   APP --> SYNC[Account Sync Client]
   SYNC --> CLOUD[Identity Sync and File Services]
@@ -56,7 +56,7 @@ V1 不包含 Admin Web、组织服务和团队控制平面。
 
 - Electron 自带 Chromium，在 V1 的 Windows 和 macOS 目标上提供一致的渲染与浏览器能力。
 - Main、Preload、Renderer 和本地服务可以使用 TypeScript/JavaScript 统一开发。
-- 本地文件、窗口、托盘、快捷键、更新和 Runtime 子进程集成路径直接。
+- 本地文件、窗口、托盘、快捷键、更新和 Pi Host 子进程集成路径直接。
 - Tauri 的包体通常更小，但会引入 Rust、系统 WebView 差异和外部 sidecar 的多目标构建复杂度。
 
 该选择优先优化开发效率和跨平台一致性，接受 Electron 包体与内存更高的代价，并通过性能门禁约束。
@@ -72,7 +72,7 @@ V1 已确认系统矩阵：
 | macOS 14 Sonoma 及以上 | Intel x64 | 必须支持 |
 | Windows 10/11 | ARM64 | V1 不支持 |
 
-实现阶段选择的 Electron、Chromium、Node 和 Runtime 版本必须仍在维护期，并通过上述矩阵实机验证。
+实现阶段选择的 Electron、Chromium、Node 和 Pi 版本必须仍在维护期，并通过上述矩阵实机验证。
 
 ## 4. 部署单元
 
@@ -81,7 +81,7 @@ V1 已确认系统矩阵：
 - 应用生命周期、窗口、菜单、托盘、深链接和更新。
 - 文件对话框、系统打开/另存为和安全外链。
 - 账户登录回调、设备标识和系统凭证库会话。
-- 创建并监督 Personal App Service 与 Runtime Host。
+- 创建并监督 Personal App Service 与 Pi Host。
 - 不承载长时间 AI 执行或 CPU 密集任务。
 
 ### 4.2 Preload Bridge
@@ -95,7 +95,7 @@ V1 已确认系统矩阵：
 - 新对话、历史、搜索、文件、助手/技能、浏览器/终端面板、账户同步、用量/费用、充值、账单和设置。
 - 使用 React + TypeScript + Vite。
 - 只消费版本化 Bridge/API 和恢复型事件。
-- 不直接解析 Runtime 私有协议。
+- 不直接解析 Pi 私有事件。
 - `nodeIntegration` 必须关闭，Renderer 运行在 Sandbox 与 Context Isolation 下。
 
 ### 4.4 Personal App Service
@@ -106,15 +106,15 @@ V1 已确认系统矩阵：
 - 创建简单响应或复杂 WorkItem。
 - 运行在 Utility Process 或独立受监督进程，不阻塞 Electron Main。
 
-### 4.5 V2 Runtime Supervisor 与产品投影
+### 4.5 Pi Host Supervisor 与产品投影
 
 - 为一次产品执行分配稳定的 Message、WorkItem、ExecutionRun 和 generation 标识，并绑定内部 Pi Session 引用。
 - 在进入 Pi 前校验账户、模型、报价/预留、文件 Scope 和设备能力前置条件。
-- 监督 Runtime Host 的进程生命周期，决定产品层是等待、明确失败，还是请求 Pi 恢复已有 Session。
+- 监督 Pi Host 的进程生命周期，决定产品层是等待、明确失败，还是请求 Pi 恢复已有 Session。
 - 将 Pi 事件投影为可持久化、可同步、可恢复的产品事件；WorkItem 和 ExecutionRun 是产品监督与审计视图，不是第二套 Agent 计划器。
 - 不实现 Agent Loop、Session/SessionManager、上下文压缩、内部重试、步骤规划或工具调用生命周期；这些全部由 Pi 提供。
 
-### 4.6 Isolated Pi Harness Host
+### 4.6 Isolated Pi Host
 
 - 只在该受监督 utility process 中加载维护中的 Pi 包；Main、Preload、Renderer 和 App Service 不直接导入 Pi。
 - 为每个执行创建或恢复 Pi `AgentSession`，并绑定明确的隔离工作目录。
@@ -134,7 +134,6 @@ apps/
     src/preload/
     src/renderer/
   app-service/
-  runtime-host/
   sync-service/
 services/
   identity-api/
@@ -147,7 +146,7 @@ services/
 packages/
   domain/
   contracts/
-  runtime-sdk/
+  pi-host/
   tool-sdk/
   skills/
   ui-react/
@@ -157,7 +156,7 @@ docs/v2/
 v1-backup/
 ```
 
-这是当前目标结构。旧控制平面、旧 Runtime、旧测试和旧运维资产已经按用户授权移动到 `v1-backup/`，新主线不得直接依赖该目录。
+这是当前目标结构。旧控制平面、旧执行引擎、旧测试和旧运维资产已经按用户授权移动到 `v1-backup/`，新主线不得直接依赖该目录。
 
 建议 Renderer 基线为 React、TypeScript、Vite、Vitest、React Testing Library 和 Playwright。路由、异步状态和组件库另行通过 ADR 确定，不在合同阶段堆叠依赖。
 
@@ -178,28 +177,23 @@ Message -> WorkItem/ExecutionRun product projection -> Pi AgentSession
 
 两条路径使用同一个 Pi harness，共享 Conversation、模型配置、权限、事件、用量、报价和结算合同。复杂路径增加的是产品可见的后台状态、权限等待、成果和恢复投影，不是另一个负责拆解步骤的 Agent 编排器。普通问答不强制创建用户可见 WorkItem。
 
-两条路径的模型请求都必须经过 Platform Model Gateway。收费请求在执行前取得 Billing Authorization；桌面端和 Runtime Host 不保存上游 Provider API Key，也不能绕过平台 Token 与费用记录直接调用未登记模型。
+两条路径的模型请求都必须经过 Platform Model Gateway。收费请求在执行前取得 Billing Authorization；桌面端和 Pi Host 不保存上游 Provider API Key，也不能绕过平台 Token 与费用记录直接调用未登记模型。
 
-## 7. Pi Host 与事件翻译边界
+## 7. Pi Host 进程合同
 
-最低接口：
+当前合同直接表达 Pi 会话动作，不定义抽象 harness：
 
-```ts
-interface PiHarnessHost {
-  readonly id: `pi/${string}`;
-  capabilities(): Promise<RuntimeCapabilities>;
-  start(input: PiStartInput): Promise<PiSessionHandle>;
-  resume(input: PiResumeInput): Promise<PiSessionHandle>;
-  prompt(handle: PiSessionHandle, input: PiPromptInput): Promise<void>;
-  abort(handle: PiSessionHandle): Promise<void>;
-  replyPermission(handle: PiSessionHandle, reply: PermissionReply): Promise<void>;
-  events(handle: PiSessionHandle, cursor?: string): AsyncIterable<PiHostEvent>;
-  usageSnapshot(handle: PiSessionHandle): Promise<RuntimeUsage>;
-  dispose(handle: PiSessionHandle): Promise<void>;
-}
-```
+| Frame | 方向 | 含义 |
+| --- | --- | --- |
+| `pi-host.bootstrap` / `pi-host.ready` | Main ↔ Pi Host | 版本、profile 和启动 nonce 握手 |
+| `pi.session.prompt` | App Service → Pi Host | 把已批准产品上下文提交给新的 Pi `AgentSession` |
+| `pi.session.abort` | App Service → Pi Host | 调用 Pi `AgentSession.abort()` |
+| `pi.product-event` | Pi Host → App Service | 把 Pi 事件投影为有序、幂等的产品增量或终态 |
 
-这是 V2 与 Pi Runtime Host 之间的版本化进程合同，不是 V1 的多 harness 插件接口。能力声明至少覆盖文本、图片、文件、工具、权限、流式、停止、恢复、上下文压缩和用量。事件翻译至少覆盖消息增量、终态、工具调用/结果、权限请求、压缩、重试、用量和 Session 状态；原始 Pi payload 只用于受控诊断，不能成为 Renderer 合同或产品数据真值。
+合同实现在 `packages/contracts/src/pi.ts`，Pi 会话组合与进程入口在 `packages/pi-host`。
+当前文本子集覆盖 delta、completed、stopped 和 failed；文件/工具阶段在同一合同中增加 Pi
+工具、权限、压缩、重试、用量和 Session 投影。原始 Pi payload 只用于受控诊断，不能成为
+Renderer 合同或产品数据真值。
 
 ## 7.1 平台模型目录与 Gateway
 
@@ -229,24 +223,22 @@ interface PiHarnessHost {
 - 金额使用最小货币单位整数，价格计算使用明确精度和舍入规则。
 - 商业系统、状态机和失败处理详见 [11-billing-and-commerce-contract.md](11-billing-and-commerce-contract.md)。
 
-## 8. Pi 合同
+## 8. Pi 所有权合同
 
-`已确认`：当前维护中的 Pi 包完整提供 V1 唯一的生产 agent harness，但不是产品数据或商业系统底层。
+`已确认`：`@earendil-works/pi-coding-agent@0.84.3` 完整提供 V1 唯一的生产 agent
+harness，但不是产品数据、权限或商业真值。
 
-进入 V1 前必须：
+1. Pi 负责 Agent Loop、`AgentSession`/SessionManager、上下文与压缩、模型轮次、内部重试和工具调用生命周期。
+2. 只有 `packages/pi-host` 可以导入 Pi；不从 `v1-backup/pi-mono` 运行代码。
+3. Pi Host 显式接收工作目录和批准的产品上下文；Pi Session ID 只作内部引用。
+4. Conversation、Message、WorkItem 和 ExecutionRun 是独立产品投影。
+5. 模型通过 Pi 原生 `ModelRuntime` Provider 接入 Platform Model Gateway。
+6. 工具使用 Pi 原生工具模型；实际文件、网络、浏览器、Shell、桌面、MCP 和 Skill 副作用全部经过 V2 Broker。
+7. 固定 Pi 版本；升级必须通过事件、Session、停止、恢复、工具、压缩和打包回归。
+8. 测试 Provider 只能位于测试文件；生产和 Release 路径不能包含固定回答模型。
 
-1. 使用当前维护中的新包，不从仓库内旧 `pi-mono` 源码树启动。
-2. 由 Pi 负责 Agent Loop、`AgentSession`/SessionManager、上下文管理与压缩、模型轮次、内部重试和工具调用生命周期。
-3. V2 不得在 Runtime Supervisor、App Service、Tool Gateway 或 WorkItem/ExecutionRun 中重建上述 harness 能力。
-4. 显式传入每个对话/Run 的工作目录，并把产品历史快照与 Pi Session 私有状态分离。
-5. 适配当前 Pi 的消息、工具、权限、压缩、重试、用量和 Session 事件，并保持顺序、游标和终态幂等。
-6. 模型请求通过 Platform Model Gateway；上游凭证只存在于服务端安全配置层。
-7. 工具由 Pi 发起调用，但文件、网络、浏览器、Shell、桌面、MCP 和 Skill 的授权及实际副作用全部通过 V2 Capability and Permission Broker。
-8. Pi Session ID 只作为内部引用；Conversation、Message、WorkItem 和 ExecutionRun 是 V2 产品投影。
-9. 固定 Pi 包版本；升级必须通过宿主合同、事件映射、恢复、工具和压缩回归测试。
-10. 通过真实模型流式、停止、继续、文件、工具、权限、压缩、重试和崩溃恢复测试。
-
-M1 的 `fake-runtime/v1` 只模拟上述 Pi Host/产品事件边界，用于无费用的确定性测试。正式构建不得把 Fake Runtime 当作生产引擎。V1 若要引入 Pi 之外的 harness，必须由新的 ADR 明确迁移和验收影响。
+不存在通用 harness 抽象、多 harness 注册表或 V2 自有 Agent 执行器。完整决策见
+[ADR-V2-007](adr/007-pi-harness-boundary.md)。
 
 ## 9. 工具、Skill 与能力 Broker
 
@@ -329,4 +321,4 @@ Electron 的一致性以更大包体和内存为代价。V1 必须建立可测�
 
 ## 15. Future Enterprise 扩展位
 
-未来可以增加 Organization Scope、团队空间、管理员服务、组织模型策略、部门预算和企业结算，但 V1 只实现个人账户商业闭环，不创建组织页面、角色工作流或企业管理 API。扩展能力必须通过新增适配层和 Scope 演进，不能重新绑定 Runtime 私有对象。
+未来可以增加 Organization Scope、团队空间、管理员服务、组织模型策略、部门预算和企业结算，但 V1 只实现个人账户商业闭环，不创建组织页面、角色工作流或企业管理 API。扩展能力通过产品合同和 Scope 演进，不能重新绑定 Pi 私有对象。

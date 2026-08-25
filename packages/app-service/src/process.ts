@@ -7,20 +7,20 @@ import {
 import { ChatRepository } from "@openerx/storage";
 import type { MessagePortMain } from "electron";
 import { ChatAppService } from "./chat-app-service";
-import { MessagePortRuntimeClient } from "./runtime-client";
+import { MessagePortPiHostClient } from "./pi-host-client";
 
 const parentPort = process.parentPort;
 if (!parentPort) throw new Error("App Service requires an Electron utility-process parent port");
 
 parentPort.once("message", async (bootstrapEvent) => {
   const bootstrap = appServiceBootstrapSchema.parse(bootstrapEvent.data);
-  const [mainPort, runtimePort] = bootstrapEvent.ports as MessagePortMain[];
-  if (!mainPort || !runtimePort) throw new Error("App Service bootstrap ports are missing");
+  const [mainPort, piHostPort] = bootstrapEvent.ports as MessagePortMain[];
+  if (!mainPort || !piHostPort) throw new Error("App Service bootstrap ports are missing");
 
-  const runtime = new MessagePortRuntimeClient(runtimePort, bootstrap.runtimeNonce);
-  await runtime.ready();
+  const piHost = new MessagePortPiHostClient(piHostPort, bootstrap.piHostNonce);
+  await piHost.ready();
   const repository = new ChatRepository(path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"));
-  const service = new ChatAppService(repository, runtime);
+  const service = new ChatAppService(repository, piHost);
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.initialize();
 

@@ -22,7 +22,7 @@
    not deletion. Clearing a local cache does not create a cloud tombstone.
 6. Attachment and Artifact bytes use immutable content-addressed objects; synchronized records carry
    hashes and object references. Absolute paths, local file grants, credentials, cookies, tool grants
-   and Runtime handles are device-only fields and are rejected by sync schemas.
+   and Pi Session handles are device-only fields and are rejected by sync schemas.
 
 ## M1 boundary
 
@@ -34,4 +34,4 @@ conflict fixtures and two-device tests before Account Alpha exits.
 
 - Retry and reconnect can be idempotent without trusting wall-clock order.
 - Branch edits and deletes remain auditable across future device conflicts.
-- The current local schema can evolve into sync without making Runtime state cloud data.
+- The current local schema can evolve into sync without making Pi Session state cloud data.

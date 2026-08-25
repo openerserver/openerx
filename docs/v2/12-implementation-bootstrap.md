@@ -19,7 +19,6 @@ apps/
     src/preload/    # 类型化安全 Bridge
     src/renderer/   # React + TypeScript + Vite Renderer
   app-service/      # 本地应用服务边界
-  runtime-host/     # 受控 Runtime 执行边界
   sync-service/     # 本地同步队列与云同步适配边界
 services/
   identity-api/
@@ -32,7 +31,7 @@ services/
 packages/
   domain/
   contracts/
-  runtime-sdk/
+  pi-host/          # Pi AgentSession 组合与隔离进程入口
   tool-sdk/
   skills/
   ui-react/
@@ -41,7 +40,7 @@ packages/
 v1-backup/           # 旧代码、配置、测试、文档和本地运行状态
 ```
 
-该结构来自 [05-platform-and-runtime-contract.md](05-platform-and-runtime-contract.md)。本轮只提交目录说明和空的源码入口，不引入 Electron、React、计费或同步实现依赖。
+该结构来自 [05-platform-and-pi-contract.md](05-platform-and-pi-contract.md)。当前 M1 与 Pi Foundation 已实现；后续依赖按开发计划逐阶段引入。
 
 ## 3. 旧资产边界
 
@@ -55,7 +54,7 @@ v1-backup/           # 旧代码、配置、测试、文档和本地运行状态
 
 1. 冻结 Electron + React + Vite 的 ADR 与双平台打包基线。
 2. 在 `apps/desktop` 建立 Main / Preload / Renderer 最小可运行骨架。
-3. 建立 Conversation / Message 的本地存储与 Fake Runtime 流式闭环。
+3. 建立 Conversation / Message 本地存储，并直接接入 Pi `AgentSession` 的流式、停止和失败闭环。
 4. 再进入账户、同步、模型目录、Token 和计费服务。
 
 每一步都必须有独立测试和可回滚提交；未完成的 V2 能力不得通过旧控制平面页面改名冒充完成。

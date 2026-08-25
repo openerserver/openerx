@@ -4,7 +4,7 @@
 >
 > 修订日期：2026-08-25
 >
-> 当前效力：已批准的个人客户端产品合同；它描述目标而不是当前实现。用户已明确授权开始实施，旧系统已归档到 `v1-backup/`，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
+> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1 与 Pi Foundation 已完成，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
 
 ## 1. 当前已经确定的方向
 
@@ -51,7 +51,7 @@
 3. [02-users-and-scenarios.md](02-users-and-scenarios.md)：单用户画像和核心场景。
 4. [03-experience-and-information-architecture.md](03-experience-and-information-architecture.md)：聊天主界面、导航和交互合同。
 5. [04-domain-and-api-contract.md](04-domain-and-api-contract.md)：Conversation-first 领域模型。
-6. [05-platform-and-runtime-contract.md](05-platform-and-runtime-contract.md)：客户端、Pi-owned harness、能力 Broker 与产品投影边界。
+6. [05-platform-and-pi-contract.md](05-platform-and-pi-contract.md)：客户端、Pi-owned harness、能力 Broker 与产品投影边界。
 7. [06-security-and-governance-contract.md](06-security-and-governance-contract.md)：个人文件、凭证、工具权限和数据安全。
 8. [07-migration-and-delivery-contract.md](07-migration-and-delivery-contract.md)：旧系统处置和 V1 阶段计划。
 9. [08-acceptance-contract.md](08-acceptance-contract.md)：个人客户端验收门槛。
@@ -64,6 +64,7 @@
 16. [adr/README.md](adr/README.md)：M0 已冻结的工程与安全架构决策。
 17. [security/electron-threat-model.md](security/electron-threat-model.md)：Electron 和本地 App Service 威胁模型。
 18. [evidence/m0-2026-08-25.md](evidence/m0-2026-08-25.md)：M0 检查点命令、结果和残余风险。
+19. [evidence/pi-foundation-2026-08-25.md](evidence/pi-foundation-2026-08-25.md)：Pi Foundation 的实现、测试、打包与边界证据。
 
 ## 5. V1 与未来方向边界
 
@@ -77,7 +78,7 @@
 | 内置、个人及工作区 Skill 的安装、使用与设置 | 管理员控制台和组织级 Skill 分发 |
 | 个人成果预览、下载和再次使用 | 团队共享、评论和发布流程 |
 | 平台统一模型、显式选模、Token、个人额度/积分、充值和账单 | 组织预算中心、企业授信账期和私有模型治理 |
-| 模型可替换、Pi 版本可在宿主边界内升级 | 私有部署、其他 harness 和组织级 Runtime 治理 |
+| 模型可替换、Pi 版本可在宿主边界内升级 | 私有部署和组织级能力治理 |
 
 未来能力不得以隐藏页面、预建复杂 Schema 或额外 V1 操作步骤的方式提前进入首版。
 
@@ -85,11 +86,11 @@
 
 产品合同范围已经批准，以下规则继续有效：
 
-1. 产品名称、导航、账户、系统范围、Runtime 边界、权限、验收和商业规则均按 [00-product-decision-review.md](00-product-decision-review.md) 生效。
+1. 产品名称、导航、账户、系统范围、Pi 边界、权限、验收和商业规则均按 [00-product-decision-review.md](00-product-decision-review.md) 生效。
 2. 积分兑换数字、充值档位/上下限和支付商户参数作为运营参数，在 Billing Alpha 前配置，在发布前冻结。
-3. 用户已明确要求按本合同开始实施准备；本轮先建立目录骨架和实施记录，后续代码、数据库和基础设施修改仍按阶段退出条件推进。
+3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；当前直接进入 M2，不设置旧执行引擎迁移阶段。
 
-`v1-backup/` 中的旧文档、旧控制平面和旧 Runtime 依赖继续作为受保护资产；新 V2 主线不得从备份目录导入模块，或通过旧页面改名冒充完成。
+`v1-backup/` 中的旧文档、旧控制平面和旧执行引擎依赖继续作为受保护资产；新 V2 主线不得从备份目录导入模块，或通过旧页面改名冒充完成。
 
 ## 7. 实施启动入口
 

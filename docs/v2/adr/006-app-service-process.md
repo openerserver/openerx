@@ -16,7 +16,7 @@
    Mutations require idempotency keys. App Service never accepts executable code or arbitrary paths.
 5. Main brokers OS credential, dialog and permission operations. App Service owns conversations,
    local storage, outbox and orchestration; it cannot create windows or directly approve tools.
-6. Runtime Host is a separate supervised process with a smaller capability port. A Runtime crash
+6. Pi Host is a separate supervised process with a smaller capability port. A Pi Host crash
    cannot terminate App Service or corrupt committed conversation state.
 7. Process logs are structured and redacted. Crash loops surface a recoverable UI state and stop
    after the configured retry budget.

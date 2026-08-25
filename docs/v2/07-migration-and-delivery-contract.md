@@ -36,7 +36,7 @@
 | 现有认证 | 按个人账户、设备会话和云同步要求重新评估；不直接继承旧组织角色语义 |
 | TaskDetail 对话与流式经验 | 转化为 Message/Conversation 测试参考 |
 | task artifacts 经验 | 转化为个人 Artifact/ArtifactVersion |
-| Runtime Provider 测试 | 转化为 Pi Host、事件翻译和真实 Pi harness 验收用例 |
+| 旧 Runtime Provider 测试 | 仅提取可复用行为断言，改写为 Pi Host 与 Pi 原生事件验收用例 |
 | Control Plane Service/BFF | 不作为 V1 产品边界，选择性提取基础能力 |
 | service-go | 默认退出 V1 主线 |
 | Dashboard、Projects、AgentOps、审批页 | 不进入 V1 员工界面 |
@@ -55,7 +55,7 @@ V1 默认不做大规模旧数据迁移。
 | Tasks | 只读历史；可选择性导出文本和成果 |
 | Task Messages | 不自动转换为个人对话，除非能保证顺序和语义 |
 | Task Artifacts | 用户明确选择后导入个人成果区 |
-| Runtime Sessions/Runs | 不迁移，只保留诊断或审计快照 |
+| 旧 Runtime Sessions/Runs | 不迁移，只保留诊断或审计快照 |
 | Provider 配置 | 不迁入桌面端；V1 改为平台统一模型和服务端凭证 |
 | Skills/MCP | 迁移安装清单前重新验证兼容性，每台设备重新授权 |
 | 旧额度、余额或费用数据 | 默认不迁入；只有来源、金额、币种和账本平衡可验证时才通过专项迁移导入 |
@@ -64,7 +64,7 @@ V1 默认不做大规模旧数据迁移。
 
 账户云同步、平台模型、Token/计费、额度/积分、充值/支付/账单及 Codex 文件、工具、Skill 基线都已进入 V1，原 12 至 16 周估算失效。
 
-`已确认规划基线`：6 至 8 人具备桌面、安全、云同步、支付计费和 Agent Runtime 经验的团队约 24 至 32 周；若只有 4 至 6 人，按 32 至 42 周规划。该估算允许账户/商业平台与桌面骨架并行，仍需在技术 Spike、支付渠道和属地合规确认后重估。
+`已确认规划基线`：6 至 8 人具备桌面、安全、云同步、支付计费和 Pi 集成经验的团队约 24 至 32 周；若只有 4 至 6 人，按 32 至 42 周规划。该估算允许账户/商业平台与桌面骨架并行，仍需在支付渠道和属地合规确认后重估。
 
 ### Phase 0：产品决策，1 至 2 周
 
@@ -83,7 +83,7 @@ V1 默认不做大规模旧数据迁移。
 - Electron Main、Preload Bridge 和 React Renderer。
 - 新对话、历史、搜索、设置壳。
 - Conversation/Message 存储。
-- Fake Pi Host test double 的流式、停止、失败和重试；只验证产品/宿主合同，不作为候选生产 harness。
+- 维护中的 Pi 包、`AgentSession` 原生事件、停止、失败和产品事件投影。
 - Windows 和 macOS 安装包及安全基线测试。
 
 退出条件：无需文件和工具即可稳定完成日常聊天闭环。
@@ -110,11 +110,11 @@ V1 默认不做大规模旧数据迁移。
 
 退出条件：[11-billing-and-commerce-contract.md](11-billing-and-commerce-contract.md) 的个人商业闭环和所有资金硬门禁通过，测试资金可以逐笔重建且没有重复扣费/入账。
 
-### Phase 4：Pi Harness、文件与成果，3 至 4 周
+### Phase 4：文件、成果与 Pi Session 恢复，3 至 4 周
 
-- 接入并固定维护中的 Pi 包，Pi 完整负责 Agent Loop、AgentSession、上下文压缩、内部重试和工具调用生命周期。
-- Pi Host 负责隔离、进程监督、产品 ID 绑定和事件翻译，不实现第二套 harness。
-- 平台模型目录和明确选择通过 Platform Model Gateway 接入 Pi。
+- 在既有 Pi Host 上完成文件上下文、长会话、SessionManager 恢复、压缩和崩溃行为。
+- Pi 继续完整负责 Agent Loop、AgentSession、上下文压缩、内部重试和工具调用生命周期。
+- Pi Host 只负责隔离、进程监督、产品上下文和事件投影。
 - 文件/文件夹授权、解析、引用、云副本和个人文件区。
 - DOCX、XLSX、PPTX、PDF、图片和 HTML 的创建/编辑/预览/版本。
 - 真实流式、停止、长上下文和错误恢复。
@@ -155,7 +155,6 @@ V1 默认不做大规模旧数据迁移。
 V1 建议使用本地/账户级功能开关控制：
 
 - 新聊天客户端入口。
-- 真实 Runtime。
 - 文件和成果。
 - 高风险工具。
 - Skill/MCP 分批启用。

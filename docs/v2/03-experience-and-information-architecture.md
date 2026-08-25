@@ -1,6 +1,6 @@
 # V1 体验与信息架构合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_NOT_AUTHORIZED`
+> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
 >
 > 合同类型：ChatGPT/WorkBuddy 式个人客户端导航、聊天界面和交互边界
 
@@ -87,7 +87,7 @@ React Renderer 使用应用内部路由。V1 不以公开 Web 站点作为主客
 - 可折叠的本次 Token、实际模型、价格快照和费用详情。
 - 重试、复制、反馈和继续操作。
 
-原始 Tool Call JSON、Runtime Session ID 和内部事件不能作为普通消息主体。
+原始 Tool Call JSON、Pi Session ID 和内部事件不能作为普通消息主体。
 
 ## 7. 对话分支与编辑
 
@@ -96,7 +96,7 @@ React Renderer 使用应用内部路由。V1 不以公开 Web 站点作为主客
 - 旧结果不得被静默覆盖。
 - UI 必须允许识别当前分支或版本。
 - 搜索和历史默认回到最后活跃分支。
-- 分支实现不强制暴露 Runtime 的 fork 概念。
+- 分支实现不暴露 Pi Session 的内部结构。
 
 ## 8. 长任务体验
 
@@ -195,7 +195,7 @@ React Renderer 使用应用内部路由。V1 不以公开 Web 站点作为主客
 | 需要权限 | 需要你的允许 | 查看范围、允许或拒绝 |
 | 模型失败 | 本次回答未完成 | 重试或切换模型 |
 | 工具失败 | 某项操作未完成 | 查看原因、重试或继续 |
-| Runtime 中断 | 执行意外中断 | 恢复、重试或保留已有结果 |
+| Pi Host 中断 | 执行意外中断 | 恢复、重试或保留已有结果 |
 | 同步失败 | 还有内容未同步 | 重试、查看对象或保持离线 |
 | Token 记录延迟 | 本次用量稍后更新 | 稍后刷新，不重复执行任务 |
 | 费用待核算 | 本次费用正在确认 | 查看已预留上限，稍后自动更新 |

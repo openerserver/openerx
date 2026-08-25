@@ -24,10 +24,11 @@ interface PendingRequest {
 
 export class AppServiceSupervisor {
   readonly #profileDirectory: string;
+  readonly #piHostEntry: string;
   readonly #listeners = new Set<(event: ChatEvent) => void>();
   readonly #pending = new Map<string, PendingRequest>();
   #appProcess: UtilityProcess | null = null;
-  #runtimeProcess: UtilityProcess | null = null;
+  #piHostProcess: UtilityProcess | null = null;
   #mainPort: MessagePortMain | null = null;
   #ready: Promise<void> | null = null;
   #resolveReady: (() => void) | null = null;
@@ -36,8 +37,9 @@ export class AppServiceSupervisor {
   #restartCount = 0;
   #handshakeComplete = false;
 
-  constructor(profileDirectory: string) {
+  constructor(profileDirectory: string, piHostEntry = "pi-host.js") {
     this.#profileDirectory = profileDirectory;
+    this.#piHostEntry = piHostEntry;
   }
 
   async start(): Promise<void> {
@@ -53,9 +55,9 @@ export class AppServiceSupervisor {
     this.#mainPort?.close();
     this.#mainPort = null;
     this.#appProcess?.kill();
-    this.#runtimeProcess?.kill();
+    this.#piHostProcess?.kill();
     this.#appProcess = null;
-    this.#runtimeProcess = null;
+    this.#piHostProcess = null;
     this.#rejectAll(new Error("App Service stopped"));
   }
 
@@ -88,7 +90,7 @@ export class AppServiceSupervisor {
 
   #spawn(): void {
     const appNonce = randomBytes(32).toString("hex");
-    const runtimeNonce = randomBytes(32).toString("hex");
+    const piHostNonce = randomBytes(32).toString("hex");
     this.#emitStatus(this.#restartCount === 0 ? "starting" : "restarting");
     this.#handshakeComplete = false;
     this.#ready = new Promise<void>((resolve, reject) => {
@@ -97,32 +99,37 @@ export class AppServiceSupervisor {
     });
 
     const mainChannel = new MessageChannelMain();
-    const runtimeChannel = new MessageChannelMain();
+    const piHostChannel = new MessageChannelMain();
     this.#mainPort = mainChannel.port1;
-    this.#runtimeProcess = utilityProcess.fork(path.join(__dirname, "runtime-host.js"), [], {
-      serviceName: "OpenerX Runtime Host",
+    this.#piHostProcess = utilityProcess.fork(path.join(__dirname, this.#piHostEntry), [], {
+      serviceName: "OpenerX Pi Host",
     });
     this.#appProcess = utilityProcess.fork(path.join(__dirname, "app-service.js"), [], {
       serviceName: "OpenerX App Service",
     });
-    this.#runtimeProcess.postMessage(
-      { kind: "runtime.bootstrap", contractVersion: 1, nonce: runtimeNonce },
-      [runtimeChannel.port1],
+    this.#piHostProcess.postMessage(
+      {
+        kind: "pi-host.bootstrap",
+        contractVersion: 1,
+        nonce: piHostNonce,
+        profileDirectory: this.#profileDirectory,
+      },
+      [piHostChannel.port1],
     );
     this.#appProcess.postMessage(
       {
         kind: "app-service.bootstrap",
         contractVersion: 1,
         nonce: appNonce,
-        runtimeNonce,
+        piHostNonce,
         profileDirectory: this.#profileDirectory,
       },
-      [mainChannel.port2, runtimeChannel.port2],
+      [mainChannel.port2, piHostChannel.port2],
     );
     this.#mainPort.on("message", (event) => this.#handleMessage(event.data, appNonce));
     this.#mainPort.start();
     this.#appProcess.once("exit", () => this.#handleExit("App Service"));
-    this.#runtimeProcess.once("exit", () => this.#handleExit("Runtime Host"));
+    this.#piHostProcess.once("exit", () => this.#handleExit("Pi Host"));
   }
 
   #handleMessage(data: unknown, expectedNonce: string): void {
@@ -169,11 +176,11 @@ export class AppServiceSupervisor {
   }
 
   #handleExit(processName: string): void {
-    if (this.#stopping || (!this.#appProcess && !this.#runtimeProcess)) return;
+    if (this.#stopping || (!this.#appProcess && !this.#piHostProcess)) return;
     this.#appProcess?.kill();
-    this.#runtimeProcess?.kill();
+    this.#piHostProcess?.kill();
     this.#appProcess = null;
-    this.#runtimeProcess = null;
+    this.#piHostProcess = null;
     this.#mainPort?.close();
     this.#mainPort = null;
     this.#rejectReady?.(new Error(`${processName} exited before readiness`));

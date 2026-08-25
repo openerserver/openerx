@@ -1,6 +1,6 @@
 # V1 领域与 API 合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_NOT_AUTHORIZED`
+> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
 >
 > 合同类型：Conversation-first 个人客户端对象、长任务执行对象与接口边界
 
@@ -107,7 +107,7 @@ erDiagram
 - `createdAt`、`updatedAt`、`archivedAt`、`deletedAt`
 - `revision`、`syncState` 和 `lastSyncedAt`
 
-Conversation 负责历史和上下文，不直接承载 Runtime 私有状态。
+Conversation 负责产品历史和上下文选择，不直接承载 Pi 私有 Session 状态。
 
 ### 3.3 Message 与 MessagePart
 
@@ -131,7 +131,7 @@ Message 表示一轮用户、助手、系统或工具可见消息。MessagePart 
 
 - Attachment 是某条消息或对话对文件的引用。
 - PersonalFile 是用户可再次查找和使用的个人文件记录。
-- 文件内容进入受控存储，永久引用不得依赖 Runtime 临时路径。
+- 文件内容进入受控存储，永久引用不得依赖 Pi 临时路径。
 - 原始文件和生成成果使用独立版本，不静默覆盖。
 - 本地句柄、绝对路径和云对象引用分开保存；云同步不能在另一台设备伪造原设备路径权限。
 
@@ -283,7 +283,7 @@ paid/credited -> partially_refunded | refunded
 
 - 编辑旧用户消息或重新生成可以创建新分支。
 - 旧消息和结果保持可访问，除非用户明确删除。
-- 分支 ID 属于产品域，不等于 Runtime fork Session。
+- 分支 ID 属于产品域，不等于 Pi Session 分支引用。
 - 删除 Conversation 时，分支、消息、附件引用和同步副本遵循同一删除策略。
 
 ## 7. 统一事件
@@ -329,7 +329,7 @@ V1 至少支持：
 
 事件至少包含 `eventId`、`conversationId`、可选 `workItemId/runId`、`sequence`、`occurredAt`、`payloadVersion` 和 `payload`。
 
-Pi 的消息、工具、权限、压缩、重试、用量和 Session 事件在 Runtime Supervisor 中映射为上述稳定产品事件。原始 Pi payload、内部步骤和 Session 快照不是 UI 或同步合同。
+Pi 的消息、工具、权限、压缩、重试、用量和 Session 事件在 Pi Host Supervisor 中映射为上述稳定产品事件。原始 Pi payload、内部步骤和 Session 快照不是 UI 或同步合同。
 
 断线恢复使用稳定游标，不依赖内存事件列表。
 
@@ -374,7 +374,7 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 - Preload 只暴露按业务动作定义的窄接口，不暴露原始 `ipcRenderer`、Node 或文件系统对象。
 - 主进程验证 IPC sender、窗口、参数和当前权限。
 - 文件使用受控本地句柄；上传或下载云副本使用短期、账户绑定的预签名入口。
-- Runtime 原始消息不得成为 UI 的唯一读取来源。
+- Pi 原始消息不得成为 UI 的唯一读取来源。
 - V1 默认优先 IPC/进程通道，不为方便而暴露无鉴权 localhost 敏感服务。
 - 云 API 与本地 IPC 复用业务 Schema，但独立处理认证、重放、设备撤销和账户隔离。
 - 金额使用币种最小单位整数，积分使用整数；货币计算不得使用二进制浮点数。
@@ -390,8 +390,8 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 
 - 领域合同不依赖 SQLite 或 PostgreSQL 的专有对象。
 - 文件存储与元数据存储分开。
-- 云同步通过显式 Sync Adapter 实现，不把同步状态混入 Runtime。
+- 云同步通过显式 Sync Adapter 实现，不把同步状态混入 Pi Session。
 - 账户范围内容以服务端 revision 为真值；Token 以 UsageRecord 为真值；费用与余额以服务端 ChargeRecord 和不可变账本为真值。本地缓存必须可重建。
 - 额度、积分、充值余额、支付、费用和账单只允许服务端写入，不进入普通离线同步写队列。
-- 设备级绝对路径、权限 Grant、Cookie、Shell 历史、平台密钥、诊断日志和 Runtime 临时目录禁止同步。
+- 设备级绝对路径、权限 Grant、Cookie、Shell 历史、平台密钥、诊断日志和 Pi 临时目录禁止同步。
 - 未来增加 Organization 时通过新增 Scope 迁移，不要求 V1 预建完整企业 Schema。

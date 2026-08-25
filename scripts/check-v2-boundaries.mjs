@@ -13,6 +13,7 @@ const forbiddenLegacyNames = [
   "claude-code-main",
   "pi-mono",
 ];
+const piPackagePrefix = "@earendil-works/pi-";
 
 function collectFiles(directory) {
   const files = [];
@@ -72,11 +73,36 @@ const importPattern = /(?:from\s*|import\s*\(|require\s*\()\s*["']([^"']+)["']/g
 for (const filePath of files) {
   const owner = workspaceOwner(filePath);
   const source = readFileSync(filePath, "utf8");
+  const isTestFile = filePath
+    .split(path.sep)
+    .some((segment) => ["test", "tests", "__tests__"].includes(segment));
+  if (!isTestFile && /\b(?:RuntimeAdapter|FakeRuntimeAdapter)\b/.test(source)) {
+    violations.push(
+      `${path.relative(repositoryRoot, filePath)} defines a second harness abstraction; use Pi AgentSession directly`,
+    );
+  }
   for (const match of source.matchAll(importPattern)) {
     const specifier = match[1];
     if (forbiddenLegacyNames.some((name) => specifier.includes(name))) {
       violations.push(
         `${path.relative(repositoryRoot, filePath)} imports legacy path ${specifier}`,
+      );
+      continue;
+    }
+
+    if (
+      specifier.startsWith(piPackagePrefix) &&
+      !isTestFile &&
+      !(owner.kind === "packages" && owner.name === "pi-host")
+    ) {
+      violations.push(
+        `${path.relative(repositoryRoot, filePath)} imports Pi outside packages/pi-host`,
+      );
+      continue;
+    }
+    if (!isTestFile && specifier.includes("/providers/faux")) {
+      violations.push(
+        `${path.relative(repositoryRoot, filePath)} imports Pi faux provider outside tests`,
       );
       continue;
     }

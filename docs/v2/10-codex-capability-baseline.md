@@ -1,6 +1,6 @@
 # V1 Codex 文件、工具与 Skill 能力基线合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_NOT_AUTHORIZED`
+> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
 >
 > 基线日期：2026-08-25
 >
@@ -32,7 +32,7 @@
 | FILE-04 | 创建与编辑 | 可创建、修改、重命名和保存文本、代码、文档、表格、演示文稿及结构化文件 | 不静默覆盖原文件；修改形成版本或可审阅差异 |
 | FILE-05 | 办公文件预览 | DOCX、XLSX、PPTX 和 PDF 可在客户端预览 | 预览失败不影响下载或另存 |
 | FILE-06 | 图片与 HTML | 常见图片可查看；HTML 可在隔离环境中查看渲染结果和源码 | HTML 不获得桌面 Bridge 或 Node 权限 |
-| FILE-07 | 成果复用 | 生成文件可打开、下载、另存、再次加入对话和生成新版本 | Artifact 使用稳定 ID，不依赖 Runtime 临时路径 |
+| FILE-07 | 成果复用 | 生成文件可打开、下载、另存、再次加入对话和生成新版本 | Artifact 使用稳定 ID，不依赖 Pi 临时路径 |
 | FILE-08 | 云同步 | 对话附件云副本、个人文件记录和成果版本可随账户同步 | 本地绝对路径和设备授权不跨设备继承 |
 
 首批解析与成果格式至少包括：PDF、DOCX、XLSX、CSV、PPTX、TXT、Markdown、常见代码/JSON/YAML、PNG、JPEG、WebP 和 HTML。加密、损坏、超大或不支持的文件必须给出可操作错误。

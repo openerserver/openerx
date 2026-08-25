@@ -58,8 +58,8 @@ const config: ForgeConfig = {
           target: "main",
         },
         {
-          entry: "src/utility/runtime-host.ts",
-          config: "vite.runtime-host.config.mts",
+          entry: "src/utility/pi-host.ts",
+          config: "vite.pi-host.config.mts",
           target: "main",
         },
       ],

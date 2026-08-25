@@ -54,7 +54,7 @@ try {
     .getByText(/第 2 轮回答/)
     .waitFor();
 
-  await page.getByLabel("发送消息").fill("写 2000 字 [FAKE_SLOW]");
+  await page.getByLabel("发送消息").fill("写 2000 字 [PI_TEST_SLOW]");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   const runningMessage = page.locator(".message-assistant").last();
   await runningMessage.locator(".status-streaming").waitFor();
@@ -65,7 +65,7 @@ try {
   await page.locator(".message-assistant").last().locator(".status-completed").waitFor();
   await page.getByLabel("分支").waitFor();
 
-  await page.getByLabel("发送消息").fill("崩溃恢复 [FAKE_SLOW]");
+  await page.getByLabel("发送消息").fill("崩溃恢复 2000 字 [PI_TEST_SLOW]");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await page.locator(".message-assistant").last().locator(".status-streaming").waitFor();
   await application.evaluate(() => {

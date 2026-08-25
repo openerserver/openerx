@@ -11,7 +11,7 @@ a superseding ADR that records migration and rollback impact.
 | [ADR-V2-004](004-ipc-contracts.md) | Main/Preload/Renderer IPC contract | Accepted |
 | [ADR-V2-005](005-local-storage.md) | Local database, migration, encryption and cache cleanup | Accepted |
 | [ADR-V2-006](006-app-service-process.md) | App Service process shape and authentication | Accepted |
-| [ADR-V2-007](007-runtime-adapter-versioning.md) | Pi-owned harness, host boundary and version strategy | Accepted |
+| [ADR-V2-007](007-pi-harness-boundary.md) | Pi owns the agent harness | Accepted and implemented |
 | [ADR-V2-008](008-sync-cursor-and-conflicts.md) | Cloud objects, sync cursor and conflict strategy | Accepted |
 | [ADR-V2-009](009-device-session-credentials.md) | Email verification, device credentials and session refresh | Accepted |
 

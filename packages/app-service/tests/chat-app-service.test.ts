@@ -1,42 +1,98 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { RuntimeEventFrame, RuntimeStartFrame } from "@openerx/contracts";
-import { FakeRuntimeAdapter, type RuntimeHandle } from "@openerx/runtime-sdk";
+import type { PiHostEventFrame, PiPromptFrame } from "@openerx/contracts";
 import { ChatRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it } from "vitest";
-import { ChatAppService, type RuntimeClient } from "../src";
+import { ChatAppService, type PiHostClient } from "../src";
 
-class AdapterRuntimeClient implements RuntimeClient {
-  readonly #adapter = new FakeRuntimeAdapter({ chunkDelayMs: 1 });
-  readonly #listeners = new Set<(event: RuntimeEventFrame) => void>();
-  readonly #handles = new Map<string, RuntimeHandle>();
+interface TestGeneration {
+  controller: AbortController;
+  sequence: number;
+  terminal: boolean;
+}
 
-  async start(frame: RuntimeStartFrame): Promise<void> {
-    const handle = await this.#adapter.start({ conversationId: frame.conversationId });
-    this.#handles.set(frame.generationId, handle);
-    await this.#adapter.send(handle, {
-      assistantMessageId: frame.assistantMessageId,
-      history: frame.history,
-    });
-    void this.#pump(frame.generationId, handle);
+class ScriptedPiHostClient implements PiHostClient {
+  readonly #listeners = new Set<(event: PiHostEventFrame) => void>();
+  readonly #generations = new Map<string, TestGeneration>();
+  readonly #failedPrompts = new Set<string>();
+
+  async prompt(frame: PiPromptFrame): Promise<void> {
+    const generation: TestGeneration = {
+      controller: new AbortController(),
+      sequence: 0,
+      terminal: false,
+    };
+    this.#generations.set(frame.generationId, generation);
+    void this.#run(frame, generation);
   }
 
-  async stop(generationId: string): Promise<void> {
-    const handle = this.#handles.get(generationId);
-    if (handle) await this.#adapter.stop(handle);
+  async abort(generationId: string): Promise<void> {
+    const generation = this.#generations.get(generationId);
+    if (!generation) return;
+    generation.controller.abort();
+    this.#emit(generationId, generation, { type: "stopped" });
   }
 
-  onEvent(listener: (event: RuntimeEventFrame) => void): () => void {
+  onEvent(listener: (event: PiHostEventFrame) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
 
-  async #pump(generationId: string, handle: RuntimeHandle): Promise<void> {
-    for await (const event of this.#adapter.stream(handle)) {
-      const frame: RuntimeEventFrame = { kind: "runtime.event", generationId, ...event };
-      for (const listener of this.#listeners) listener(frame);
+  async #run(frame: PiPromptFrame, generation: TestGeneration): Promise<void> {
+    const prompt = frame.history.at(-1)?.text ?? "";
+    const shouldFail = prompt.includes("[PI_TEST_FAIL]") && !this.#failedPrompts.has(prompt);
+    if (shouldFail) this.#failedPrompts.add(prompt);
+    const response = this.#response(frame);
+    const chunks = Array.from({ length: Math.ceil(response.length / 5) }, (_, index) =>
+      response.slice(index * 5, index * 5 + 5),
+    );
+    for (let index = 0; index < chunks.length; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      if (generation.controller.signal.aborted || generation.terminal) return;
+      this.#emit(frame.generationId, generation, { type: "delta", delta: chunks[index] });
+      if (shouldFail && index === 1) {
+        this.#emit(frame.generationId, generation, {
+          type: "failed",
+          errorCode: "PI_TEST_PROVIDER_FAILURE",
+        });
+        return;
+      }
     }
+    this.#emit(frame.generationId, generation, { type: "completed" });
+  }
+
+  #response(frame: PiPromptFrame): string {
+    const prompt = frame.history.at(-1)?.text ?? "";
+    if (prompt.includes("法国的首都")) return "巴黎。";
+    if (prompt.includes("2000 字") || prompt.includes("[PI_TEST_SLOW]")) {
+      return "这是用于验证停止后不再追加内容的固定段落。".repeat(80);
+    }
+    return `Pi AgentSession 已收到：${prompt}`;
+  }
+
+  #emit(
+    generationId: string,
+    generation: TestGeneration,
+    event: Pick<PiHostEventFrame, "type"> & Partial<Pick<PiHostEventFrame, "delta" | "errorCode">>,
+  ): void {
+    if (generation.terminal) return;
+    generation.sequence += 1;
+    const frame: PiHostEventFrame = {
+      kind: "pi.product-event",
+      generationId,
+      eventId: crypto.randomUUID(),
+      sequence: generation.sequence,
+      occurredAt: new Date().toISOString(),
+      type: event.type,
+      ...(event.delta === undefined ? {} : { delta: event.delta }),
+      ...(event.errorCode === undefined ? {} : { errorCode: event.errorCode }),
+    };
+    if (event.type !== "delta") {
+      generation.terminal = true;
+      this.#generations.delete(generationId);
+    }
+    for (const listener of this.#listeners) listener(frame);
   }
 }
 
@@ -47,7 +103,7 @@ function createService(): ChatAppService {
   temporaryDirectories.push(directory);
   return new ChatAppService(
     new ChatRepository(path.join(directory, "chat.sqlite")),
-    new AdapterRuntimeClient(),
+    new ScriptedPiHostClient(),
   );
 }
 
@@ -74,7 +130,7 @@ async function waitForTerminal(service: ChatAppService, conversationId: string):
 }
 
 describe("ChatAppService", () => {
-  it("runs a typed command through Fake Runtime into durable conversation state", async () => {
+  it("projects Pi Host events into durable conversation state", async () => {
     const service = createService();
     const receipt = (await service.handle({
       command: "chat.send",
@@ -94,13 +150,13 @@ describe("ChatAppService", () => {
     service.close();
   });
 
-  it("stops a long generation without accepting later runtime deltas", async () => {
+  it("stops a long generation without accepting later Pi deltas", async () => {
     const service = createService();
     const receipt = (await service.handle({
       command: "chat.send",
       input: {
         conversationId: null,
-        text: "写 2000 字 [FAKE_SLOW]",
+        text: "写 2000 字 [PI_TEST_SLOW]",
         idempotencyKey: "service-stop-0001",
       },
     })) as { conversationId: string; assistantMessageId: string };
@@ -126,7 +182,7 @@ describe("ChatAppService", () => {
       command: "chat.send",
       input: {
         conversationId: null,
-        text: "请失败 [FAKE_FAIL]",
+        text: "请失败 [PI_TEST_FAIL]",
         idempotencyKey: "service-fail-0001",
       },
     })) as { conversationId: string; assistantMessageId: string };

@@ -6,18 +6,18 @@
   "main": ".vite/build/main.js",
   "scripts": {
     "start": "electron-forge start",
-    "build": "electron-forge package",
-    "package": "electron-forge package",
-    "make": "electron-forge make",
+    "build": "node scripts/clean-test-build.mjs && electron-forge package",
+    "package": "node scripts/clean-test-build.mjs && electron-forge package",
+    "make": "node scripts/clean-test-build.mjs && electron-forge make",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:e2e": "node scripts/e2e-chat.mjs",
+    "test:e2e": "vite build --config vite.pi-host-test.config.mts && node scripts/e2e-chat.mjs",
     "verify:fuses": "node scripts/verify-packaged-fuses.mjs"
   },
   "dependencies": {
     "@openerx/app-service": "0.0.0",
     "@openerx/contracts": "0.0.0",
-    "@openerx/runtime-host": "0.0.0",
+    "@openerx/pi-host": "0.0.0",
     "@tanstack/react-query": "5.102.3",
     "electron-squirrel-startup": "1.0.1",
     "react": "19.2.8",
@@ -27,6 +27,7 @@
     "remark-gfm": "4.0.1"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.3",
     "@electron-forge/cli": "7.11.2",
     "@electron-forge/maker-dmg": "7.11.2",
     "@electron-forge/maker-squirrel": "7.11.2",

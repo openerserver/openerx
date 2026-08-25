@@ -2,23 +2,23 @@ import { randomUUID } from "node:crypto";
 import type {
   ChatCommandEnvelope,
   ChatEvent,
-  RuntimeEventFrame,
-  RuntimeStartFrame,
+  PiHostEventFrame,
+  PiPromptFrame,
 } from "@openerx/contracts";
 import type { ChatRepository, GenerationDraft } from "@openerx/storage";
-import type { RuntimeClient } from "./runtime-client";
+import type { PiHostClient } from "./pi-host-client";
 
 export class ChatAppService {
   readonly #repository: ChatRepository;
-  readonly #runtime: RuntimeClient;
+  readonly #piHost: PiHostClient;
   readonly #listeners = new Set<(event: ChatEvent) => void>();
   readonly #generationByMessage = new Map<string, string>();
   readonly #messageByGeneration = new Map<string, string>();
 
-  constructor(repository: ChatRepository, runtime: RuntimeClient) {
+  constructor(repository: ChatRepository, piHost: PiHostClient) {
     this.#repository = repository;
-    this.#runtime = runtime;
-    this.#runtime.onEvent((event) => this.#handleRuntimeEvent(event));
+    this.#piHost = piHost;
+    this.#piHost.onEvent((event) => this.#handlePiEvent(event));
   }
 
   initialize(): ChatEvent[] {
@@ -56,7 +56,7 @@ export class ChatAppService {
         const generationId = this.#generationByMessage.get(request.input.assistantMessageId);
         if (generationId) {
           this.#forgetGeneration(generationId);
-          await this.#runtime.stop(generationId);
+          await this.#piHost.abort(generationId);
         }
         return result.message;
       }
@@ -113,34 +113,34 @@ export class ChatAppService {
     for (const event of draft.events) this.#emit(event);
     if (!draft.created) return;
     const generationId = randomUUID();
-    const frame: RuntimeStartFrame = {
-      kind: "runtime.start",
+    const frame: PiPromptFrame = {
+      kind: "pi.session.prompt",
       generationId,
       conversationId: draft.receipt.conversationId,
       assistantMessageId: draft.receipt.assistantMessageId,
-      history: this.#repository.runtimeHistory(draft.receipt.assistantMessageId),
+      history: this.#repository.piHistory(draft.receipt.assistantMessageId),
     };
     this.#generationByMessage.set(draft.receipt.assistantMessageId, generationId);
     this.#messageByGeneration.set(generationId, draft.receipt.assistantMessageId);
     try {
-      await this.#runtime.start(frame);
+      await this.#piHost.prompt(frame);
     } catch {
-      const event = this.#repository.appendRuntimeEvent(draft.receipt.assistantMessageId, {
+      const event = this.#repository.appendPiEvent(draft.receipt.assistantMessageId, {
         eventId: randomUUID(),
         sequence: 1,
         occurredAt: new Date().toISOString(),
         type: "failed",
-        errorCode: "RUNTIME_UNAVAILABLE",
+        errorCode: "PI_HOST_UNAVAILABLE",
       });
       this.#forgetGeneration(generationId);
       if (event) this.#emit(event);
     }
   }
 
-  #handleRuntimeEvent(frame: RuntimeEventFrame): void {
+  #handlePiEvent(frame: PiHostEventFrame): void {
     const assistantMessageId = this.#messageByGeneration.get(frame.generationId);
     if (!assistantMessageId) return;
-    const event = this.#repository.appendRuntimeEvent(assistantMessageId, {
+    const event = this.#repository.appendPiEvent(assistantMessageId, {
       eventId: frame.eventId,
       sequence: frame.sequence,
       occurredAt: frame.occurredAt,

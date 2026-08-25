@@ -28,6 +28,8 @@
     "check:v2": "npm run check:boundaries:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.3",
+    "@earendil-works/pi-coding-agent": "0.84.3",
     "@biomejs/biome": "2.5.10",
     "jsdom": "29.0.0",
     "typescript": "6.0.3",

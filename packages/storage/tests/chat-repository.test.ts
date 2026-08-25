@@ -26,14 +26,14 @@ describe("ChatRepository", () => {
       text: "法国的首都是哪里？",
       idempotencyKey: "send-france-0001",
     });
-    repository.appendRuntimeEvent(draft.receipt.assistantMessageId, {
+    repository.appendPiEvent(draft.receipt.assistantMessageId, {
       eventId: crypto.randomUUID(),
       sequence: 1,
       occurredAt: new Date().toISOString(),
       type: "delta",
       delta: "巴黎",
     });
-    repository.appendRuntimeEvent(draft.receipt.assistantMessageId, {
+    repository.appendPiEvent(draft.receipt.assistantMessageId, {
       eventId: crypto.randomUUID(),
       sequence: 2,
       occurredAt: new Date().toISOString(),
@@ -61,7 +61,7 @@ describe("ChatRepository", () => {
     });
     expect(duplicate.created).toBe(false);
     expect(duplicate.receipt).toEqual(first.receipt);
-    repository.appendRuntimeEvent(first.receipt.assistantMessageId, {
+    repository.appendPiEvent(first.receipt.assistantMessageId, {
       eventId: crypto.randomUUID(),
       sequence: 1,
       occurredAt: new Date().toISOString(),
@@ -81,7 +81,7 @@ describe("ChatRepository", () => {
       "",
     ]);
 
-    repository.appendRuntimeEvent(edited.receipt.assistantMessageId, {
+    repository.appendPiEvent(edited.receipt.assistantMessageId, {
       eventId: crypto.randomUUID(),
       sequence: 1,
       occurredAt: new Date().toISOString(),
@@ -108,7 +108,7 @@ describe("ChatRepository", () => {
       text: "长响应",
       idempotencyKey: "restart-send-0001",
     });
-    firstRepository.appendRuntimeEvent(draft.receipt.assistantMessageId, {
+    firstRepository.appendPiEvent(draft.receipt.assistantMessageId, {
       eventId: crypto.randomUUID(),
       sequence: 1,
       occurredAt: new Date().toISOString(),

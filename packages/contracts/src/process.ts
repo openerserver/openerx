@@ -10,7 +10,7 @@ export const appServiceBootstrapSchema = z
     kind: z.literal("app-service.bootstrap"),
     contractVersion: z.literal(appServiceContractVersion),
     nonce: processNonceSchema,
-    runtimeNonce: processNonceSchema,
+    piHostNonce: processNonceSchema,
     profileDirectory: z.string().min(1),
   })
   .strict();

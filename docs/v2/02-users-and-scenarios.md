@@ -1,6 +1,6 @@
 # V1 用户与场景合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_NOT_AUTHORIZED`
+> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
 >
 > 合同类型：个人客户端用户画像、核心任务与场景优先级
 
@@ -98,7 +98,7 @@ V1 可以保留个人高级设置和诊断，但不能以这些未来角色为�
 
 - 搜索结果能够回到正确消息或成果。
 - 删除和保留行为有明确说明。
-- Runtime Session 失效不影响历史阅读。
+- Pi Session/AgentSession 失效不影响历史阅读。
 - 同步状态、保存位置、待同步项目和最后同步时间对用户透明。
 - 在另一台已登录设备可恢复核心对话、附件云副本和成果。
 
@@ -160,7 +160,7 @@ V1 可以保留个人高级设置和诊断，但不能以这些未来角色为�
 - 新对话和流式交互。
 - 多文件上传、解析和上下文选择。
 - 表格分析和确定性计算。
-- Runtime 与工具调用。
+- Pi AgentSession 与工具调用。
 - 长任务进度、停止和恢复。
 - 文档、XLSX、PPTX 成果。
 - 对话历史和成果再次访问。

@@ -1,2 +1,2 @@
 export * from "./chat-app-service";
-export * from "./runtime-client";
+export * from "./pi-host-client";

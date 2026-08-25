@@ -25,6 +25,6 @@
 ## Consequences
 
 - Refresh/deep-link behavior works identically in dev server and packaged app.
-- Runtime/session state cannot silently become conversation history in Renderer memory.
+- Pi Session state cannot silently become conversation history in Renderer memory.
 - A larger UI system can be added only after its bundle, accessibility and design-token impact are
   measured against this boundary.

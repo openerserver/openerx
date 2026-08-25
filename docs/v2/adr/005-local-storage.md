@@ -7,7 +7,7 @@
 ## Decision
 
 1. Use SQLite through Node 24 `node:sqlite`, isolated behind `packages/storage` interfaces and owned
-   exclusively by App Service. Renderer, Preload and Runtime never open the database.
+   exclusively by App Service. Renderer, Preload and Pi Host never open the database.
 2. Database access executes outside Electron Main so synchronous SQLite work cannot block window or
    permission handling. WAL mode, foreign keys and an explicit busy timeout are enabled at open.
 3. Schema migrations are ordered, checksummed and transactional. Startup refuses to open a database

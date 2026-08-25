@@ -1,20 +1,28 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  FakeRuntimeAdapter,
-  type RuntimeEvent,
-  type RuntimeInputMessage,
-} from "@openerx/runtime-sdk";
+import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import type { PiHistoryMessage } from "@openerx/contracts";
+import { createProductPiSession, ModelRuntime } from "@openerx/pi-host";
 import { ChatRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it } from "vitest";
 
+interface ObservedPiEvent {
+  type: "delta" | "completed" | "stopped" | "failed";
+  delta?: string;
+}
+
 const temporaryDirectories: string[] = [];
 
-function databasePath(): string {
-  const directory = mkdtempSync(path.join(tmpdir(), "openerx-golden-chat-"));
+function temporaryDirectory(prefix: string): string {
+  const directory = mkdtempSync(path.join(tmpdir(), prefix));
   temporaryDirectories.push(directory);
-  return path.join(directory, "chat.sqlite");
+  return directory;
+}
+
+function databasePath(): string {
+  return path.join(temporaryDirectory("openerx-golden-chat-"), "chat.sqlite");
 }
 
 afterEach(() => {
@@ -23,77 +31,187 @@ afterEach(() => {
   }
 });
 
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        typeof part === "object" &&
+        part !== null &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part &&
+        typeof part.text === "string",
+    )
+    .map(({ text }) => text)
+    .join("");
+}
+
+function responseFor(context: Context): AssistantMessage {
+  const userMessages = context.messages.filter(({ role }) => role === "user");
+  const latestUser = contentText(userMessages.at(-1)?.content);
+  const userTurns = userMessages.length;
+
+  if (latestUser.includes("法国的首都")) return fauxAssistantMessage("巴黎。");
+  if (latestUser.includes("正式邮件") || latestUser.includes("项目延期说明")) {
+    return fauxAssistantMessage(
+      [
+        "主题：项目延期说明",
+        "",
+        "您好：",
+        "",
+        "现将项目延期说明整理如下。具体日期、人员和范围保持与原文一致，不补充未提供的信息。",
+        "",
+        "此致",
+        "敬礼",
+      ].join("\n"),
+    );
+  }
+  if (latestUser.includes("中英双向翻译") || latestUser.includes("保留 API")) {
+    return fauxAssistantMessage(
+      [
+        "English: OpenerX API version 2.0 supports 24 requests.",
+        "中文：OpenerX API 版本 2.0 支持 24 个请求。",
+      ].join("\n"),
+    );
+  }
+  if (latestUser.includes("代码块") && latestUser.includes("表格")) {
+    return fauxAssistantMessage(
+      [
+        "```ts",
+        'const client = "OpenerX";',
+        "```",
+        "",
+        "| 项目 | 状态 | 版本 |",
+        "| --- | --- | --- |",
+        "| Pi AgentSession | ready | 0.84.3 |",
+      ].join("\n"),
+    );
+  }
+  if (latestUser.includes("2000 字") || latestUser.includes("[PI_TEST_SLOW]")) {
+    return fauxAssistantMessage(
+      `长响应开始。${"这是用于验证停止后不再追加内容的固定段落。".repeat(80)}`,
+    );
+  }
+  if (userTurns >= 2) {
+    return fauxAssistantMessage(
+      `这是第 ${userTurns} 轮回答。我仍记得当前 Pi 上下文共有 ${context.messages.length} 条消息。`,
+    );
+  }
+  return fauxAssistantMessage(`Pi AgentSession 已收到：${latestUser}`);
+}
+
 async function runPrompt(
-  adapter: FakeRuntimeAdapter,
-  history: RuntimeInputMessage[],
-): Promise<{ text: string; events: RuntimeEvent[] }> {
-  const handle = await adapter.start({ conversationId: crypto.randomUUID() });
-  await adapter.send(handle, { assistantMessageId: crypto.randomUUID(), history });
-  const events: RuntimeEvent[] = [];
-  for await (const event of adapter.stream(handle)) events.push(event);
+  history: PiHistoryMessage[],
+  options: { abortAfterFirstDelta?: boolean; tokensPerSecond?: number } = {},
+): Promise<{ text: string; events: ObservedPiEvent[]; activeTools: string[] }> {
+  const root = temporaryDirectory("openerx-pi-golden-");
+  const cwd = path.join(root, "workspace");
+  const agentDir = path.join(root, "agent");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(agentDir, { recursive: true });
+  const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+  const faux = fauxProvider({
+    tokensPerSecond: options.tokensPerSecond ?? 10_000,
+    tokenSize: { min: 1, max: 3 },
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  faux.setResponses([(context) => responseFor(context)]);
+  const prompt = history.at(-1);
+  if (prompt?.role !== "user") throw new Error("Golden prompt must end with user input");
+  const { session } = await createProductPiSession({
+    cwd,
+    agentDir,
+    history: history.slice(0, -1),
+    modelRuntime,
+    model: faux.getModel(),
+  });
+  const events: ObservedPiEvent[] = [];
+  let abortRequested = false;
+  const unsubscribe = session.subscribe((event) => {
+    if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") {
+      return;
+    }
+    events.push({ type: "delta", delta: event.assistantMessageEvent.delta });
+    if (options.abortAfterFirstDelta && !abortRequested) {
+      abortRequested = true;
+      void session.abort();
+    }
+  });
+  await session.prompt(prompt.text, { expandPromptTemplates: false });
+  await session.waitForIdle();
+  const assistant = [...session.messages]
+    .reverse()
+    .find((message): message is AssistantMessage => message.role === "assistant");
+  events.push({
+    type:
+      abortRequested || assistant?.stopReason === "aborted"
+        ? "stopped"
+        : assistant?.stopReason === "error"
+          ? "failed"
+          : "completed",
+  });
+  const activeTools = session.getActiveToolNames();
+  unsubscribe();
+  session.dispose();
   return {
     text: events
       .filter(({ type }) => type === "delta")
       .map(({ delta }) => delta)
       .join(""),
     events,
+    activeTools,
   };
 }
 
-describe("M1 Fake Runtime golden chat gates", () => {
+describe("M1 Pi AgentSession golden chat gates", () => {
   it("GT-CHAT-01..04 stream deterministic knowledge, email, translation and Markdown", async () => {
-    const adapter = new FakeRuntimeAdapter({ chunkDelayMs: 0 });
-    const knowledge = await runPrompt(adapter, [{ role: "user", text: "法国的首都是哪里？" }]);
+    const knowledge = await runPrompt([{ role: "user", text: "法国的首都是哪里？" }]);
     expect(knowledge.text).toBe("巴黎。");
     expect(knowledge.events.at(-1)?.type).toBe("completed");
     expect(knowledge.events.some(({ type }) => type === "delta")).toBe(true);
+    expect(knowledge.activeTools).toEqual([]);
 
-    const email = await runPrompt(adapter, [{ role: "user", text: "改写为正式邮件，不添加事实" }]);
+    const email = await runPrompt([{ role: "user", text: "改写为正式邮件，不添加事实" }]);
     expect(email.text).toContain("主题：项目延期说明");
     expect(email.text).toContain("不补充未提供的信息");
 
-    const translation = await runPrompt(adapter, [
+    const translation = await runPrompt([
       { role: "user", text: "中英双向翻译，保留 API、OpenerX、2.0 和 24" },
     ]);
     for (const term of ["API", "OpenerX", "2.0", "24"]) expect(translation.text).toContain(term);
     expect(translation.text).toContain("English:");
     expect(translation.text).toContain("中文：");
 
-    const markdown = await runPrompt(adapter, [
-      { role: "user", text: "生成 TypeScript 代码块和表格" },
-    ]);
+    const markdown = await runPrompt([{ role: "user", text: "生成 TypeScript 代码块和表格" }]);
     expect(markdown.text).toContain("```ts");
     expect(markdown.text).toContain("| 项目 | 状态 | 版本 |");
+    expect(markdown.text).toContain("Pi AgentSession");
   });
 
-  it("GT-CHAT-05 retains ten turns and reports observable context size", async () => {
-    const adapter = new FakeRuntimeAdapter({ chunkDelayMs: 0 });
-    const history: RuntimeInputMessage[] = [];
+  it("GT-CHAT-05 retains ten turns in Pi context", async () => {
+    const history: PiHistoryMessage[] = [];
     let finalText = "";
     for (let turn = 1; turn <= 10; turn += 1) {
       history.push({ role: "user", text: `第 ${turn} 轮追问` });
-      const result = await runPrompt(adapter, history);
+      const result = await runPrompt(history);
       finalText = result.text;
       history.push({ role: "assistant", text: finalText });
     }
     expect(finalText).toContain("第 10 轮回答");
-    expect(finalText).toContain("19 条上下文消息");
+    expect(finalText).toContain("19 条消息");
   });
 
-  it("GT-CHAT-06 stops with exactly one terminal event and no later delta", async () => {
-    const adapter = new FakeRuntimeAdapter({ chunkDelayMs: 1 });
-    const handle = await adapter.start({ conversationId: crypto.randomUUID() });
-    await adapter.send(handle, {
-      assistantMessageId: crypto.randomUUID(),
-      history: [{ role: "user", text: "生成一篇 2000 字说明 [FAKE_SLOW]" }],
-    });
-    const events: RuntimeEvent[] = [];
-    for await (const event of adapter.stream(handle)) {
-      events.push(event);
-      if (event.type === "delta") await adapter.stop(handle);
-    }
-    expect(events.filter(({ type }) => type === "stopped")).toHaveLength(1);
-    expect(events.map(({ type }) => type).lastIndexOf("delta")).toBeLessThan(events.length - 1);
+  it("GT-CHAT-06 aborts through AgentSession with one terminal event", async () => {
+    const result = await runPrompt(
+      [{ role: "user", text: "生成一篇 2000 字说明 [PI_TEST_SLOW]" }],
+      { abortAfterFirstDelta: true, tokensPerSecond: 1_000 },
+    );
+    expect(result.events.filter(({ type }) => type === "stopped")).toHaveLength(1);
+    expect(result.events.map(({ type }) => type).lastIndexOf("delta")).toBeLessThan(
+      result.events.length - 1,
+    );
   });
 
   it("GT-CHAT-07..08 retain original regeneration and edit branches", () => {
@@ -102,7 +220,7 @@ describe("M1 Fake Runtime golden chat gates", () => {
       text: "原始问题",
       idempotencyKey: "golden-original-0001",
     });
-    repository.appendRuntimeEvent(original.receipt.assistantMessageId, {
+    repository.appendPiEvent(original.receipt.assistantMessageId, {
       eventId: crypto.randomUUID(),
       sequence: 1,
       occurredAt: new Date().toISOString(),
@@ -136,7 +254,7 @@ describe("M1 Fake Runtime golden chat gates", () => {
       text: "重启测试",
       idempotencyKey: "golden-restart-0001",
     });
-    first.appendRuntimeEvent(draft.receipt.assistantMessageId, {
+    first.appendPiEvent(draft.receipt.assistantMessageId, {
       eventId: crypto.randomUUID(),
       sequence: 1,
       occurredAt: new Date().toISOString(),
