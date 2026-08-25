@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Context } from "@earendil-works/pi-ai";
 import { AccountSyncService } from "@openerx/account-sync-api";
 import { BillingLedgerService, ServerModelBilling } from "@openerx/billing-ledger-service";
@@ -9,6 +12,7 @@ import {
 } from "@openerx/contracts";
 import { IdentityService } from "@openerx/identity-api";
 import { ModelGatewayService } from "@openerx/model-gateway";
+import { ObjectStoreService } from "@openerx/object-store-api";
 import { PaymentAdapter } from "@openerx/payment-adapter";
 import { createPlatformAlphaServer, listenOnEphemeralPort } from "@openerx/platform-alpha";
 import { PricingService } from "@openerx/pricing-service";
@@ -77,6 +81,11 @@ const identity = new IdentityService(":memory:", {
   mailer: { async deliver() {} },
 });
 const sync = new AccountSyncService(":memory:");
+const objectRoot = mkdtempSync(path.join(tmpdir(), "openerx-platform-objects-"));
+const objects = new ObjectStoreService(
+  path.join(objectRoot, "objects.sqlite"),
+  path.join(objectRoot, "bytes"),
+);
 const usage = new UsageStore(":memory:");
 const billingTerms: BillingTerms = {
   version: "terms-m3-e2e-v1",
@@ -162,7 +171,7 @@ const models = new ModelGatewayService({
   },
 });
 const listener = await listenOnEphemeralPort(
-  createPlatformAlphaServer({ identity, sync, usage, models, pricing, billing, payments }),
+  createPlatformAlphaServer({ identity, sync, objects, usage, models, pricing, billing, payments }),
 );
 
 process.send?.({ kind: "platform-alpha.ready", baseUrl: listener.baseUrl });
@@ -171,6 +180,8 @@ async function shutdown(): Promise<void> {
   await listener.close();
   identity.close();
   sync.close();
+  objects.close();
+  rmSync(objectRoot, { recursive: true, force: true });
   usage.close();
   payments.close();
   billing.close();

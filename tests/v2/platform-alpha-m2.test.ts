@@ -1,8 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { AccountSyncService } from "@openerx/account-sync-api";
 import { automaticModelRef, type ModelCatalogEntry } from "@openerx/contracts";
 import { IdentityService } from "@openerx/identity-api";
 import { ModelGatewayService } from "@openerx/model-gateway";
+import { ObjectStoreService } from "@openerx/object-store-api";
 import { createPlatformAlphaServer, listenOnEphemeralPort } from "@openerx/platform-alpha";
 import { UsageStore } from "@openerx/token-usage-store";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,6 +51,11 @@ async function setup() {
     },
   });
   const sync = new AccountSyncService(":memory:");
+  const objectRoot = mkdtempSync(path.join(tmpdir(), "openerx-http-objects-"));
+  const objects = new ObjectStoreService(
+    path.join(objectRoot, "objects.sqlite"),
+    path.join(objectRoot, "bytes"),
+  );
   const usage = new UsageStore(":memory:");
   const models = new ModelGatewayService({
     catalog,
@@ -70,14 +79,16 @@ async function setup() {
     },
   });
   const listener = await listenOnEphemeralPort(
-    createPlatformAlphaServer({ identity, sync, usage, models }),
+    createPlatformAlphaServer({ identity, sync, objects, usage, models }),
   );
-  cleanups.push(
-    listener.close,
-    () => identity.close(),
-    () => sync.close(),
-    () => usage.close(),
-  );
+  cleanups.push(async () => {
+    await listener.close();
+    identity.close();
+    sync.close();
+    objects.close();
+    usage.close();
+    rmSync(objectRoot, { recursive: true, force: true });
+  });
   return { ...listener, codes };
 }
 
@@ -146,5 +157,55 @@ describe("Platform Alpha HTTP composition", () => {
     });
     const afterRevoke = await fetch(`${baseUrl}/api/v2/models`, { headers: authorization });
     expect(afterRevoke.status).toBe(401);
+  });
+
+  it("moves account-scoped artifact bytes across devices and invalidates revoked transfers", async () => {
+    const { baseUrl } = await setup();
+    const first = await signIn(baseUrl, "objects@example.com");
+    const second = await signIn(baseUrl, "objects@example.com");
+    const firstAuthorization = { authorization: `Bearer ${first.accessToken}` };
+    const secondAuthorization = { authorization: `Bearer ${second.accessToken}` };
+    const bytes = Buffer.from("M4 cross-device artifact");
+    const objectId = randomUUID();
+    const checksumSha256 = createHash("sha256").update(bytes).digest("hex");
+    const uploadIntent = await fetch(`${baseUrl}/api/v2/objects/upload-intents`, {
+      method: "POST",
+      headers: { ...firstAuthorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        objectId,
+        checksumSha256,
+        sizeBytes: bytes.byteLength,
+        mediaType: "text/plain",
+      }),
+    }).then((response) => response.json() as Promise<{ token: string }>);
+    const upload = await fetch(`${baseUrl}/api/v2/objects/transfers/${uploadIntent.token}`, {
+      method: "PUT",
+      headers: { ...firstAuthorization, "content-type": "application/octet-stream" },
+      body: bytes,
+    });
+    expect(upload.status).toBe(200);
+
+    const downloadIntent = await fetch(`${baseUrl}/api/v2/objects/${objectId}/download-intents`, {
+      method: "POST",
+      headers: secondAuthorization,
+    }).then((response) => response.json() as Promise<{ token: string }>);
+    const download = await fetch(`${baseUrl}/api/v2/objects/transfers/${downloadIntent.token}`, {
+      headers: secondAuthorization,
+    });
+    expect(await download.text()).toBe("M4 cross-device artifact");
+    expect(download.headers.get("x-openerx-checksum-sha256")).toBe(checksumSha256);
+
+    const revokedIntent = await fetch(`${baseUrl}/api/v2/objects/${objectId}/download-intents`, {
+      method: "POST",
+      headers: secondAuthorization,
+    }).then((response) => response.json() as Promise<{ token: string }>);
+    await fetch(`${baseUrl}/api/v2/devices/${second.session.sessionId}`, {
+      method: "DELETE",
+      headers: firstAuthorization,
+    });
+    const revoked = await fetch(`${baseUrl}/api/v2/objects/transfers/${revokedIntent.token}`, {
+      headers: secondAuthorization,
+    });
+    expect(revoked.status).toBe(401);
   });
 });

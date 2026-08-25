@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { PiHostEventFrame, PiPromptFrame } from "@openerx/contracts";
+import type { PiFileToolRequestFrame, PiHostEventFrame, PiPromptFrame } from "@openerx/contracts";
 import { ChatRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatAppService, type PiHostClient } from "../src";
@@ -37,6 +37,10 @@ class ScriptedPiHostClient implements PiHostClient {
   onEvent(listener: (event: PiHostEventFrame) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  onFileToolRequest(_listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void {
+    return () => undefined;
   }
 
   async #run(frame: PiPromptFrame, generation: TestGeneration): Promise<void> {

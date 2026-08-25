@@ -7,6 +7,7 @@ import {
   accountVerifyCodeInputSchema,
   billingStatementRequestSchema,
   cloudDataDeletionResultSchema,
+  cloudObjectIntentInputSchema,
   createRechargeOrderInputSchema,
   deviceDescriptorSchema,
   modelGatewayRequestSchema,
@@ -27,6 +28,22 @@ function send(response: ServerResponse, status: number, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
+function sendBytes(
+  response: ServerResponse,
+  body: Uint8Array,
+  mediaType: string,
+  checksumSha256: string,
+): void {
+  response.writeHead(200, {
+    "content-type": mediaType,
+    "content-length": String(body.byteLength),
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+    "x-openerx-checksum-sha256": checksumSha256,
+  });
+  response.end(body);
+}
+
 async function jsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -38,6 +55,18 @@ async function jsonBody(request: IncomingMessage): Promise<unknown> {
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function binaryBody(request: IncomingMessage): Promise<Uint8Array> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 50 * 1024 * 1024) throw new Error("OBJECT_TOO_LARGE");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 function bearer(request: IncomingMessage): string {
@@ -100,7 +129,9 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
       const deviceMatch = /^\/api\/v2\/devices\/([^/]+)$/.exec(url.pathname);
       if (request.method === "DELETE" && deviceMatch) {
         const input = accountRevokeDeviceInputSchema.parse({ sessionId: deviceMatch[1] });
-        send(response, 200, services.identity.revokeDevice(principal, input.sessionId));
+        const revoked = services.identity.revokeDevice(principal, input.sessionId);
+        services.objects?.revokeSession?.(input.sessionId);
+        send(response, 200, revoked);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/v2/devices") {
@@ -108,7 +139,55 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         return;
       }
       if (request.method === "DELETE" && url.pathname === "/api/v2/devices") {
-        send(response, 200, services.identity.revokeAllDevices(principal));
+        const revoked = services.identity.revokeAllDevices(principal);
+        for (const session of revoked) services.objects?.revokeSession?.(session.sessionId);
+        send(response, 200, revoked);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/objects/upload-intents") {
+        if (!services.objects) throw new Error("OBJECT_STORE_NOT_CONFIGURED");
+        const input = cloudObjectIntentInputSchema.parse(await jsonBody(request));
+        send(response, 200, services.objects.createUploadIntent(syncPrincipal(principal), input));
+        return;
+      }
+      const downloadIntentMatch = /^\/api\/v2\/objects\/([^/]+)\/download-intents$/.exec(
+        url.pathname,
+      );
+      if (request.method === "POST" && downloadIntentMatch) {
+        if (!services.objects) throw new Error("OBJECT_STORE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.objects.createDownloadIntent(
+            syncPrincipal(principal),
+            downloadIntentMatch[1] ?? "",
+          ),
+        );
+        return;
+      }
+      const transferMatch = /^\/api\/v2\/objects\/transfers\/([a-f0-9]{64})$/.exec(url.pathname);
+      if (request.method === "PUT" && transferMatch) {
+        if (!services.objects) throw new Error("OBJECT_STORE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.objects.upload(
+            syncPrincipal(principal),
+            transferMatch[1] ?? "",
+            await binaryBody(request),
+          ),
+        );
+        return;
+      }
+      if (request.method === "GET" && transferMatch) {
+        if (!services.objects) throw new Error("OBJECT_STORE_NOT_CONFIGURED");
+        const object = services.objects.download(syncPrincipal(principal), transferMatch[1] ?? "");
+        sendBytes(
+          response,
+          object.bytes,
+          object.descriptor.mediaType,
+          object.descriptor.checksumSha256,
+        );
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/v2/models") {
@@ -207,12 +286,15 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         return;
       }
       if (request.method === "DELETE" && url.pathname === "/api/v2/sync/account-data") {
+        const objectCount = services.objects?.deleteAccountData(syncPrincipal(principal)) ?? 0;
+        const deleted = services.sync.deleteAccountData(syncPrincipal(principal));
         send(
           response,
           200,
-          cloudDataDeletionResultSchema.parse(
-            services.sync.deleteAccountData(syncPrincipal(principal)),
-          ),
+          cloudDataDeletionResultSchema.parse({
+            ...deleted,
+            deletedObjects: deleted.deletedObjects + objectCount,
+          }),
         );
         return;
       }
@@ -246,7 +328,11 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         "BILLING_TERMS_NOT_ACCEPTED",
         "QUOTE_EXCEEDS_USER_LIMIT",
       ].includes(code);
-      const unavailable = ["BILLING_NOT_CONFIGURED", "PAYMENT_NOT_CONFIGURED"].includes(code);
+      const unavailable = [
+        "BILLING_NOT_CONFIGURED",
+        "PAYMENT_NOT_CONFIGURED",
+        "OBJECT_STORE_NOT_CONFIGURED",
+      ].includes(code);
       send(response, authenticationError ? 401 : paymentRequired ? 402 : unavailable ? 503 : 400, {
         error: { code, message },
       });

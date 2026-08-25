@@ -19,6 +19,11 @@ import type {
   RefundOrder,
 } from "./billing";
 import type {
+  CloudObjectDescriptor,
+  CloudObjectIntentInput,
+  CloudObjectTransferIntent,
+} from "./file";
+import type {
   ModelCatalogEntry,
   ModelGatewayRequestDto,
   ModelGatewayResponse,
@@ -66,6 +71,24 @@ export interface AccountSyncServicePort {
   listConflicts(principal: SyncPrincipal): SyncConflict[];
   resolveConflict(principal: SyncPrincipal, conflictId: string): SyncConflict;
   deleteAccountData(principal: SyncPrincipal): CloudDataDeletionResult;
+}
+
+export interface CloudObjectServicePort {
+  createUploadIntent(
+    principal: SyncPrincipal,
+    input: CloudObjectIntentInput,
+  ): CloudObjectTransferIntent;
+  upload(principal: SyncPrincipal, token: string, bytes: Uint8Array): CloudObjectDescriptor;
+  createDownloadIntent(principal: SyncPrincipal, objectId: string): CloudObjectTransferIntent;
+  download(
+    principal: SyncPrincipal,
+    token: string,
+  ): {
+    descriptor: CloudObjectDescriptor;
+    bytes: Uint8Array;
+  };
+  deleteAccountData(principal: SyncPrincipal): number;
+  revokeSession?(sessionId: string): void;
 }
 
 export interface UsageStorePort {
@@ -136,6 +159,7 @@ export interface ModelBillingPort {
 export interface PlatformAlphaServices {
   identity: IdentityServicePort;
   sync: AccountSyncServicePort;
+  objects?: CloudObjectServicePort;
   models: ModelGatewayServicePort;
   usage: UsageStorePort;
   pricing?: PricingServicePort;

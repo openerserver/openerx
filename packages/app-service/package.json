@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@openerx/contracts": "0.0.0",
+    "@openerx/file-service": "0.0.0",
     "@openerx/storage": "0.0.0"
   },
   "devDependencies": {

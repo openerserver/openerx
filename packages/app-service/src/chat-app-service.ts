@@ -3,9 +3,11 @@ import type {
   AppServiceAuthorization,
   ChatCommandEnvelope,
   ChatEvent,
+  PiFileToolRequestFrame,
   PiHostEventFrame,
   PiPromptFrame,
 } from "@openerx/contracts";
+import type { FileAppService } from "@openerx/file-service";
 import type { ChatRepository, GenerationDraft } from "@openerx/storage";
 import type { PiHostClient } from "./pi-host-client";
 import type { SyncCoordinator } from "./sync-coordinator";
@@ -16,18 +18,23 @@ export class ChatAppService {
   readonly #listeners = new Set<(event: ChatEvent) => void>();
   readonly #generationByMessage = new Map<string, string>();
   readonly #messageByGeneration = new Map<string, string>();
+  readonly #conversationByGeneration = new Map<string, string>();
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
   readonly #sync: SyncCoordinator | null;
+  readonly #files: FileAppService | null;
 
   constructor(
     repository: ChatRepository,
     piHost: PiHostClient,
     sync: SyncCoordinator | null = null,
+    files: FileAppService | null = null,
   ) {
     this.#repository = repository;
     this.#piHost = piHost;
     this.#piHost.onEvent((event) => this.#handlePiEvent(event));
+    this.#piHost.onFileToolRequest((request) => this.#handleFileToolRequest(request));
     this.#sync = sync;
+    this.#files = files;
   }
 
   initialize(): ChatEvent[] {
@@ -38,6 +45,7 @@ export class ChatAppService {
 
   close(): void {
     this.#repository.close();
+    this.#files?.close();
   }
 
   onEvent(listener: (event: ChatEvent) => void): () => void {
@@ -151,7 +159,45 @@ export class ChatAppService {
           request.input.conversationId,
           request.input.afterSequence,
         );
+      case "file.import":
+        return await this.#requiredFiles().importPaths(
+          request.input.localPaths,
+          request.input.conversationId,
+        );
+      case "file.list":
+        return this.#requiredFiles().listFiles(request.input.conversationId);
+      case "file.search":
+        return this.#requiredFiles().search(request.input.query, request.input.fileIds);
+      case "file.preview":
+        return this.#requiredFiles().previewFile(request.input.personalFileId);
+      case "file.scope.revoke":
+        return this.#requiredFiles().revokeScope(request.input.scopeId);
+      case "file.attach":
+        return this.#requiredFiles().attach(
+          request.input.conversationId,
+          request.input.personalFileId,
+        );
+      case "artifact.create":
+        return this.#requiredFiles().createArtifact(request.input);
+      case "artifact.newVersion":
+        return this.#requiredFiles().addArtifactVersion(request.input);
+      case "artifact.list":
+        return this.#requiredFiles().listArtifacts();
+      case "artifact.get":
+        return this.#requiredFiles().artifact(request.input.artifactId);
+      case "artifact.preview":
+        return this.#requiredFiles().previewArtifact(request.input.artifactId);
+      case "artifact.export":
+        return this.#requiredFiles().exportArtifact(
+          request.input.artifactId,
+          request.input.destinationPath,
+        );
     }
+  }
+
+  #requiredFiles(): FileAppService {
+    if (!this.#files) throw new Error("FILE_SERVICE_UNAVAILABLE");
+    return this.#files;
   }
 
   async #launch(draft: GenerationDraft, authorization?: AppServiceAuthorization): Promise<void> {
@@ -164,6 +210,11 @@ export class ChatAppService {
       conversationId: draft.receipt.conversationId,
       assistantMessageId: draft.receipt.assistantMessageId,
       history: this.#repository.piHistory(draft.receipt.assistantMessageId),
+      files: this.#files?.attachedFiles(draft.receipt.conversationId).map((file) => ({
+        personalFileId: file.id,
+        displayName: file.displayName,
+        format: file.format,
+      })),
       ...(authorization
         ? {
             platform: {
@@ -181,6 +232,7 @@ export class ChatAppService {
     };
     this.#generationByMessage.set(draft.receipt.assistantMessageId, generationId);
     this.#messageByGeneration.set(generationId, draft.receipt.assistantMessageId);
+    this.#conversationByGeneration.set(generationId, draft.receipt.conversationId);
     if (authorization) this.#authorizationByGeneration.set(generationId, authorization);
     try {
       await this.#piHost.prompt(frame);
@@ -216,9 +268,47 @@ export class ChatAppService {
     if (event) this.#emit(event);
   }
 
+  async #handleFileToolRequest(frame: PiFileToolRequestFrame): Promise<unknown> {
+    if (this.#conversationByGeneration.get(frame.generationId) !== frame.conversationId) {
+      throw new Error("GENERATION_NOT_ACTIVE");
+    }
+    const files = this.#requiredFiles();
+    const attached = files.attachedFiles(frame.conversationId);
+    const allowedIds = new Set(attached.map(({ id }) => id));
+    switch (frame.request.operation) {
+      case "list":
+        return attached;
+      case "search":
+        return files.search(frame.request.input.query, [...allowedIds]);
+      case "read":
+        if (!allowedIds.has(frame.request.input.personalFileId)) {
+          throw new Error("FILE_NOT_ATTACHED");
+        }
+        return files.readParsedFile(frame.request.input.personalFileId);
+      case "artifact.write": {
+        const input = frame.request.input;
+        const bytesBase64 = Buffer.from(input.content, "utf8").toString("base64");
+        return input.artifactId
+          ? files.addArtifactVersion({
+              artifactId: input.artifactId,
+              format: input.format,
+              mediaType: input.mediaType,
+              bytesBase64,
+            })
+          : files.createArtifact({
+              displayName: input.displayName,
+              format: input.format,
+              mediaType: input.mediaType,
+              bytesBase64,
+            });
+      }
+    }
+  }
+
   #forgetGeneration(generationId: string): void {
     const messageId = this.#messageByGeneration.get(generationId);
     this.#messageByGeneration.delete(generationId);
+    this.#conversationByGeneration.delete(generationId);
     this.#authorizationByGeneration.delete(generationId);
     if (messageId) this.#generationByMessage.delete(messageId);
   }

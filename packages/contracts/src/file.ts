@@ -1,0 +1,281 @@
+import { z } from "zod";
+
+const entityIdSchema = z.uuid();
+const timestampSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
+  message: "Expected an ISO timestamp",
+});
+
+export const supportedFileFormatSchema = z.enum([
+  "pdf",
+  "docx",
+  "xlsx",
+  "csv",
+  "pptx",
+  "text",
+  "markdown",
+  "code",
+  "json",
+  "yaml",
+  "png",
+  "jpeg",
+  "webp",
+  "html",
+]);
+
+export const fileParseErrorCodeSchema = z.enum([
+  "FILE_UNSUPPORTED",
+  "FILE_CORRUPT",
+  "FILE_ENCRYPTED",
+  "FILE_TOO_LARGE",
+  "FILE_SCOPE_REVOKED",
+  "FILE_SCOPE_EXPIRED",
+  "FILE_PATH_ESCAPE",
+  "FILE_SYMLINK_BLOCKED",
+  "FILE_NOT_FOUND",
+  "FILE_OCR_UNAVAILABLE",
+]);
+
+export const fileScopeSchema = z
+  .object({
+    id: entityIdSchema,
+    kind: z.enum(["file", "directory"]),
+    displayName: z.string().min(1),
+    access: z.enum(["read", "read_write"]),
+    expiresAt: timestampSchema.nullable(),
+    revokedAt: timestampSchema.nullable(),
+    createdAt: timestampSchema,
+  })
+  .strict();
+
+export const sourceLocatorSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("page"), page: z.number().int().positive() }).strict(),
+  z
+    .object({
+      kind: z.literal("sheet_range"),
+      sheet: z.string().min(1),
+      range: z.string().min(1),
+    })
+    .strict(),
+  z.object({ kind: z.literal("slide"), slide: z.number().int().positive() }).strict(),
+  z
+    .object({
+      kind: z.literal("text_range"),
+      startLine: z.number().int().positive(),
+      endLine: z.number().int().positive(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("image_region"), label: z.string().min(1) }).strict(),
+]);
+
+export const fileCitationSchema = z
+  .object({
+    id: entityIdSchema,
+    personalFileId: entityIdSchema,
+    locator: sourceLocatorSchema,
+    excerpt: z.string(),
+    confidence: z.number().min(0).max(1),
+  })
+  .strict();
+
+export const personalFileSchema = z
+  .object({
+    id: entityIdSchema,
+    ownerProfileId: z.string().min(1),
+    displayName: z.string().min(1),
+    format: supportedFileFormatSchema,
+    mediaType: z.string().min(1),
+    sizeBytes: z.number().int().nonnegative(),
+    checksumSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    objectRef: z.string().regex(/^objects\/sha256\/[a-f0-9]{2}\/[a-f0-9]{64}$/),
+    sourceScopeId: entityIdSchema.nullable(),
+    sourceRelativePath: z.string().min(1),
+    parseStatus: z.enum(["pending", "ready", "failed"]),
+    parseErrorCode: fileParseErrorCodeSchema.nullable(),
+    createdAt: timestampSchema,
+    updatedAt: timestampSchema,
+    revision: z.number().int().positive(),
+  })
+  .strict();
+
+export const attachmentSchema = z
+  .object({
+    id: entityIdSchema,
+    conversationId: entityIdSchema,
+    messageId: entityIdSchema.nullable(),
+    personalFileId: entityIdSchema,
+    createdAt: timestampSchema,
+  })
+  .strict();
+
+export const artifactVersionSchema = z
+  .object({
+    id: entityIdSchema,
+    artifactId: entityIdSchema,
+    version: z.number().int().positive(),
+    sizeBytes: z.number().int().nonnegative(),
+    checksumSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    objectRef: z.string().regex(/^objects\/sha256\/[a-f0-9]{2}\/[a-f0-9]{64}$/),
+    sourcePersonalFileId: entityIdSchema.nullable(),
+    createdAt: timestampSchema,
+  })
+  .strict();
+
+export const artifactSchema = z
+  .object({
+    id: entityIdSchema,
+    ownerProfileId: z.string().min(1),
+    displayName: z.string().min(1),
+    format: supportedFileFormatSchema,
+    mediaType: z.string().min(1),
+    currentVersion: z.number().int().positive(),
+    createdAt: timestampSchema,
+    updatedAt: timestampSchema,
+    revision: z.number().int().positive(),
+    versions: z.array(artifactVersionSchema).min(1),
+  })
+  .strict();
+
+export const personalFileSyncPayloadSchema = personalFileSchema
+  .omit({ objectRef: true, sourceScopeId: true, sourceRelativePath: true })
+  .extend({
+    cloudObjectId: entityIdSchema,
+    parsedText: z.string(),
+    citations: z.array(fileCitationSchema.omit({ personalFileId: true })),
+  })
+  .strict();
+
+export const attachmentSyncPayloadSchema = attachmentSchema;
+
+export const artifactSyncPayloadSchema = artifactSchema.omit({ versions: true }).strict();
+
+export const artifactVersionSyncPayloadSchema = artifactVersionSchema
+  .omit({ objectRef: true })
+  .extend({ cloudObjectId: entityIdSchema })
+  .strict();
+
+export const fileSearchResultSchema = z
+  .object({
+    file: personalFileSchema,
+    citations: z.array(fileCitationSchema),
+  })
+  .strict();
+
+export const contentPreviewSchema = z
+  .object({
+    objectKind: z.enum(["personal_file", "artifact"]),
+    objectId: entityIdSchema,
+    displayName: z.string().min(1),
+    format: supportedFileFormatSchema,
+    source: z.string().nullable(),
+    parsedText: z.string(),
+    citations: z.array(fileCitationSchema),
+  })
+  .strict();
+
+export const fileImportPrivilegedInputSchema = z
+  .object({
+    localPaths: z.array(z.string().min(1)).min(1).max(100),
+    conversationId: entityIdSchema.nullable().optional(),
+  })
+  .strict();
+export const fileListInputSchema = z
+  .object({ conversationId: entityIdSchema.nullable().optional() })
+  .strict();
+export const fileChooseInputSchema = z
+  .object({ conversationId: entityIdSchema.nullable().optional() })
+  .strict();
+export const fileSearchInputSchema = z
+  .object({ query: z.string().trim().min(1).max(500), fileIds: z.array(entityIdSchema).optional() })
+  .strict();
+export const fileRevokeScopeInputSchema = z.object({ scopeId: entityIdSchema }).strict();
+export const filePreviewInputSchema = z.object({ personalFileId: entityIdSchema }).strict();
+export const fileAttachInputSchema = z
+  .object({ conversationId: entityIdSchema, personalFileId: entityIdSchema })
+  .strict();
+export const artifactCreateInputSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(240),
+    format: supportedFileFormatSchema,
+    mediaType: z.string().min(1),
+    bytesBase64: z.string().min(1),
+    sourcePersonalFileId: entityIdSchema.nullable().optional(),
+  })
+  .strict();
+export const artifactNewVersionInputSchema = artifactCreateInputSchema
+  .omit({ displayName: true })
+  .extend({ artifactId: entityIdSchema })
+  .strict();
+export const artifactListInputSchema = z.object({}).strict();
+export const artifactGetInputSchema = z.object({ artifactId: entityIdSchema }).strict();
+export const artifactPreviewInputSchema = artifactGetInputSchema;
+export const artifactExportPrivilegedInputSchema = artifactGetInputSchema
+  .extend({ destinationPath: z.string().min(1) })
+  .strict();
+export const artifactExportResultSchema = z
+  .object({
+    artifactId: entityIdSchema,
+    fileName: z.string().min(1),
+    version: z.number().int().positive(),
+  })
+  .strict();
+
+export const cloudObjectIntentInputSchema = z
+  .object({
+    objectId: entityIdSchema,
+    checksumSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    sizeBytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(50 * 1024 * 1024),
+    mediaType: z.string().min(1).max(200),
+  })
+  .strict();
+export const cloudObjectDescriptorSchema = cloudObjectIntentInputSchema
+  .extend({
+    accountId: entityIdSchema,
+    createdAt: timestampSchema,
+  })
+  .strict();
+export const cloudObjectTransferIntentSchema = z
+  .object({
+    token: z.string().regex(/^[a-f0-9]{64}$/),
+    operation: z.enum(["upload", "download"]),
+    objectId: entityIdSchema,
+    expiresAt: timestampSchema,
+  })
+  .strict();
+
+export type SupportedFileFormat = z.infer<typeof supportedFileFormatSchema>;
+export type FileParseErrorCode = z.infer<typeof fileParseErrorCodeSchema>;
+export type FileScope = z.infer<typeof fileScopeSchema>;
+export type SourceLocator = z.infer<typeof sourceLocatorSchema>;
+export type FileCitation = z.infer<typeof fileCitationSchema>;
+export type PersonalFile = z.infer<typeof personalFileSchema>;
+export type Attachment = z.infer<typeof attachmentSchema>;
+export type ArtifactVersion = z.infer<typeof artifactVersionSchema>;
+export type Artifact = z.infer<typeof artifactSchema>;
+export type FileSearchResult = z.infer<typeof fileSearchResultSchema>;
+export type ContentPreview = z.infer<typeof contentPreviewSchema>;
+export type CloudObjectIntentInput = z.infer<typeof cloudObjectIntentInputSchema>;
+export type CloudObjectDescriptor = z.infer<typeof cloudObjectDescriptorSchema>;
+export type CloudObjectTransferIntent = z.infer<typeof cloudObjectTransferIntentSchema>;
+export type PersonalFileSyncPayload = z.infer<typeof personalFileSyncPayloadSchema>;
+export type AttachmentSyncPayload = z.infer<typeof attachmentSyncPayloadSchema>;
+export type ArtifactSyncPayload = z.infer<typeof artifactSyncPayloadSchema>;
+export type ArtifactVersionSyncPayload = z.infer<typeof artifactVersionSyncPayloadSchema>;
+export type ArtifactExportResult = z.infer<typeof artifactExportResultSchema>;
+
+export interface FileBridge {
+  chooseFiles(input?: z.input<typeof fileChooseInputSchema>): Promise<PersonalFile[]>;
+  chooseDirectory(input?: z.input<typeof fileChooseInputSchema>): Promise<PersonalFile[]>;
+  listFiles(input?: z.input<typeof fileListInputSchema>): Promise<PersonalFile[]>;
+  searchFiles(input: z.input<typeof fileSearchInputSchema>): Promise<FileSearchResult[]>;
+  previewFile(input: z.input<typeof filePreviewInputSchema>): Promise<ContentPreview>;
+  revokeFileScope(input: z.input<typeof fileRevokeScopeInputSchema>): Promise<FileScope>;
+  attachFile(input: z.input<typeof fileAttachInputSchema>): Promise<Attachment>;
+  listArtifacts(): Promise<Artifact[]>;
+  getArtifact(input: z.input<typeof artifactGetInputSchema>): Promise<Artifact>;
+  previewArtifact(input: z.input<typeof artifactPreviewInputSchema>): Promise<ContentPreview>;
+  saveArtifact(input: z.input<typeof artifactGetInputSchema>): Promise<ArtifactExportResult | null>;
+}

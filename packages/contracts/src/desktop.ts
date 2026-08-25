@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AccountBridge } from "./account";
 import type { BillingBridge } from "./billing";
+import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
 import type { SyncBridge } from "./sync";
 
@@ -44,6 +45,17 @@ export const ipcChannels = Object.freeze({
   chatActivateBranch: "chat:branch:activate",
   chatEvents: "chat:events:list",
   chatEvent: "chat:event",
+  fileChoose: "file:choose",
+  directoryChoose: "file:directory:choose",
+  fileList: "file:list",
+  fileSearch: "file:search",
+  filePreview: "file:preview",
+  fileScopeRevoke: "file:scope:revoke",
+  fileAttach: "file:attach",
+  artifactList: "artifact:list",
+  artifactGet: "artifact:get",
+  artifactPreview: "artifact:preview",
+  artifactSave: "artifact:save",
 });
 
 export const desktopEnvironmentSchema = z
@@ -61,7 +73,8 @@ export interface DesktopBridge
     AccountBridge,
     ModelUsageBridge,
     SyncBridge,
-    BillingBridge {
+    BillingBridge,
+    FileBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
 }
 

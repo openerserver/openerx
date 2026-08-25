@@ -1,5 +1,32 @@
 import { z } from "zod";
 import {
+  type Artifact,
+  type Attachment,
+  artifactCreateInputSchema,
+  artifactExportPrivilegedInputSchema,
+  artifactExportResultSchema,
+  artifactGetInputSchema,
+  artifactListInputSchema,
+  artifactNewVersionInputSchema,
+  artifactPreviewInputSchema,
+  artifactSchema,
+  attachmentSchema,
+  type ContentPreview,
+  contentPreviewSchema,
+  type FileScope,
+  type FileSearchResult,
+  fileAttachInputSchema,
+  fileImportPrivilegedInputSchema,
+  fileListInputSchema,
+  filePreviewInputSchema,
+  fileRevokeScopeInputSchema,
+  fileScopeSchema,
+  fileSearchInputSchema,
+  fileSearchResultSchema,
+  type PersonalFile,
+  personalFileSchema,
+} from "./file";
+import {
   localCacheClearResultSchema,
   type SyncConflict,
   syncConflictSchema,
@@ -212,6 +239,22 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     .object({ command: z.literal("chat.activateBranch"), input: chatActivateBranchInputSchema })
     .strict(),
   z.object({ command: z.literal("chat.events"), input: chatEventsInputSchema }).strict(),
+  z.object({ command: z.literal("file.import"), input: fileImportPrivilegedInputSchema }).strict(),
+  z.object({ command: z.literal("file.list"), input: fileListInputSchema }).strict(),
+  z.object({ command: z.literal("file.search"), input: fileSearchInputSchema }).strict(),
+  z.object({ command: z.literal("file.preview"), input: filePreviewInputSchema }).strict(),
+  z.object({ command: z.literal("file.scope.revoke"), input: fileRevokeScopeInputSchema }).strict(),
+  z.object({ command: z.literal("file.attach"), input: fileAttachInputSchema }).strict(),
+  z.object({ command: z.literal("artifact.create"), input: artifactCreateInputSchema }).strict(),
+  z
+    .object({ command: z.literal("artifact.newVersion"), input: artifactNewVersionInputSchema })
+    .strict(),
+  z.object({ command: z.literal("artifact.list"), input: artifactListInputSchema }).strict(),
+  z.object({ command: z.literal("artifact.get"), input: artifactGetInputSchema }).strict(),
+  z.object({ command: z.literal("artifact.preview"), input: artifactPreviewInputSchema }).strict(),
+  z
+    .object({ command: z.literal("artifact.export"), input: artifactExportPrivilegedInputSchema })
+    .strict(),
 ]);
 
 export const deletedConversationResultSchema = z
@@ -281,6 +324,18 @@ export interface ChatCommandResultMap {
   "chat.search": SearchResult[];
   "chat.activateBranch": ConversationSnapshot;
   "chat.events": ChatEvent[];
+  "file.import": PersonalFile[];
+  "file.list": PersonalFile[];
+  "file.search": FileSearchResult[];
+  "file.preview": ContentPreview;
+  "file.scope.revoke": FileScope;
+  "file.attach": Attachment;
+  "artifact.create": Artifact;
+  "artifact.newVersion": Artifact;
+  "artifact.list": Artifact[];
+  "artifact.get": Artifact;
+  "artifact.preview": ContentPreview;
+  "artifact.export": z.infer<typeof artifactExportResultSchema>;
 }
 
 export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
@@ -327,6 +382,34 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "chat.events":
       parsed = z.array(chatEventSchema).parse(value);
+      break;
+    case "file.import":
+    case "file.list":
+      parsed = z.array(personalFileSchema).parse(value);
+      break;
+    case "file.search":
+      parsed = z.array(fileSearchResultSchema).parse(value);
+      break;
+    case "file.preview":
+    case "artifact.preview":
+      parsed = contentPreviewSchema.parse(value);
+      break;
+    case "file.scope.revoke":
+      parsed = fileScopeSchema.parse(value);
+      break;
+    case "file.attach":
+      parsed = attachmentSchema.parse(value);
+      break;
+    case "artifact.create":
+    case "artifact.newVersion":
+    case "artifact.get":
+      parsed = artifactSchema.parse(value);
+      break;
+    case "artifact.list":
+      parsed = z.array(artifactSchema).parse(value);
+      break;
+    case "artifact.export":
+      parsed = artifactExportResultSchema.parse(value);
       break;
   }
   return parsed as ChatCommandResultMap[C];

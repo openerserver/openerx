@@ -129,6 +129,17 @@ function createBridge(): DesktopBridge {
     search: vi.fn().mockResolvedValue([]),
     activateBranch: vi.fn(),
     getChatEvents: vi.fn().mockResolvedValue([]),
+    chooseFiles: vi.fn().mockResolvedValue([]),
+    chooseDirectory: vi.fn().mockResolvedValue([]),
+    listFiles: vi.fn().mockResolvedValue([]),
+    searchFiles: vi.fn().mockResolvedValue([]),
+    previewFile: vi.fn(),
+    revokeFileScope: vi.fn(),
+    attachFile: vi.fn(),
+    listArtifacts: vi.fn().mockResolvedValue([]),
+    getArtifact: vi.fn(),
+    previewArtifact: vi.fn(),
+    saveArtifact: vi.fn(),
     onChatEvent: vi.fn().mockReturnValue(() => undefined),
   };
 }
@@ -189,6 +200,101 @@ describe("M1 chat renderer", () => {
     expect(window.localStorage.getItem("openerx.theme")).toBe("system");
 
     window.localStorage.removeItem("openerx.theme");
+  });
+
+  it("shows HTML source and an isolated preview without bridge privileges", async () => {
+    const bridge = createBridge();
+    const personalFileId = crypto.randomUUID();
+    const scopeId = crypto.randomUUID();
+    vi.mocked(bridge.listFiles).mockResolvedValue([
+      {
+        id: personalFileId,
+        ownerProfileId: "local-default",
+        displayName: "preview.html",
+        format: "html",
+        mediaType: "text/html",
+        sizeBytes: 120,
+        checksumSha256: "a".repeat(64),
+        objectRef: `objects/sha256/aa/${"a".repeat(64)}`,
+        sourceScopeId: scopeId,
+        sourceRelativePath: "preview.html",
+        parseStatus: "ready",
+        parseErrorCode: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        revision: 2,
+      },
+    ]);
+    vi.mocked(bridge.previewFile).mockResolvedValue({
+      objectKind: "personal_file",
+      objectId: personalFileId,
+      displayName: "preview.html",
+      format: "html",
+      source: "<h1>isolated</h1><script>window.probe = typeof window.openerx</script>",
+      parsedText: "isolated",
+      citations: [],
+    });
+    renderApp(bridge, "/files");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /preview\.html/ }));
+    const frame = await screen.findByTitle("HTML 隔离预览");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame.getAttribute("srcdoc")).toContain("window.openerx");
+    await user.click(screen.getByRole("button", { name: "源码" }));
+    expect(screen.getByText(/window\.openerx/)).toBeTruthy();
+  });
+
+  it("saves the current immutable artifact version through the native bridge", async () => {
+    const bridge = createBridge();
+    const artifactId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    vi.mocked(bridge.listArtifacts).mockResolvedValue([
+      {
+        id: artifactId,
+        ownerProfileId: "local-default",
+        displayName: "report.md",
+        format: "markdown",
+        mediaType: "text/markdown",
+        currentVersion: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        revision: 1,
+        versions: [
+          {
+            id: versionId,
+            artifactId,
+            version: 1,
+            sizeBytes: 9,
+            checksumSha256: "b".repeat(64),
+            objectRef: `objects/sha256/bb/${"b".repeat(64)}`,
+            sourcePersonalFileId: null,
+            createdAt: timestamp,
+          },
+        ],
+      },
+    ]);
+    vi.mocked(bridge.previewArtifact).mockResolvedValue({
+      objectKind: "artifact",
+      objectId: artifactId,
+      displayName: "report.md",
+      format: "markdown",
+      source: "# report",
+      parsedText: "# report",
+      citations: [],
+    });
+    vi.mocked(bridge.saveArtifact).mockResolvedValue({
+      artifactId,
+      fileName: "report.md",
+      version: 1,
+    });
+
+    renderApp(bridge, "/files");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /report\.md/ }));
+    await user.click(screen.getByRole("button", { name: "下载 / 另存" }));
+    await waitFor(() => expect(bridge.saveArtifact).toHaveBeenCalledWith({ artifactId }));
+    expect(await screen.findByText("已保存 report.md")).toBeTruthy();
   });
 
   it("exposes M2 device, sync, usage and data boundaries in account settings", async () => {

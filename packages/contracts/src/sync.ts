@@ -9,8 +9,10 @@ export const syncObjectTypeSchema = z.enum([
   "conversation",
   "branch",
   "message",
+  "personal_file",
   "attachment",
   "artifact",
+  "artifact_version",
   "assistant_profile",
   "skill_installation",
 ]);

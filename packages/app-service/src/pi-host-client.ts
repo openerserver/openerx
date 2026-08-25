@@ -1,6 +1,8 @@
 import {
+  type PiFileToolRequestFrame,
   type PiHostEventFrame,
   type PiPromptFrame,
+  piFileToolRequestFrameSchema,
   piHostEventFrameSchema,
   piHostReadyFrameSchema,
 } from "@openerx/contracts";
@@ -10,11 +12,13 @@ export interface PiHostClient {
   prompt(frame: PiPromptFrame): Promise<void>;
   abort(generationId: string): Promise<void>;
   onEvent(listener: (frame: PiHostEventFrame) => void): () => void;
+  onFileToolRequest(listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void;
 }
 
 export class MessagePortPiHostClient implements PiHostClient {
   readonly #port: MessagePortMain;
   readonly #listeners = new Set<(frame: PiHostEventFrame) => void>();
+  readonly #fileToolListeners = new Set<(frame: PiFileToolRequestFrame) => Promise<unknown>>();
   readonly #ready: Promise<void>;
 
   constructor(port: MessagePortMain, expectedNonce: string) {
@@ -55,13 +59,48 @@ export class MessagePortPiHostClient implements PiHostClient {
     return () => this.#listeners.delete(listener);
   }
 
+  onFileToolRequest(listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void {
+    this.#fileToolListeners.add(listener);
+    return () => this.#fileToolListeners.delete(listener);
+  }
+
   async ready(): Promise<void> {
     await this.#ready;
   }
 
   #handleMessage(data: unknown): void {
     const event = piHostEventFrameSchema.safeParse(data);
-    if (!event.success) return;
-    for (const listener of this.#listeners) listener(event.data);
+    if (event.success) {
+      for (const listener of this.#listeners) listener(event.data);
+      return;
+    }
+    const request = piFileToolRequestFrameSchema.safeParse(data);
+    if (!request.success) return;
+    const listener = [...this.#fileToolListeners][0];
+    if (!listener) {
+      this.#port.postMessage({
+        kind: "pi.file-tool.response",
+        requestId: request.data.requestId,
+        ok: false,
+        errorCode: "FILE_SERVICE_UNAVAILABLE",
+      });
+      return;
+    }
+    void listener(request.data).then(
+      (result) =>
+        this.#port.postMessage({
+          kind: "pi.file-tool.response",
+          requestId: request.data.requestId,
+          ok: true,
+          data: result,
+        }),
+      (error: unknown) =>
+        this.#port.postMessage({
+          kind: "pi.file-tool.response",
+          requestId: request.data.requestId,
+          ok: false,
+          errorCode: error instanceof Error ? error.message.split(":", 1)[0] : "FILE_TOOL_FAILED",
+        }),
+    );
   }
 }

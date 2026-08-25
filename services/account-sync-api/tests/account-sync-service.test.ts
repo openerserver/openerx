@@ -119,7 +119,11 @@ describe("AccountSyncService", () => {
         actor,
         operation(actor, randomUUID(), 0, {
           title: "unsafe",
-          nested: { refreshCredential: "must-not-sync" },
+          nested: {
+            refreshCredential: "must-not-sync",
+            sourceScopeId: randomUUID(),
+            objectRef: "objects/sha256/local-only",
+          },
         }),
       ),
     ).toThrow("SYNC_FORBIDDEN_FIELD");

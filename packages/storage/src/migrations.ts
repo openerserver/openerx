@@ -119,6 +119,88 @@ const migrations: readonly Migration[] = [
         ON sync_outbox(account_id, status, created_at, operation_id);
     `,
   },
+  {
+    version: 3,
+    checksum: "files-artifacts-v3-20260825",
+    sql: `
+      CREATE TABLE file_scopes (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('file', 'directory')),
+        display_name TEXT NOT NULL,
+        root_path TEXT NOT NULL,
+        access TEXT NOT NULL CHECK (access IN ('read', 'read_write')),
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE personal_files (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        format TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+        checksum_sha256 TEXT NOT NULL,
+        object_ref TEXT NOT NULL,
+        source_scope_id TEXT REFERENCES file_scopes(id),
+        source_relative_path TEXT NOT NULL,
+        parse_status TEXT NOT NULL CHECK (parse_status IN ('pending', 'ready', 'failed')),
+        parse_error_code TEXT,
+        parsed_text TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        UNIQUE(owner_profile_id, checksum_sha256, source_scope_id, source_relative_path)
+      ) STRICT;
+      CREATE TABLE file_citations (
+        id TEXT PRIMARY KEY,
+        personal_file_id TEXT NOT NULL REFERENCES personal_files(id) ON DELETE CASCADE,
+        locator_json TEXT NOT NULL,
+        excerpt TEXT NOT NULL,
+        confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+        position INTEGER NOT NULL CHECK (position > 0),
+        UNIQUE(personal_file_id, position)
+      ) STRICT;
+      CREATE TABLE attachments (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+        personal_file_id TEXT NOT NULL REFERENCES personal_files(id),
+        created_at TEXT NOT NULL,
+        UNIQUE(conversation_id, message_id, personal_file_id)
+      ) STRICT;
+      CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        format TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        current_version INTEGER NOT NULL CHECK (current_version > 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0)
+      ) STRICT;
+      CREATE TABLE artifact_versions (
+        id TEXT PRIMARY KEY,
+        artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL CHECK (version > 0),
+        size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+        checksum_sha256 TEXT NOT NULL,
+        object_ref TEXT NOT NULL,
+        source_personal_file_id TEXT REFERENCES personal_files(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(artifact_id, version)
+      ) STRICT;
+      CREATE INDEX personal_files_owner_idx
+        ON personal_files(owner_profile_id, updated_at DESC);
+      CREATE INDEX file_citations_file_idx
+        ON file_citations(personal_file_id, position);
+      CREATE INDEX attachments_conversation_idx
+        ON attachments(conversation_id, created_at);
+      CREATE INDEX artifact_versions_artifact_idx
+        ON artifact_versions(artifact_id, version);
+    `,
+  },
 ];
 
 export function migrateDatabase(database: DatabaseSync): void {

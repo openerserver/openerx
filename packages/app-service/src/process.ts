@@ -5,7 +5,8 @@ import {
   type ErrorEnvelope,
   safeErrorMessage,
 } from "@openerx/contracts";
-import { ChatRepository } from "@openerx/storage";
+import { FileAppService } from "@openerx/file-service";
+import { ChatRepository, FileRepository } from "@openerx/storage";
 import type { MessagePortMain } from "electron";
 import { ChatAppService } from "./chat-app-service";
 import { MessagePortPiHostClient } from "./pi-host-client";
@@ -29,10 +30,16 @@ parentPort.once("message", async (bootstrapEvent) => {
       deviceId: bootstrap.deviceId,
     },
   );
+  const fileRepository = new FileRepository(
+    path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
+    { ownerProfileId: bootstrap.ownerProfileId, deviceId: bootstrap.deviceId },
+  );
+  const files = new FileAppService(fileRepository, bootstrap.profileDirectory);
   const service = new ChatAppService(
     repository,
     piHost,
-    new SyncCoordinator(repository, new HttpAccountSyncTransport()),
+    new SyncCoordinator(repository, new HttpAccountSyncTransport(), files),
+    files,
   );
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.initialize();

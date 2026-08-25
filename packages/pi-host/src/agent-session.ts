@@ -6,8 +6,9 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { PiHistoryMessage } from "@openerx/contracts";
+import type { PiHistoryMessage, SupportedFileFormat } from "@openerx/contracts";
 
 const emptyUsage: AssistantMessage["usage"] = {
   input: 0,
@@ -26,6 +27,8 @@ export interface CreateProductPiSessionOptions {
   model?: Model<string>;
   settingsManager?: SettingsManager;
   sessionManager?: SessionManager;
+  customTools?: ToolDefinition[];
+  files?: Array<{ personalFileId: string; displayName: string; format: SupportedFileFormat }>;
 }
 
 function seedProductHistory(
@@ -65,9 +68,22 @@ export async function createProductPiSession(
     options.settingsManager ??
     SettingsManager.create(options.cwd, options.agentDir, { projectTrusted: false });
   const sessionManager = options.sessionManager ?? SessionManager.inMemory(options.cwd);
-  seedProductHistory(sessionManager, options.history, options.model);
+  if (sessionManager.getEntries().length === 0) {
+    seedProductHistory(sessionManager, options.history, options.model);
+  }
+  const fileContext =
+    options.files && options.files.length > 0
+      ? [
+          "Files attached to this conversation are available only through openerx_file_* tools:",
+          ...options.files.map(
+            (file) => `- ${file.displayName} (${file.format}, id ${file.personalFileId})`,
+          ),
+        ].join("\n")
+      : "No files are attached to this conversation.";
   const systemPrompt = [
     "You are OpenerX, a precise personal AI assistant.",
+    "Never use raw filesystem paths. Use only OpenerX file tools for user files and artifacts.",
+    fileContext,
     ...options.history.filter(({ role }) => role === "system").map(({ text }) => text),
   ].join("\n\n");
 
@@ -89,7 +105,8 @@ export async function createProductPiSession(
     agentDir: options.agentDir,
     modelRuntime: options.modelRuntime,
     model: options.model,
-    noTools: "all",
+    noTools: "builtin",
+    customTools: options.customTools,
     resourceLoader,
     sessionManager,
     settingsManager,

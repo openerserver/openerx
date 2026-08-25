@@ -76,6 +76,12 @@ describe("SyncCoordinator", () => {
       async resolveConflict() {
         throw new Error("not used");
       },
+      async uploadObject() {
+        throw new Error("not used");
+      },
+      async downloadObject() {
+        throw new Error("not used");
+      },
     };
     coordinator = new SyncCoordinator(repository, transport);
 

@@ -1,0 +1,6 @@
+external_id,sku,quantity,unit_price,expected_total
+EXT-001,A-100,3,120,360
+EXT-002,B-200,2,310,620
+EXT-003,C-300,5,80,400
+EXT-004,D-400,1,950,950
+EXT-005,UNKNOWN,4,25,100

@@ -1,8 +1,8 @@
 # OpenerX 2.0 V1 开发计划
 
-> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2 LOCAL COMPLETE / M3 LOCAL COMPLETE / NEXT M4`
+> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2 LOCAL COMPLETE / M3 LOCAL COMPLETE / M4 LOCAL COMPLETE / NEXT M5`
 >
-> 更新日期：2026-08-25（Asia/Shanghai）
+> 更新日期：2026-08-26（Asia/Shanghai）
 >
 > 适用范围：Electron + React 的 Windows/macOS 执行主机与 React Native iOS/Android Remote Companion
 
@@ -122,6 +122,8 @@ E2E 证明客户端只显示服务端最终余额和 Charge。真实支付宝/�
 
 ### M4：File、Artifact 与 Pi Session 恢复 — 3 至 4 周
 
+状态：`LOCAL IMPLEMENTATION COMPLETE (2026-08-26)`
+
 - 文件/文件夹 Scope、撤销、符号链接防护和受控副本。
 - PDF、DOCX、XLSX、CSV、PPTX、文本/代码、JSON/YAML、图片和 HTML 解析。
 - 引用页码、工作表、范围或文本位置。
@@ -130,6 +132,11 @@ E2E 证明客户端只显示服务端最终余额和 Charge。真实支付宝/�
 - 文件能力以 Pi 原生工具定义注册，实际读写经过 V2 Broker。
 
 退出条件：GT-FILE-01 至 GT-FILE-10、FILE-01 至 FILE-08，支持格式均有渲染和真实打开证据。
+
+本地检查点已完成 File Scope Broker、受控内容副本、多格式解析与定位引用、不可变 Artifact
+版本、账户云对象恢复、Pi 原生文件工具和 SessionManager 崩溃恢复。18 条 M4 自动化门禁及
+PDF/DOCX/XLSX/PPTX 真实渲染检查通过；原生 Windows/macOS 双平台打开与签名包证据仍保留为
+发布环境门禁。证据见 [M4 checkpoint](evidence/m4-2026-08-26.md)。
 
 ### M5：Tool Alpha 与长任务 — 5 至 6 周
 
@@ -237,5 +244,6 @@ E2E 证明客户端只显示服务端最终余额和 Charge。真实支付宝/�
 
 ## 10. 当前下一步
 
-进入 M4 File、Artifact 与 Pi Session 恢复。M4 不得改变 M3 的服务端计费真值，也不得向
-Renderer、Preload、App Service 或 Remote 客户端增加 token/rate/estimate/quote 写入能力。
+进入 M5 Tool Alpha 与长任务。M5 在 Pi 原生工具调用生命周期之上增加 Web、隔离浏览器、
+本地 Web 预览、Shell/代码、桌面控制和 MCP，并由 Capability Broker 统一 Scope、审批、
+沙箱、审计和副作用幂等。M5 不得绕过 M4 File Scope Broker，也不得改变 M3 的服务端计费真值。

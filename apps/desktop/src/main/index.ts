@@ -7,6 +7,9 @@ import {
   accountRevokeDeviceInputSchema,
   accountStateSchema,
   accountVerifyCodeInputSchema,
+  artifactGetInputSchema,
+  artifactPreviewInputSchema,
+  artifactSchema,
   billingStatementRequestSchema,
   chatActivateBranchInputSchema,
   chatArchiveInputSchema,
@@ -25,12 +28,18 @@ import {
   createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
   emptyInputSchema,
+  fileAttachInputSchema,
+  fileChooseInputSchema,
+  fileListInputSchema,
+  filePreviewInputSchema,
+  fileRevokeScopeInputSchema,
+  fileSearchInputSchema,
   ipcChannels,
   syncResolveConflictInputSchema,
   usageQueryInputSchema,
   usageRecordSchema,
 } from "@openerx/contracts";
-import { app, BrowserWindow, ipcMain, net, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from "electron";
 import started from "electron-squirrel-startup";
 import type { z } from "zod";
 import { AccountSessionManager, HttpIdentityTransport } from "./account-session-manager";
@@ -268,6 +277,94 @@ function registerIpcHandlers(
     true,
   );
   registerChatHandler(ipcChannels.localCacheClear, "cache.clear", emptyInputSchema);
+  ipcMain.handle(ipcChannels.fileChoose, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = fileChooseInputSchema.parse(input ?? {});
+    const selection = await dialog.showOpenDialog({
+      title: "添加文件",
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        {
+          name: "支持的文件",
+          extensions: [
+            "pdf",
+            "docx",
+            "xlsx",
+            "csv",
+            "pptx",
+            "txt",
+            "md",
+            "json",
+            "yaml",
+            "yml",
+            "png",
+            "jpg",
+            "jpeg",
+            "webp",
+            "html",
+            "htm",
+            "ts",
+            "tsx",
+            "js",
+            "jsx",
+            "py",
+            "go",
+            "rs",
+          ],
+        },
+      ],
+    });
+    if (selection.canceled) return [];
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "file.import",
+        input: { localPaths: selection.filePaths, conversationId: parsed.conversationId },
+      }),
+    );
+  });
+  ipcMain.handle(ipcChannels.directoryChoose, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = fileChooseInputSchema.parse(input ?? {});
+    const selection = await dialog.showOpenDialog({
+      title: "添加文件夹",
+      properties: ["openDirectory"],
+    });
+    if (selection.canceled) return [];
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "file.import",
+        input: { localPaths: selection.filePaths, conversationId: parsed.conversationId },
+      }),
+    );
+  });
+  registerChatHandler(ipcChannels.fileList, "file.list", fileListInputSchema);
+  registerChatHandler(ipcChannels.fileSearch, "file.search", fileSearchInputSchema);
+  registerChatHandler(ipcChannels.filePreview, "file.preview", filePreviewInputSchema);
+  registerChatHandler(ipcChannels.fileScopeRevoke, "file.scope.revoke", fileRevokeScopeInputSchema);
+  registerChatHandler(ipcChannels.fileAttach, "file.attach", fileAttachInputSchema);
+  registerChatHandler(ipcChannels.artifactList, "artifact.list", emptyInputSchema);
+  registerChatHandler(ipcChannels.artifactGet, "artifact.get", artifactGetInputSchema);
+  registerChatHandler(ipcChannels.artifactPreview, "artifact.preview", artifactPreviewInputSchema);
+  ipcMain.handle(ipcChannels.artifactSave, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = artifactGetInputSchema.parse(input);
+    const artifact = artifactSchema.parse(
+      await supervisor.request(
+        chatCommandEnvelopeSchema.parse({ command: "artifact.get", input: parsed }),
+      ),
+    );
+    const selection = await dialog.showSaveDialog({
+      title: "保存成果副本",
+      defaultPath: path.join(app.getPath("documents"), artifact.displayName),
+    });
+    if (selection.canceled || !selection.filePath) return null;
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "artifact.export",
+        input: { artifactId: artifact.id, destinationPath: selection.filePath },
+      }),
+    );
+  });
 }
 
 function registerAppProtocol(): void {

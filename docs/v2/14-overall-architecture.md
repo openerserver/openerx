@@ -1,8 +1,8 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M3_BILLING_ALPHA_LOCAL_COMPLETE / M4_FILE_ARTIFACT_NEXT`
+> 状态：`M4_FILE_ARTIFACT_LOCAL_COMPLETE / M5_TOOL_ALPHA_NEXT`
 >
-> 更新日期：2026-08-25（Asia/Shanghai）
+> 更新日期：2026-08-26（Asia/Shanghai）
 >
 > 适用范围：Windows 10 22H2+/Windows 11 x64、macOS 14+ arm64/x64 桌面执行主机与 iOS 17+/Android 11+ Remote Companion
 
@@ -26,9 +26,9 @@
 
 ## 2. V2 总体逻辑架构图
 
-下图是完整 V1 目标态。M3 本地实现已接入账户云、内容同步、模型网关、Token Usage、服务端
-报价/预留/结算、复式账本、支付适配和最终 Billing 展示；文件、工具、Skill 与 Remote 运行面
-仍按后续检查点交付，不以占位实现伪装完成。
+下图是完整 V1 目标态。M4 本地实现已接入账户云、模型和服务端 Billing，并完成文件 Scope、
+解析/引用、Artifact 版本、云对象恢复以及 Pi SessionManager；Web/Browser/Shell/Desktop/MCP、
+Skill 与 Remote 运行面仍按后续检查点交付，不以占位实现伪装完成。
 
 ```mermaid
 flowchart LR
@@ -222,6 +222,45 @@ flowchart LR
 生成冻结报价并预留资金。Provider 返回的实际 Token 由 Gateway 写入 Usage Store，再在同一
 服务端协调链结算唯一 Charge。Renderer 只重新读取最终资产、费用、订单、账本和账单快照。
 
+### 2.4 M4 当前本地已实现拓扑
+
+```mermaid
+flowchart LR
+  USER([个人用户]) --> UI[React Renderer<br/>文件库 / Context Dock / Artifact 预览]
+  UI --> PRELOAD[Typed Preload Bridge<br/>固定 File / Artifact 方法]
+  PRELOAD --> MAIN[Electron Main<br/>原生文件/文件夹选择器]
+  MAIN --> APP[App Service<br/>账户范围协调]
+
+  APP --> BROKER[File Scope Broker<br/>真实路径 / 撤销 / 过期 / 防逃逸 / 防符号链接]
+  BROKER --> SOURCE[(用户明确选择的来源)]
+  APP --> PARSER[Multi-format Parser<br/>PDF / OOXML / CSV / Text / Image / HTML]
+  PARSER --> CITATION[(页 / 工作表范围 / 幻灯片 / 文本位置)]
+  APP --> CAS[(设备受控 CAS<br/>PersonalFile / Artifact bytes)]
+  APP --> SQLITE[(SQLite<br/>File / Attachment / ArtifactVersion / Outbox)]
+
+  APP <-->|自定义 File Tool 协议| PIHOST[Isolated Pi Host]
+  PIHOST --> SESSION[Pi AgentSession + SessionManager<br/>Compaction / Crash Restore]
+  SESSION --> TOOLS[Pi 原生 ToolDefinition<br/>list / search / read / artifact.write]
+  TOOLS --> APP
+
+  APP --> SYNC[Account Sync Adapter<br/>元数据 / revision / cursor]
+  SYNC --> SYNCAPI[Account Sync API]
+  SYNC --> OBJECTAPI[一次性对象传输 Intent]
+  OBJECTAPI --> OBJECTS[(账户云对象<br/>PersonalFile / ArtifactVersion)]
+
+  UI --> HTML[Sandboxed iframe<br/>源码 / 隔离渲染]
+  HTML -.->|无 Node、无 Preload Bridge、无 same-origin| NONE[无桌面权限]
+```
+
+原始路径 Grant 只保存在授权设备；解析前先把字节复制到内容寻址的应用区。账户同步载荷只含
+账户元数据、引用、校验值和云对象 ID，不包含 `rootPath`、`sourceScopeId` 或本地 `objectRef`。
+另一设备恢复为无源路径 Grant 的云端副本。ArtifactVersion 以稳定 ID 对应不可变云对象，上传/
+下载 Intent 同时绑定账户、设备会话和设备，短时且只能消费一次。
+
+Pi Host 使用维护中的 Pi `SessionManager` 保存每个 Conversation 的内部 Session，损坏注册表可从
+Pi Session 头恢复；Conversation/Message SQLite 仍是产品历史真值。Pi 不获得原始文件系统工具，
+只注册四个产品文件工具，实际读取和成果写入全部回到 App Service 与 File Scope Broker。
+
 ## 3. 主链路
 
 ### 3.1 聊天与收费模型调用
@@ -367,6 +406,7 @@ packages/pi-host                 Pi AgentSession 组合与 utility-process 入�
 packages/remote-host             Remote Host Connector 核心与 utility-process 入口
 services/identity-api            账户与设备会话
 services/account-sync-api        云同步 API
+services/object-store-api        账户范围文件/成果对象与一次性传输 Intent
 services/model-gateway           平台模型目录与统一调用
 services/token-usage-store       UsageRecord 与 Token 聚合
 services/pricing-service         价格目录、报价与快照
@@ -380,6 +420,7 @@ packages/tool-sdk                Tool/Permission 合同
 packages/skills                  Skill 包与生命周期
 packages/ui-react                React UI 基础
 packages/storage                 本地/云存储抽象
+packages/file-service            File Scope Broker、解析、引用、Artifact 与受控对象区
 packages/observability           脱敏日志、Trace 和诊断
 ```
 
@@ -387,7 +428,7 @@ packages/observability           脱敏日志、Trace 和诊断
 
 旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。
 
-## 8. M1/M2/M3 本地已实现映射
+## 8. M1/M2/M3/M4 本地已实现映射
 
 - 根 workspace 使用 npm 11；`apps`/`services` 只通过 `packages` 共享合同和实现。
 - Electron 44 + Forge 7 + Vite 6 分别构建 Main、Preload、App Service、Pi Host 和
@@ -399,8 +440,13 @@ packages/observability           脱敏日志、Trace 和诊断
 - App Service 独占 `node:sqlite`，实现迁移校验、Conversation/Message/Part、分支、revision、
   幂等键、单调事件、中断恢复，以及账户内容 Outbox、cursor、冲突和墓碑。本地数据库不包含
   可复用账户凭证。
-- Pi Host 直接运行维护中的 Pi 0.84.3，使用 `AgentSession`、原生流式事件和 `abort()`；
-  M2 本地实现已以 Pi-native Provider 接入 Platform Model Gateway，文件和工具能力分别由 M4、M5 门禁约束。
+- Pi Host 直接运行维护中的 Pi 0.84.3，使用 `AgentSession`、`SessionManager`、原生流式事件和
+  `abort()`；M4 注册 Pi 原生文件 ToolDefinition，并保留 Pi 的上下文压缩和崩溃恢复语义，
+  不建立平行 harness。
+- `packages/file-service` 实现设备级 File Scope Broker、内容寻址副本、多格式解析器、稳定引用和
+  Artifact 版本；Renderer 只通过冻结 Bridge 调用，HTML 预览使用无 `allow-same-origin` 的 sandbox。
+- `services/object-store-api` 以账户/会话/设备绑定的一次性短时 Intent 传输 PersonalFile 与
+  ArtifactVersion 字节；同步 payload 不携带绝对路径、原设备 Grant 或本地对象引用。
 - Identity API、Account Sync API、Model Gateway、Token Usage Store 和 Platform Alpha HTTP
   组合层均已实现账户作用域；服务之间只通过 `packages/contracts` 端口连接。
 - Main 使用 Electron `safeStorage` 异步接口保护可复用 DeviceSession 凭证；访问令牌只在 Main
@@ -424,5 +470,5 @@ Remote M2 协议合同已冻结；M6 完成移动端、Connector、Gateway、推
 
 ## 9. 当前下一步
 
-进入 M4 File、Artifact 与 Pi Session 恢复。M4 只增加文件 Scope、解析、引用、成果版本和恢复，
-不得把文件或工具用量计算下放客户端，也不得改变 M3 已冻结的服务端资金真值。
+进入 M5 Tool Alpha 与长任务：在既有 Pi 原生 ToolDefinition 和 M4 Broker 边界上接入 Web、
+Browser、Shell、Desktop 与 MCP，并补齐审批、沙箱、审计、长任务恢复和副作用幂等。

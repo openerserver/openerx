@@ -8,6 +8,7 @@ import type {
   DeviceSession,
   Message,
   ModelCatalogEntry,
+  PersonalFile,
   RechargeOrder,
   RefundOrder,
   SyncConflict,
@@ -21,7 +22,7 @@ import {
   ChatCircle,
   CheckCircle,
   Desktop,
-  DotsThreeVertical,
+  DownloadSimple,
   FileText,
   FolderSimple,
   GearSix,
@@ -168,6 +169,12 @@ function Composer({
   const [draft, setDraft] = useState("");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const chooseFiles = useMutation({
+    mutationFn: () => window.openerx.chooseFiles({ conversationId: conversationId ?? null }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["files"] });
+    },
+  });
   const send = useMutation({
     mutationFn: (text: string) =>
       window.openerx.sendMessage({
@@ -208,7 +215,13 @@ function Composer({
       />
       <div className="composer-actions">
         <div className="composer-tools">
-          <button type="button" className="icon-button" aria-label="添加附件">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="添加附件"
+            onClick={() => chooseFiles.mutate()}
+            disabled={chooseFiles.isPending}
+          >
             <Paperclip size={18} weight="regular" />
           </button>
           <button type="button" className="composer-select">
@@ -240,6 +253,7 @@ function Composer({
         </button>
       </div>
       {send.error ? <p className="inline-error">{send.error.message}</p> : null}
+      {chooseFiles.error ? <p className="inline-error">{chooseFiles.error.message}</p> : null}
     </form>
   );
 }
@@ -288,21 +302,27 @@ function Suggestion({ text }: { text: string }): React.JSX.Element {
   );
 }
 
-type ContextFile = {
-  id: string;
-  name: string;
-  size: string;
-  status: "已解析" | "待解析";
-};
-
-const initialContextFiles: ContextFile[] = [
-  { id: "prd", name: "产品需求文档（PRD）.pdf", size: "1.24 MB", status: "已解析" },
-  { id: "research", name: "用户调研报告.docx", size: "892 KB", status: "已解析" },
-];
-
 function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const [files, setFiles] = useState(initialContextFiles);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const { conversationId = "" } = useParams();
+  const queryClient = useQueryClient();
+  const files = useQuery({
+    queryKey: ["files", conversationId],
+    queryFn: () => window.openerx.listFiles({ conversationId }),
+    enabled: Boolean(conversationId),
+  });
+  const chooseFiles = useMutation({
+    mutationFn: () => window.openerx.chooseFiles({ conversationId }),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["files"] }),
+  });
+  const chooseDirectory = useMutation({
+    mutationFn: () => window.openerx.chooseDirectory({ conversationId }),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["files"] }),
+  });
+  const revoke = useMutation({
+    mutationFn: (scopeId: string) => window.openerx.revokeFileScope({ scopeId }),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["files"] }),
+  });
+  const fileList = files.data ?? [];
 
   return (
     <aside className="context-dock" aria-label="当前上下文">
@@ -322,56 +342,67 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
       <section className="context-files" aria-labelledby="context-files-title">
         <div className="context-section-heading">
           <h3 id="context-files-title">文件</h3>
-          <span>{files.length}</span>
+          <span>{fileList.length}</span>
         </div>
-        <label className="context-dropzone">
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".pdf,.doc,.docx,.md,.txt"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              setFiles((current) => [
-                {
-                  id: `${file.name}-${file.lastModified}`,
-                  name: file.name,
-                  size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
-                  status: "待解析",
-                },
-                ...current,
-              ]);
-              event.target.value = "";
-            }}
-          />
+        <div className="context-dropzone">
           <FileText size={26} weight="regular" />
-          <strong>拖拽文件到此处，或点击上传</strong>
-          <span>支持 PDF、Word、Markdown、Txt（单个 ≤50MB）</span>
-        </label>
+          <strong>添加文件或受控文件夹</strong>
+          <span>支持 PDF、Office、表格、图片、文本、代码与 HTML（单个 ≤50MB）</span>
+          <div className="context-picker-actions">
+            <button type="button" onClick={() => chooseFiles.mutate()}>
+              选择文件
+            </button>
+            <button type="button" onClick={() => chooseDirectory.mutate()}>
+              选择文件夹
+            </button>
+          </div>
+        </div>
+        {chooseFiles.error || chooseDirectory.error ? (
+          <p className="inline-error">{(chooseFiles.error ?? chooseDirectory.error)?.message}</p>
+        ) : null}
         <div className="context-file-list">
-          {files.map((file) => (
-            <article className="context-file" key={file.id}>
-              <div className="context-file-icon">
-                <FileText size={19} weight="regular" />
-              </div>
-              <div className="context-file-copy">
-                <strong title={file.name}>{file.name}</strong>
-                <span>{file.size}</span>
-              </div>
-              <span
-                className={`context-file-status status-${file.status === "已解析" ? "ready" : "pending"}`}
-              >
-                {file.status}
-              </span>
-              <button
-                type="button"
-                className="icon-button context-file-menu"
-                aria-label={`管理 ${file.name}`}
-              >
-                <DotsThreeVertical size={17} weight="bold" />
-              </button>
-            </article>
-          ))}
+          {fileList.map((file) => {
+            const sourceScopeId = file.sourceScopeId;
+            return (
+              <article className="context-file" key={file.id}>
+                <div className="context-file-icon">
+                  <FileText size={19} weight="regular" />
+                </div>
+                <div className="context-file-copy">
+                  <strong title={file.displayName}>{file.displayName}</strong>
+                  <span>
+                    {formatBytes(file.sizeBytes)} · {file.format.toUpperCase()}
+                  </span>
+                </div>
+                <span
+                  className={`context-file-status status-${file.parseStatus === "ready" ? "ready" : "pending"}`}
+                >
+                  {file.parseStatus === "ready"
+                    ? "已解析"
+                    : file.parseStatus === "failed"
+                      ? file.parseErrorCode
+                      : "待解析"}
+                </span>
+                {sourceScopeId ? (
+                  <button
+                    type="button"
+                    className="icon-button context-file-menu"
+                    aria-label={`撤销 ${file.displayName} 的源文件权限`}
+                    title="撤销源文件权限（受控副本仍保留）"
+                    onClick={() => revoke.mutate(sourceScopeId)}
+                  >
+                    <X size={16} weight="bold" />
+                  </button>
+                ) : (
+                  <span className="context-file-cloud-copy">云端副本</span>
+                )}
+              </article>
+            );
+          })}
+          {files.isPending ? <p className="muted-copy">正在读取上下文…</p> : null}
+          {!files.isPending && fileList.length === 0 ? (
+            <p className="muted-copy">还没有添加文件。</p>
+          ) : null}
         </div>
       </section>
 
@@ -384,6 +415,173 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
         </button>
       </footer>
     </aside>
+  );
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function FilesAndArtifacts(): React.JSX.Element {
+  const [selected, setSelected] = useState<{
+    kind: "personal_file" | "artifact";
+    id: string;
+  } | null>(null);
+  const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview");
+  const files = useQuery({ queryKey: ["files", "all"], queryFn: () => window.openerx.listFiles() });
+  const artifacts = useQuery({
+    queryKey: ["artifacts"],
+    queryFn: () => window.openerx.listArtifacts(),
+  });
+  const chooseFiles = useMutation({
+    mutationFn: () => window.openerx.chooseFiles(),
+    onSuccess: () => files.refetch(),
+  });
+  const preview = useQuery({
+    queryKey: ["content-preview", selected?.kind, selected?.id],
+    queryFn: () => {
+      if (!selected) throw new Error("No preview selected");
+      return selected.kind === "personal_file"
+        ? window.openerx.previewFile({ personalFileId: selected.id })
+        : window.openerx.previewArtifact({ artifactId: selected.id });
+    },
+    enabled: selected !== null,
+  });
+  const saveArtifact = useMutation({
+    mutationFn: async (artifactId: string) => await window.openerx.saveArtifact({ artifactId }),
+  });
+  return (
+    <main className="library-page">
+      <header className="library-header">
+        <div>
+          <p className="eyebrow">本地优先 · 可同步对象</p>
+          <h1>个人文件与成果</h1>
+          <p>原始路径权限与受控副本分离；生成成果按版本保留，不静默覆盖。</p>
+        </div>
+        <button type="button" className="primary-action" onClick={() => chooseFiles.mutate()}>
+          <Plus size={17} /> 添加文件
+        </button>
+      </header>
+      <section className="library-section" aria-labelledby="personal-files-title">
+        <div className="library-section-title">
+          <h2 id="personal-files-title">个人文件</h2>
+          <span>{files.data?.length ?? 0}</span>
+        </div>
+        <div className="library-grid">
+          {files.data?.map((file: PersonalFile) => (
+            <button
+              type="button"
+              className="library-card"
+              key={file.id}
+              onClick={() => {
+                setSelected({ kind: "personal_file", id: file.id });
+                setPreviewMode("preview");
+              }}
+            >
+              <FileText size={24} />
+              <strong>{file.displayName}</strong>
+              <span>
+                {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
+              </span>
+              <span>
+                {file.parseStatus === "ready" ? "引用已就绪" : (file.parseErrorCode ?? "解析中")}
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="library-section" aria-labelledby="artifacts-title">
+        <div className="library-section-title">
+          <h2 id="artifacts-title">成果</h2>
+          <span>{artifacts.data?.length ?? 0}</span>
+        </div>
+        <div className="library-grid">
+          {artifacts.data?.map((artifact) => (
+            <button
+              type="button"
+              className="library-card"
+              key={artifact.id}
+              onClick={() => {
+                setSelected({ kind: "artifact", id: artifact.id });
+                setPreviewMode("preview");
+              }}
+            >
+              <FolderSimple size={24} />
+              <strong>{artifact.displayName}</strong>
+              <span>
+                {artifact.format.toUpperCase()} · v{artifact.currentVersion}
+              </span>
+              <span>{artifact.versions.length} 个不可变版本</span>
+            </button>
+          ))}
+        </div>
+      </section>
+      {selected ? (
+        <section className="content-preview" aria-labelledby="content-preview-title">
+          <header>
+            <div>
+              <p className="eyebrow">受控内容预览</p>
+              <h2 id="content-preview-title">{preview.data?.displayName ?? "正在加载…"}</h2>
+            </div>
+            <div className="preview-actions">
+              {selected.kind === "artifact" ? (
+                <button
+                  type="button"
+                  disabled={saveArtifact.isPending}
+                  onClick={() => saveArtifact.mutate(selected.id)}
+                >
+                  <DownloadSimple size={15} />
+                  {saveArtifact.isPending ? "保存中…" : "下载 / 另存"}
+                </button>
+              ) : null}
+              {preview.data && preview.data.source !== null ? (
+                <>
+                  <button
+                    type="button"
+                    className={previewMode === "preview" ? "is-active" : ""}
+                    onClick={() => setPreviewMode("preview")}
+                  >
+                    预览
+                  </button>
+                  <button
+                    type="button"
+                    className={previewMode === "source" ? "is-active" : ""}
+                    onClick={() => setPreviewMode("source")}
+                  >
+                    源码
+                  </button>
+                </>
+              ) : null}
+              <button type="button" onClick={() => setSelected(null)}>
+                关闭
+              </button>
+            </div>
+          </header>
+          {preview.error ? <p className="inline-error">{preview.error.message}</p> : null}
+          {saveArtifact.error ? <p className="inline-error">{saveArtifact.error.message}</p> : null}
+          {saveArtifact.data ? (
+            <p className="inline-success">已保存 {saveArtifact.data.fileName}</p>
+          ) : null}
+          {preview.data?.format === "html" && previewMode === "preview" && preview.data.source ? (
+            <iframe
+              title="HTML 隔离预览"
+              sandbox="allow-scripts"
+              referrerPolicy="no-referrer"
+              srcDoc={preview.data.source}
+            />
+          ) : preview.data ? (
+            <pre>{previewMode === "source" ? preview.data.source : preview.data.parsedText}</pre>
+          ) : (
+            <p className="muted-copy">正在准备预览…</p>
+          )}
+          {preview.data?.citations.length ? (
+            <footer>{preview.data.citations.length} 个稳定引用位置</footer>
+          ) : null}
+        </section>
+      ) : null}
+    </main>
   );
 }
 
@@ -1770,7 +1968,7 @@ export function App(): React.JSX.Element {
             }
           />
           <Route path="/search" element={<SearchPage />} />
-          <Route path="/files" element={<Placeholder title="个人文件与成果" />} />
+          <Route path="/files" element={<FilesAndArtifacts />} />
           <Route path="/assistants" element={<Placeholder title="助手与 Skill" />} />
           <Route path="/settings/billing" element={<BillingSettings />} />
           <Route

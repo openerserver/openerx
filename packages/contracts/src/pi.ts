@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { entityIdSchema, timestampSchema } from "./chat";
+import { supportedFileFormatSchema } from "./file";
 import { usageRecordSchema } from "./model";
 import { processNonceSchema } from "./process";
 
@@ -36,6 +37,17 @@ export const piPromptFrameSchema = z
     conversationId: entityIdSchema,
     assistantMessageId: entityIdSchema,
     history: z.array(piHistoryMessageSchema).min(1),
+    files: z
+      .array(
+        z
+          .object({
+            personalFileId: entityIdSchema,
+            displayName: z.string().min(1),
+            format: supportedFileFormatSchema,
+          })
+          .strict(),
+      )
+      .optional(),
     platform: z
       .object({
         accountId: entityIdSchema,
@@ -66,7 +78,70 @@ export const piAbortFrameSchema = z
   })
   .strict();
 
-export const piHostRequestFrameSchema = z.union([piPromptFrameSchema, piAbortFrameSchema]);
+const piFileToolOperationSchema = z.discriminatedUnion("operation", [
+  z.object({ operation: z.literal("list"), input: z.object({}).strict() }).strict(),
+  z
+    .object({
+      operation: z.literal("search"),
+      input: z.object({ query: z.string().trim().min(1).max(500) }).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("read"),
+      input: z.object({ personalFileId: entityIdSchema }).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("artifact.write"),
+      input: z
+        .object({
+          artifactId: entityIdSchema.optional(),
+          displayName: z.string().trim().min(1).max(240),
+          format: z.enum(["text", "markdown", "code", "json", "yaml", "csv", "html"]),
+          mediaType: z.string().min(1).max(200),
+          content: z.string().max(5_000_000),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+export const piFileToolRequestFrameSchema = z
+  .object({
+    kind: z.literal("pi.file-tool.request"),
+    requestId: entityIdSchema,
+    generationId: entityIdSchema,
+    conversationId: entityIdSchema,
+    request: piFileToolOperationSchema,
+  })
+  .strict();
+
+export const piFileToolResponseFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      kind: z.literal("pi.file-tool.response"),
+      requestId: entityIdSchema,
+      ok: z.literal(true),
+      data: z.unknown(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pi.file-tool.response"),
+      requestId: entityIdSchema,
+      ok: z.literal(false),
+      errorCode: z.string().min(1),
+    })
+    .strict(),
+]);
+
+export const piHostRequestFrameSchema = z.union([
+  piPromptFrameSchema,
+  piAbortFrameSchema,
+  piFileToolResponseFrameSchema,
+]);
 
 export const piHostEventFrameSchema = z
   .object({
@@ -86,8 +161,12 @@ export const piHostPortFrameSchema = z.union([
   piHostReadyFrameSchema,
   piHostRequestFrameSchema,
   piHostEventFrameSchema,
+  piFileToolRequestFrameSchema,
+  piFileToolResponseFrameSchema,
 ]);
 
 export type PiHistoryMessage = z.infer<typeof piHistoryMessageSchema>;
 export type PiPromptFrame = z.infer<typeof piPromptFrameSchema>;
 export type PiHostEventFrame = z.infer<typeof piHostEventFrameSchema>;
+export type PiFileToolRequestFrame = z.infer<typeof piFileToolRequestFrameSchema>;
+export type PiFileToolResponseFrame = z.infer<typeof piFileToolResponseFrameSchema>;

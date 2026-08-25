@@ -4,6 +4,9 @@ import {
   accountRevokeDeviceInputSchema,
   accountStateSchema,
   accountVerifyCodeInputSchema,
+  artifactExportResultSchema,
+  artifactGetInputSchema,
+  artifactPreviewInputSchema,
   billingOverviewSchema,
   billingStatementExportSchema,
   billingStatementRequestSchema,
@@ -32,6 +35,12 @@ import {
   desktopEnvironmentSchema,
   deviceSessionSchema,
   emailChallengeSchema,
+  fileAttachInputSchema,
+  fileChooseInputSchema,
+  fileListInputSchema,
+  filePreviewInputSchema,
+  fileRevokeScopeInputSchema,
+  fileSearchInputSchema,
   ipcChannels,
   ledgerTransactionSchema,
   modelCatalogEntrySchema,
@@ -210,6 +219,40 @@ const bridge: DesktopBridge = {
     ),
   getChatEvents: async (input) =>
     invokeChat(ipcChannels.chatEvents, "chat.events", chatEventsInputSchema.parse(input)),
+  chooseFiles: async (input = {}) =>
+    invokeChat(ipcChannels.fileChoose, "file.import", fileChooseInputSchema.parse(input)),
+  chooseDirectory: async (input = {}) =>
+    invokeChat(ipcChannels.directoryChoose, "file.import", fileChooseInputSchema.parse(input)),
+  listFiles: async (input = {}) =>
+    invokeChat(ipcChannels.fileList, "file.list", fileListInputSchema.parse(input)),
+  searchFiles: async (input) =>
+    invokeChat(ipcChannels.fileSearch, "file.search", fileSearchInputSchema.parse(input)),
+  previewFile: async (input) =>
+    invokeChat(ipcChannels.filePreview, "file.preview", filePreviewInputSchema.parse(input)),
+  revokeFileScope: async (input) =>
+    invokeChat(
+      ipcChannels.fileScopeRevoke,
+      "file.scope.revoke",
+      fileRevokeScopeInputSchema.parse(input),
+    ),
+  attachFile: async (input) =>
+    invokeChat(ipcChannels.fileAttach, "file.attach", fileAttachInputSchema.parse(input)),
+  listArtifacts: async () => invokeChat(ipcChannels.artifactList, "artifact.list", {}),
+  getArtifact: async (input) =>
+    invokeChat(ipcChannels.artifactGet, "artifact.get", artifactGetInputSchema.parse(input)),
+  previewArtifact: async (input) =>
+    invokeChat(
+      ipcChannels.artifactPreview,
+      "artifact.preview",
+      artifactPreviewInputSchema.parse(input),
+    ),
+  saveArtifact: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.artifactSave,
+      artifactGetInputSchema.parse(input),
+    );
+    return result === null ? null : artifactExportResultSchema.parse(result);
+  },
   onChatEvent: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {
       const parsed = chatEventSchema.safeParse(value);

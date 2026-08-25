@@ -38,12 +38,16 @@ const forbiddenPayloadKeys = new Set([
   "devicecredential",
   "filegrant",
   "localpath",
+  "objectref",
   "permissiongrant",
   "pisession",
   "providerapikey",
   "refreshcredential",
   "refreshtoken",
+  "rootpath",
   "shellhistory",
+  "sourcerelativepath",
+  "sourcescopeid",
 ]);
 
 function canonicalKey(key: string): string {
