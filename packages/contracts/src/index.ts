@@ -1,6 +1,7 @@
 export * from "./account";
 export * from "./billing";
 export * from "./chat";
+export * from "./common";
 export * from "./desktop";
 export * from "./errors";
 export * from "./file";
@@ -11,3 +12,4 @@ export * from "./process";
 export * from "./redaction";
 export * from "./remote";
 export * from "./sync";
+export * from "./tool";

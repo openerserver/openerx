@@ -4,15 +4,19 @@ import path from "node:path";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
+  type PiActivityEvent,
   type PiFileToolRequestFrame,
   type PiHostEventFrame,
   type PiPromptFrame,
+  type PiToolRequestFrame,
   piFileToolResponseFrameSchema,
   piHostBootstrapSchema,
   piHostRequestFrameSchema,
+  piToolResponseFrameSchema,
 } from "@openerx/contracts";
 import type { MessagePortMain } from "electron";
 import { createProductPiSession, ModelRuntime } from "./agent-session";
+import { createProductCapabilityTools } from "./capability-tools";
 import { createProductFileTools } from "./file-tools";
 import { createPlatformModelProvider, HttpPlatformModelTransport } from "./platform-provider";
 import { ProductSessionRegistry } from "./session-registry";
@@ -20,6 +24,7 @@ import { ProductSessionRegistry } from "./session-registry";
 interface ActiveGeneration {
   abortRequested: boolean;
   sequence: number;
+  activitySequence: number;
   session?: AgentSession;
   terminal: boolean;
   conversationId: string;
@@ -75,6 +80,7 @@ export function startPiHostProcess(
     mkdirSync(agentDirectory, { recursive: true });
     const active = new Map<string, ActiveGeneration>();
     const pendingFileTools = new Map<string, PendingFileToolRequest>();
+    const pendingCapabilityTools = new Map<string, PendingFileToolRequest>();
     const sessionRegistry = new ProductSessionRegistry(
       bootstrap.profileDirectory,
       workspaceDirectory,
@@ -88,6 +94,18 @@ export function startPiHostProcess(
             reject(new Error("FILE_TOOL_TIMEOUT"));
           }, 15_000);
           pendingFileTools.set(frame.requestId, { resolve, reject, timeout });
+          port.postMessage(frame);
+        });
+      },
+    };
+    const capabilityToolTransport = {
+      request: async (frame: PiToolRequestFrame): Promise<unknown> => {
+        return await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            pendingCapabilityTools.delete(frame.requestId);
+            reject(new Error("CAPABILITY_TOOL_TIMEOUT"));
+          }, 30 * 60_000);
+          pendingCapabilityTools.set(frame.requestId, { resolve, reject, timeout });
           port.postMessage(frame);
         });
       },
@@ -116,6 +134,34 @@ export function startPiHostProcess(
       port.postMessage(frame);
     };
 
+    const emitActivity = (
+      generationId: string,
+      state: ActiveGeneration,
+      event: Pick<PiActivityEvent, "type"> &
+        Partial<
+          Pick<
+            PiActivityEvent,
+            "piToolCallId" | "toolName" | "inputSummary" | "resultSummary" | "errorCode"
+          >
+        >,
+    ): void => {
+      state.activitySequence += 1;
+      const frame: PiActivityEvent = {
+        kind: "pi.activity-event",
+        generationId,
+        eventId: randomUUID(),
+        sequence: state.activitySequence,
+        occurredAt: new Date().toISOString(),
+        type: event.type,
+        ...(event.piToolCallId ? { piToolCallId: event.piToolCallId } : {}),
+        ...(event.toolName ? { toolName: event.toolName } : {}),
+        ...(event.inputSummary ? { inputSummary: event.inputSummary } : {}),
+        ...(event.resultSummary ? { resultSummary: event.resultSummary } : {}),
+        ...(event.errorCode ? { errorCode: event.errorCode } : {}),
+      };
+      port.postMessage(frame);
+    };
+
     const prompt = async (frame: PiPromptFrame): Promise<void> => {
       const duplicateConversation = [...active.values()].some(
         (state) => state.conversationId === frame.conversationId,
@@ -123,6 +169,7 @@ export function startPiHostProcess(
       const state: ActiveGeneration = {
         abortRequested: false,
         sequence: 0,
+        activitySequence: 0,
         terminal: false,
         conversationId: frame.conversationId,
       };
@@ -184,11 +231,19 @@ export function startPiHostProcess(
           model,
           sessionManager,
           files: frame.files,
-          customTools: createProductFileTools({
-            generationId: frame.generationId,
-            conversationId: frame.conversationId,
-            transport: fileToolTransport,
-          }),
+          customTools: [
+            ...createProductFileTools({
+              generationId: frame.generationId,
+              conversationId: frame.conversationId,
+              transport: fileToolTransport,
+            }),
+            ...createProductCapabilityTools({
+              generationId: frame.generationId,
+              conversationId: frame.conversationId,
+              assistantMessageId: frame.assistantMessageId,
+              transport: capabilityToolTransport,
+            }),
+          ],
         });
         const session = result.session;
         state.session = session;
@@ -205,6 +260,59 @@ export function startPiHostProcess(
             emit(frame.generationId, state, {
               type: "delta",
               delta: event.assistantMessageEvent.delta,
+            });
+            return;
+          }
+          if (event.type === "tool_execution_start") {
+            emitActivity(frame.generationId, state, {
+              type: "tool.requested",
+              piToolCallId: event.toolCallId,
+              toolName: event.toolName,
+              inputSummary: JSON.stringify(event.args).slice(0, 2_000),
+            });
+            return;
+          }
+          if (event.type === "tool_execution_update") {
+            emitActivity(frame.generationId, state, {
+              type: "tool.progressed",
+              piToolCallId: event.toolCallId,
+              toolName: event.toolName,
+              resultSummary: JSON.stringify(event.partialResult).slice(0, 4_000),
+            });
+            return;
+          }
+          if (event.type === "tool_execution_end") {
+            emitActivity(frame.generationId, state, {
+              type: event.isError ? "tool.failed" : "tool.completed",
+              piToolCallId: event.toolCallId,
+              toolName: event.toolName,
+              resultSummary: JSON.stringify(event.result).slice(0, 4_000),
+              ...(event.isError ? { errorCode: "PI_TOOL_EXECUTION_FAILED" } : {}),
+            });
+            return;
+          }
+          if (event.type === "compaction_start") {
+            emitActivity(frame.generationId, state, { type: "run.compacting" });
+            return;
+          }
+          if (event.type === "compaction_end") {
+            emitActivity(frame.generationId, state, {
+              type: "run.compacted",
+              ...(event.errorMessage ? { errorCode: "PI_COMPACTION_FAILED" } : {}),
+            });
+            return;
+          }
+          if (event.type === "auto_retry_start") {
+            emitActivity(frame.generationId, state, {
+              type: "run.retrying",
+              resultSummary: `attempt ${event.attempt}/${event.maxAttempts}`,
+            });
+            return;
+          }
+          if (event.type === "auto_retry_end") {
+            emitActivity(frame.generationId, state, {
+              type: "run.retry_completed",
+              ...(event.success ? {} : { errorCode: "PI_RETRY_FAILED" }),
             });
           }
         });
@@ -245,6 +353,16 @@ export function startPiHostProcess(
         pendingFileTools.delete(fileToolResponse.data.requestId);
         if (fileToolResponse.data.ok) pending.resolve(fileToolResponse.data.data);
         else pending.reject(new Error(fileToolResponse.data.errorCode));
+        return;
+      }
+      const capabilityToolResponse = piToolResponseFrameSchema.safeParse(event.data);
+      if (capabilityToolResponse.success) {
+        const pending = pendingCapabilityTools.get(capabilityToolResponse.data.requestId);
+        if (!pending) return;
+        clearTimeout(pending.timeout);
+        pendingCapabilityTools.delete(capabilityToolResponse.data.requestId);
+        if (capabilityToolResponse.data.ok) pending.resolve(capabilityToolResponse.data.data);
+        else pending.reject(new Error(capabilityToolResponse.data.errorCode));
         return;
       }
       const request = piHostRequestFrameSchema.safeParse(event.data);

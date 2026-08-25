@@ -79,7 +79,7 @@ try {
     if (typeof crash !== "function") throw new Error("Crash injection hook missing");
     crash();
   });
-  await page.getByText("失败原因：APP_SERVICE_RESTARTED").last().waitFor();
+  await page.getByText("失败原因：APP_SERVICE_RESTARTED").last().waitFor({ timeout: 60_000 });
   await page.getByText(/(darwin|win32) · ready/).waitFor();
 
   const firstUserMessage = page.locator(".message-user").first();

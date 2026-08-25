@@ -198,6 +198,11 @@ export class FileAppService {
     return this.#store.read(objectRef);
   }
 
+  resolvePersonalFilePath(personalFileId: string): string {
+    const file = this.#repository.personalFile(personalFileId);
+    return this.#store.resolve(file.objectRef);
+  }
+
   async prepareSyncPush(
     operation: SyncOperation,
     upload: (

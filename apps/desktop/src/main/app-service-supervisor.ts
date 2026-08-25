@@ -7,7 +7,12 @@ import {
   appServiceResponseFrameSchema,
   type ChatCommandEnvelope,
   type ChatEvent,
+  mainCapabilityCancelFrameSchema,
+  mainCapabilityRequestFrameSchema,
+  mainCredentialRequestFrameSchema,
+  type NormalizedToolResult,
   parseChatCommandResult,
+  type ToolOperation,
 } from "@openerx/contracts";
 import {
   MessageChannelMain,
@@ -22,6 +27,14 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timeout: NodeJS.Timeout;
+}
+
+export interface MainCapabilityHost {
+  execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult>;
+  close(): void;
+  saveCredential(credentialRef: string, value: string): Promise<void>;
+  resolveCredential(credentialRef: string): Promise<string>;
+  clearCredential(credentialRef: string): Promise<void>;
 }
 
 export class AppServiceSupervisor {
@@ -40,17 +53,22 @@ export class AppServiceSupervisor {
   #stopping = false;
   #restartCount = 0;
   #handshakeComplete = false;
+  #capabilityHost: MainCapabilityHost | null = null;
+  readonly #capabilityHostFactory: ((profileDirectory: string) => MainCapabilityHost) | null;
+  readonly #capabilityRequests = new Map<string, AbortController>();
 
   constructor(
     profileDirectory: string,
     piHostEntry = "pi-host.js",
     ownerProfileId = "local-default",
     deviceId = "00000000-0000-4000-8000-000000000000",
+    capabilityHostFactory: ((profileDirectory: string) => MainCapabilityHost) | null = null,
   ) {
     this.#profileDirectory = profileDirectory;
     this.#piHostEntry = piHostEntry;
     this.#ownerProfileId = ownerProfileId;
     this.#deviceId = deviceId;
+    this.#capabilityHostFactory = capabilityHostFactory;
   }
 
   async start(): Promise<void> {
@@ -76,6 +94,10 @@ export class AppServiceSupervisor {
 
   stop(): void {
     this.#stopping = true;
+    for (const controller of this.#capabilityRequests.values()) controller.abort();
+    this.#capabilityRequests.clear();
+    this.#capabilityHost?.close();
+    this.#capabilityHost = null;
     this.#mainPort?.close();
     this.#mainPort = null;
     this.#appProcess?.kill();
@@ -120,12 +142,27 @@ export class AppServiceSupervisor {
     });
   }
 
+  async saveCapabilityCredential(credentialRef: string, value: string): Promise<void> {
+    await this.start();
+    const host = this.#capabilityHost;
+    if (!host) throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
+    await host.saveCredential(credentialRef, value);
+  }
+
+  async clearCapabilityCredential(credentialRef: string): Promise<void> {
+    await this.start();
+    const host = this.#capabilityHost;
+    if (!host) throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
+    await host.clearCredential(credentialRef);
+  }
+
   #spawn(): void {
     mkdirSync(this.#profileDirectory, { recursive: true });
     const appNonce = randomBytes(32).toString("hex");
     const piHostNonce = randomBytes(32).toString("hex");
     this.#emitStatus(this.#restartCount === 0 ? "starting" : "restarting");
     this.#handshakeComplete = false;
+    this.#capabilityHost = this.#capabilityHostFactory?.(this.#profileDirectory) ?? null;
     this.#ready = new Promise<void>((resolve, reject) => {
       this.#resolveReady = resolve;
       this.#rejectReady = reject;
@@ -206,6 +243,86 @@ export class AppServiceSupervisor {
       } else {
         pending.reject(new Error(`${response.data.error.code}: ${response.data.error.message}`));
       }
+      return;
+    }
+    const capabilityRequest = mainCapabilityRequestFrameSchema.safeParse(data);
+    if (capabilityRequest.success) {
+      const host = this.#capabilityHost;
+      if (!host) {
+        this.#mainPort?.postMessage({
+          kind: "main.capability.response",
+          requestId: capabilityRequest.data.requestId,
+          ok: false,
+          errorCode: "MAIN_CAPABILITY_UNAVAILABLE",
+        });
+        return;
+      }
+      const controller = new AbortController();
+      this.#capabilityRequests.set(capabilityRequest.data.requestId, controller);
+      void host
+        .execute(capabilityRequest.data.operation, controller.signal)
+        .then(
+          (result) =>
+            this.#mainPort?.postMessage({
+              kind: "main.capability.response",
+              requestId: capabilityRequest.data.requestId,
+              ok: true,
+              data: result,
+            }),
+          (error: unknown) =>
+            this.#mainPort?.postMessage({
+              kind: "main.capability.response",
+              requestId: capabilityRequest.data.requestId,
+              ok: false,
+              errorCode:
+                error instanceof Error
+                  ? (error.message.split(":", 1)[0] ?? "MAIN_CAPABILITY_FAILED")
+                  : "MAIN_CAPABILITY_FAILED",
+            }),
+        )
+        .finally(() => this.#capabilityRequests.delete(capabilityRequest.data.requestId));
+      return;
+    }
+    const capabilityCancel = mainCapabilityCancelFrameSchema.safeParse(data);
+    if (capabilityCancel.success) {
+      this.#capabilityRequests.get(capabilityCancel.data.requestId)?.abort();
+      return;
+    }
+    const credentialRequest = mainCredentialRequestFrameSchema.safeParse(data);
+    if (credentialRequest.success) {
+      const host = this.#capabilityHost;
+      if (!host) {
+        this.#mainPort?.postMessage({
+          kind: "main.credential.response",
+          requestId: credentialRequest.data.requestId,
+          ok: false,
+          errorCode: "MAIN_CAPABILITY_UNAVAILABLE",
+        });
+        return;
+      }
+      const operation =
+        credentialRequest.data.operation === "resolve"
+          ? host.resolveCredential(credentialRequest.data.credentialRef)
+          : host.clearCredential(credentialRequest.data.credentialRef).then(() => undefined);
+      void operation.then(
+        (value) =>
+          this.#mainPort?.postMessage({
+            kind: "main.credential.response",
+            requestId: credentialRequest.data.requestId,
+            ok: true,
+            ...(value ? { value } : {}),
+          }),
+        (error: unknown) =>
+          this.#mainPort?.postMessage({
+            kind: "main.credential.response",
+            requestId: credentialRequest.data.requestId,
+            ok: false,
+            errorCode:
+              error instanceof Error
+                ? (error.message.split(":", 1)[0] ?? "MAIN_CREDENTIAL_FAILED")
+                : "MAIN_CREDENTIAL_FAILED",
+          }),
+      );
       return;
     }
     const event = appServiceEventFrameSchema.safeParse(data);

@@ -1,10 +1,14 @@
 import {
+  type PiActivityEvent,
   type PiFileToolRequestFrame,
   type PiHostEventFrame,
   type PiPromptFrame,
+  type PiToolRequestFrame,
+  piActivityEventSchema,
   piFileToolRequestFrameSchema,
   piHostEventFrameSchema,
   piHostReadyFrameSchema,
+  piToolRequestFrameSchema,
 } from "@openerx/contracts";
 import type { MessagePortMain } from "electron";
 
@@ -13,12 +17,16 @@ export interface PiHostClient {
   abort(generationId: string): Promise<void>;
   onEvent(listener: (frame: PiHostEventFrame) => void): () => void;
   onFileToolRequest(listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void;
+  onToolRequest(listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void;
+  onActivity(listener: (frame: PiActivityEvent) => void): () => void;
 }
 
 export class MessagePortPiHostClient implements PiHostClient {
   readonly #port: MessagePortMain;
   readonly #listeners = new Set<(frame: PiHostEventFrame) => void>();
   readonly #fileToolListeners = new Set<(frame: PiFileToolRequestFrame) => Promise<unknown>>();
+  readonly #toolListeners = new Set<(frame: PiToolRequestFrame) => Promise<unknown>>();
+  readonly #activityListeners = new Set<(frame: PiActivityEvent) => void>();
   readonly #ready: Promise<void>;
 
   constructor(port: MessagePortMain, expectedNonce: string) {
@@ -64,6 +72,16 @@ export class MessagePortPiHostClient implements PiHostClient {
     return () => this.#fileToolListeners.delete(listener);
   }
 
+  onToolRequest(listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void {
+    this.#toolListeners.add(listener);
+    return () => this.#toolListeners.delete(listener);
+  }
+
+  onActivity(listener: (frame: PiActivityEvent) => void): () => void {
+    this.#activityListeners.add(listener);
+    return () => this.#activityListeners.delete(listener);
+  }
+
   async ready(): Promise<void> {
     await this.#ready;
   }
@@ -72,6 +90,46 @@ export class MessagePortPiHostClient implements PiHostClient {
     const event = piHostEventFrameSchema.safeParse(data);
     if (event.success) {
       for (const listener of this.#listeners) listener(event.data);
+      return;
+    }
+    const activity = piActivityEventSchema.safeParse(data);
+    if (activity.success) {
+      for (const listener of this.#activityListeners) listener(activity.data);
+      return;
+    }
+    const toolRequest = piToolRequestFrameSchema.safeParse(data);
+    if (toolRequest.success) {
+      const listener = [...this.#toolListeners][0];
+      if (!listener) {
+        this.#port.postMessage({
+          kind: "pi.tool.response",
+          requestId: toolRequest.data.requestId,
+          ok: false,
+          errorCode: "TOOL_BROKER_UNAVAILABLE",
+          message: "Tool Broker unavailable",
+        });
+        return;
+      }
+      void listener(toolRequest.data).then(
+        (result) =>
+          this.#port.postMessage({
+            kind: "pi.tool.response",
+            requestId: toolRequest.data.requestId,
+            ok: true,
+            data: result,
+          }),
+        (error: unknown) =>
+          this.#port.postMessage({
+            kind: "pi.tool.response",
+            requestId: toolRequest.data.requestId,
+            ok: false,
+            errorCode:
+              error instanceof Error
+                ? (error.message.split(":", 1)[0] ?? "TOOL_FAILED")
+                : "TOOL_FAILED",
+            message: error instanceof Error ? error.message : "Tool failed",
+          }),
+      );
       return;
     }
     const request = piFileToolRequestFrameSchema.safeParse(data);

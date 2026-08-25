@@ -4,6 +4,7 @@ import type { BillingBridge } from "./billing";
 import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
 import type { SyncBridge } from "./sync";
+import type { ToolBridge } from "./tool";
 
 export const ipcChannels = Object.freeze({
   environmentGet: "desktop:environment:get",
@@ -56,6 +57,15 @@ export const ipcChannels = Object.freeze({
   artifactGet: "artifact:get",
   artifactPreview: "artifact:preview",
   artifactSave: "artifact:save",
+  toolWorkItemsList: "tool:work-items:list",
+  toolWorkItemGet: "tool:work-item:get",
+  toolPermissionsList: "tool:permissions:list",
+  toolPermissionResolve: "tool:permission:resolve",
+  toolScopesList: "tool:scopes:list",
+  toolScopeRevoke: "tool:scope:revoke",
+  mcpServersList: "mcp:servers:list",
+  mcpServerSave: "mcp:server:save",
+  mcpServerRemove: "mcp:server:remove",
 });
 
 export const desktopEnvironmentSchema = z
@@ -74,7 +84,8 @@ export interface DesktopBridge
     ModelUsageBridge,
     SyncBridge,
     BillingBridge,
-    FileBridge {
+    FileBridge,
+    ToolBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
 }
 

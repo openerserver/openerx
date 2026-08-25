@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
   appServiceBootstrapSchema,
@@ -6,11 +7,13 @@ import {
   safeErrorMessage,
 } from "@openerx/contracts";
 import { FileAppService } from "@openerx/file-service";
-import { ChatRepository, FileRepository } from "@openerx/storage";
+import { ChatRepository, FileRepository, ToolRepository } from "@openerx/storage";
 import type { MessagePortMain } from "electron";
 import { ChatAppService } from "./chat-app-service";
+import { MainCapabilityClient } from "./main-capability-client";
 import { MessagePortPiHostClient } from "./pi-host-client";
 import { HttpAccountSyncTransport, SyncCoordinator } from "./sync-coordinator";
+import { ToolAppService } from "./tool-app-service";
 
 const parentPort = process.parentPort;
 if (!parentPort) throw new Error("App Service requires an Electron utility-process parent port");
@@ -21,6 +24,7 @@ parentPort.once("message", async (bootstrapEvent) => {
   if (!mainPort || !piHostPort) throw new Error("App Service bootstrap ports are missing");
 
   const piHost = new MessagePortPiHostClient(piHostPort, bootstrap.piHostNonce);
+  const mainCapabilities = new MainCapabilityClient(mainPort);
   await piHost.ready();
   const repository = new ChatRepository(
     path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
@@ -35,16 +39,39 @@ parentPort.once("message", async (bootstrapEvent) => {
     { ownerProfileId: bootstrap.ownerProfileId, deviceId: bootstrap.deviceId },
   );
   const files = new FileAppService(fileRepository, bootstrap.profileDirectory);
-  const service = new ChatAppService(
+  const toolRepository = new ToolRepository(
+    path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
+    { ownerProfileId: bootstrap.ownerProfileId },
+  );
+  const workspaceDirectory = path.join(bootstrap.profileDirectory, "pi-workspace");
+  mkdirSync(workspaceDirectory, { recursive: true });
+  let service: ChatAppService;
+  const toolService = new ToolAppService({
+    repository: toolRepository,
+    workspaceDirectory,
+    host: mainCapabilities,
+    resolveUploadPath: (fileId) => files.resolvePersonalFilePath(fileId),
+    ingestDownload: async (downloadPath) => {
+      const [file] = await files.importPaths([downloadPath]);
+      if (!file) throw new Error("BROWSER_DOWNLOAD_IMPORT_FAILED");
+      return { fileId: file.id, displayName: file.displayName };
+    },
+    selectedModelRef: (assistantMessageId) =>
+      repository.selectedModelForMessage(assistantMessageId),
+    emit: (event) => service.emitExternal(event),
+  });
+  service = new ChatAppService(
     repository,
     piHost,
     new SyncCoordinator(repository, new HttpAccountSyncTransport(), files),
     files,
+    toolService,
   );
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.initialize();
 
   mainPort.on("message", async (event) => {
+    if (mainCapabilities.handleMessage(event.data)) return;
     const request = appServiceRequestFrameSchema.safeParse(event.data);
     if (!request.success) return;
     try {
@@ -76,5 +103,8 @@ parentPort.once("message", async (bootstrapEvent) => {
     contractVersion: 1,
     nonce: bootstrap.nonce,
   });
-  process.once("exit", () => service.close());
+  process.once("exit", () => {
+    mainCapabilities.close();
+    service.close();
+  });
 });

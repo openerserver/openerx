@@ -1,6 +1,6 @@
 # Electron and local App Service threat model
 
-> Baseline: M2 local implementation checkpoint
+> Baseline: M5 local implementation checkpoint
 >
 > Date: 2026-08-25 (Asia/Shanghai)
 >
@@ -47,7 +47,12 @@ The current invariants are:
 | App Service crash freezes UI or corrupts writes | utility process, bounded restart, transactional single-writer storage | live Electron crash injection plus interrupted-message recovery E2E |
 | Database theft reveals reusable credentials | credentials outside DB; OS-protected key and authenticated field encryption | schema inspection proves no credential/token tables; M2 vault tests and Electron E2E verify protected credential bytes and sign-out deletion |
 | Path traversal or symlink escapes a grant | canonical path checks at capability broker and operation time | file-scope E2E in M4 |
-| Pi/Skill/MCP expands its own authority | isolated Pi Host, V2 capability port, explicit scope and approval; Pi tool lifecycle does not grant side-effect authority | denial/revocation E2E in M5/M7 |
+| Pi/Skill/MCP expands its own authority | isolated Pi Host, exact-payload approval, device Scope and Capability Broker; Pi tool lifecycle does not grant side-effect authority | Broker/storage/Electron E2E in M5; Skill lifecycle in M7 |
+| Isolated browser inherits daily cookies or Renderer authority | dedicated partition per session, sandbox, no preload/Node and origin navigation policy | real second-window Browser E2E in M5 |
+| Browser upload reads a model-selected device path | Pi sends PersonalFile ID; App Service resolves M4 controlled bytes; Main enforces profile-CAS real path | stable-ID adapter test and real upload E2E in M5 |
+| Browser download leaks a Profile path to Pi | Main path stays on private IPC; App Service imports controlled bytes and returns PersonalFile ID/display name | path-redaction adapter test and download E2E in M5 |
+| Shell escapes the workspace or keeps children after stop | canonical approved roots, argv-only spawn, network deny, timeout/output cap and process-group cleanup | Shell escape/network/long-process tests in M5 |
+| MCP credentials leak into Renderer, Pi or SQLite | Main-owned OS-encrypted vault and opaque credential references | Tool vault, Bridge and MCP reconnect/clear tests in M5 |
 | Remote exposes a desktop listener | supervised Connector makes outbound TLS/WSS connections only; no localhost/public Remote server | socket scan and packaged-host E2E in M6 |
 | Forged/replayed/expired Remote command controls Pi twice | same-account pairing, device signatures, E2EE, TTL, sequence, baseRevision and host idempotency | mutation, replay, reorder and duplicate E2E in M6 |
 | Lost/revoked phone continues approval or event access | protected device key, biometric gates, immediate pairing/session revocation and short-lived encrypted resources | lost-device/revocation E2E in M6 |
@@ -64,6 +69,7 @@ The current invariants are:
 - New windows and in-app navigation are denied unless a future ADR grants an explicit route.
 - External URLs are never loaded with a Preload Bridge.
 - Tool, file, browser, desktop and MCP permissions do not imply one another.
+- L4/L5 permissions are bound to the exact operation digest and cannot become persistent grants.
 - A failed security check produces a stable error and audit event; it does not silently downgrade.
 
 ## Residual risks and follow-up gates
@@ -80,6 +86,9 @@ The current invariants are:
   data-loss risk; automated restoration from a backup remains a later reliability feature.
 - M1 process E2E runs natively on the development macOS arm64 host. Windows x64 and macOS x64 are
   cross-packaged locally and have native E2E jobs in CI; hosted results are required before release.
+- M5 browser flow is exercised on the development macOS host with a real isolated Electron window.
+  Native Windows desktop automation, OS sandbox behavior, signed packages and interactive OAuth
+  authorization-code providers remain release-environment gates.
 
 ## Change rule
 

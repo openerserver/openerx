@@ -27,6 +27,7 @@ import {
   chatStopInputSchema,
   createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
+  desktopMcpServerSaveInputSchema,
   emptyInputSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
@@ -35,16 +36,23 @@ import {
   fileRevokeScopeInputSchema,
   fileSearchInputSchema,
   ipcChannels,
+  mcpServerConfigSchema,
+  mcpServerRemoveInputSchema,
+  permissionListInputSchema,
+  permissionResolveInputSchema,
   syncResolveConflictInputSchema,
+  toolListInputSchema,
+  toolScopeRevokeInputSchema,
   usageQueryInputSchema,
   usageRecordSchema,
+  workItemGetInputSchema,
 } from "@openerx/contracts";
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from "electron";
 import started from "electron-squirrel-startup";
 import type { z } from "zod";
 import { AccountSessionManager, HttpIdentityTransport } from "./account-session-manager";
 import { AppServiceSupervisor } from "./app-service-supervisor";
-import { DeviceCredentialVault } from "./credential-vault";
+import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { PlatformAccountClient } from "./platform-account-client";
@@ -54,6 +62,7 @@ import {
   isTrustedExternalUrl,
   resolveRendererAssetPath,
 } from "./security";
+import { ElectronToolCapabilityHost } from "./tool-capability-host";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -345,6 +354,69 @@ function registerIpcHandlers(
   registerChatHandler(ipcChannels.artifactList, "artifact.list", emptyInputSchema);
   registerChatHandler(ipcChannels.artifactGet, "artifact.get", artifactGetInputSchema);
   registerChatHandler(ipcChannels.artifactPreview, "artifact.preview", artifactPreviewInputSchema);
+  registerChatHandler(ipcChannels.toolWorkItemsList, "tool.workItems.list", toolListInputSchema);
+  registerChatHandler(ipcChannels.toolWorkItemGet, "tool.workItem.get", workItemGetInputSchema);
+  registerChatHandler(
+    ipcChannels.toolPermissionsList,
+    "tool.permissions.list",
+    permissionListInputSchema,
+  );
+  registerChatHandler(
+    ipcChannels.toolPermissionResolve,
+    "tool.permission.resolve",
+    permissionResolveInputSchema,
+  );
+  registerChatHandler(ipcChannels.toolScopesList, "tool.scopes.list", emptyInputSchema);
+  registerChatHandler(ipcChannels.toolScopeRevoke, "tool.scope.revoke", toolScopeRevokeInputSchema);
+  registerChatHandler(ipcChannels.mcpServersList, "mcp.servers.list", emptyInputSchema);
+  ipcMain.handle(ipcChannels.mcpServerSave, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = desktopMcpServerSaveInputSchema.parse(input);
+    let config = parsed.config;
+    if (config.transport === "streamable_http") {
+      let credentialRef = config.auth === "none" ? null : config.credentialRef;
+      if (config.auth === "bearer" && parsed.bearerToken) {
+        credentialRef = `mcp:${config.id}`;
+        await supervisor.saveCapabilityCredential(credentialRef, parsed.bearerToken);
+      }
+      if (config.auth === "oauth" && parsed.oauthClientId && parsed.oauthClientSecret) {
+        credentialRef = `mcp:${config.id}`;
+        await supervisor.saveCapabilityCredential(
+          credentialRef,
+          JSON.stringify({
+            grantType: "client_credentials",
+            clientId: parsed.oauthClientId,
+            clientSecret: parsed.oauthClientSecret,
+            ...(parsed.oauthScope ? { scope: parsed.oauthScope } : {}),
+          }),
+        );
+      }
+      if (config.auth !== "none" && !credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
+      config = mcpServerConfigSchema.parse({ ...config, credentialRef });
+    }
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({ command: "mcp.server.upsert", input: { config } }),
+    );
+  });
+  ipcMain.handle(ipcChannels.mcpServerRemove, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = mcpServerRemoveInputSchema.parse(input);
+    const servers = mcpServerConfigSchema
+      .array()
+      .parse(
+        await supervisor.request(
+          chatCommandEnvelopeSchema.parse({ command: "mcp.servers.list", input: {} }),
+        ),
+      );
+    const server = servers.find(({ id }) => id === parsed.serverId);
+    const removed = await supervisor.request(
+      chatCommandEnvelopeSchema.parse({ command: "mcp.server.remove", input: parsed }),
+    );
+    if (server?.transport === "streamable_http" && server.credentialRef) {
+      await supervisor.clearCapabilityCredential(server.credentialRef);
+    }
+    return removed;
+  });
   ipcMain.handle(ipcChannels.artifactSave, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const parsed = artifactGetInputSchema.parse(input);
@@ -449,6 +521,11 @@ app.whenReady().then(async () => {
     piHostEntry,
     accountState.account?.accountId ?? "local-default",
     device.deviceId,
+    (directory) =>
+      new ElectronToolCapabilityHost(
+        directory,
+        new ToolCredentialVault(path.join(directory, "credentials", "tool-credentials.bin")),
+      ),
   );
   if (process.env.OPENERX_E2E === "1") {
     Object.assign(globalThis, {

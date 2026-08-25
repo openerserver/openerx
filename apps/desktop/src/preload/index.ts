@@ -33,6 +33,7 @@ import {
   createRechargeOrderInputSchema,
   type DesktopBridge,
   desktopEnvironmentSchema,
+  desktopMcpServerSaveInputSchema,
   deviceSessionSchema,
   emailChallengeSchema,
   fileAttachInputSchema,
@@ -43,14 +44,22 @@ import {
   fileSearchInputSchema,
   ipcChannels,
   ledgerTransactionSchema,
+  mcpServerConfigSchema,
+  mcpServerRemoveInputSchema,
+  mcpServerRemoveResultSchema,
   modelCatalogEntrySchema,
   parseChatCommandResult,
+  permissionListInputSchema,
+  permissionResolveInputSchema,
   rechargeOrderSchema,
   refundOrderSchema,
   syncResolveConflictInputSchema,
+  toolListInputSchema,
+  toolScopeRevokeInputSchema,
   usageAggregateSchema,
   usageQueryInputSchema,
   usageRecordSchema,
+  workItemGetInputSchema,
 } from "@openerx/contracts";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -252,6 +261,55 @@ const bridge: DesktopBridge = {
       artifactGetInputSchema.parse(input),
     );
     return result === null ? null : artifactExportResultSchema.parse(result);
+  },
+  listWorkItems: async (input = {}) =>
+    invokeChat(
+      ipcChannels.toolWorkItemsList,
+      "tool.workItems.list",
+      toolListInputSchema.parse(input),
+    ),
+  getWorkItem: async (input) =>
+    invokeChat(
+      ipcChannels.toolWorkItemGet,
+      "tool.workItem.get",
+      workItemGetInputSchema.parse(input),
+    ),
+  listPermissionRequests: async (input = {}) =>
+    invokeChat(
+      ipcChannels.toolPermissionsList,
+      "tool.permissions.list",
+      permissionListInputSchema.parse(input),
+    ),
+  resolvePermission: async (input) =>
+    invokeChat(
+      ipcChannels.toolPermissionResolve,
+      "tool.permission.resolve",
+      permissionResolveInputSchema.parse(input),
+    ),
+  listCapabilityScopes: async () => invokeChat(ipcChannels.toolScopesList, "tool.scopes.list", {}),
+  revokeCapabilityScope: async (input) =>
+    invokeChat(
+      ipcChannels.toolScopeRevoke,
+      "tool.scope.revoke",
+      toolScopeRevokeInputSchema.parse(input),
+    ),
+  listMcpServers: async () => {
+    const value: unknown = await ipcRenderer.invoke(ipcChannels.mcpServersList, {});
+    return mcpServerConfigSchema.array().parse(value);
+  },
+  saveMcpServer: async (input) => {
+    const value: unknown = await ipcRenderer.invoke(
+      ipcChannels.mcpServerSave,
+      desktopMcpServerSaveInputSchema.parse(input),
+    );
+    return mcpServerConfigSchema.parse(value);
+  },
+  removeMcpServer: async (input) => {
+    const value: unknown = await ipcRenderer.invoke(
+      ipcChannels.mcpServerRemove,
+      mcpServerRemoveInputSchema.parse(input),
+    );
+    return mcpServerRemoveResultSchema.parse(value);
   },
   onChatEvent: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {

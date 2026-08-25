@@ -3,6 +3,7 @@ import { entityIdSchema, timestampSchema } from "./chat";
 import { supportedFileFormatSchema } from "./file";
 import { usageRecordSchema } from "./model";
 import { processNonceSchema } from "./process";
+import { piActivityEventSchema, piToolRequestFrameSchema, piToolResponseFrameSchema } from "./tool";
 
 export const piHostContractVersion = 1 as const;
 
@@ -141,6 +142,7 @@ export const piHostRequestFrameSchema = z.union([
   piPromptFrameSchema,
   piAbortFrameSchema,
   piFileToolResponseFrameSchema,
+  piToolResponseFrameSchema,
 ]);
 
 export const piHostEventFrameSchema = z
@@ -163,6 +165,9 @@ export const piHostPortFrameSchema = z.union([
   piHostEventFrameSchema,
   piFileToolRequestFrameSchema,
   piFileToolResponseFrameSchema,
+  piToolRequestFrameSchema,
+  piToolResponseFrameSchema,
+  piActivityEventSchema,
 ]);
 
 export type PiHistoryMessage = z.infer<typeof piHistoryMessageSchema>;

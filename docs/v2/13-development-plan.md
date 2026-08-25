@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 开发计划
 
-> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2 LOCAL COMPLETE / M3 LOCAL COMPLETE / M4 LOCAL COMPLETE / NEXT M5`
+> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2-M5 LOCAL COMPLETE / NEXT M6`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -42,6 +42,8 @@ V1 完成必须同时满足：
 | Pi Foundation | COMPLETE | 直接依赖 Pi；`AgentSession` 原生事件；`pi.session.prompt/abort`；生产包仅含 Pi Host | [实现与质量证据](evidence/pi-foundation-2026-08-25.md) |
 | M2 Account + Model | LOCAL COMPLETE | 账户/设备会话、Outbox/冲突/墓碑、Pi-native Model Gateway Provider、UsageRecord、Remote V1 Schema | 原生 Windows/macOS 双设备与付费 Provider 验证属于发布环境门禁；[实现与质量证据](evidence/m2-2026-08-25.md) |
 | M3 Billing Alpha | LOCAL COMPLETE | 服务端报价/预留/结算、额度/积分/现金复式账本、支付回调/退款/对账、最终 Billing UI、CSV/PDF | 真实支付宝/微信沙箱、商户参数、属地合规与原生发布矩阵仍是发布环境门禁；[实现与质量证据](evidence/m3-2026-08-25.md) |
+| M4 File + Artifact | LOCAL COMPLETE | 设备 Scope、受控副本、多格式引用、不可变成果、云对象恢复、Pi SessionManager | 原生双平台打开/选择器与签名包仍是发布门禁；[实现与质量证据](evidence/m4-2026-08-26.md) |
+| M5 Tool Alpha | LOCAL COMPLETE | Pi-native Web/image/Browser/Shell/Desktop/MCP、Capability Broker、长任务与权限投影 | 原生双平台桌面/沙箱、实时 Provider、第三方 MCP 与签名包仍是发布门禁；[实现与质量证据](evidence/m5-2026-08-26.md) |
 
 当前生产路径在未配置平台模型时明确返回 `PI_MODEL_NOT_CONFIGURED`，不以测试模型伪装可用模型。
 
@@ -140,13 +142,21 @@ PDF/DOCX/XLSX/PPTX 真实渲染检查通过；原生 Windows/macOS 双平台打�
 
 ### M5：Tool Alpha 与长任务 — 5 至 6 周
 
-- Web 搜索、隔离浏览器、本地 Web 预览、Shell/代码、桌面控制和 MCP。
+状态：`LOCAL IMPLEMENTATION COMPLETE (2026-08-26)`
+
+- Web 搜索、平台图片生成、隔离浏览器、本地 Web 预览、Shell/代码、桌面控制和 MCP。
 - 工具通过 Pi 原生 ToolDefinition 注册；Pi 管理调用生命周期并接收结果。
 - V2 Broker 管理 Scope、审批、沙箱、网络策略、副作用幂等和审计。
 - 从 Pi 事件投影 WorkItem、ExecutionRun、RunStep、ToolCall 和 PermissionRequest。
 - 长任务可离开、返回、停止、恢复；子进程和临时授权可回收。
 
-退出条件：TOOL-01 至 TOOL-10 在 Windows/macOS 通过；越权和崩溃注入均安全失败。
+本地退出条件：TOOL-01 至 TOOL-10 的 M5 实现切片，GT-TOOL-01 至 GT-TOOL-06 及
+GT-TOOL-10 非 Skill 切片；越权、路径逃逸、网络拒绝、重复副作用和崩溃注入安全失败。
+GT-TOOL-07 至 GT-TOOL-09 是 Skill 安装/生命周期/同步任务，仍由 M7 交付，不用 M5 证据
+提前宣称通过。原生 Windows/macOS 桌面控制与 Shell 沙箱、实时 Web/图片 Provider、第三方
+MCP/OAuth 授权码流和签名包证据仍是发布环境门禁。
+
+证据：[M5 checkpoint](evidence/m5-2026-08-26.md)。
 
 ### M6：Remote Control Alpha — 5 至 7 周
 
@@ -188,14 +198,14 @@ PDF/DOCX/XLSX/PPTX 真实渲染检查通过；原生 Windows/macOS 双平台打�
 
 | 顺序 | ID | 工作项 | 完成证据 |
 | --- | --- | --- | --- |
-| 1 | PRICING-001 | 版本化 Price Catalog、收费条款和价格快照 | 生效区间、币种、舍入和版本测试 |
-| 2 | QUOTE-001 | 执行前报价与最大费用预留 | 过期、重放、余额不足和并发测试 |
-| 3 | LEDGER-001 | 追加式复式账本与账户资产投影 | 借贷平衡、反向分录和全量重建 |
-| 4 | SETTLEMENT-001 | UsageRecord 到唯一 ChargeRecord 结算 | 重试、停止、失败和去重测试 |
-| 5 | ASSET-001 | 额度、积分和充值余额分账及扣减顺序 | 到期、适用范围和零透支测试 |
-| 6 | PAYMENT-001 | 支付宝/微信订单、验签、查单、退款和对账 | 测试环境回调、重放和异常恢复 |
-| 7 | STATEMENT-001 | 账单明细、月度 CSV/PDF 和调整记录 | 聚合一致性与文件打开证据 |
-| 8 | QA-M3-001 | 资金隔离、服务重启和故障注入 | GT-BILLING-01 至 GT-BILLING-10 |
+| 1 | MOBILE-001 | 建立 React Native + Expo 手机控制面骨架 | iOS/Android Hosts/Tasks/Inbox/Settings 构建 |
+| 2 | PAIR-001 | 同账户二维码配对、设备密钥和撤销 | 过期、重放、跨账户、丢失设备测试 |
+| 3 | CONNECTOR-001 | 桌面出站 Remote Host Connector | 无监听端口、睡眠/重连和撤销测试 |
+| 4 | RELAY-001 | 密文命令/事件路由、TTL、回执和游标 | 重复、乱序、过期、篡改与断线恢复 |
+| 5 | PI-REMOTE-001 | Start/Steer/Queue/Stop 到 Pi 原生 API 映射 | 单次调用、顺序、abort 和恢复证据 |
+| 6 | REMOTE-APPROVAL-001 | 手机受限审批与问题回复 | 同一 Broker、无 Scope 扩大/继承测试 |
+| 7 | REVIEW-001 | Diff/测试/终端/截图/Artifact 手机审阅 | 脱敏、分页、附件与大结果测试 |
+| 8 | QA-M6-001 | iOS/Android × Windows/macOS 故障矩阵 | Remote 合同全部硬门禁 |
 
 ## 7. 完成定义
 
@@ -244,6 +254,6 @@ PDF/DOCX/XLSX/PPTX 真实渲染检查通过；原生 Windows/macOS 双平台打�
 
 ## 10. 当前下一步
 
-进入 M5 Tool Alpha 与长任务。M5 在 Pi 原生工具调用生命周期之上增加 Web、隔离浏览器、
-本地 Web 预览、Shell/代码、桌面控制和 MCP，并由 Capability Broker 统一 Scope、审批、
-沙箱、审计和副作用幂等。M5 不得绕过 M4 File Scope Broker，也不得改变 M3 的服务端计费真值。
+进入 M6 Remote Control Alpha。手机只作为控制面，通过配对设备密钥和加密产品命令控制在线
+桌面执行主机；Start、Steer、Queue、Stop 必须直接映射 Pi 原生 API，审批必须回到 M5 的同一
+Capability Broker。Remote 不得继承设备本地 Scope，也不得改变 M3 的服务端计费真值。

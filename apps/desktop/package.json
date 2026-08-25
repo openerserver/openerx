@@ -12,13 +12,14 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:e2e:account": "node scripts/e2e-account.mjs",
-    "test:e2e": "vite build --config vite.pi-host-test.config.mts && vite build --config vite.platform-alpha-test.config.mts && node scripts/e2e-chat.mjs && node scripts/e2e-account.mjs",
+    "test:e2e": "vite build --config vite.pi-host-test.config.mts && vite build --config vite.platform-alpha-test.config.mts && node scripts/e2e-chat.mjs && node scripts/e2e-account.mjs && node scripts/e2e-tools.mjs",
     "verify:fuses": "node scripts/verify-packaged-fuses.mjs"
   },
   "dependencies": {
     "@openerx/app-service": "0.0.0",
     "@openerx/contracts": "0.0.0",
     "@openerx/pi-host": "0.0.0",
+    "@openerx/tool-sdk": "0.0.0",
     "@phosphor-icons/react": "^2.1.10",
     "@tanstack/react-query": "5.102.3",
     "electron-squirrel-startup": "1.0.1",

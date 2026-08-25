@@ -1,7 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { PiFileToolRequestFrame, PiHostEventFrame, PiPromptFrame } from "@openerx/contracts";
+import type {
+  PiActivityEvent,
+  PiFileToolRequestFrame,
+  PiHostEventFrame,
+  PiPromptFrame,
+  PiToolRequestFrame,
+} from "@openerx/contracts";
 import { ChatRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatAppService, type PiHostClient } from "../src";
@@ -40,6 +46,14 @@ class ScriptedPiHostClient implements PiHostClient {
   }
 
   onFileToolRequest(_listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void {
+    return () => undefined;
+  }
+
+  onToolRequest(_listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void {
+    return () => undefined;
+  }
+
+  onActivity(_listener: (frame: PiActivityEvent) => void): () => void {
     return () => undefined;
   }
 

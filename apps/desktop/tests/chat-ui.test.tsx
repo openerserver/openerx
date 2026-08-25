@@ -140,6 +140,15 @@ function createBridge(): DesktopBridge {
     getArtifact: vi.fn(),
     previewArtifact: vi.fn(),
     saveArtifact: vi.fn(),
+    listWorkItems: vi.fn().mockResolvedValue([]),
+    getWorkItem: vi.fn(),
+    listPermissionRequests: vi.fn().mockResolvedValue([]),
+    resolvePermission: vi.fn(),
+    listCapabilityScopes: vi.fn().mockResolvedValue([]),
+    revokeCapabilityScope: vi.fn(),
+    listMcpServers: vi.fn().mockResolvedValue([]),
+    saveMcpServer: vi.fn(),
+    removeMcpServer: vi.fn(),
     onChatEvent: vi.fn().mockReturnValue(() => undefined),
   };
 }

@@ -1,5 +1,9 @@
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@openerx/pi-host";
 import { startPiHostProcess } from "@openerx/pi-host/host";
 
@@ -23,6 +27,72 @@ function contentText(content: unknown): string {
 function responseFor(context: Context): AssistantMessage {
   const userMessages = context.messages.filter(({ role }) => role === "user");
   const latestUser = contentText(userMessages.at(-1)?.content);
+  const toolResults = context.messages.filter(({ role }) => role === "toolResult");
+  if (latestUser.includes("[PI_TEST_BROWSER]")) {
+    const url = latestUser.match(/https?:\/\/\S+/)?.[0];
+    const uploadFileId = latestUser.match(/FILE_ID=([0-9a-f-]+)/)?.[1];
+    if (!url) return fauxAssistantMessage("缺少测试 URL。");
+    if (toolResults.length === 0) {
+      return fauxAssistantMessage(
+        fauxToolCall("openerx_browser", { action: "open", url }, { id: "browser-open" }),
+        { stopReason: "toolUse" },
+      );
+    }
+    const first = JSON.parse(contentText(toolResults[0]?.content)) as {
+      data?: { sessionId?: string; partition?: string };
+    };
+    const sessionId = first.data?.sessionId;
+    if (!sessionId) return fauxAssistantMessage("隔离浏览器没有返回 Session。");
+    if (toolResults.length === 1) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "openerx_browser",
+          { action: "type", sessionId, selector: "#name", text: "OpenerX M5" },
+          { id: "browser-type" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    if (toolResults.length === 2) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "openerx_browser",
+          { action: "screenshot", sessionId },
+          { id: "browser-screenshot" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    if (toolResults.length === 3) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "openerx_browser",
+          { action: "upload", sessionId, selector: "#upload", fileId: uploadFileId },
+          { id: "browser-upload" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    if (toolResults.length === 4) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "openerx_browser",
+          { action: "download", sessionId, selector: "#download" },
+          { id: "browser-download" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    if (toolResults.length === 5) {
+      return fauxAssistantMessage(
+        fauxToolCall("openerx_browser", { action: "close", sessionId }, { id: "browser-close" }),
+        { stopReason: "toolUse" },
+      );
+    }
+    return fauxAssistantMessage(
+      `隔离浏览器工具完成；独立分区 ${first.data?.partition ?? "unknown"}。`,
+    );
+  }
   if (latestUser.includes("法国的首都")) return fauxAssistantMessage("巴黎。");
   if (latestUser.includes("代码块") && latestUser.includes("表格")) {
     return fauxAssistantMessage(

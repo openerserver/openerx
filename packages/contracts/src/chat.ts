@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { entityIdSchema, timestampSchema } from "./common";
 import {
   type Artifact,
   type Attachment,
@@ -33,11 +34,26 @@ import {
   syncResolveConflictInputSchema,
   syncStatusSchema,
 } from "./sync";
+import {
+  capabilityScopeSchema,
+  executionRunSchema,
+  mcpServerConfigSchema,
+  mcpServerRemoveInputSchema,
+  mcpServerRemoveResultSchema,
+  mcpServerUpsertInputSchema,
+  permissionListInputSchema,
+  permissionRequestSchema,
+  permissionResolveInputSchema,
+  runStepSchema,
+  toolCallSchema,
+  toolListInputSchema,
+  toolScopeRevokeInputSchema,
+  workItemDetailSchema,
+  workItemGetInputSchema,
+  workItemSchema,
+} from "./tool";
 
-export const entityIdSchema = z.uuid();
-export const timestampSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
-  message: "Expected an ISO timestamp",
-});
+export { entityIdSchema, timestampSchema } from "./common";
 
 export const messageStatusSchema = z.enum([
   "pending",
@@ -255,6 +271,19 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
   z
     .object({ command: z.literal("artifact.export"), input: artifactExportPrivilegedInputSchema })
     .strict(),
+  z.object({ command: z.literal("tool.workItems.list"), input: toolListInputSchema }).strict(),
+  z.object({ command: z.literal("tool.workItem.get"), input: workItemGetInputSchema }).strict(),
+  z
+    .object({ command: z.literal("tool.permissions.list"), input: permissionListInputSchema })
+    .strict(),
+  z
+    .object({ command: z.literal("tool.permission.resolve"), input: permissionResolveInputSchema })
+    .strict(),
+  z.object({ command: z.literal("tool.scopes.list"), input: emptyInputSchema }).strict(),
+  z.object({ command: z.literal("tool.scope.revoke"), input: toolScopeRevokeInputSchema }).strict(),
+  z.object({ command: z.literal("mcp.servers.list"), input: emptyInputSchema }).strict(),
+  z.object({ command: z.literal("mcp.server.upsert"), input: mcpServerUpsertInputSchema }).strict(),
+  z.object({ command: z.literal("mcp.server.remove"), input: mcpServerRemoveInputSchema }).strict(),
 ]);
 
 export const deletedConversationResultSchema = z
@@ -278,6 +307,19 @@ export const chatEventSchema = z
       "message.completed",
       "message.stopped",
       "message.failed",
+      "run.started",
+      "run.progressed",
+      "run.compacted",
+      "run.retrying",
+      "run.completed",
+      "run.failed",
+      "run.cancelled",
+      "tool.requested",
+      "tool.progressed",
+      "tool.completed",
+      "tool.failed",
+      "permission.required",
+      "permission.resolved",
     ]),
     conversationId: entityIdSchema.nullable(),
     messageId: entityIdSchema.nullable(),
@@ -291,6 +333,11 @@ export const chatEventSchema = z
         delta: z.string().optional(),
         status: z.enum(["starting", "ready", "restarting", "unavailable"]).optional(),
         reason: z.string().optional(),
+        workItem: workItemSchema.optional(),
+        run: executionRunSchema.optional(),
+        step: runStepSchema.optional(),
+        toolCall: toolCallSchema.optional(),
+        permission: permissionRequestSchema.optional(),
       })
       .strict(),
   })
@@ -336,6 +383,15 @@ export interface ChatCommandResultMap {
   "artifact.get": Artifact;
   "artifact.preview": ContentPreview;
   "artifact.export": z.infer<typeof artifactExportResultSchema>;
+  "tool.workItems.list": z.infer<typeof workItemSchema>[];
+  "tool.workItem.get": z.infer<typeof workItemDetailSchema>;
+  "tool.permissions.list": z.infer<typeof permissionRequestSchema>[];
+  "tool.permission.resolve": z.infer<typeof permissionRequestSchema>;
+  "tool.scopes.list": z.infer<typeof capabilityScopeSchema>[];
+  "tool.scope.revoke": z.infer<typeof capabilityScopeSchema>;
+  "mcp.servers.list": z.infer<typeof mcpServerConfigSchema>[];
+  "mcp.server.upsert": z.infer<typeof mcpServerConfigSchema>;
+  "mcp.server.remove": z.infer<typeof mcpServerRemoveResultSchema>;
 }
 
 export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
@@ -410,6 +466,33 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "artifact.export":
       parsed = artifactExportResultSchema.parse(value);
+      break;
+    case "tool.workItems.list":
+      parsed = z.array(workItemSchema).parse(value);
+      break;
+    case "tool.workItem.get":
+      parsed = workItemDetailSchema.parse(value);
+      break;
+    case "tool.permissions.list":
+      parsed = z.array(permissionRequestSchema).parse(value);
+      break;
+    case "tool.permission.resolve":
+      parsed = permissionRequestSchema.parse(value);
+      break;
+    case "tool.scopes.list":
+      parsed = z.array(capabilityScopeSchema).parse(value);
+      break;
+    case "tool.scope.revoke":
+      parsed = capabilityScopeSchema.parse(value);
+      break;
+    case "mcp.servers.list":
+      parsed = z.array(mcpServerConfigSchema).parse(value);
+      break;
+    case "mcp.server.upsert":
+      parsed = mcpServerConfigSchema.parse(value);
+      break;
+    case "mcp.server.remove":
+      parsed = mcpServerRemoveResultSchema.parse(value);
       break;
   }
   return parsed as ChatCommandResultMap[C];

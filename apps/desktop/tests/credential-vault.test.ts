@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AccountIdentity, DeviceSession } from "@openerx/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { type CredentialProtector, DeviceCredentialVault } from "../src/main/credential-vault";
+import {
+  type CredentialProtector,
+  DeviceCredentialVault,
+  ToolCredentialVault,
+} from "../src/main/credential-vault";
 
 const temporaryDirectories: string[] = [];
 
@@ -82,5 +86,22 @@ describe("DeviceCredentialVault", () => {
       new TestProtector(false),
     );
     await expect(vault.save(fixture())).rejects.toThrow("OS_CREDENTIAL_STORE_UNAVAILABLE");
+  });
+});
+
+describe("ToolCredentialVault", () => {
+  it("keeps MCP credentials protected and removes one credential without exposing others", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-tool-vault-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "tool-credentials.bin");
+    const vault = new ToolCredentialVault(filePath, new TestProtector());
+    await vault.save("mcp:one", "first-bearer-secret");
+    await vault.save("mcp:two", "second-bearer-secret");
+    const bytes = await readFile(filePath);
+    expect(bytes.toString()).not.toContain("bearer-secret");
+    await expect(vault.resolve("mcp:one")).resolves.toBe("first-bearer-secret");
+    await vault.clear("mcp:one");
+    await expect(vault.resolve("mcp:one")).rejects.toThrow("MCP_CREDENTIAL_NOT_FOUND");
+    await expect(vault.resolve("mcp:two")).resolves.toBe("second-bearer-secret");
   });
 });

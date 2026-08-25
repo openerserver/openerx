@@ -101,3 +101,68 @@ export class DeviceCredentialVault {
     await rm(this.#filePath, { force: true });
   }
 }
+
+const persistedToolCredentialsSchema = z
+  .object({
+    version: z.literal(1),
+    values: z.record(z.string().min(1).max(500), z.string().min(1)),
+  })
+  .strict();
+
+export class ToolCredentialVault {
+  constructor(
+    private readonly filePath: string,
+    private readonly protector: CredentialProtector = new ElectronSafeStorageProtector(),
+  ) {}
+
+  async save(credentialRef: string, value: string): Promise<void> {
+    const values = await this.#load();
+    values[credentialRef] = value;
+    await this.#write(values);
+  }
+
+  async resolve(credentialRef: string): Promise<string> {
+    const value = (await this.#load())[credentialRef];
+    if (!value) throw new Error("MCP_CREDENTIAL_NOT_FOUND");
+    return value;
+  }
+
+  async clear(credentialRef: string): Promise<void> {
+    const values = await this.#load();
+    delete values[credentialRef];
+    await this.#write(values);
+  }
+
+  async #load(): Promise<Record<string, string>> {
+    let encrypted: Buffer;
+    try {
+      encrypted = await readFile(this.filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw error;
+    }
+    if (!(await this.protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
+    const decrypted = await this.protector.decrypt(encrypted);
+    const payload = persistedToolCredentialsSchema.parse(JSON.parse(decrypted.result));
+    if (decrypted.shouldReEncrypt) await this.#write(payload.values);
+    return { ...payload.values };
+  }
+
+  async #write(values: Record<string, string>): Promise<void> {
+    if (!(await this.protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
+    const payload = persistedToolCredentialsSchema.parse({ version: 1, values });
+    const encrypted = await this.protector.encrypt(JSON.stringify(payload));
+    const directory = path.dirname(this.filePath);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const temporaryPath = path.join(
+      directory,
+      `.${path.basename(this.filePath)}.${randomBytes(8).toString("hex")}.tmp`,
+    );
+    try {
+      await writeFile(temporaryPath, encrypted, { mode: 0o600, flag: "wx" });
+      await rename(temporaryPath, this.filePath);
+    } finally {
+      await rm(temporaryPath, { force: true });
+    }
+  }
+}

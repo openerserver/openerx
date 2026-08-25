@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M4_FILE_ARTIFACT_LOCAL_COMPLETE / M5_TOOL_ALPHA_NEXT`
+> 状态：`M5_TOOL_ALPHA_LOCAL_COMPLETE / M6_REMOTE_CONTROL_NEXT`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -26,9 +26,9 @@
 
 ## 2. V2 总体逻辑架构图
 
-下图是完整 V1 目标态。M4 本地实现已接入账户云、模型和服务端 Billing，并完成文件 Scope、
-解析/引用、Artifact 版本、云对象恢复以及 Pi SessionManager；Web/Browser/Shell/Desktop/MCP、
-Skill 与 Remote 运行面仍按后续检查点交付，不以占位实现伪装完成。
+下图是完整 V1 目标态。M5 本地实现已接入账户云、模型和服务端 Billing，并完成文件 Scope、
+Artifact/对象恢复、Pi SessionManager、Capability Broker 与 Tool Alpha；Skill 与 Remote 运行面
+仍按后续检查点交付，不以占位实现伪装完成。
 
 ```mermaid
 flowchart LR
@@ -261,6 +261,39 @@ Pi Host 使用维护中的 Pi `SessionManager` 保存每个 Conversation 的内�
 Pi Session 头恢复；Conversation/Message SQLite 仍是产品历史真值。Pi 不获得原始文件系统工具，
 只注册四个产品文件工具，实际读取和成果写入全部回到 App Service 与 File Scope Broker。
 
+### 2.5 M5 当前本地已实现拓扑
+
+```mermaid
+flowchart LR
+  USER([个人用户]) --> UI[React Renderer<br/>工具活动 / 权限卡 / Tool Center]
+  UI --> PRELOAD[Typed Tool Bridge<br/>无通用 IPC / 无凭证]
+  PRELOAD --> MAIN[Electron Main<br/>Capability Host / OS Credential Vault]
+  MAIN --> APP[App Service<br/>Capability Broker]
+
+  APP --> PROJECTION[(SQLite<br/>WorkItem / Run / Step / ToolCall / Permission / Scope)]
+  APP <-->|pi.tool request / normalized result| PIHOST[Isolated Pi Host]
+  PIHOST --> PI[Pi AgentSession<br/>唯一 Agent Loop / Tool Lifecycle]
+  PI --> DEFINITIONS[Pi ToolDefinition<br/>File / Web / Image / Browser / Shell / Desktop / MCP]
+  DEFINITIONS --> APP
+
+  APP --> BUILTIN[Deterministic Built-ins<br/>计算 / 结构化数据]
+  APP --> SHELL[Shell Adapter<br/>argv / workspace / timeout / stop / network deny]
+  APP --> PLATFORM[First-party Platform Tools<br/>Web search / Image generation]
+  APP --> MCP[MCP Adapter<br/>STDIO / Streamable HTTP]
+  APP --> MAINHOST[Main Capability Adapter]
+  MAINHOST --> BROWSER[Isolated BrowserWindow<br/>dedicated partition / no preload]
+  MAINHOST --> DESKTOP[Desktop Capture / Control<br/>native OS boundary]
+  MAIN --> VAULT[(safeStorage Tool Vault<br/>Bearer / OAuth client credentials)]
+  MCP --> VAULT
+  MCP --> EXTERNAL[MCP Servers]
+  PLATFORM --> PLATFORM_API[Authenticated Platform API]
+```
+
+Pi 生成工具调用并等待结果；App Service 不建立第二套步骤规划器。Broker 把每个操作映射为
+capability/resource/action/risk，审批绑定完整 payload digest，副作用绑定宿主派生的幂等键。
+L4/L5 操作只能逐次授权。Browser/Desktop 仅在 Main 执行，Shell 子进程由 App Service 唯一拥有，
+MCP 凭证只存在 OS 加密 Vault。启动恢复会终止中断运行、过期待批权限并撤销临时 Scope。
+
 ## 3. 主链路
 
 ### 3.1 聊天与收费模型调用
@@ -395,6 +428,9 @@ Relay 的投递重放只解决网络至少一次语义，不是 Agent 队列。P
 | 支付结果 | 服务端查单/验签回调 | 客户端只轮询和展示 |
 | Remote 配对/撤销 | Identity API 设备注册 | 手机和主机保留受保护私钥与只读配对投影 |
 | Remote 命令应用结果 | 桌面 App Service + Pi/Broker 产品事件 | Gateway 只保留短期密文与回执；手机按游标缓存 |
+| WorkItem、ExecutionRun、RunStep、ToolCall | Pi 活动的 App Service 产品投影 | 可恢复状态与审计，不是执行计划真值 |
+| 本地 Capability Scope 与 PermissionRequest | 当前桌面设备 Broker | 不跨设备同步权限；高风险授权逐次绑定 payload |
+| MCP Bearer/OAuth 凭证 | Electron Main OS 凭证库 | App Service 只使用 credentialRef；Renderer/Pi/SQLite 无密钥 |
 
 ## 6. 仓库映射
 
@@ -416,7 +452,7 @@ services/remote-control-gateway  Presence、配对协调、密文命令/事件�
 services/notification-service    APNs/FCM 推送令牌与不透明通知
 packages/domain                  Conversation-first 领域模型
 packages/contracts               IPC/API/Event Schema
-packages/tool-sdk                Tool/Permission 合同
+packages/tool-sdk                Capability Broker、风险策略与 Tool Adapters
 packages/skills                  Skill 包与生命周期
 packages/ui-react                React UI 基础
 packages/storage                 本地/云存储抽象
@@ -428,7 +464,7 @@ packages/observability           脱敏日志、Trace 和诊断
 
 旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。
 
-## 8. M1/M2/M3/M4 本地已实现映射
+## 8. M1/M2/M3/M4/M5 本地已实现映射
 
 - 根 workspace 使用 npm 11；`apps`/`services` 只通过 `packages` 共享合同和实现。
 - Electron 44 + Forge 7 + Vite 6 分别构建 Main、Preload、App Service、Pi Host 和
@@ -445,6 +481,12 @@ packages/observability           脱敏日志、Trace 和诊断
   不建立平行 harness。
 - `packages/file-service` 实现设备级 File Scope Broker、内容寻址副本、多格式解析器、稳定引用和
   Artifact 版本；Renderer 只通过冻结 Bridge 调用，HTML 预览使用无 `allow-same-origin` 的 sandbox。
+- `packages/tool-sdk` 实现 L0-L5 风险策略、精确 payload 授权、Scope 检查、副作用幂等，以及
+  Web、平台图片、Shell、Browser/Desktop Host 和官方 SDK MCP Adapter；高风险动作不能持久授权。
+- Tool Repository 把 Pi 活动投影为 WorkItem/ExecutionRun/RunStep/ToolCall/PermissionRequest；
+  启动恢复回收子进程、隔离窗口和临时授权，但不接管 Pi 的工具顺序、重试或 Agent Loop。
+- Tool Center 显示按 namespace 分组的内置/平台/本地/MCP 工具、运行活动与可撤销 Scope；
+  Renderer 不能读取 MCP 密钥或调用通用进程/桌面接口。
 - `services/object-store-api` 以账户/会话/设备绑定的一次性短时 Intent 传输 PersonalFile 与
   ArtifactVersion 字节；同步 payload 不携带绝对路径、原设备 Grant 或本地对象引用。
 - Identity API、Account Sync API、Model Gateway、Token Usage Store 和 Platform Alpha HTTP
@@ -470,5 +512,6 @@ Remote M2 协议合同已冻结；M6 完成移动端、Connector、Gateway、推
 
 ## 9. 当前下一步
 
-进入 M5 Tool Alpha 与长任务：在既有 Pi 原生 ToolDefinition 和 M4 Broker 边界上接入 Web、
-Browser、Shell、Desktop 与 MCP，并补齐审批、沙箱、审计、长任务恢复和副作用幂等。
+进入 M6 Remote Control Alpha：实现 iOS/Android 手机控制面、桌面出站 Connector、密文 Relay、
+Presence、配对/撤销和 Pi 原生 Start/Steer/Queue/Stop 映射。远程审批必须调用 M5 的同一 Broker，
+不得把手机决定转化为跨设备或永久 Scope。

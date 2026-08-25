@@ -6,6 +6,7 @@ import type {
   ConversationSummary,
   DesktopEnvironment,
   DeviceSession,
+  McpServerConfig,
   Message,
   ModelCatalogEntry,
   PersonalFile,
@@ -14,6 +15,8 @@ import type {
   SyncConflict,
   TokenAggregateField,
   UsageRecord,
+  WorkItem,
+  WorkItemDetail,
 } from "@openerx/contracts";
 import {
   ArrowClockwise,
@@ -37,6 +40,7 @@ import {
   SlidersHorizontal,
   Sparkle,
   Sun,
+  TerminalWindow,
   UserCircle,
   X,
 } from "@phosphor-icons/react";
@@ -143,6 +147,18 @@ const capabilityLabels: Record<keyof ModelCatalogEntry["capabilities"], string> 
   mcp: "MCP",
   imageGeneration: "图片生成",
 };
+
+const toolCatalog = [
+  { namespace: "builtin", name: "确定性计算", detail: "无网络算术计算" },
+  { namespace: "builtin", name: "结构化数据", detail: "排序、选择与去重" },
+  { namespace: "files", name: "文件与成果", detail: "受 Scope 限制的读取、检索、转换与版本" },
+  { namespace: "platform", name: "Web 搜索", detail: "第一方检索与可打开来源" },
+  { namespace: "platform", name: "图片生成", detail: "账户鉴权的平台图片生成" },
+  { namespace: "local", name: "隔离浏览器", detail: "独立 Profile 的导航与交互" },
+  { namespace: "local", name: "Shell / 代码", detail: "授权工作区内的可停止进程" },
+  { namespace: "local", name: "桌面控制", detail: "屏幕读取与逐次确认交互" },
+  { namespace: "mcp", name: "MCP", detail: "STDIO 与 Streamable HTTP 服务" },
+] as const;
 
 function modelCapabilities(model: ModelCatalogEntry): string {
   return Object.entries(model.capabilities)
@@ -732,6 +748,121 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
   );
 }
 
+const workItemStatusLabel: Record<WorkItem["status"], string> = {
+  queued: "排队中",
+  running: "运行中",
+  waiting_for_user: "等待输入",
+  waiting_for_permission: "等待授权",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const detail = useQuery({
+    queryKey: ["tools", "work-item", workItem.id],
+    queryFn: () => window.openerx.getWorkItem({ workItemId: workItem.id }),
+  });
+  const resolve = useMutation({
+    mutationFn: ({
+      permissionRequestId,
+      decision,
+      payloadDigest,
+    }: {
+      permissionRequestId: string;
+      decision: "once" | "session" | "persistent" | "deny";
+      payloadDigest: string;
+    }) => window.openerx.resolvePermission({ permissionRequestId, decision, payloadDigest }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["tools"] });
+    },
+  });
+  const value: WorkItemDetail | undefined = detail.data;
+  const pending = value?.permissions.filter(({ status }) => status === "pending") ?? [];
+  const shouldOpen = ["running", "waiting_for_permission", "failed"].includes(workItem.status);
+  return (
+    <details className="tool-activity" open={shouldOpen || undefined}>
+      <summary>
+        <TerminalWindow size={17} />
+        <strong>{workItem.title}</strong>
+        <span className={`tool-state tool-state-${workItem.status}`}>
+          {workItemStatusLabel[workItem.status]}
+        </span>
+      </summary>
+      {detail.isPending ? <p className="muted-copy">正在读取工具活动…</p> : null}
+      {value?.toolCalls.map((call) => (
+        <div className="tool-call-row" key={call.id}>
+          <div>
+            <strong>{call.toolName}</strong>
+            <span>{call.inputSummary}</span>
+          </div>
+          <span>{call.status}</span>
+          {call.resultSummary ? <p>{call.resultSummary}</p> : null}
+          {call.errorCode ? <p className="inline-error">{call.errorCode}</p> : null}
+        </div>
+      ))}
+      {pending.map((permission) => {
+        const persistentAllowed = ["L1", "L2", "L3"].includes(permission.risk);
+        return (
+          <section className="permission-card" key={permission.id} aria-label="工具权限确认">
+            <p className="eyebrow">{permission.risk} 权限请求</p>
+            <strong>{permission.reason}</strong>
+            <span>
+              {permission.capability} · {permission.resource}
+            </span>
+            <div>
+              <button
+                type="button"
+                className="primary-action"
+                disabled={resolve.isPending}
+                onClick={() =>
+                  resolve.mutate({
+                    permissionRequestId: permission.id,
+                    decision: "once",
+                    payloadDigest: permission.payloadDigest,
+                  })
+                }
+              >
+                仅本次允许
+              </button>
+              {persistentAllowed ? (
+                <button
+                  type="button"
+                  disabled={resolve.isPending}
+                  onClick={() =>
+                    resolve.mutate({
+                      permissionRequestId: permission.id,
+                      decision: "session",
+                      payloadDigest: permission.payloadDigest,
+                    })
+                  }
+                >
+                  本次会话允许
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="danger-action"
+                disabled={resolve.isPending}
+                onClick={() =>
+                  resolve.mutate({
+                    permissionRequestId: permission.id,
+                    decision: "deny",
+                    payloadDigest: permission.payloadDigest,
+                  })
+                }
+              >
+                拒绝
+              </button>
+            </div>
+          </section>
+        );
+      })}
+    </details>
+  );
+}
+
 function ConversationToolbar({
   snapshot,
   onToggleContext,
@@ -929,6 +1060,11 @@ function ChatPage({
     queryFn: () => window.openerx.getConversation({ conversationId }),
     enabled: Boolean(conversationId),
   });
+  const workItems = useQuery({
+    queryKey: ["tools", "work-items", conversationId],
+    queryFn: () => window.openerx.listWorkItems({ conversationId, limit: 100 }),
+    enabled: Boolean(conversationId),
+  });
   if (snapshot.isPending) return <main className="center-state">正在恢复对话…</main>;
   if (snapshot.error || !snapshot.data) {
     return (
@@ -940,7 +1076,14 @@ function ChatPage({
       <ConversationToolbar snapshot={snapshot.data} onToggleContext={onToggleContext} />
       <section className="message-list" aria-live="polite" aria-label="对话消息">
         {snapshot.data.messages.map((message) => (
-          <MessageCard key={message.id} message={message} />
+          <section className="message-stack" key={message.id}>
+            <MessageCard message={message} />
+            {workItems.data
+              ?.filter((workItem) => workItem.messageId === message.id)
+              .map((workItem) => (
+                <ToolActivity key={workItem.id} workItem={workItem} />
+              ))}
+          </section>
         ))}
       </section>
       <Composer
@@ -1779,6 +1922,275 @@ function BillingSettings(): React.JSX.Element {
   );
 }
 
+function ToolCenter(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const [mcpName, setMcpName] = useState("");
+  const [mcpTransport, setMcpTransport] = useState<"stdio" | "streamable_http">("stdio");
+  const [mcpEndpoint, setMcpEndpoint] = useState("");
+  const [mcpCwd, setMcpCwd] = useState("");
+  const [mcpAuth, setMcpAuth] = useState<"none" | "bearer" | "oauth">("none");
+  const [mcpToken, setMcpToken] = useState("");
+  const [mcpOAuthClientId, setMcpOAuthClientId] = useState("");
+  const [mcpOAuthClientSecret, setMcpOAuthClientSecret] = useState("");
+  const [mcpOAuthScope, setMcpOAuthScope] = useState("");
+  const workItems = useQuery({
+    queryKey: ["tools", "work-items"],
+    queryFn: () => window.openerx.listWorkItems({ limit: 100 }),
+  });
+  const scopes = useQuery({
+    queryKey: ["tools", "scopes"],
+    queryFn: () => window.openerx.listCapabilityScopes(),
+  });
+  const permissions = useQuery({
+    queryKey: ["tools", "permissions", "pending"],
+    queryFn: () => window.openerx.listPermissionRequests({ status: "pending" }),
+  });
+  const mcpServers = useQuery({
+    queryKey: ["tools", "mcp-servers"],
+    queryFn: () => window.openerx.listMcpServers(),
+  });
+  const revoke = useMutation({
+    mutationFn: (scopeId: string) => window.openerx.revokeCapabilityScope({ scopeId }),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["tools", "scopes"] }),
+  });
+  const saveMcp = useMutation({
+    mutationFn: (config: McpServerConfig) =>
+      window.openerx.saveMcpServer({
+        config,
+        ...(mcpTransport === "streamable_http" && mcpAuth === "bearer" && mcpToken
+          ? { bearerToken: mcpToken }
+          : {}),
+        ...(mcpTransport === "streamable_http" &&
+        mcpAuth === "oauth" &&
+        mcpOAuthClientId &&
+        mcpOAuthClientSecret
+          ? {
+              oauthClientId: mcpOAuthClientId,
+              oauthClientSecret: mcpOAuthClientSecret,
+              ...(mcpOAuthScope ? { oauthScope: mcpOAuthScope } : {}),
+            }
+          : {}),
+      }),
+    onSuccess: async () => {
+      setMcpName("");
+      setMcpEndpoint("");
+      setMcpCwd("");
+      setMcpToken("");
+      setMcpOAuthClientId("");
+      setMcpOAuthClientSecret("");
+      setMcpOAuthScope("");
+      await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
+    },
+  });
+  const removeMcp = useMutation({
+    mutationFn: (serverId: string) => window.openerx.removeMcpServer({ serverId }),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] }),
+  });
+  return (
+    <main className="tool-center-page">
+      <header>
+        <p className="eyebrow">Tool Alpha</p>
+        <h1>任务与工具</h1>
+        <p>查看 Pi 工具活动、处理权限请求，并撤销设备本地 Scope。</p>
+      </header>
+      <section className="tool-center-summary" aria-label="工具状态摘要">
+        <div>
+          <strong>{workItems.data?.length ?? 0}</strong>
+          <span>任务</span>
+        </div>
+        <div>
+          <strong>{permissions.data?.length ?? 0}</strong>
+          <span>待授权</span>
+        </div>
+        <div>
+          <strong>{scopes.data?.length ?? 0}</strong>
+          <span>有效 Scope</span>
+        </div>
+      </section>
+      <section className="tool-catalog" aria-label="工具目录">
+        <h2>工具目录</h2>
+        <div className="tool-catalog-grid">
+          {toolCatalog.map((tool) => (
+            <article key={`${tool.namespace}:${tool.name}`}>
+              <small>{tool.namespace}</small>
+              <strong>{tool.name}</strong>
+              <span>{tool.detail}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+      <section className="tool-center-grid">
+        <div>
+          <h2>最近任务</h2>
+          {workItems.data?.length ? (
+            workItems.data.map((workItem) => <ToolActivity key={workItem.id} workItem={workItem} />)
+          ) : (
+            <p className="muted-copy">还没有工具任务。</p>
+          )}
+        </div>
+        <aside>
+          <h2>本地授权</h2>
+          {scopes.data?.map((scope) => (
+            <article className="scope-card" key={scope.id}>
+              <strong>{scope.capability}</strong>
+              <span>{scope.resource}</span>
+              <small>
+                {scope.maxRisk} · {scope.sessionOnly ? "临时" : "持久"}
+              </small>
+              <button
+                type="button"
+                className="danger-action"
+                disabled={revoke.isPending}
+                onClick={() => revoke.mutate(scope.id)}
+              >
+                撤销
+              </button>
+            </article>
+          ))}
+          {!scopes.data?.length ? <p className="muted-copy">没有有效授权。</p> : null}
+          <h2>MCP 服务</h2>
+          {mcpServers.data?.map((server) => (
+            <article className="scope-card" key={server.id}>
+              <strong>{server.name}</strong>
+              <span>{server.transport === "stdio" ? server.command : server.url}</span>
+              <small>
+                {server.transport} · {server.enabled ? "已启用" : "已禁用"}
+                {server.transport === "streamable_http" ? ` · ${server.auth}` : ""}
+              </small>
+              <button
+                type="button"
+                className="danger-action"
+                onClick={() => removeMcp.mutate(server.id)}
+              >
+                移除
+              </button>
+            </article>
+          ))}
+          <form
+            className="mcp-config-form"
+            aria-label="添加 MCP 服务"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const id = crypto.randomUUID();
+              const config: McpServerConfig =
+                mcpTransport === "stdio"
+                  ? {
+                      id,
+                      name: mcpName,
+                      transport: "stdio",
+                      command: mcpEndpoint,
+                      args: [],
+                      cwd: mcpCwd,
+                      enabled: true,
+                      enabledTools: [],
+                    }
+                  : {
+                      id,
+                      name: mcpName,
+                      transport: "streamable_http",
+                      url: mcpEndpoint,
+                      auth: mcpAuth,
+                      credentialRef: null,
+                      enabled: true,
+                      enabledTools: [],
+                    };
+              saveMcp.mutate(config);
+            }}
+          >
+            <strong>添加服务</strong>
+            <input
+              aria-label="MCP 名称"
+              placeholder="名称"
+              value={mcpName}
+              onChange={(event) => setMcpName(event.target.value)}
+              required
+            />
+            <select
+              aria-label="MCP 传输"
+              value={mcpTransport}
+              onChange={(event) =>
+                setMcpTransport(event.target.value as "stdio" | "streamable_http")
+              }
+            >
+              <option value="stdio">STDIO</option>
+              <option value="streamable_http">Streamable HTTP</option>
+            </select>
+            <input
+              aria-label={mcpTransport === "stdio" ? "MCP 命令" : "MCP URL"}
+              placeholder={mcpTransport === "stdio" ? "可执行文件路径" : "https://…/mcp"}
+              value={mcpEndpoint}
+              onChange={(event) => setMcpEndpoint(event.target.value)}
+              required
+            />
+            {mcpTransport === "stdio" ? (
+              <input
+                aria-label="MCP 工作目录"
+                placeholder="工作目录"
+                value={mcpCwd}
+                onChange={(event) => setMcpCwd(event.target.value)}
+                required
+              />
+            ) : (
+              <>
+                <select
+                  aria-label="MCP 认证"
+                  value={mcpAuth}
+                  onChange={(event) => setMcpAuth(event.target.value as typeof mcpAuth)}
+                >
+                  <option value="none">无认证</option>
+                  <option value="bearer">Bearer</option>
+                  <option value="oauth">OAuth</option>
+                </select>
+                {mcpAuth === "bearer" ? (
+                  <input
+                    aria-label="MCP Bearer Token"
+                    type="password"
+                    autoComplete="off"
+                    value={mcpToken}
+                    onChange={(event) => setMcpToken(event.target.value)}
+                    required
+                  />
+                ) : mcpAuth === "oauth" ? (
+                  <>
+                    <input
+                      aria-label="MCP OAuth Client ID"
+                      autoComplete="off"
+                      placeholder="Client ID"
+                      value={mcpOAuthClientId}
+                      onChange={(event) => setMcpOAuthClientId(event.target.value)}
+                      required
+                    />
+                    <input
+                      aria-label="MCP OAuth Client Secret"
+                      type="password"
+                      autoComplete="off"
+                      placeholder="Client Secret"
+                      value={mcpOAuthClientSecret}
+                      onChange={(event) => setMcpOAuthClientSecret(event.target.value)}
+                      required
+                    />
+                    <input
+                      aria-label="MCP OAuth Scope"
+                      autoComplete="off"
+                      placeholder="Scope（可选）"
+                      value={mcpOAuthScope}
+                      onChange={(event) => setMcpOAuthScope(event.target.value)}
+                    />
+                  </>
+                ) : null}
+              </>
+            )}
+            <button type="submit" className="primary-action" disabled={saveMcp.isPending}>
+              保存 MCP
+            </button>
+            {saveMcp.error ? <p className="inline-error">{saveMcp.error.message}</p> : null}
+          </form>
+        </aside>
+      </section>
+    </main>
+  );
+}
+
 function Sidebar({
   environment,
   serviceStatus,
@@ -1820,6 +2232,10 @@ function Sidebar({
         <NavLink to="/files">
           <FolderSimple size={17} />
           <span>个人文件</span>
+        </NavLink>
+        <NavLink to="/tasks">
+          <TerminalWindow size={17} />
+          <span>任务与工具</span>
         </NavLink>
         <NavLink to="/assistants">
           <Sparkle size={17} />
@@ -1930,6 +2346,13 @@ export function App(): React.JSX.Element {
         setServiceStatus(event.payload.status ?? "unavailable");
         return;
       }
+      if (
+        event.type.startsWith("run.") ||
+        event.type.startsWith("tool.") ||
+        event.type.startsWith("permission.")
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ["tools"] });
+      }
       if (!event.conversationId) return;
       const conversationId = event.conversationId;
       const previous = sequenceByConversation.current.get(conversationId) ?? 0;
@@ -1969,6 +2392,7 @@ export function App(): React.JSX.Element {
           />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/files" element={<FilesAndArtifacts />} />
+          <Route path="/tasks" element={<ToolCenter />} />
           <Route path="/assistants" element={<Placeholder title="助手与 Skill" />} />
           <Route path="/settings/billing" element={<BillingSettings />} />
           <Route
