@@ -1,10 +1,10 @@
 # OpenerX 2.0
 
-OpenerX 2.0 是面向企业普通用户的个人 AI 工作客户端。V1 使用 Electron + React + TypeScript，围绕对话、文件、工具、Skill、账户同步、平台模型和个人计费构建 Windows/macOS 桌面体验。
+OpenerX 2.0 是面向普通用户的个人 AI 工作客户端。V1 使用 Electron + React + TypeScript，围绕对话、文件、工具、Skill、账户同步、平台模型和个人计费构建 Windows/macOS 桌面体验。
 
 ## 当前状态
 
-V2 产品合同已经批准，仓库已进入实施准备阶段。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，不再属于新主线构建和依赖边界。
+V2 产品合同已经批准，M0「工程与 ADR 基线」已通过，下一检查点是 M1「Chat Alpha」。V2 workspace、Electron/React 最小壳、合同包和独立质量命令已经建立。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，不再属于新主线构建和依赖边界。
 
 ## 活跃目录
 
@@ -25,4 +25,12 @@ V2 产品合同已经批准，仓库已进入实施准备阶段。旧企业 AI D
 2. [实施启动记录](docs/v2/12-implementation-bootstrap.md)
 3. [开发执行计划](docs/v2/13-development-plan.md)
 
-当前尚未注册 V2 workspace 或安装新依赖；这属于开发计划 M0 的下一步。
+## V2 本地命令
+
+```bash
+npm ci
+npm run dev:v2
+npm run check:v2
+```
+
+`check:v2` 会依次执行依赖边界、lint、类型检查、单元/夹具测试和 Electron 生产打包。M0 的决策记录位于 [`docs/v2/adr/`](docs/v2/adr/README.md)。

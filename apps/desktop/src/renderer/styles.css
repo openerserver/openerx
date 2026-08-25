@@ -1,0 +1,226 @@
+:root {
+  color: #20211f;
+  background: #f7f7f5;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 720px;
+  height: 100%;
+  margin: 0;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+a:focus-visible,
+button:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #68a8ff;
+  outline-offset: 2px;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 100%;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 28px 18px 20px;
+  color: #f6f5ef;
+  background: #252824;
+}
+
+.brand {
+  padding: 0 10px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.sidebar nav {
+  display: grid;
+  gap: 4px;
+}
+
+.sidebar nav a {
+  padding: 10px 12px;
+  color: #c9ccc5;
+  text-decoration: none;
+  border-radius: 8px;
+}
+
+.sidebar nav a:hover,
+.sidebar nav a.active {
+  color: #ffffff;
+  background: #3b4039;
+}
+
+.sync-state {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: auto;
+  padding: 0 10px;
+  color: #b7bbb3;
+  font-size: 12px;
+}
+
+.sync-state span {
+  width: 7px;
+  height: 7px;
+  background: #80b58a;
+  border-radius: 50%;
+}
+
+.chat-page,
+.placeholder-page {
+  width: min(760px, calc(100% - 64px));
+  margin: 0 auto;
+}
+
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 13vh 0 32px;
+}
+
+.welcome {
+  text-align: center;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: #747970;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(30px, 4vw, 44px);
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+}
+
+.welcome > p:last-child,
+.placeholder-page > p:last-child {
+  color: #6b7068;
+}
+
+.suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 38px;
+}
+
+.suggestion-card {
+  padding: 15px 16px;
+  color: #353833;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #e2e3de;
+  border-radius: 12px;
+}
+
+.suggestion-card:hover {
+  border-color: #b9bdb5;
+}
+
+.composer {
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid #dedfd9;
+  border-radius: 16px;
+  box-shadow: 0 10px 35px rgb(39 42 38 / 8%);
+}
+
+.composer label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.composer textarea {
+  width: 100%;
+  resize: none;
+  color: #232520;
+  background: transparent;
+  border: 0;
+}
+
+.composer-actions {
+  display: flex;
+  justify-content: space-between;
+}
+
+.composer-actions button {
+  padding: 8px 13px;
+  border-radius: 9px;
+}
+
+.secondary-action {
+  color: #50544d;
+  background: transparent;
+  border: 1px solid #d9dbd4;
+}
+
+.primary-action {
+  color: #ffffff;
+  background: #2d5b3b;
+  border: 1px solid #2d5b3b;
+}
+
+.composer-status {
+  min-height: 18px;
+  margin: 0;
+  color: #5f655c;
+  font-size: 12px;
+}
+
+.placeholder-page {
+  padding-top: 16vh;
+}
+
+@media (max-width: 840px) {
+  .app-shell {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+
+  .suggestion-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "allowJs": false,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["node", "vite/client"]
+  },
+  "include": ["forge.config.ts", "vite.*.config.ts", "src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts"]
+}

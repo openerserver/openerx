@@ -1,0 +1,65 @@
+name: V2 CI
+
+on:
+  pull_request:
+    paths-ignore:
+      - "v1-backup/**"
+  push:
+    paths-ignore:
+      - "v1-backup/**"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: V2 quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run audit:prod:v2
+      - run: npm run check:boundaries:v2
+      - run: npm run lint:v2
+      - run: npm run typecheck:v2
+      - run: npm run test:v2
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2022
+            arch: x64
+          - target: macos-arm64
+            os: macos-14
+            arch: arm64
+          - target: macos-x64
+            os: macos-14
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace @openerx/contracts
+      - run: npm run package --workspace @openerx/desktop -- --arch=${{ matrix.arch }}
+      - run: npm run verify:fuses --workspace @openerx/desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenerX-${{ matrix.target }}-unsigned
+          path: apps/desktop/out/
+          if-no-files-found: error
+          retention-days: 7

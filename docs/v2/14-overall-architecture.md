@@ -224,3 +224,14 @@ packages/observability           脱敏日志、Trace 和诊断
 ## 7. Legacy 边界
 
 旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链。它在迁移期用于旧系统运行、行为参考和专项 Runtime Spike；V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。
+
+## 8. M0 已冻结的实现映射
+
+- 根 workspace 使用 npm 11；`apps`/`services` 只通过 `packages` 共享合同和实现。
+- Electron 44 + Forge 7 + Vite 6 分别构建 Main、Preload 和 Renderer；当前包为未签名开发包。
+- Renderer 使用 React 19 + HashRouter，只能调用冻结的类型化 Preload Bridge。
+- App Service 将运行在受监督 utility process，通过私有 MessagePort、启动 nonce 和版本化合同通信。
+- App Service 独占 `node:sqlite` 本地数据库；凭证留在 OS 保护边界，敏感缓存使用认证加密。
+- Windows x64、macOS arm64 和 macOS x64 进入 CI 打包矩阵。
+
+规范性细节见 [M0 ADR 索引](adr/README.md) 和 [Electron/App Service 威胁模型](security/electron-threat-model.md)。

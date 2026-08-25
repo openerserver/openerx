@@ -1,5 +1,8 @@
 node_modules/
 dist/
+.vite/
+out/
+coverage/
 .env
 .env.local
 *.db
@@ -11,7 +14,7 @@ dist/
 .opencode/state/
 .DS_Store
 tmp/*
-bun.lock
+npm-debug.log*
 
 # Archived V1 local state is preserved on disk but is not part of source history.
 /v1-backup/.opencode/state/

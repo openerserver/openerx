@@ -1,0 +1,34 @@
+{
+  "name": "openerx-v2",
+  "version": "2.0.0-alpha.0",
+  "private": true,
+  "description": "OpenerX 2.0 personal AI desktop client",
+  "packageManager": "npm@11.3.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "audit:prod:v2": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org",
+    "check:boundaries:v2": "node scripts/check-v2-boundaries.mjs",
+    "dev:v2": "npm run start --workspace @openerx/desktop",
+    "lint:v2": "biome check apps packages services scripts tests package.json tsconfig.base.json",
+    "lint:v2:fix": "biome check --write apps packages services scripts tests package.json tsconfig.base.json",
+    "typecheck:v2": "npm run typecheck --workspaces --if-present",
+    "test:v2": "npm run test --workspaces --if-present && vitest run tests/v2",
+    "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/desktop",
+    "package:v2": "npm run build --workspace @openerx/contracts && npm run package --workspace @openerx/desktop",
+    "verify:package:v2": "npm run verify:fuses --workspace @openerx/desktop",
+    "check:v2": "npm run check:boundaries:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.10",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

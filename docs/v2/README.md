@@ -60,6 +60,9 @@
 13. [12-implementation-bootstrap.md](12-implementation-bootstrap.md)：V2 新主线目录和旧资产保护边界。
 14. [13-development-plan.md](13-development-plan.md)：里程碑、依赖、首个迭代、质量门禁和风险清单。
 15. [14-overall-architecture.md](14-overall-architecture.md)：V2 总体逻辑架构、主链路、信任边界和数据真值。
+16. [adr/README.md](adr/README.md)：M0 已冻结的工程与安全架构决策。
+17. [security/electron-threat-model.md](security/electron-threat-model.md)：Electron 和本地 App Service 威胁模型。
+18. [evidence/m0-2026-08-25.md](evidence/m0-2026-08-25.md)：M0 检查点命令、结果和残余风险。
 
 ## 5. V1 与未来方向边界
 
