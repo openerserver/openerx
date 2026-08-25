@@ -21,6 +21,7 @@
 11. `已确定`：V1 在 Token 使用记录基础上提供个人额度、费用、积分、充值、支付和账单完整闭环。
 12. `已确定`：文件、工具和 Skill 按 Codex 桌面能力基线建设和验收。
 13. `已确定`：Windows 支持 Windows 10 以上；“较新的 macOS”当前具体化为 macOS 14 及以上。
+14. `已确定`：V1 的 agent harness 完全由维护中的 Pi 提供；V2 只实现宿主、产品投影和能力/权限 Broker，不重复实现 Agent Loop、Session、压缩、重试或工具调用生命周期。
 
 这里的“个人客户端”表示产品围绕单个用户的对话、文件、工具、历史和个人成果展开；用户可能处于企业工作环境，但首版不要求企业先完成组织部署、角色配置或团队治理。
 
@@ -50,7 +51,7 @@
 3. [02-users-and-scenarios.md](02-users-and-scenarios.md)：单用户画像和核心场景。
 4. [03-experience-and-information-architecture.md](03-experience-and-information-architecture.md)：聊天主界面、导航和交互合同。
 5. [04-domain-and-api-contract.md](04-domain-and-api-contract.md)：Conversation-first 领域模型。
-6. [05-platform-and-runtime-contract.md](05-platform-and-runtime-contract.md)：客户端、工具层、Runtime 和 Pi 边界。
+6. [05-platform-and-runtime-contract.md](05-platform-and-runtime-contract.md)：客户端、Pi-owned harness、能力 Broker 与产品投影边界。
 7. [06-security-and-governance-contract.md](06-security-and-governance-contract.md)：个人文件、凭证、工具权限和数据安全。
 8. [07-migration-and-delivery-contract.md](07-migration-and-delivery-contract.md)：旧系统处置和 V1 阶段计划。
 9. [08-acceptance-contract.md](08-acceptance-contract.md)：个人客户端验收门槛。
@@ -76,7 +77,7 @@
 | 内置、个人及工作区 Skill 的安装、使用与设置 | 管理员控制台和组织级 Skill 分发 |
 | 个人成果预览、下载和再次使用 | 团队共享、评论和发布流程 |
 | 平台统一模型、显式选模、Token、个人额度/积分、充值和账单 | 组织预算中心、企业授信账期和私有模型治理 |
-| 模型与 Runtime 可替换 | 私有部署和组织级 Runtime 治理 |
+| 模型可替换、Pi 版本可在宿主边界内升级 | 私有部署、其他 harness 和组织级 Runtime 治理 |
 
 未来能力不得以隐藏页面、预建复杂 Schema 或额外 V1 操作步骤的方式提前进入首版。
 

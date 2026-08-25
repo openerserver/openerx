@@ -52,6 +52,16 @@ const config: ForgeConfig = {
           config: "vite.preload.config.mts",
           target: "preload",
         },
+        {
+          entry: "src/utility/app-service.ts",
+          config: "vite.app-service.config.mts",
+          target: "main",
+        },
+        {
+          entry: "src/utility/runtime-host.ts",
+          config: "vite.runtime-host.config.mts",
+          target: "main",
+        },
       ],
       renderer: [
         {

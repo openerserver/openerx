@@ -56,6 +56,7 @@ jobs:
       - run: npm ci
       - run: npm run build --workspace @openerx/contracts
       - run: npm run package --workspace @openerx/desktop -- --arch=${{ matrix.arch }}
+      - run: npm run test:e2e:v2
       - run: npm run verify:fuses --workspace @openerx/desktop
       - uses: actions/upload-artifact@v4
         with:

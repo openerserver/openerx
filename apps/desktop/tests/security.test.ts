@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { assertTrustedIpcSender, parseInitialAppServiceReady } from "../src/main/ipc-security";
 import {
   createWindowOptions,
   isTrustedExternalUrl,
@@ -41,5 +42,27 @@ describe("desktop window security", () => {
     expect(
       resolveRendererAssetPath(rendererRoot, "openerx://user@renderer/index.html"),
     ).toBeUndefined();
+  });
+});
+
+describe("desktop IPC security", () => {
+  it("accepts only the sender main frame", () => {
+    const mainFrame = {};
+    expect(() =>
+      assertTrustedIpcSender({ senderFrame: mainFrame, sender: { mainFrame } } as never),
+    ).not.toThrow();
+    expect(() =>
+      assertTrustedIpcSender({ senderFrame: {}, sender: { mainFrame } } as never),
+    ).toThrow("sender is not the main frame");
+  });
+
+  it("accepts one matching App Service handshake and rejects mismatch or replay", () => {
+    const nonce = "a".repeat(64);
+    const frame = { kind: "app-service.ready", contractVersion: 1, nonce };
+    expect(parseInitialAppServiceReady(frame, nonce, false)).toEqual(frame);
+    expect(() => parseInitialAppServiceReady(frame, "b".repeat(64), false)).toThrow(
+      "nonce mismatch",
+    );
+    expect(() => parseInitialAppServiceReady(frame, nonce, true)).toThrow("Duplicate");
   });
 });

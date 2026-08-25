@@ -35,7 +35,7 @@
 - SyncConflict
 - AppSettings
 
-只有复杂执行才使用：
+只有需要产品级后台状态、恢复或审计的复杂执行才使用以下投影对象：
 
 - WorkItem
 - ExecutionRun
@@ -43,9 +43,11 @@
 - ToolCall
 - PermissionRequest
 
+这些对象不构成 Agent harness。`RunStep` 和 `ToolCall` 只能投影 Pi 事件，不能成为另一套步骤规划、重试或工具调度状态机。
+
 关键不变量：
 
-> Conversation 和 Message 是用户历史；Runtime Session 只是执行引用。Runtime 升级、崩溃或替换不能让历史对话失去可读性。
+> Conversation 和 Message 是用户历史；Pi Session/AgentSession 只是执行引用。Pi 升级、崩溃或恢复失败不能让历史对话失去可读性。
 
 ## 2. 领域关系
 
@@ -212,28 +214,30 @@ UsageRecord 是原始计量真值，不直接修改余额。服务端统一记�
 WorkItem 只在以下情况下创建：
 
 - 需要后台继续。
-- 需要多个持久化步骤。
+- 需要把 Pi 产生的多步活动投影为可持久化进度。
 - 产生文件成果。
 - 需要中途权限或用户输入。
-- 需要可靠取消、恢复或重试。
+- 需要产品级取消、恢复或重新发起执行尝试。
 
 普通问答不强制创建用户可见 WorkItem 页面。
+
+WorkItem 是用户可见的粗粒度状态和审计容器。它不拆解 prompt、不选择下一步，也不维护独立 Agent Loop；这些行为属于 Pi。
 
 ### 4.2 ExecutionRun
 
 一次完成 WorkItem 的执行尝试，记录：
 
-- Runtime Adapter 与版本。
+- Pi package/version 与 Pi Host 合同版本。
 - 用户选择模型、实际模型、回退原因和模型目录版本。
 - 输入和权限快照。
-- Runtime 私有引用。
-- 状态、错误、用量、报价/费用引用和时间。
+- Pi Session 私有引用和最后投影事件游标。
+- 状态、错误、压缩/内部重试摘要、用量、报价/费用引用和时间。
 
-重试创建新 Run，不覆盖旧 Run。
+用户或产品重新发起一次执行尝试时创建新 Run，不覆盖旧 Run。Pi 在同一次 AgentSession 内部进行的模型重试仍属于原 Run，只通过事件和计量投影记录，不由 V2 重放 Agent 步骤。
 
 ### 4.3 ToolCall 与 PermissionRequest
 
-ToolCall 必须有状态、幂等键、输入摘要、结果摘要和风险等级。敏感调用关联 PermissionRequest，授权载荷变化后必须重新请求。
+ToolCall 是 Pi 工具调用的产品可见与安全审计投影，必须有 Pi call ref、状态、幂等键、输入摘要、结果摘要和风险等级。Pi 负责调用生命周期和把结果送回 Agent Loop；V2 Capability and Permission Broker 负责 Scope、审批、沙箱、实际副作用和审计。敏感调用关联 PermissionRequest，授权载荷变化后必须重新请求。
 
 ## 5. 状态模型
 
@@ -254,6 +258,8 @@ queued -> running -> waiting_for_user -> running
 ```
 
 用户停止生成与取消复杂 WorkItem 是不同动作，但 UI 可以根据当前上下文提供统一“停止”入口。
+
+该状态是由 Pi Session 事件、权限/用户输入等待和宿主进程状态归纳出的产品投影，不驱动一套 V2 自有步骤执行器。
 
 ### 5.3 收费执行状态
 
@@ -291,7 +297,12 @@ V1 至少支持：
 - `message.stopped`
 - `run.started`
 - `run.progressed`
+- `run.compacted`
+- `run.retrying`
 - `tool.requested`
+- `tool.started`
+- `tool.completed`
+- `tool.failed`
 - `permission.required`
 - `permission.resolved`
 - `artifact.created`
@@ -317,6 +328,8 @@ V1 至少支持：
 - `sync.failed`
 
 事件至少包含 `eventId`、`conversationId`、可选 `workItemId/runId`、`sequence`、`occurredAt`、`payloadVersion` 和 `payload`。
+
+Pi 的消息、工具、权限、压缩、重试、用量和 Session 事件在 Runtime Supervisor 中映射为上述稳定产品事件。原始 Pi payload、内部步骤和 Session 快照不是 UI 或同步合同。
 
 断线恢复使用稳定游标，不依赖内存事件列表。
 

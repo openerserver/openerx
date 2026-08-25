@@ -1,0 +1,24 @@
+{
+  "name": "@openerx/app-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./process": "./src/process.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openerx/contracts": "0.0.0",
+    "@openerx/runtime-sdk": "0.0.0",
+    "@openerx/storage": "0.0.0"
+  },
+  "devDependencies": {
+    "electron": "44.0.0"
+  }
+}

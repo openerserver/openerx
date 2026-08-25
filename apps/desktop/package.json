@@ -11,14 +11,20 @@
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "test:e2e": "node scripts/e2e-chat.mjs",
     "verify:fuses": "node scripts/verify-packaged-fuses.mjs"
   },
   "dependencies": {
+    "@openerx/app-service": "0.0.0",
     "@openerx/contracts": "0.0.0",
+    "@openerx/runtime-host": "0.0.0",
+    "@tanstack/react-query": "5.102.3",
     "electron-squirrel-startup": "1.0.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "react-router-dom": "7.18.2"
+    "react-markdown": "10.1.0",
+    "react-router-dom": "7.18.2",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@electron-forge/cli": "7.11.2",
@@ -32,8 +38,11 @@
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.6",
     "@vitejs/plugin-react": "4.7.0",
     "electron": "44.0.0",
+    "playwright": "1.62.1",
     "vite": "6.4.3"
   }
 }

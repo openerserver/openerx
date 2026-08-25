@@ -7,7 +7,7 @@
 ## 1. 迁移原则
 
 1. 个人客户端是新产品，不把旧 Dashboard、Project、Task、AgentOps 页面改名后继续使用。
-2. 优先复用基础技术和经过验证的 Runtime 行为，不复用旧用户心智。
+2. V1 使用维护中的 Pi 包完整提供 agent harness；V2 复用并验证 Pi 行为，不从旧代码或新协调层复制 Agent Loop、Session、压缩、重试和工具调用生命周期。
 3. 先建立桌面聊天骨架，再并行建设账户/模型与个人商业平台，随后接文件、Codex 级工具、Skill 和复杂任务。
 4. 产品/团队负责人和企业治理能力不进入 V1 迁移清单。
 5. 旧平台保留可恢复快照，未经批准不删除。
@@ -36,7 +36,7 @@
 | 现有认证 | 按个人账户、设备会话和云同步要求重新评估；不直接继承旧组织角色语义 |
 | TaskDetail 对话与流式经验 | 转化为 Message/Conversation 测试参考 |
 | task artifacts 经验 | 转化为个人 Artifact/ArtifactVersion |
-| Runtime Provider 测试 | 转化为 Runtime Adapter 验收用例 |
+| Runtime Provider 测试 | 转化为 Pi Host、事件翻译和真实 Pi harness 验收用例 |
 | Control Plane Service/BFF | 不作为 V1 产品边界，选择性提取基础能力 |
 | service-go | 默认退出 V1 主线 |
 | Dashboard、Projects、AgentOps、审批页 | 不进入 V1 员工界面 |
@@ -83,7 +83,7 @@ V1 默认不做大规模旧数据迁移。
 - Electron Main、Preload Bridge 和 React Renderer。
 - 新对话、历史、搜索、设置壳。
 - Conversation/Message 存储。
-- Fake Runtime 流式、停止、失败和重试。
+- Fake Pi Host test double 的流式、停止、失败和重试；只验证产品/宿主合同，不作为候选生产 harness。
 - Windows 和 macOS 安装包及安全基线测试。
 
 退出条件：无需文件和工具即可稳定完成日常聊天闭环。
@@ -110,10 +110,11 @@ V1 默认不做大规模旧数据迁移。
 
 退出条件：[11-billing-and-commerce-contract.md](11-billing-and-commerce-contract.md) 的个人商业闭环和所有资金硬门禁通过，测试资金可以逐笔重建且没有重复扣费/入账。
 
-### Phase 4：真实 Runtime、文件与成果，3 至 4 周
+### Phase 4：Pi Harness、文件与成果，3 至 4 周
 
-- 维护中的 Pi Adapter 或批准的首个 Runtime。
-- 平台模型目录和明确选择接入 Runtime Adapter。
+- 接入并固定维护中的 Pi 包，Pi 完整负责 Agent Loop、AgentSession、上下文压缩、内部重试和工具调用生命周期。
+- Pi Host 负责隔离、进程监督、产品 ID 绑定和事件翻译，不实现第二套 harness。
+- 平台模型目录和明确选择通过 Platform Model Gateway 接入 Pi。
 - 文件/文件夹授权、解析、引用、云副本和个人文件区。
 - DOCX、XLSX、PPTX、PDF、图片和 HTML 的创建/编辑/预览/版本。
 - 真实流式、停止、长上下文和错误恢复。
@@ -122,11 +123,11 @@ V1 默认不做大规模旧数据迁移。
 
 ### Phase 5：Codex 工具与长任务，5 至 6 周
 
-- Tool Gateway、沙箱、权限卡片和统一工具记录。
+- 把 V2 工具注册给 Pi；Pi 管理工具调用生命周期，V2 Capability and Permission Broker 管理沙箱、Scope、权限卡片、副作用幂等和统一工具记录。
 - 第一方 Web 搜索、隔离浏览器、本地 Web 预览。
 - Shell/代码执行、长进程和受控桌面应用操作。
 - STDIO/Streamable HTTP MCP、Bearer/OAuth 和连接管理。
-- WorkItem、ExecutionRun 和持久化事件。
+- 从 Pi 事件生成 WorkItem、ExecutionRun、RunStep 和 ToolCall 产品投影及持久化事件，不建立 V2 自有步骤调度器。
 - 离开对话后继续、恢复和取消。
 
 退出条件：TOOL-01 至 TOOL-10 在 Windows 和 macOS 达到安全和可靠性门禁。

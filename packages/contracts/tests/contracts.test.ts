@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { desktopEnvironmentSchema, errorEnvelopeSchema } from "../src";
+import {
+  appServiceBootstrapSchema,
+  chatCommandEnvelopeSchema,
+  desktopEnvironmentSchema,
+  errorEnvelopeSchema,
+  parseChatCommandResult,
+  runtimeEventFrameSchema,
+} from "../src";
 
 describe("desktop environment contract", () => {
   it("accepts supported V1 targets", () => {
@@ -57,5 +64,53 @@ describe("error envelope contract", () => {
         retryable: false,
       }),
     ).toThrow();
+  });
+});
+
+describe("M1 process and chat contracts", () => {
+  it("rejects unknown chat fields and weak mutation idempotency keys", () => {
+    expect(() =>
+      chatCommandEnvelopeSchema.parse({
+        command: "chat.send",
+        input: { text: "hello", idempotencyKey: "short", executable: "rm" },
+      }),
+    ).toThrow();
+  });
+
+  it("requires exact process versions and 256-bit boot nonces", () => {
+    const nonce = "a".repeat(64);
+    expect(
+      appServiceBootstrapSchema.parse({
+        kind: "app-service.bootstrap",
+        contractVersion: 1,
+        nonce,
+        runtimeNonce: nonce,
+        profileDirectory: "/profile",
+      }),
+    ).toMatchObject({ contractVersion: 1 });
+    expect(() =>
+      appServiceBootstrapSchema.parse({
+        kind: "app-service.bootstrap",
+        contractVersion: 2,
+        nonce: "weak",
+        runtimeNonce: nonce,
+        profileDirectory: "/profile",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects malformed runtime events and malformed command responses", () => {
+    expect(() =>
+      runtimeEventFrameSchema.parse({
+        kind: "runtime.event",
+        generationId: crypto.randomUUID(),
+        eventId: crypto.randomUUID(),
+        sequence: 0,
+        occurredAt: "not-a-date",
+        type: "delta",
+        delta: 42,
+      }),
+    ).toThrow();
+    expect(() => parseChatCommandResult("chat.list", [{ title: "incomplete" }])).toThrow();
   });
 });

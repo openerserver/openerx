@@ -2,7 +2,7 @@
 
 > 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_NOT_AUTHORIZED`
 >
-> 合同类型：个人客户端壳、应用服务、工具层、Runtime Host 和 Pi Adapter
+> 合同类型：个人客户端壳、应用服务、Pi-owned Harness、Runtime Host 和能力 Broker
 
 ## 1. 架构目标
 
@@ -15,7 +15,7 @@ V1 技术架构首先服务个人客户端：
 5. 账户历史在 Windows 与 macOS 间可靠同步和恢复。
 6. 平台统一模型的 Token、价格、实际费用和账户扣减可逐笔核对。
 7. 额度、积分、充值余额、支付和账单由服务端商业系统保持唯一真值。
-8. 模型和 Runtime 可替换。
+8. 模型可替换，Pi 版本可在稳定宿主边界内升级，产品历史不依赖 Pi 内部状态。
 9. 不建设暂时没有用户价值的企业管理面。
 
 ## 2. 目标拓扑
@@ -27,15 +27,13 @@ flowchart TD
   MAIN --> APP[Personal App Service / Utility Process]
   APP --> STORE[Conversation and File Store]
   APP --> SEARCH[Personal Search Index]
-  APP --> EXEC[Execution Coordinator]
-  EXEC --> TOOLS[Tool and Skill Gateway]
-  EXEC --> HOST[Isolated Runtime Host]
-  HOST --> ADAPTER[Runtime Adapter]
-  ADAPTER --> PI[Pi]
-  ADAPTER --> OTHER[Other Runtime]
+  APP --> SUPERVISOR[V2 Runtime Supervisor]
+  SUPERVISOR --> HOST[Isolated Pi Harness Host]
+  HOST --> PI[Pi Agent Harness]
+  PI --> TOOLS[V2 Capability and Permission Broker]
   APP --> SYNC[Account Sync Client]
   SYNC --> CLOUD[Identity Sync and File Services]
-  EXEC --> MODEL[Platform Model Gateway]
+  PI --> MODEL[Platform Model Gateway]
   MODEL --> CATALOG[Model Catalog Pricing and Usage]
   MODEL --> BILLING[Billing Authorization and Ledger]
   MAIN --> CHECKOUT[Trusted Hosted Checkout]
@@ -108,16 +106,19 @@ V1 已确认系统矩阵：
 - 创建简单响应或复杂 WorkItem。
 - 运行在 Utility Process 或独立受监督进程，不阻塞 Electron Main。
 
-### 4.5 Execution Coordinator
+### 4.5 V2 Runtime Supervisor 与产品投影
 
-- 区分快速聊天和复杂工作。
-- 管理队列、步骤、取消、恢复、重试和幂等。
-- 状态持久化，不依赖进程内 Agent Registry。
-- 将 Runtime 事件映射为产品事件。
+- 为一次产品执行分配稳定的 Message、WorkItem、ExecutionRun 和 generation 标识，并绑定内部 Pi Session 引用。
+- 在进入 Pi 前校验账户、模型、报价/预留、文件 Scope 和设备能力前置条件。
+- 监督 Runtime Host 的进程生命周期，决定产品层是等待、明确失败，还是请求 Pi 恢复已有 Session。
+- 将 Pi 事件投影为可持久化、可同步、可恢复的产品事件；WorkItem 和 ExecutionRun 是产品监督与审计视图，不是第二套 Agent 计划器。
+- 不实现 Agent Loop、Session/SessionManager、上下文压缩、内部重试、步骤规划或工具调用生命周期；这些全部由 Pi 提供。
 
-### 4.6 Runtime Host
+### 4.6 Isolated Pi Harness Host
 
-- 为复杂执行创建隔离工作目录和进程。
+- 只在该受监督 utility process 中加载维护中的 Pi 包；Main、Preload、Renderer 和 App Service 不直接导入 Pi。
+- 为每个执行创建或恢复 Pi `AgentSession`，并绑定明确的隔离工作目录。
+- 把 Platform Model Gateway 客户端和 V2 能力工具注册给 Pi，不建立第二套 loop 或 tool dispatcher。
 - 挂载当前对话明确授权的输入。
 - 限制 CPU、内存、磁盘、时长和网络。
 - 不暴露用户 Home、全局凭证和未授权文件夹。
@@ -165,38 +166,40 @@ v1-backup/
 快速聊天路径：
 
 ```text
-Message -> Runtime Adapter -> streaming Message
+Message -> Pi AgentSession -> Pi events -> streaming Message projection
 ```
 
 复杂执行路径：
 
 ```text
-Message -> WorkItem -> ExecutionRun -> Tool/Runtime -> Artifact + Message
+Message -> WorkItem/ExecutionRun product projection -> Pi AgentSession
+        -> V2 capability tools -> Artifact + Message projection
 ```
 
-两条路径共享 Conversation、模型配置、权限、事件、用量、报价和结算合同。禁止让每个简单问题都经过完整企业任务编排。
+两条路径使用同一个 Pi harness，共享 Conversation、模型配置、权限、事件、用量、报价和结算合同。复杂路径增加的是产品可见的后台状态、权限等待、成果和恢复投影，不是另一个负责拆解步骤的 Agent 编排器。普通问答不强制创建用户可见 WorkItem。
 
 两条路径的模型请求都必须经过 Platform Model Gateway。收费请求在执行前取得 Billing Authorization；桌面端和 Runtime Host 不保存上游 Provider API Key，也不能绕过平台 Token 与费用记录直接调用未登记模型。
 
-## 7. Runtime Adapter
+## 7. Pi Host 与事件翻译边界
 
 最低接口：
 
 ```ts
-interface RuntimeAdapter {
-  readonly id: string;
+interface PiHarnessHost {
+  readonly id: `pi/${string}`;
   capabilities(): Promise<RuntimeCapabilities>;
-  start(input: StartInput): Promise<RuntimeHandle>;
-  send(handle: RuntimeHandle, input: RuntimeInput): Promise<void>;
-  stop(handle: RuntimeHandle): Promise<void>;
-  replyPermission(handle: RuntimeHandle, reply: PermissionReply): Promise<void>;
-  stream(handle: RuntimeHandle, cursor?: string): AsyncIterable<RuntimeEvent>;
-  usage(handle: RuntimeHandle): Promise<RuntimeUsage>;
-  dispose(handle: RuntimeHandle): Promise<void>;
+  start(input: PiStartInput): Promise<PiSessionHandle>;
+  resume(input: PiResumeInput): Promise<PiSessionHandle>;
+  prompt(handle: PiSessionHandle, input: PiPromptInput): Promise<void>;
+  abort(handle: PiSessionHandle): Promise<void>;
+  replyPermission(handle: PiSessionHandle, reply: PermissionReply): Promise<void>;
+  events(handle: PiSessionHandle, cursor?: string): AsyncIterable<PiHostEvent>;
+  usageSnapshot(handle: PiSessionHandle): Promise<RuntimeUsage>;
+  dispose(handle: PiSessionHandle): Promise<void>;
 }
 ```
 
-能力声明至少覆盖文本、图片、文件、工具、权限、流式、停止、恢复、上下文压缩和用量。
+这是 V2 与 Pi Runtime Host 之间的版本化进程合同，不是 V1 的多 harness 插件接口。能力声明至少覆盖文本、图片、文件、工具、权限、流式、停止、恢复、上下文压缩和用量。事件翻译至少覆盖消息增量、终态、工具调用/结果、权限请求、压缩、重试、用量和 Session 状态；原始 Pi payload 只用于受控诊断，不能成为 Renderer 合同或产品数据真值。
 
 ## 7.1 平台模型目录与 Gateway
 
@@ -228,21 +231,28 @@ interface RuntimeAdapter {
 
 ## 8. Pi 合同
 
-`已确认`：Pi 是 V1 默认执行引擎，但不是业务底层。
+`已确认`：当前维护中的 Pi 包完整提供 V1 唯一的生产 agent harness，但不是产品数据或商业系统底层。
 
 进入 V1 前必须：
 
 1. 使用当前维护中的新包，不从仓库内旧 `pi-mono` 源码树启动。
-2. 显式传入每个对话/Run 的工作目录。
-3. 适配当前增量事件、压缩、重试和权限事件。
-4. 模型请求通过 Platform Model Gateway；上游凭证只存在于服务端安全配置层。
-5. 复杂工具仅在 Runtime Host 内运行。
-6. Pi Session ID 只作为内部引用。
-7. 通过真实模型流式、停止、继续、文件、工具和崩溃测试。
+2. 由 Pi 负责 Agent Loop、`AgentSession`/SessionManager、上下文管理与压缩、模型轮次、内部重试和工具调用生命周期。
+3. V2 不得在 Runtime Supervisor、App Service、Tool Gateway 或 WorkItem/ExecutionRun 中重建上述 harness 能力。
+4. 显式传入每个对话/Run 的工作目录，并把产品历史快照与 Pi Session 私有状态分离。
+5. 适配当前 Pi 的消息、工具、权限、压缩、重试、用量和 Session 事件，并保持顺序、游标和终态幂等。
+6. 模型请求通过 Platform Model Gateway；上游凭证只存在于服务端安全配置层。
+7. 工具由 Pi 发起调用，但文件、网络、浏览器、Shell、桌面、MCP 和 Skill 的授权及实际副作用全部通过 V2 Capability and Permission Broker。
+8. Pi Session ID 只作为内部引用；Conversation、Message、WorkItem 和 ExecutionRun 是 V2 产品投影。
+9. 固定 Pi 包版本；升级必须通过宿主合同、事件映射、恢复、工具和压缩回归测试。
+10. 通过真实模型流式、停止、继续、文件、工具、权限、压缩、重试和崩溃恢复测试。
 
-## 9. 工具与 Skill Gateway
+M1 的 `fake-runtime/v1` 只模拟上述 Pi Host/产品事件边界，用于无费用的确定性测试。正式构建不得把 Fake Runtime 当作生产引擎。V1 若要引入 Pi 之外的 harness，必须由新的 ADR 明确迁移和验收影响。
+
+## 9. 工具、Skill 与能力 Broker
 
 V1 工具范围以 [10-codex-capability-baseline.md](10-codex-capability-baseline.md) 为硬性基线，并按以下层次实现：
+
+V2 将工具定义和 Skill 上下文注册给 Pi。Pi 负责模型到工具的选择、调用开始/结束、工具结果回填和 Agent 继续运行；V2 Capability and Permission Broker 负责 Scope 校验、用户审批、沙箱、实际系统调用、外部副作用幂等和审计。Broker 不是另一个 agent harness。
 
 - 内置低风险工具：计算、文本处理、成果渲染等。
 - 文件工具：读取、搜索、创建和补丁式修改，只访问已添加文件或明确授权目录。
@@ -254,7 +264,7 @@ V1 工具范围以 [10-codex-capability-baseline.md](10-codex-capability-baselin
 - Skill：加载 `SKILL.md`、脚本、参考资料和资产；显式/自动触发都进入可见活动记录。
 - 工具目录：按来源和命名空间索引，在大型工具集合中按需发现，不把全部工具 Schema 永久塞入模型上下文。
 
-工具返回统一结果、来源、用量和错误，不把每个工具私有格式泄漏到聊天 UI。Skill 脚本和 MCP 不得绕过 Gateway、沙箱、审批、网络策略或用量记录。
+工具返回统一结果、来源、用量和错误，不把每个工具私有格式泄漏到聊天 UI。Skill 脚本和 MCP 不得绕过 Broker、沙箱、审批、网络策略或用量记录。
 
 ## 10. 存储与同步
 
@@ -272,7 +282,8 @@ V1 已确定支持账户云同步；已确认架构采用账户云真值与本�
 
 ## 11. 可观测性
 
-- 共享 Conversation ID、Message ID、可选 WorkItem/Run ID 和 Trace ID。
+- 共享 Conversation ID、Message ID、可选 WorkItem/Run ID、Trace ID，以及仅供内部关联的 Pi package/version、Session ref 和 event cursor。
+- 记录 Pi 消息、工具、权限、压缩、重试和用量事件到产品投影的关联结果，但默认不记录完整原始 payload。
 - 指标覆盖启动、首个内容时间、生成时长、停止成功率、工具失败率、同步延迟/冲突率、Token/费用记录完整率、重复扣费率、支付入账延迟、对账差异、恢复率和成果打开率。
 - 日志默认不记录完整对话、文件内容和 API Key。
 - 用户可以导出脱敏诊断包。

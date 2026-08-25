@@ -1,12 +1,12 @@
 # OpenerX 2.0 V1 开发执行计划
 
-> 状态：`READY_FOR_EXECUTION`
+> 状态：`IN_EXECUTION`
 >
 > 基准日期：2026-08-25（Asia/Shanghai）
 >
 > 适用范围：Electron + React 个人 AI 桌面客户端 V1
 >
-> 当前进度：`M0 COMPLETE / NEXT M1 CHAT ALPHA`
+> 当前进度：`M0 COMPLETE / M1 COMPLETE / NEXT M2 ACCOUNT ALPHA`
 >
 > 计划依据：[产品合同](01-product-contract.md)、[领域与 API 合同](04-domain-and-api-contract.md)、[平台与 Runtime 合同](05-platform-and-runtime-contract.md)、[迁移与交付合同](07-migration-and-delivery-contract.md)、[验收合同](08-acceptance-contract.md)
 
@@ -73,8 +73,8 @@ V1 完成的判断以以下结果为准：
 | 工作流 | 主要目录 | 核心责任 | 首个交付 |
 | --- | --- | --- | --- |
 | Desktop Foundation | `apps/desktop`、`packages/ui-react` | Electron Main、Preload、React Renderer、打包与更新 | 可安装的聊天壳 |
-| Personal App Service | `apps/app-service`、`packages/storage` | 本地业务 API、缓存、Conversation/Message 存储 | 本地聊天闭环 |
-| Runtime | `apps/runtime-host`、`packages/runtime-sdk` | Runtime Adapter、事件、停止、恢复和隔离 | Fake Runtime，随后真实 Runtime |
+| Personal App Service | `packages/app-service`、`packages/storage` | 本地业务 API、缓存、Conversation/Message 存储 | 本地聊天闭环 |
+| Runtime | `packages/runtime-host`、`packages/runtime-sdk` | Runtime Adapter、事件、停止、恢复和隔离 | Fake Runtime，随后真实 Runtime |
 | Identity & Sync | `services/identity-api`、`services/account-sync-api`、`apps/sync-service` | 账户、设备会话、revision、游标、离线队列和冲突 | 跨设备历史恢复 |
 | Model & Usage | `services/model-gateway`、`services/token-usage-store` | 模型目录、统一调用、Token 真值和去重 | 明确选模与用量页 |
 | Commerce | `services/pricing-service`、`services/billing-ledger-service`、`services/payment-adapter` | 报价、预留、结算、账本、支付、退款和对账 | Billing Alpha |
@@ -108,8 +108,8 @@ flowchart LR
 | 检查点 | 当前状态 | 必须通过的 Gate | 检查点证据 |
 | --- | --- | --- | --- |
 | M0 工程与 ADR 基线 | **COMPLETE** | V2 独立安装、边界检查、lint、typecheck、test、三目标 CI 打包配置；ADR-V2-001 至 006、威胁模型、50 条黄金任务夹具、可交互聊天壳 | [`docs/v2/evidence/m0-2026-08-25.md`](evidence/m0-2026-08-25.md) |
-| M1 Chat Alpha | **NEXT** | 本地 Conversation/Message 真值、Fake Runtime 流式/停止/重试/分支/重启恢复；GT-CHAT-01 至 10 Fake 版 | M1 测试报告、双平台启动证据 |
-| M2 Account Alpha | NOT STARTED | 邮箱登录、设备会话、双向同步/冲突/撤销、模型目录和 UsageRecord；GT-ACCOUNT-01 至 10 | 双设备与跨账户隔离证据 |
+| M1 Chat Alpha | **COMPLETE** | 本地 Conversation/Message 真值、Fake Runtime 流式/停止/重试/分支/重启恢复；GT-CHAT-01 至 10 Fake 版 | [`docs/v2/evidence/m1-2026-08-25.md`](evidence/m1-2026-08-25.md)；Windows/macOS native CI confirmation remains pre-release |
+| M2 Account Alpha | **NEXT** | 邮箱登录、设备会话、双向同步/冲突/撤销、模型目录和 UsageRecord；GT-ACCOUNT-01 至 10 | 双设备与跨账户隔离证据 |
 | M3 Billing Alpha | NOT STARTED | 报价/预留/结算、额度/积分/余额、复式账本、支付/退款/对账；GT-BILLING-01 至 10 | 账本重建与支付沙箱证据 |
 | M4 Runtime + File Alpha | NOT STARTED | 真实 Runtime Adapter、文件授权/解析/引用、Artifact 生成预览和跨设备恢复；GT-FILE-01 至 10 | 文件矩阵与真实模型证据 |
 | M5 Tool Alpha | NOT STARTED | Tool Gateway、Web/Browser/Shell/Desktop/MCP、长任务停止恢复；TOOL-01 至 10 | Windows/macOS E2E 证据 |

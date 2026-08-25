@@ -104,7 +104,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 - Shell 绑定授权工作目录，支持流式输出、输入、停止、超时、长进程和退出状态。
 - 本地 STDIO 与远程 Streamable HTTP MCP 均通过；Bearer/OAuth、禁用、重连和清除授权可验证。
 - Skill 支持标准目录、显式/自动触发、脚本/参考/资产、个人/工作区 Scope、更新权限复核、同步安装记录和卸载。
-- 所有脚本、MCP 和自动触发 Skill 复用 Tool Gateway；不存在旁路文件、网络、Shell 或桌面权限。
+- 所有工具定义和 Skill 上下文由 Pi 使用，脚本、MCP 和自动触发 Skill 的实际能力统一经过 V2 Capability and Permission Broker；不存在旁路文件、网络、Shell 或桌面权限。
 
 ## 5.2 账户同步门禁
 
@@ -144,9 +144,15 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 - 月度账单可按消费、充值、退款、冲正和调账核对并下载；账单明确不等于税务发票。
 - 积分兑换比例由版本化配置提供；未配置或无效配置时积分抵扣关闭且阻断正式发布，不使用隐含默认值。
 
-## 6. 真实 Runtime 门禁
+## 6. 真实 Pi Harness 门禁
 
-发布验证必须使用真实配置的模型和 Runtime：
+发布验证必须使用维护中的 Pi 包和真实配置的模型：
+
+- Pi 是正式构建中唯一的 agent harness；Fake Runtime 不得进入生产执行路径。
+- Pi 负责 Agent Loop、AgentSession/SessionManager、上下文压缩、内部重试和工具调用生命周期。
+- V2 Runtime Supervisor、WorkItem/ExecutionRun 投影和 Capability Broker 中不存在平行 Agent Loop、步骤规划、Session 管理、压缩、重试或工具调度器。
+- Pi Host 的事件合同覆盖消息、工具、权限、压缩、重试、用量和 Session 状态，并有顺序、重放、终态与版本升级契约测试。
+- 工具由 Pi 发起并接收结果；Scope、审批、沙箱、系统副作用和审计由 V2 Capability and Permission Broker 执行。
 
 - 流式聊天。
 - 停止和重新生成。
@@ -167,7 +173,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 | 客户端刷新/重启 | 已完成历史可读，活动任务恢复或明确失败 |
 | 流式连接断开 | 按游标补读，不重复消息 |
 | App Service 重启 | 已接受消息不丢失 |
-| Runtime 退出 | 不删除历史，保留已有成果 |
+| Pi Harness Host 退出 | 不删除历史，保留已有成果；Pi Session 可恢复时恢复，否则明确失败 |
 | 文件解析失败 | 不阻塞删除文件或继续纯文本对话 |
 | 工具超时 | 有限重试，用户可停止 |
 | 重复发送 | 幂等，不产生重复工具副作用 |
@@ -210,6 +216,8 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 - 单元、集成、契约和端到端测试通过。
 - 数据迁移在新库和升级样本通过。
 - 事件顺序、重复、断线和补读测试通过。
+- Pi Host 消息、工具、权限、压缩、重试、用量和 Session 事件翻译契约测试通过。
+- 依赖图和代码扫描证明 V2 没有第二套 Agent Loop/Session/compaction/retry/tool-lifecycle 实现，Fake Runtime 不进入 Release 构建。
 - 工具调用具有幂等和权限测试。
 - 支持格式的成果经过渲染验证。
 - 云同步 Schema、冲突、删除墓碑、设备撤销和 Token/费用记录契约测试通过。
@@ -238,7 +246,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 ### Chat Alpha
 
 - 新对话、历史、流式、停止、重试稳定。
-- Fake 与真实 Runtime 基本链路通过。
+- Fake Pi Host test double 的合同链路和真实 Pi harness 基本链路均通过；正式构建只启用 Pi。
 - Electron + React 在首批目标系统可安装、启动和退出。
 
 ### File Alpha

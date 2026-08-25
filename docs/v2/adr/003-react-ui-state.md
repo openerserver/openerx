@@ -7,7 +7,8 @@
 ## Decision
 
 1. Use React 19 with TypeScript strict mode and React Router 7 `HashRouter`. Hash routing keeps
-   packaged `file://` navigation deterministic without a custom protocol in M0/M1.
+   navigation deterministic when the packaged Renderer is served from the privileged `openerx://`
+   application protocol.
 2. Renderer state is split by ownership:
    - component-local interaction state uses React state/reducer;
    - URL-addressable navigation uses the router;

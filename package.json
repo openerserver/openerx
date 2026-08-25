@@ -21,6 +21,7 @@
     "lint:v2:fix": "biome check --write apps packages services scripts tests package.json tsconfig.base.json",
     "typecheck:v2": "npm run typecheck --workspaces --if-present",
     "test:v2": "npm run test --workspaces --if-present && vitest run tests/v2",
+    "test:e2e:v2": "npm run test:e2e --workspace @openerx/desktop",
     "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/desktop",
     "package:v2": "npm run build --workspace @openerx/contracts && npm run package --workspace @openerx/desktop",
     "verify:package:v2": "npm run verify:fuses --workspace @openerx/desktop",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
+    "jsdom": "29.0.0",
     "typescript": "6.0.3",
     "vitest": "4.1.11"
   }

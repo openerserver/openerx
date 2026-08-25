@@ -1,6 +1,6 @@
 # Electron and local App Service threat model
 
-> Baseline: M0
+> Baseline: M1 Chat Alpha
 >
 > Date: 2026-08-25 (Asia/Shanghai)
 >
@@ -11,7 +11,7 @@
 Protected assets are account sessions, OS credential handles, local conversation/cache data, file
 grants, attachment/artifact content, model/payment credentials, tool approvals and update integrity.
 
-The M0 invariants are:
+The M1 invariants are:
 
 1. Renderer has no Node, filesystem, process, credential, ledger-write or raw IPC authority.
 2. Main is the only broker for windows, navigation, OS credentials, dialogs and process startup.
@@ -37,12 +37,12 @@ The M0 invariants are:
 | --- | --- | --- |
 | Renderer remote-code execution becomes Node execution | sandbox, no Node integration, context isolation, no webview | window-option unit test and packaged smoke test |
 | XSS or model output invokes privileged IPC | frozen domain bridge, no raw IPC, strict request schemas | bridge review and contract rejection tests |
-| iframe or unexpected window sends IPC | main-frame/window identity checks | forged sender integration test in M1 |
+| iframe or unexpected window sends IPC | main-frame/window identity checks | trusted-main-frame and forged-frame rejection tests |
 | Navigation loads a privileged remote page | deny new windows, prevent navigation, HTTPS allowlist only for OS handoff | URL/window policy unit tests |
 | Malicious URL uses `file:`, `javascript:` or custom protocol | URL parser and explicit `https:` policy | scheme test matrix |
-| Local process impersonates App Service | private MessagePort, random one-use boot nonce, contract negotiation | handshake replay/mismatch tests in M1 |
-| App Service crash freezes UI or corrupts writes | utility process, bounded restart, transactional single-writer storage | crash-loop and transaction recovery tests in M1 |
-| Database theft reveals reusable credentials | credentials outside DB; OS-protected key and authenticated field encryption | storage inspection and tamper tests in M1 |
+| Local process impersonates App Service | private MessagePort, random one-use boot nonce, contract negotiation | nonce mismatch, version mismatch and duplicate-handshake rejection tests |
+| App Service crash freezes UI or corrupts writes | utility process, bounded restart, transactional single-writer storage | live Electron crash injection plus interrupted-message recovery E2E |
+| Database theft reveals reusable credentials | credentials outside DB; OS-protected key and authenticated field encryption | M1 schema inspection proves no credential/token tables; OS store and encrypted account fields remain M2 |
 | Path traversal or symlink escapes a grant | canonical path checks at capability broker and operation time | file-scope E2E in M4 |
 | Runtime/Skill/MCP expands its own authority | separate process, capability port, explicit scope and approval | denial/revocation E2E in M5/M6 |
 | Duplicate event/retry creates repeated state or charge | stable IDs, sequence checks and idempotency keys | contract tests from M1; billing tests in M3 |
@@ -68,10 +68,11 @@ The M0 invariants are:
 - The stable Forge development dependency tree has known audit findings in archive/image build tools.
   They are excluded from the packaged runtime; CI uses the integrity-pinned lockfile and only trusted
   repository inputs. The risk remains open until upstream-compatible fixes are available.
-- `node:sqlite` is not yet a stable Node API. The storage adapter and migration tests contain driver
-  replacement risk; M1 must prove corruption recovery before persistent chat exits Alpha.
-- Renderer sender verification and App Service boot authentication need process-level integration
-  tests when the utility process is implemented in M1.
+- `node:sqlite` remains an experimental Node API. Ordered checksummed migrations, startup
+  `quick_check`, transactional tests, newer-schema refusal and corrupt-file fail-closed tests contain
+  data-loss risk; automated restoration from a backup remains a later reliability feature.
+- M1 process E2E runs natively on the development macOS arm64 host. Windows x64 and macOS x64 are
+  cross-packaged locally and have native E2E jobs in CI; hosted results are required before release.
 
 ## Change rule
 
