@@ -1,11 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { IdentityService } from "../src/identity-service";
 
 const services: IdentityService[] = [];
+const directories: string[] = [];
 
 afterEach(() => {
   for (const service of services.splice(0)) service.close();
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
 });
 
 function setup(): {
@@ -31,12 +38,12 @@ function setup(): {
   return { service, codes, advance: (ms) => (timestamp += ms) };
 }
 
-function device(name: string, platform: "darwin" | "win32" = "darwin") {
+function device(name: string, platform: "darwin" | "win32" | "ios" | "android" = "darwin") {
   return {
     deviceId: randomUUID(),
     name,
     platform,
-    arch: platform === "darwin" ? ("arm64" as const) : ("x64" as const),
+    arch: platform === "win32" ? ("x64" as const) : ("arm64" as const),
   };
 }
 
@@ -128,5 +135,62 @@ describe("IdentityService", () => {
     );
     expect(() => service.authenticate(first.accessToken)).toThrow("DEVICE_SESSION_REVOKED");
     expect(() => service.authenticate(second.accessToken)).toThrow("DEVICE_SESSION_REVOKED");
+  });
+
+  it("creates iOS and Android controller sessions for Remote Companion", async () => {
+    const { service } = setup();
+    const iosChallenge = await service.requestChallenge("remote@example.com");
+    const ios = service.verifyChallenge({
+      challengeId: iosChallenge.challengeId,
+      code: "123456",
+      device: device("iPhone", "ios"),
+    });
+    const androidChallenge = await service.requestChallenge("remote@example.com");
+    const android = service.verifyChallenge({
+      challengeId: androidChallenge.challengeId,
+      code: "123456",
+      device: device("Pixel", "android"),
+    });
+
+    expect(ios.session.device.platform).toBe("ios");
+    expect(android.session.device.platform).toBe("android");
+    expect(service.listDevices(service.authenticate(ios.accessToken))).toHaveLength(2);
+  });
+
+  it("migrates the desktop-only device table before accepting a mobile controller", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-identity-mobile-migration-"));
+    directories.push(directory);
+    const databasePath = path.join(directory, "identity.sqlite");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE device_sessions (
+        session_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        device_name TEXT NOT NULL,
+        platform TEXT NOT NULL CHECK (platform IN ('darwin', 'win32')),
+        arch TEXT NOT NULL CHECK (arch IN ('arm64', 'x64')),
+        session_version INTEGER NOT NULL CHECK (session_version > 0),
+        refresh_hash TEXT NOT NULL,
+        previous_refresh_hash TEXT,
+        created_at TEXT NOT NULL,
+        last_active_at TEXT NOT NULL,
+        revoked_at TEXT
+      ) STRICT;
+    `);
+    legacy.close();
+    const service = new IdentityService(databasePath, {
+      challengeCooldownMs: 0,
+      codeFactory: () => "123456",
+      mailer: { async deliver() {} },
+    });
+    services.push(service);
+    const challenge = await service.requestChallenge("migration@example.com");
+    const grant = service.verifyChallenge({
+      challengeId: challenge.challengeId,
+      code: "123456",
+      device: device("Migrated iPhone", "ios"),
+    });
+    expect(grant.session.device.platform).toBe("ios");
   });
 });

@@ -79,6 +79,42 @@ export const piAbortFrameSchema = z
   })
   .strict();
 
+export const piSessionControlFrameSchema = z
+  .object({
+    kind: z.literal("pi.session.control"),
+    requestId: entityIdSchema,
+    generationId: entityIdSchema,
+    action: z.enum(["steer", "follow_up", "abort"]),
+    text: z.string().trim().min(1).max(100_000).optional(),
+  })
+  .strict()
+  .superRefine((frame, context) => {
+    if (frame.action === "abort" && frame.text !== undefined) {
+      context.addIssue({ code: "custom", path: ["text"], message: "Abort has no text" });
+    }
+    if (frame.action !== "abort" && frame.text === undefined) {
+      context.addIssue({ code: "custom", path: ["text"], message: "Control text required" });
+    }
+  });
+
+export const piSessionControlResultFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      kind: z.literal("pi.session.control-result"),
+      requestId: entityIdSchema,
+      ok: z.literal(true),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pi.session.control-result"),
+      requestId: entityIdSchema,
+      ok: z.literal(false),
+      errorCode: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+    })
+    .strict(),
+]);
+
 const piFileToolOperationSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("list"), input: z.object({}).strict() }).strict(),
   z
@@ -141,6 +177,7 @@ export const piFileToolResponseFrameSchema = z.discriminatedUnion("ok", [
 export const piHostRequestFrameSchema = z.union([
   piPromptFrameSchema,
   piAbortFrameSchema,
+  piSessionControlFrameSchema,
   piFileToolResponseFrameSchema,
   piToolResponseFrameSchema,
 ]);
@@ -163,6 +200,7 @@ export const piHostPortFrameSchema = z.union([
   piHostReadyFrameSchema,
   piHostRequestFrameSchema,
   piHostEventFrameSchema,
+  piSessionControlResultFrameSchema,
   piFileToolRequestFrameSchema,
   piFileToolResponseFrameSchema,
   piToolRequestFrameSchema,
@@ -173,5 +211,7 @@ export const piHostPortFrameSchema = z.union([
 export type PiHistoryMessage = z.infer<typeof piHistoryMessageSchema>;
 export type PiPromptFrame = z.infer<typeof piPromptFrameSchema>;
 export type PiHostEventFrame = z.infer<typeof piHostEventFrameSchema>;
+export type PiSessionControlFrame = z.infer<typeof piSessionControlFrameSchema>;
+export type PiSessionControlResultFrame = z.infer<typeof piSessionControlResultFrameSchema>;
 export type PiFileToolRequestFrame = z.infer<typeof piFileToolRequestFrameSchema>;
 export type PiFileToolResponseFrame = z.infer<typeof piFileToolResponseFrameSchema>;

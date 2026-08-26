@@ -62,6 +62,11 @@ const config: ForgeConfig = {
           config: "vite.pi-host.config.mts",
           target: "main",
         },
+        {
+          entry: "src/utility/remote-host.ts",
+          config: "vite.remote-host.config.mts",
+          target: "main",
+        },
       ],
       renderer: [
         {

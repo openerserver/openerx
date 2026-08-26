@@ -53,6 +53,11 @@ import {
   permissionResolveInputSchema,
   rechargeOrderSchema,
   refundOrderSchema,
+  remoteDesktopEnableInputSchema,
+  remoteDesktopRevokeInputSchema,
+  remoteDesktopStateSchema,
+  remoteDevicePairingSchema,
+  remotePairingChallengeSchema,
   syncResolveConflictInputSchema,
   toolListInputSchema,
   toolScopeRevokeInputSchema,
@@ -113,6 +118,28 @@ const bridge: DesktopBridge = {
       accountRevokeDeviceInputSchema.parse(input),
     );
     return accountStateSchema.parse(result);
+  },
+  getRemoteState: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.remoteState);
+    return remoteDesktopStateSchema.parse(result);
+  },
+  setRemoteEnabled: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.remoteEnable,
+      remoteDesktopEnableInputSchema.parse(input),
+    );
+    return remoteDesktopStateSchema.parse(result);
+  },
+  createRemotePairingChallenge: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.remotePairingChallenge);
+    return remotePairingChallengeSchema.parse(result);
+  },
+  revokeRemotePairing: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.remotePairingRevoke,
+      remoteDesktopRevokeInputSchema.parse(input),
+    );
+    return remoteDevicePairingSchema.parse(result);
   },
   listModels: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.modelList);

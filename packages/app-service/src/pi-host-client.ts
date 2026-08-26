@@ -3,11 +3,13 @@ import {
   type PiFileToolRequestFrame,
   type PiHostEventFrame,
   type PiPromptFrame,
+  type PiSessionControlFrame,
   type PiToolRequestFrame,
   piActivityEventSchema,
   piFileToolRequestFrameSchema,
   piHostEventFrameSchema,
   piHostReadyFrameSchema,
+  piSessionControlResultFrameSchema,
   piToolRequestFrameSchema,
 } from "@openerx/contracts";
 import type { MessagePortMain } from "electron";
@@ -15,6 +17,7 @@ import type { MessagePortMain } from "electron";
 export interface PiHostClient {
   prompt(frame: PiPromptFrame): Promise<void>;
   abort(generationId: string): Promise<void>;
+  control(frame: PiSessionControlFrame): Promise<void>;
   onEvent(listener: (frame: PiHostEventFrame) => void): () => void;
   onFileToolRequest(listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void;
   onToolRequest(listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void;
@@ -27,6 +30,10 @@ export class MessagePortPiHostClient implements PiHostClient {
   readonly #fileToolListeners = new Set<(frame: PiFileToolRequestFrame) => Promise<unknown>>();
   readonly #toolListeners = new Set<(frame: PiToolRequestFrame) => Promise<unknown>>();
   readonly #activityListeners = new Set<(frame: PiActivityEvent) => void>();
+  readonly #pendingControls = new Map<
+    string,
+    { resolve(): void; reject(error: Error): void; timeout: NodeJS.Timeout }
+  >();
   readonly #ready: Promise<void>;
 
   constructor(port: MessagePortMain, expectedNonce: string) {
@@ -62,6 +69,18 @@ export class MessagePortPiHostClient implements PiHostClient {
     this.#port.postMessage({ kind: "pi.session.abort", generationId });
   }
 
+  async control(frame: PiSessionControlFrame): Promise<void> {
+    await this.#ready;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.#pendingControls.delete(frame.requestId);
+        reject(new Error("PI_CONTROL_TIMEOUT"));
+      }, 10_000);
+      this.#pendingControls.set(frame.requestId, { resolve, reject, timeout });
+      this.#port.postMessage(frame);
+    });
+  }
+
   onEvent(listener: (frame: PiHostEventFrame) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
@@ -87,6 +106,16 @@ export class MessagePortPiHostClient implements PiHostClient {
   }
 
   #handleMessage(data: unknown): void {
+    const control = piSessionControlResultFrameSchema.safeParse(data);
+    if (control.success) {
+      const pending = this.#pendingControls.get(control.data.requestId);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      this.#pendingControls.delete(control.data.requestId);
+      if (control.data.ok) pending.resolve();
+      else pending.reject(new Error(control.data.errorCode));
+      return;
+    }
     const event = piHostEventFrameSchema.safeParse(data);
     if (event.success) {
       for (const listener of this.#listeners) listener(event.data);

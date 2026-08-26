@@ -17,9 +17,11 @@ a superseding ADR that records migration and rollback impact.
 | [ADR-V2-010](010-billing-ledger-and-money.md) | Integer money, reservation and append-only ledger | Accepted and M3 local slice implemented |
 | [ADR-V2-011](011-file-artifact-object-and-pi-session.md) | Device file scopes, cloud objects, artifact versions and Pi session recovery | Accepted and M4 local slice implemented |
 | [ADR-V2-012](012-capability-broker-and-tool-projection.md) | Pi tool invocation, Capability Broker, host adapters and durable projection | Accepted and M5 local slice implemented |
+| [ADR-V2-013](013-remote-control-transport-and-application.md) | E2EE Remote transport, outbound Connector and exactly-once application | Accepted and M6 local slice implemented |
 
-ADR-V2-001 through ADR-V2-012 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
+ADR-V2-001 through ADR-V2-013 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
 recorded in [the checkpoint report](../evidence/m2-2026-08-25.md). ADR-V2-010 is implemented by the
 [M3 checkpoint](../evidence/m3-2026-08-25.md). ADR-V2-011 is implemented by the
 [M4 checkpoint](../evidence/m4-2026-08-26.md). ADR-V2-012 is implemented by the
-[M5 checkpoint](../evidence/m5-2026-08-26.md); native cross-platform release evidence remains.
+[M5 checkpoint](../evidence/m5-2026-08-26.md). ADR-V2-013 is implemented by the
+[M6 checkpoint](../evidence/m6-2026-08-26.md); native cross-platform release evidence remains.

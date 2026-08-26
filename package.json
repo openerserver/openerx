@@ -22,7 +22,7 @@
     "typecheck:v2": "npm run typecheck --workspaces --if-present",
     "test:v2": "npm run test --workspaces --if-present && vitest run tests/v2",
     "test:e2e:v2": "npm run test:e2e --workspace @openerx/desktop",
-    "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/desktop",
+    "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/mobile && npm run build --workspace @openerx/desktop",
     "package:v2": "npm run build --workspace @openerx/contracts && npm run package --workspace @openerx/desktop",
     "verify:package:v2": "npm run verify:fuses --workspace @openerx/desktop",
     "check:v2": "npm run check:boundaries:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2"

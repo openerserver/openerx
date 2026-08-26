@@ -329,6 +329,7 @@ export class ToolRepository {
     permissionRequestId: string;
     decision: "once" | "session" | "persistent" | "deny";
     payloadDigest: string;
+    scopeConversationId?: string | null;
   }): { permission: PermissionRequest; scope: CapabilityScope | null } {
     return this.#transaction(() => {
       const request = this.permission(input.permissionRequestId);
@@ -362,6 +363,7 @@ export class ToolRepository {
           resource: request.resource,
           actions: request.actions,
           maxRisk: request.risk,
+          conversationId: input.scopeConversationId ?? null,
           sessionOnly: input.decision === "session",
           expiresAt,
         });
@@ -402,6 +404,7 @@ export class ToolRepository {
     resource: string;
     actions: CapabilityAction[];
     maxRisk: ToolRisk;
+    conversationId?: string | null;
     sessionOnly: boolean;
     expiresAt: string | null;
   }): CapabilityScope {
@@ -410,8 +413,8 @@ export class ToolRepository {
       .prepare(
         `INSERT INTO capability_scopes
          (id, owner_profile_id, capability, resource_type, resource, actions_json, max_risk,
-          session_only, expires_at, revoked_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+          conversation_id, session_only, expires_at, revoked_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
       )
       .run(
         id,
@@ -421,6 +424,7 @@ export class ToolRepository {
         input.resource,
         JSON.stringify(input.actions),
         input.maxRisk,
+        input.conversationId ?? null,
         input.sessionOnly ? 1 : 0,
         input.expiresAt,
         this.#now(),
@@ -785,6 +789,7 @@ export class ToolRepository {
       resource: row.resource,
       actions: JSON.parse(String(row.actions_json)),
       maxRisk: row.max_risk,
+      conversationId: row.conversation_id ?? null,
       sessionOnly: Number(row.session_only) === 1,
       expiresAt: row.expires_at,
       revokedAt: row.revoked_at,

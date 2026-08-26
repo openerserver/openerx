@@ -6,6 +6,7 @@ import {
   timestampSchema,
 } from "./chat";
 import { errorEnvelopeSchema } from "./errors";
+import { remoteConnectorConfigureFrameSchema, remoteConnectorDisableFrameSchema } from "./remote";
 import { normalizedToolResultSchema, toolOperationSchema } from "./tool";
 
 export const appServiceContractVersion = 1 as const;
@@ -147,6 +148,8 @@ export const appServicePortFrameSchema = z.union([
   mainCapabilityCancelFrameSchema,
   mainCredentialRequestFrameSchema,
   mainCredentialResponseFrameSchema,
+  remoteConnectorConfigureFrameSchema,
+  remoteConnectorDisableFrameSchema,
 ]);
 
 export type AppServiceBootstrap = z.infer<typeof appServiceBootstrapSchema>;

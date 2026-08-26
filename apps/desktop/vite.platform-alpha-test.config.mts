@@ -26,6 +26,7 @@ export default defineConfig({
       "@openerx/payment-adapter",
       "@openerx/platform-alpha",
       "@openerx/pricing-service",
+      "@openerx/remote-control-gateway",
       "@openerx/token-usage-store",
     ],
   },

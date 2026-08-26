@@ -13,6 +13,16 @@ import {
   modelGatewayRequestSchema,
   type PlatformAlphaServices,
   paymentCallbackSchema,
+  pushSubscriptionSchema,
+  remoteCommandReceiptSchema,
+  remoteCommandSchema,
+  remoteCursorAckInputSchema,
+  remoteEventListInputSchema,
+  remoteEventPublishInputSchema,
+  remoteHostRegistrationInputSchema,
+  remotePairingAcceptInputSchema,
+  remotePairingChallengeInputSchema,
+  remotePresenceUpdateSchema,
   type SyncPrincipal,
   safeErrorMessage,
   syncOperationSchema,
@@ -142,6 +152,159 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         const revoked = services.identity.revokeAllDevices(principal);
         for (const session of revoked) services.objects?.revokeSession?.(session.sessionId);
         send(response, 200, revoked);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/hosts") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.registerHost(
+            principal,
+            remoteHostRegistrationInputSchema.parse(await jsonBody(request)),
+          ),
+        );
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/remote/hosts") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(response, 200, services.remote.listHosts(principal));
+        return;
+      }
+      const remotePresenceMatch = /^\/api\/v2\/remote\/hosts\/([^/]+)\/presence$/.exec(
+        url.pathname,
+      );
+      if (request.method === "POST" && remotePresenceMatch) {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        const input = remotePresenceUpdateSchema.parse({
+          ...((await jsonBody(request)) as object),
+          hostDeviceId: remotePresenceMatch[1],
+        });
+        send(response, 200, services.remote.updatePresence(principal, input));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/pairing-challenges") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.createPairingChallenge(
+            principal,
+            remotePairingChallengeInputSchema.parse(await jsonBody(request)),
+          ),
+        );
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/pairings") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.acceptPairing(
+            principal,
+            remotePairingAcceptInputSchema.parse(await jsonBody(request)),
+          ),
+        );
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/remote/pairings") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(response, 200, services.remote.listPairings(principal));
+        return;
+      }
+      const remotePairingMatch = /^\/api\/v2\/remote\/pairings\/([^/]+)$/.exec(url.pathname);
+      if (request.method === "DELETE" && remotePairingMatch) {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(response, 200, services.remote.revokePairing(principal, remotePairingMatch[1] ?? ""));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/commands") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.submitCommand(
+            principal,
+            remoteCommandSchema.parse(await jsonBody(request)),
+          ),
+        );
+        return;
+      }
+      const remoteCommandsMatch = /^\/api\/v2\/remote\/hosts\/([^/]+)\/commands$/.exec(
+        url.pathname,
+      );
+      if (request.method === "GET" && remoteCommandsMatch) {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.pullHostCommands(
+            principal,
+            remoteCommandsMatch[1] ?? "",
+            Number(url.searchParams.get("limit") ?? 20),
+          ),
+        );
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/receipts") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.recordReceipt(
+            principal,
+            remoteCommandReceiptSchema.parse(await jsonBody(request)),
+          ),
+        );
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/events") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.publishEvent(
+            principal,
+            remoteEventPublishInputSchema.parse(await jsonBody(request)),
+          ),
+        );
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/remote/events") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        const input = remoteEventListInputSchema.parse({
+          hostDeviceId: url.searchParams.get("hostDeviceId"),
+          conversationId: url.searchParams.has("conversationId")
+            ? url.searchParams.get("conversationId")
+            : undefined,
+          afterCursor: url.searchParams.get("afterCursor"),
+          limit: Number(url.searchParams.get("limit") ?? 100),
+        });
+        send(response, 200, services.remote.listEvents(principal, input));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/event-cursors") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.acknowledgeCursor(
+            principal,
+            remoteCursorAckInputSchema.parse(await jsonBody(request)),
+          ),
+        );
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/push-subscriptions") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(
+          response,
+          200,
+          services.remote.upsertPushSubscription(
+            principal,
+            pushSubscriptionSchema.parse(await jsonBody(request)),
+          ),
+        );
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/v2/objects/upload-intents") {

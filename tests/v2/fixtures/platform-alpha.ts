@@ -16,6 +16,7 @@ import { ObjectStoreService } from "@openerx/object-store-api";
 import { PaymentAdapter } from "@openerx/payment-adapter";
 import { createPlatformAlphaServer, listenOnEphemeralPort } from "@openerx/platform-alpha";
 import { PricingService } from "@openerx/pricing-service";
+import { RemoteControlGateway } from "@openerx/remote-control-gateway";
 import { UsageStore } from "@openerx/token-usage-store";
 
 export const platformFixturePaymentSecrets = {
@@ -87,6 +88,7 @@ const objects = new ObjectStoreService(
   path.join(objectRoot, "bytes"),
 );
 const usage = new UsageStore(":memory:");
+const remote = new RemoteControlGateway(":memory:");
 const billingTerms: BillingTerms = {
   version: "terms-m3-e2e-v1",
   effectiveAt: "2026-08-01T00:00:00.000Z",
@@ -171,7 +173,17 @@ const models = new ModelGatewayService({
   },
 });
 const listener = await listenOnEphemeralPort(
-  createPlatformAlphaServer({ identity, sync, objects, usage, models, pricing, billing, payments }),
+  createPlatformAlphaServer({
+    identity,
+    sync,
+    objects,
+    usage,
+    models,
+    pricing,
+    billing,
+    payments,
+    remote,
+  }),
 );
 
 process.send?.({ kind: "platform-alpha.ready", baseUrl: listener.baseUrl });
@@ -183,6 +195,7 @@ async function shutdown(): Promise<void> {
   objects.close();
   rmSync(objectRoot, { recursive: true, force: true });
   usage.close();
+  remote.close();
   payments.close();
   billing.close();
   pricing.close();

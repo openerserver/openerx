@@ -122,4 +122,70 @@ describe("CapabilityBroker", () => {
     chat.close();
     repository.close();
   });
+
+  it("does not reuse a remote session scope outside its approved conversation", async () => {
+    const { chat, repository, projection } = fixture();
+    const transport = {
+      search: vi.fn(async () => ({
+        summary: "result",
+        data: {},
+        sources: [],
+        artifacts: [],
+        sideEffectCommitted: false,
+        durationMs: 1,
+      })),
+    };
+    const broker = new CapabilityBroker(repository, [new WebSearchAdapter(transport)]);
+    const firstOperation = {
+      operation: "web_search" as const,
+      query: "conversation A",
+      recencyDays: 7,
+      idempotencyKey: "conversation-a-search",
+    };
+    const blocked = await broker.execute(projection, firstOperation);
+    if (blocked.status !== "permission_required") throw new Error("expected permission");
+    broker.resolvePermission({
+      permissionRequestId: blocked.permission.id,
+      decision: "session",
+      payloadDigest: blocked.permission.payloadDigest,
+      scopeConversationId: projection.conversationId,
+    });
+    expect((await broker.execute(projection, firstOperation)).status).toBe("completed");
+
+    const secondGeneration = chat.createGeneration({
+      text: "另一个对话",
+      idempotencyKey: "chat-broker-0002",
+    });
+    const secondProjection = repository.createProjection({
+      conversationId: secondGeneration.receipt.conversationId,
+      messageId: secondGeneration.receipt.assistantMessageId,
+      title: "另一个对话",
+      selectedModelRef: "platform/auto",
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 1,
+    });
+    const second = await broker.execute(
+      {
+        generationId: "00000000-0000-4000-8000-000000000011",
+        workItemId: secondProjection.workItem.id,
+        runId: secondProjection.run.id,
+        conversationId: secondGeneration.receipt.conversationId,
+        assistantMessageId: secondGeneration.receipt.assistantMessageId,
+        piToolCallId: "pi-call-2",
+        toolName: "openerx_tool",
+      },
+      {
+        ...firstOperation,
+        query: "conversation B",
+        idempotencyKey: "conversation-b-search",
+      },
+    );
+    expect(second.status).toBe("permission_required");
+    expect(transport.search).toHaveBeenCalledTimes(1);
+    expect(repository.activeScopes("web.search")[0]?.conversationId).toBe(
+      projection.conversationId,
+    );
+    chat.close();
+    repository.close();
+  });
 });

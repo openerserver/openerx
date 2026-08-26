@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "OpenerX Remote",
+    "slug": "openerx-remote",
+    "version": "2.0.0-alpha.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "openerx",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.openerx.remote",
+      "infoPlist": {
+        "NSCameraUsageDescription": "扫描桌面显示的一次性 OpenerX Remote 配对码。",
+        "NSFaceIDUsageDescription": "确认高风险远程审批由当前设备用户作出。"
+      }
+    },
+    "android": {
+      "package": "com.openerx.remote",
+      "permissions": ["CAMERA", "USE_BIOMETRIC", "POST_NOTIFICATIONS"]
+    },
+    "plugins": [
+      "expo-secure-store",
+      ["expo-camera", { "cameraPermission": "扫描桌面的一次性 Remote 配对码" }],
+      ["expo-local-authentication", { "faceIDPermission": "确认远程审批" }],
+      "expo-notifications",
+      "expo-document-picker",
+      "expo-image-picker"
+    ]
+  }
+}

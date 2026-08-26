@@ -3,6 +3,7 @@ export * from "./billing";
 export * from "./chat";
 export * from "./common";
 export * from "./desktop";
+export * from "./desktop-remote";
 export * from "./errors";
 export * from "./file";
 export * from "./model";

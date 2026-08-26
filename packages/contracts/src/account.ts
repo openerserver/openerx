@@ -3,6 +3,7 @@ import { entityIdSchema, timestampSchema } from "./chat";
 
 export const desktopPlatformSchema = z.enum(["darwin", "win32"]);
 export const desktopArchitectureSchema = z.enum(["arm64", "x64"]);
+export const accountDevicePlatformSchema = z.enum(["darwin", "win32", "ios", "android"]);
 
 export const accountIdentitySchema = z
   .object({
@@ -17,7 +18,7 @@ export const deviceDescriptorSchema = z
   .object({
     deviceId: entityIdSchema,
     name: z.string().trim().min(1).max(120),
-    platform: desktopPlatformSchema,
+    platform: accountDevicePlatformSchema,
     arch: desktopArchitectureSchema,
   })
   .strict();

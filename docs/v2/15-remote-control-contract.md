@@ -1,8 +1,8 @@
 # V1 Remote Control 合同
 
-> 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_PLANNED`
+> 状态：`LOCAL_ALPHA_COMPLETE / RELEASE_MATRIX_PENDING`
 >
-> 更新日期：2026-08-25（Asia/Shanghai）
+> 更新日期：2026-08-26（Asia/Shanghai）
 >
 > 合同类型：iOS/Android 手机控制面、桌面执行主机、Pi 原生命令映射、远程安全与发布门禁
 
@@ -238,6 +238,26 @@ V1 不提供 Wake-on-LAN、云端代跑、本地登录解锁或主机离线命�
 ## 11. 交付与验收
 
 Remote Control 在 [13-development-plan.md](13-development-plan.md) 的 M6 独立交付，依赖 M2 账户/设备、M3 收费前置条件、M4 文件/Artifact 和 M5 工具/长任务。
+
+### 11.1 当前实现状态
+
+2026-08-26 的本地 Alpha 检查点已经实现：
+
+- Expo iOS/Android Hosts、Tasks、Inbox、Settings 构建，以及 SecureStore 设备私钥、主机选择、
+  配对/撤销、命令和加密事件游标；
+- 同账户一次性二维码 Challenge、X25519/Ed25519/HKDF/XChaCha20-Poly1305 协议、严格验签、
+  TTL、sequence、revision、撤销和持久化去重；
+- 不开放监听端口的受监督 Connector、只路由密文的 Gateway、回执、Presence、PushSubscription
+  和不透明推送信封；
+- Start/Steer/Queue/Stop 到 Pi 原生 API 的映射，以及绑定精确待批请求、Conversation、风险、
+  解锁/生物识别证明的同一 Broker 决策；
+- Electron 桌面到模拟移动控制器的 E2E，覆盖真实平台模型调用、服务端报价/结算、事件解密、
+  重投只应用一次、只形成一次 Charge、撤销、关闭 Remote 和桌面密钥加密保存。
+
+可复现命令和证据见 [M6 checkpoint](evidence/m6-2026-08-26.md)。这是本地实现检查点，不把
+Hermes 导出或模拟移动控制器当作 iOS/Android 真机证据，也不改变下列发布硬门禁。
+
+### 11.2 发布硬门禁
 
 发布前必须有：
 

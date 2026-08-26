@@ -238,6 +238,7 @@ export class ToolAppService {
     permissionRequestId: string;
     decision: "once" | "session" | "persistent" | "deny";
     payloadDigest: string;
+    scopeConversationId?: string | null;
   }): PermissionRequest {
     const permission = this.#broker.resolvePermission(input);
     const projection = [...this.#projectionByGeneration.values()].find(

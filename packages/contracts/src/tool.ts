@@ -41,6 +41,7 @@ export const capabilityScopeSchema = z
     resource: z.string().min(1).max(2_048),
     actions: z.array(capabilityActionSchema).min(1),
     maxRisk: toolRiskSchema,
+    conversationId: entityIdSchema.nullable(),
     sessionOnly: z.boolean(),
     expiresAt: timestampSchema.nullable(),
     revokedAt: timestampSchema.nullable(),

@@ -25,6 +25,7 @@ import {
   ChatCircle,
   CheckCircle,
   Desktop,
+  DeviceMobile,
   DownloadSimple,
   FileText,
   FolderSimple,
@@ -35,6 +36,7 @@ import {
   Paperclip,
   PaperPlaneTilt,
   Plus,
+  QrCode,
   Receipt,
   SidebarSimple,
   SlidersHorizontal,
@@ -45,6 +47,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import QRCode from "qrcode";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
@@ -1192,6 +1195,116 @@ function ThemeSettings({
   );
 }
 
+function RemoteSettings(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const remote = useQuery({
+    queryKey: ["remote", "state"],
+    queryFn: () => window.openerx.getRemoteState(),
+    retry: false,
+  });
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const enable = useMutation({
+    mutationFn: (enabled: boolean) => window.openerx.setRemoteEnabled({ enabled }),
+    onSuccess: (state) => {
+      queryClient.setQueryData(["remote", "state"], state);
+      if (!state.enabled) setQrDataUrl(null);
+    },
+  });
+  const challenge = useMutation({
+    mutationFn: () => window.openerx.createRemotePairingChallenge(),
+  });
+  const revoke = useMutation({
+    mutationFn: (pairingId: string) => window.openerx.revokeRemotePairing({ pairingId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["remote", "state"] }),
+  });
+
+  useEffect(() => {
+    const value = challenge.data;
+    if (!value) return;
+    const pairingUrl = `openerx://remote/pair?payload=${encodeURIComponent(JSON.stringify(value))}`;
+    let active = true;
+    void QRCode.toDataURL(pairingUrl, {
+      width: 220,
+      margin: 1,
+      errorCorrectionLevel: "M",
+      color: { dark: "#232823", light: "#ffffff" },
+    }).then((dataUrl) => {
+      if (active) setQrDataUrl(dataUrl);
+    });
+    return () => {
+      active = false;
+    };
+  }, [challenge.data]);
+
+  const state = remote.data;
+  const activePairings = state?.pairings.filter(({ status }) => status === "active") ?? [];
+  return (
+    <section className="settings-card settings-stack remote-settings" aria-label="手机远程控制">
+      <div className="settings-heading">
+        <div>
+          <h2>手机远程控制</h2>
+          <p>手机是控制面；Pi、文件、工具和权限判断仍只在这台电脑运行。</p>
+        </div>
+        <button
+          type="button"
+          className={state?.enabled ? "danger-action" : "primary-action"}
+          disabled={enable.isPending || remote.isPending || state?.available === false}
+          onClick={() => enable.mutate(!state?.enabled)}
+        >
+          {state?.enabled ? "关闭 Remote" : "开启 Remote"}
+        </button>
+      </div>
+      {state?.enabled ? (
+        <div className="remote-status-row">
+          <span className={`remote-presence presence-${state.host?.presence ?? "offline"}`}>
+            {state.host?.presence ?? "offline"}
+          </span>
+          <span>{state.host?.displayName}</span>
+          <span>{activePairings.length} 台手机已配对</span>
+          <button type="button" onClick={() => challenge.mutate()} disabled={challenge.isPending}>
+            <QrCode size={16} /> 新建配对码
+          </button>
+        </div>
+      ) : null}
+      {challenge.data && qrDataUrl ? (
+        <div className="remote-pairing-panel">
+          <img src={qrDataUrl} alt="OpenerX Remote 一次性配对二维码" />
+          <div>
+            <strong>用已登录同一账户的手机扫描</strong>
+            <p>二维码不含访问令牌，只含一次性挑战、公钥和到期时间。</p>
+            <span>到期：{new Date(challenge.data.expiresAt).toLocaleString()}</span>
+            <code>{challenge.data.challengeId}</code>
+          </div>
+        </div>
+      ) : null}
+      {activePairings.map((pairing) => (
+        <div className="device-card" key={pairing.pairingId}>
+          <div>
+            <strong>
+              <DeviceMobile size={16} /> 控制设备 {pairing.controllerDeviceId.slice(0, 8)}
+            </strong>
+            <span>创建于 {new Date(pairing.createdAt).toLocaleString()}</span>
+            <span>到期于 {new Date(pairing.expiresAt).toLocaleString()}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => revoke.mutate(pairing.pairingId)}
+            disabled={revoke.isPending}
+          >
+            撤销配对
+          </button>
+        </div>
+      ))}
+      {remote.error || enable.error || challenge.error || revoke.error || state?.reason ? (
+        <p className="inline-error">
+          {(remote.error ?? enable.error ?? challenge.error ?? revoke.error)?.message ??
+            state?.reason}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function AccountSettings({
   themePreference,
   onThemeChange,
@@ -1388,6 +1501,7 @@ function AccountSettings({
       </section>
       {state?.status === "signed_in" && state.session ? (
         <>
+          <RemoteSettings />
           <section className="settings-card settings-stack" aria-label="设备会话">
             <div className="settings-heading">
               <div>

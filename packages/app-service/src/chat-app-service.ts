@@ -8,9 +8,12 @@ import type {
   PiHostEventFrame,
   PiPromptFrame,
   PiToolRequestFrame,
+  RemoteApplyCommandResponseFrame,
+  RemoteCommand,
+  RemoteCommandPayload,
 } from "@openerx/contracts";
 import type { FileAppService } from "@openerx/file-service";
-import type { ChatRepository, GenerationDraft } from "@openerx/storage";
+import type { ChatRepository, GenerationDraft, RemoteRepository } from "@openerx/storage";
 import type { PiHostClient } from "./pi-host-client";
 import type { SyncCoordinator } from "./sync-coordinator";
 import type { ToolAppService } from "./tool-app-service";
@@ -26,6 +29,8 @@ export class ChatAppService {
   readonly #sync: SyncCoordinator | null;
   readonly #files: FileAppService | null;
   readonly #tools: ToolAppService | null;
+  readonly #remote: RemoteRepository | null;
+  readonly #remoteApplications = new Map<string, Promise<RemoteApplyCommandResponseFrame>>();
 
   constructor(
     repository: ChatRepository,
@@ -33,6 +38,7 @@ export class ChatAppService {
     sync: SyncCoordinator | null = null,
     files: FileAppService | null = null,
     tools: ToolAppService | null = null,
+    remote: RemoteRepository | null = null,
   ) {
     this.#repository = repository;
     this.#piHost = piHost;
@@ -43,6 +49,7 @@ export class ChatAppService {
     this.#sync = sync;
     this.#files = files;
     this.#tools = tools;
+    this.#remote = remote;
   }
 
   initialize(): ChatEvent[] {
@@ -56,6 +63,7 @@ export class ChatAppService {
     this.#repository.close();
     this.#files?.close();
     void this.#tools?.close();
+    this.#remote?.close();
   }
 
   onEvent(listener: (event: ChatEvent) => void): () => void {
@@ -227,6 +235,24 @@ export class ChatAppService {
     }
   }
 
+  currentRemoteRevision(conversationId: string | null): number {
+    return this.#repository.conversationRevision(conversationId);
+  }
+
+  async applyRemoteCommand(
+    command: RemoteCommand,
+    payload: RemoteCommandPayload,
+    authorization: AppServiceAuthorization,
+  ): Promise<RemoteApplyCommandResponseFrame> {
+    const running = this.#remoteApplications.get(command.commandId);
+    if (running) return await running;
+    const application = this.#applyRemoteCommand(command, payload, authorization).finally(() => {
+      this.#remoteApplications.delete(command.commandId);
+    });
+    this.#remoteApplications.set(command.commandId, application);
+    return await application;
+  }
+
   #requiredFiles(): FileAppService {
     if (!this.#files) throw new Error("FILE_SERVICE_UNAVAILABLE");
     return this.#files;
@@ -239,6 +265,179 @@ export class ChatAppService {
 
   #requiredToolsRepository() {
     return this.#requiredTools().repository();
+  }
+
+  async #applyRemoteCommand(
+    command: RemoteCommand,
+    payload: RemoteCommandPayload,
+    authorization: AppServiceAuthorization,
+  ): Promise<RemoteApplyCommandResponseFrame> {
+    const remote = this.#remote;
+    if (!remote) throw new Error("REMOTE_SERVICE_UNAVAILABLE");
+    if (authorization.accountId !== command.accountId) throw new Error("ACCOUNT_SCOPE_VIOLATION");
+    const existing = remote.begin(command, payload);
+    if (existing.result) return existing.result;
+    let response: RemoteApplyCommandResponseFrame;
+    try {
+      const result = await this.#executeRemoteCommand(command, payload, authorization);
+      response = {
+        kind: "remote.command.result",
+        requestId: command.commandId,
+        ok: true,
+        appliedRevision: this.#repository.conversationRevision(command.conversationId),
+        ...(result === undefined ? {} : { result }),
+      };
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "REMOTE_COMMAND_APPLY_FAILED";
+      const candidate = message.split(":", 1)[0] ?? "REMOTE_COMMAND_APPLY_FAILED";
+      response = {
+        kind: "remote.command.result",
+        requestId: command.commandId,
+        ok: false,
+        errorCode: /^[A-Z][A-Z0-9_]*$/u.test(candidate) ? candidate : "REMOTE_COMMAND_APPLY_FAILED",
+        currentRevision: this.#safeConversationRevision(command.conversationId),
+      };
+    }
+    return remote.complete(command.commandId, response);
+  }
+
+  async #executeRemoteCommand(
+    command: RemoteCommand,
+    payload: RemoteCommandPayload,
+    authorization: AppServiceAuthorization,
+  ): Promise<unknown> {
+    if (this.#safeConversationRevision(command.conversationId) !== command.baseRevision) {
+      throw new Error("REMOTE_BASE_REVISION_CONFLICT");
+    }
+    switch (payload.kind) {
+      case "task.start":
+      case "session.prompt":
+        return await this.handle(
+          {
+            command: "chat.send",
+            input: {
+              conversationId: command.conversationId,
+              text: payload.text,
+              idempotencyKey: command.commandId,
+            },
+          },
+          authorization,
+        );
+      case "session.steer":
+        await this.#remotePiControl(command, "steer", payload.text);
+        return { action: "steer" };
+      case "session.follow_up":
+        await this.#remotePiControl(command, "follow_up", payload.text);
+        return { action: "follow_up" };
+      case "session.abort": {
+        const generationId = this.#requireRemoteGeneration(command);
+        const messageId = this.#messageByGeneration.get(generationId);
+        const conversationId = this.#conversationByGeneration.get(generationId);
+        if (messageId !== payload.assistantMessageId || conversationId !== command.conversationId) {
+          throw new Error("REMOTE_GENERATION_SCOPE_VIOLATION");
+        }
+        await this.#piHost.control({
+          kind: "pi.session.control",
+          requestId: command.commandId,
+          generationId,
+          action: "abort",
+        });
+        const stopped = this.#repository.stopMessage(conversationId, messageId);
+        if (stopped.event) this.#emit(stopped.event);
+        this.#tools?.cancelGeneration(generationId);
+        this.#forgetGeneration(generationId);
+        await this.#syncIfAuthorized(authorization);
+        return stopped.message;
+      }
+      case "permission.decide": {
+        if (payload.attentionRequestId !== payload.permissionRequestId) {
+          throw new Error("REMOTE_ATTENTION_SCOPE_VIOLATION");
+        }
+        const permission = this.#requiredToolsRepository().permission(payload.permissionRequestId);
+        const workItem = this.#requiredToolsRepository().workItem(permission.workItemId);
+        if (workItem.conversationId !== command.conversationId) {
+          throw new Error("REMOTE_PERMISSION_SCOPE_VIOLATION");
+        }
+        const risk = Number(permission.risk.slice(1));
+        if (risk >= 3 && !payload.deviceUnlocked) throw new Error("REMOTE_DEVICE_UNLOCK_REQUIRED");
+        const reauthenticatedAt = Date.parse(payload.reauthenticatedAt);
+        const age = Date.now() - reauthenticatedAt;
+        if (reauthenticatedAt > Date.now() + 15_000 || age > 60_000) {
+          throw new Error("REMOTE_REAUTHENTICATION_EXPIRED");
+        }
+        if (permission.risk === "L5" && !payload.biometricVerified) {
+          throw new Error("REMOTE_BIOMETRIC_REQUIRED");
+        }
+        if (permission.risk === "L5" && payload.decision === "session") {
+          throw new Error("REMOTE_PERMISSION_DECISION_NOT_ALLOWED");
+        }
+        return this.#requiredTools().resolvePermission({
+          permissionRequestId: payload.permissionRequestId,
+          decision: payload.decision,
+          payloadDigest: payload.payloadDigest,
+          scopeConversationId: payload.decision === "session" ? command.conversationId : null,
+        });
+      }
+      case "attention.respond":
+        if (payload.delivery === "prompt") {
+          return await this.handle(
+            {
+              command: "chat.send",
+              input: {
+                conversationId: command.conversationId,
+                text: payload.response,
+                idempotencyKey: command.commandId,
+              },
+            },
+            authorization,
+          );
+        }
+        await this.#remotePiControl(
+          command,
+          payload.delivery === "steer" ? "steer" : "follow_up",
+          payload.response,
+        );
+        return { action: payload.delivery, attentionRequestId: payload.attentionRequestId };
+    }
+  }
+
+  async #remotePiControl(
+    command: RemoteCommand,
+    action: "steer" | "follow_up",
+    text: string,
+  ): Promise<void> {
+    const generationId = this.#requireRemoteGeneration(command);
+    if (this.#conversationByGeneration.get(generationId) !== command.conversationId) {
+      throw new Error("REMOTE_GENERATION_SCOPE_VIOLATION");
+    }
+    await this.#piHost.control({
+      kind: "pi.session.control",
+      requestId: command.commandId,
+      generationId,
+      action,
+      text,
+    });
+  }
+
+  #requireRemoteGeneration(command: RemoteCommand): string {
+    const generationId =
+      command.generationId ??
+      [...this.#conversationByGeneration.entries()].find(
+        ([, conversationId]) => conversationId === command.conversationId,
+      )?.[0];
+    if (!generationId) throw new Error("REMOTE_GENERATION_NOT_ACTIVE");
+    if (!this.#messageByGeneration.has(generationId)) {
+      throw new Error("REMOTE_GENERATION_NOT_ACTIVE");
+    }
+    return generationId;
+  }
+
+  #safeConversationRevision(conversationId: string | null): number {
+    try {
+      return this.#repository.conversationRevision(conversationId);
+    } catch {
+      return 0;
+    }
   }
 
   async #launch(draft: GenerationDraft, authorization?: AppServiceAuthorization): Promise<void> {

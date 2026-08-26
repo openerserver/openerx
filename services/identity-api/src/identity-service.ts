@@ -383,7 +383,7 @@ export class IdentityService {
         account_id TEXT NOT NULL REFERENCES accounts(account_id),
         device_id TEXT NOT NULL,
         device_name TEXT NOT NULL,
-        platform TEXT NOT NULL CHECK (platform IN ('darwin', 'win32')),
+        platform TEXT NOT NULL CHECK (platform IN ('darwin', 'win32', 'ios', 'android')),
         arch TEXT NOT NULL CHECK (arch IN ('arm64', 'x64')),
         session_version INTEGER NOT NULL CHECK (session_version > 0),
         refresh_hash TEXT NOT NULL,
@@ -404,5 +404,58 @@ export class IdentityService {
       CREATE INDEX IF NOT EXISTS sessions_account_idx
         ON device_sessions(account_id, created_at);
     `);
+    const sessionTable = this.#database
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'device_sessions'")
+      .get() as { sql: string } | undefined;
+    if (sessionTable && !sessionTable.sql.includes("'ios'")) this.#migrateMobileDevicePlatforms();
+  }
+
+  #migrateMobileDevicePlatforms(): void {
+    this.#database.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.#database.exec(`
+        BEGIN IMMEDIATE;
+      CREATE TABLE device_sessions_next (
+        session_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(account_id),
+        device_id TEXT NOT NULL,
+        device_name TEXT NOT NULL,
+        platform TEXT NOT NULL CHECK (platform IN ('darwin', 'win32', 'ios', 'android')),
+        arch TEXT NOT NULL CHECK (arch IN ('arm64', 'x64')),
+        session_version INTEGER NOT NULL CHECK (session_version > 0),
+        refresh_hash TEXT NOT NULL,
+        previous_refresh_hash TEXT,
+        created_at TEXT NOT NULL,
+        last_active_at TEXT NOT NULL,
+        revoked_at TEXT
+      ) STRICT;
+      INSERT INTO device_sessions_next SELECT * FROM device_sessions;
+      CREATE TABLE access_tokens_next AS SELECT * FROM access_tokens;
+      DROP TABLE access_tokens;
+      DROP TABLE device_sessions;
+      ALTER TABLE device_sessions_next RENAME TO device_sessions;
+      CREATE TABLE access_tokens (
+        token_hash TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES device_sessions(session_id),
+        issued_session_version INTEGER NOT NULL,
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO access_tokens SELECT * FROM access_tokens_next;
+      DROP TABLE access_tokens_next;
+      CREATE INDEX IF NOT EXISTS sessions_account_idx
+        ON device_sessions(account_id, created_at);
+        COMMIT;
+      `);
+    } catch (error) {
+      try {
+        this.#database.exec("ROLLBACK");
+      } catch {
+        // SQLite already rolled back the failed migration statement.
+      }
+      throw error;
+    } finally {
+      this.#database.exec("PRAGMA foreign_keys = ON");
+    }
   }
 }

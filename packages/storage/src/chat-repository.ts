@@ -112,6 +112,10 @@ export class ChatRepository {
     });
   }
 
+  conversationRevision(conversationId: string | null): number {
+    return conversationId ? this.#getConversationEntity(conversationId).revision : 0;
+  }
+
   createGeneration(input: {
     conversationId?: string | null;
     text: string;

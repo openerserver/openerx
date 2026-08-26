@@ -40,6 +40,8 @@ import {
   mcpServerRemoveInputSchema,
   permissionListInputSchema,
   permissionResolveInputSchema,
+  remoteDesktopEnableInputSchema,
+  remoteDesktopRevokeInputSchema,
   syncResolveConflictInputSchema,
   toolListInputSchema,
   toolScopeRevokeInputSchema,
@@ -56,6 +58,7 @@ import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { PlatformAccountClient } from "./platform-account-client";
+import { RemoteDesktopController } from "./remote-desktop-controller";
 import {
   appProtocol,
   createWindowOptions,
@@ -89,6 +92,7 @@ function registerIpcHandlers(
   baseProfileDirectory: string,
   platformUrl: string | undefined,
   platformClient: PlatformAccountClient | null,
+  remote: RemoteDesktopController,
 ): void {
   ipcMain.handle(ipcChannels.environmentGet, (event) => {
     assertTrustedIpcSender(event);
@@ -121,17 +125,20 @@ function registerIpcHandlers(
         path.join(baseProfileDirectory, "accounts", state.account.accountId),
         state.account.accountId,
       );
+      await remote.resume();
     }
     return state;
   });
   ipcMain.handle(ipcChannels.accountSignOut, async (event) => {
     assertTrustedIpcSender(event);
+    await remote.prepareSignOut();
     const state = await accounts.signOut();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
   });
   ipcMain.handle(ipcChannels.accountSignOutAll, async (event) => {
     assertTrustedIpcSender(event);
+    await remote.prepareSignOut();
     const state = await accounts.signOutAll();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
@@ -139,11 +146,30 @@ function registerIpcHandlers(
   ipcMain.handle(ipcChannels.accountRevokeDevice, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const parsed = accountRevokeDeviceInputSchema.parse(input);
+    if (parsed.sessionId === accounts.state().session?.sessionId) await remote.prepareSignOut();
     const state = await accounts.revokeDevice(parsed.sessionId);
     if (state.status !== "signed_in") {
       await supervisor.switchProfile(baseProfileDirectory, "local-default");
     }
     return state;
+  });
+
+  ipcMain.handle(ipcChannels.remoteState, async (event) => {
+    assertTrustedIpcSender(event);
+    return await remote.state();
+  });
+  ipcMain.handle(ipcChannels.remoteEnable, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    return await remote.setEnabled(remoteDesktopEnableInputSchema.parse(input).enabled);
+  });
+  ipcMain.handle(ipcChannels.remotePairingChallenge, async (event) => {
+    assertTrustedIpcSender(event);
+    return await remote.createPairingChallenge();
+  });
+  ipcMain.handle(ipcChannels.remotePairingRevoke, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = remoteDesktopRevokeInputSchema.parse(input);
+    return await remote.revokePairing(parsed.pairingId);
   });
 
   ipcMain.handle(ipcChannels.modelList, async (event) => {
@@ -527,6 +553,14 @@ app.whenReady().then(async () => {
         new ToolCredentialVault(path.join(directory, "credentials", "tool-credentials.bin")),
       ),
   );
+  const remote = new RemoteDesktopController(
+    supervisor,
+    accounts,
+    profileDirectory,
+    platformUrl,
+    device,
+    app.getVersion(),
+  );
   if (process.env.OPENERX_E2E === "1") {
     Object.assign(globalThis, {
       __openerxCrashAppServiceForTest: () => supervisor?.crashAppServiceForTest(),
@@ -544,8 +578,10 @@ app.whenReady().then(async () => {
     profileDirectory,
     platformUrl,
     platformUrl ? new PlatformAccountClient(platformUrl) : null,
+    remote,
   );
   void supervisor.start();
+  void remote.resume();
   createMainWindow();
 
   app.on("activate", () => {

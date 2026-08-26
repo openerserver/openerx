@@ -353,6 +353,29 @@ const migrations: readonly Migration[] = [
         ON mcp_server_configs(owner_profile_id, updated_at DESC);
     `,
   },
+  {
+    version: 6,
+    checksum: "conversation-bound-tool-scope-v6-20260826",
+    sql: `
+      ALTER TABLE capability_scopes ADD COLUMN conversation_id TEXT;
+      CREATE INDEX capability_scopes_conversation_idx
+        ON capability_scopes(owner_profile_id, conversation_id, capability, revoked_at);
+    `,
+  },
+  {
+    version: 7,
+    checksum: "remote-command-application-v7-20260826",
+    sql: `
+      CREATE TABLE remote_command_applications (
+        command_id TEXT PRIMARY KEY,
+        command_digest TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('applying', 'applied', 'rejected')),
+        result_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `,
+  },
 ];
 
 export function migrateDatabase(database: DatabaseSync): void {

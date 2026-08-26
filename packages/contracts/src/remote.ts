@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { entityIdSchema, timestampSchema } from "./chat";
+import { entityIdSchema, timestampSchema } from "./common";
 
-const base64UrlSchema = z
+export const remoteOpaqueSchema = z
   .string()
   .regex(/^[A-Za-z0-9_-]+$/)
   .min(32)
   .max(8_192);
-const remoteCursorSchema = z.string().regex(/^remote:\d+$/);
+export const remoteCursorSchema = z.string().regex(/^remote:\d+$/);
 
 export const remotePresenceSchema = z.enum(["online", "degraded", "offline", "revoked"]);
 
@@ -33,8 +33,8 @@ export const remotePairingChallengeSchema = z
     challengeId: entityIdSchema,
     accountId: entityIdSchema,
     hostDeviceId: entityIdSchema,
-    oneTimeNonce: base64UrlSchema,
-    hostPublicKey: base64UrlSchema,
+    oneTimeNonce: remoteOpaqueSchema,
+    hostPublicKey: remoteOpaqueSchema,
     createdAt: timestampSchema,
     expiresAt: timestampSchema,
   })
@@ -52,8 +52,8 @@ export const remoteDevicePairingSchema = z
     accountId: entityIdSchema,
     controllerDeviceId: entityIdSchema,
     hostDeviceId: entityIdSchema,
-    controllerPublicKey: base64UrlSchema,
-    hostPublicKey: base64UrlSchema,
+    controllerPublicKey: remoteOpaqueSchema,
+    hostPublicKey: remoteOpaqueSchema,
     status: z.enum(["pending", "active", "expired", "revoked"]),
     createdAt: timestampSchema,
     expiresAt: timestampSchema,
@@ -110,8 +110,8 @@ export const remoteCommandSchema = z
     issuedAt: timestampSchema,
     expiresAt: timestampSchema,
     idempotencyKey: z.string().min(8).max(240),
-    encryptedPayload: base64UrlSchema,
-    signature: base64UrlSchema,
+    encryptedPayload: remoteOpaqueSchema,
+    signature: remoteOpaqueSchema,
   })
   .strict()
   .superRefine((command, context) => {
@@ -157,7 +157,7 @@ export const attentionRequestSchema = z
     riskLevel: z.enum(["L1", "L2", "L3", "L4", "L5"]),
     status: z.enum(["pending", "approved", "denied", "expired"]),
     title: z.string().trim().min(1).max(200),
-    encryptedPayload: base64UrlSchema,
+    encryptedPayload: remoteOpaqueSchema,
     revision: z.number().int().nonnegative(),
     createdAt: timestampSchema,
     expiresAt: timestampSchema,
@@ -210,7 +210,7 @@ export const remoteProductEventSchema = z
     cursor: remoteCursorSchema,
     kind: remoteProductEventKindSchema,
     occurredAt: timestampSchema,
-    encryptedPayload: base64UrlSchema,
+    encryptedPayload: remoteOpaqueSchema,
   })
   .strict();
 
@@ -240,6 +240,262 @@ export const pushSubscriptionSchema = z
   })
   .strict();
 
+export const remotePromptPayloadSchema = z
+  .object({
+    kind: z.enum(["task.start", "session.prompt"]),
+    text: z.string().trim().min(1).max(100_000),
+    clientOperationId: z.string().min(8).max(200),
+  })
+  .strict();
+
+export const remoteSteerPayloadSchema = z
+  .object({
+    kind: z.literal("session.steer"),
+    text: z.string().trim().min(1).max(100_000),
+  })
+  .strict();
+
+export const remoteFollowUpPayloadSchema = z
+  .object({
+    kind: z.literal("session.follow_up"),
+    text: z.string().trim().min(1).max(100_000),
+  })
+  .strict();
+
+export const remoteAbortPayloadSchema = z
+  .object({
+    kind: z.literal("session.abort"),
+    assistantMessageId: entityIdSchema,
+  })
+  .strict();
+
+export const remotePermissionDecisionPayloadSchema = z
+  .object({
+    kind: z.literal("permission.decide"),
+    attentionRequestId: entityIdSchema,
+    permissionRequestId: entityIdSchema,
+    payloadDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    decision: z.enum(["once", "session", "deny"]),
+    deviceUnlocked: z.boolean(),
+    biometricVerified: z.boolean(),
+    reauthenticatedAt: timestampSchema,
+  })
+  .strict();
+
+export const remoteAttentionResponsePayloadSchema = z
+  .object({
+    kind: z.literal("attention.respond"),
+    attentionRequestId: entityIdSchema,
+    response: z.string().trim().min(1).max(100_000),
+    delivery: z.enum(["prompt", "steer", "follow_up"]),
+  })
+  .strict();
+
+export const remoteCommandPayloadSchema = z.discriminatedUnion("kind", [
+  remotePromptPayloadSchema,
+  remoteSteerPayloadSchema,
+  remoteFollowUpPayloadSchema,
+  remoteAbortPayloadSchema,
+  remotePermissionDecisionPayloadSchema,
+  remoteAttentionResponsePayloadSchema,
+]);
+
+export const remotePairingAcceptInputSchema = z
+  .object({
+    challengeId: entityIdSchema,
+    oneTimeNonce: remoteOpaqueSchema,
+    controllerDeviceId: entityIdSchema,
+    controllerPublicKey: remoteOpaqueSchema,
+    proof: remoteOpaqueSchema,
+  })
+  .strict();
+
+export const remotePairingChallengeInputSchema = z
+  .object({
+    hostDeviceId: entityIdSchema,
+    hostPublicKey: remoteOpaqueSchema,
+  })
+  .strict();
+
+export const remotePresenceUpdateSchema = z
+  .object({
+    hostDeviceId: entityIdSchema,
+    presence: z.enum(["online", "degraded", "offline"]),
+    revision: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const remoteHostRegistrationInputSchema = z
+  .object({
+    hostDeviceId: entityIdSchema,
+    displayName: z.string().trim().min(1).max(120),
+    platform: z.enum(["darwin", "win32"]),
+    arch: z.enum(["arm64", "x64"]),
+    appVersion: z.string().min(1).max(64),
+    capabilities: z.array(z.string().regex(/^[a-z][a-z0-9._-]*$/)).max(64),
+    remoteEnabled: z.boolean(),
+  })
+  .strict();
+
+export const remoteCommandPullInputSchema = z
+  .object({
+    hostDeviceId: entityIdSchema,
+    limit: z.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+
+export const remoteCursorAckInputSchema = z
+  .object({
+    hostDeviceId: entityIdSchema,
+    conversationId: entityIdSchema.nullable(),
+    cursor: remoteCursorSchema,
+  })
+  .strict();
+
+export const remoteEventPublishInputSchema = z
+  .object({
+    pairingId: entityIdSchema,
+    controllerDeviceId: entityIdSchema,
+    event: remoteProductEventSchema.omit({ cursor: true }),
+    expiresAt: timestampSchema,
+  })
+  .strict();
+
+export const remoteEventListInputSchema = z
+  .object({
+    hostDeviceId: entityIdSchema,
+    conversationId: entityIdSchema.nullable().optional(),
+    afterCursor: remoteCursorSchema.nullable(),
+    limit: z.number().int().min(1).max(500).default(100),
+  })
+  .strict();
+
+export const remoteReviewResourceSchema = z
+  .object({
+    resourceId: entityIdSchema,
+    kind: z.enum(["diff", "test", "terminal", "screenshot", "artifact", "attachment"]),
+    mediaType: z.string().min(1).max(200),
+    encryptedObjectRef: remoteOpaqueSchema,
+    sizeBytes: z.number().int().nonnegative().max(100_000_000),
+    expiresAt: timestampSchema,
+  })
+  .strict();
+
+export const remotePushEnvelopeSchema = z
+  .object({
+    version: z.literal(1),
+    category: z.enum(["attention", "completed", "failed"]),
+    hostDeviceId: entityIdSchema,
+    conversationId: entityIdSchema.nullable(),
+    attentionRequestId: entityIdSchema.nullable(),
+    eventId: entityIdSchema,
+  })
+  .strict();
+
+export const remoteApplyCommandRequestFrameSchema = z
+  .object({
+    kind: z.literal("remote.command.apply"),
+    requestId: entityIdSchema,
+    command: remoteCommandSchema,
+    payload: remoteCommandPayloadSchema,
+  })
+  .strict();
+
+export const remoteApplyCommandResponseFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      kind: z.literal("remote.command.result"),
+      requestId: entityIdSchema,
+      ok: z.literal(true),
+      appliedRevision: z.number().int().nonnegative(),
+      result: z.unknown().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("remote.command.result"),
+      requestId: entityIdSchema,
+      ok: z.literal(false),
+      errorCode: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+      currentRevision: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+
+export const remoteConnectorBootstrapSchema = z
+  .object({
+    kind: z.literal("remote-connector.bootstrap"),
+    contractVersion: z.literal(1),
+    nonce: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+
+export const remoteConnectorReadyFrameSchema = z
+  .object({
+    kind: z.literal("remote-connector.ready"),
+    contractVersion: z.literal(1),
+    nonce: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+
+export const remoteConnectorConfigureFrameSchema = z
+  .object({
+    kind: z.literal("remote-connector.configure"),
+    profileDirectory: z.string().min(1),
+    authorization: z
+      .object({
+        accountId: entityIdSchema,
+        accessToken: z.string().min(32),
+        accessTokenExpiresAt: timestampSchema,
+        platformBaseUrl: z.url(),
+      })
+      .strict(),
+    host: remoteHostRegistrationInputSchema,
+    hostPrivateKey: remoteOpaqueSchema,
+  })
+  .strict();
+
+export const remoteConnectorDisableFrameSchema = z
+  .object({ kind: z.literal("remote-connector.disable") })
+  .strict();
+
+export const remoteRevisionRequestFrameSchema = z
+  .object({
+    kind: z.literal("remote.revision.request"),
+    requestId: entityIdSchema,
+    conversationId: entityIdSchema.nullable(),
+  })
+  .strict();
+
+export const remoteRevisionResponseFrameSchema = z
+  .object({
+    kind: z.literal("remote.revision.response"),
+    requestId: entityIdSchema,
+    revision: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const remoteLocalEventFrameSchema = z
+  .object({
+    kind: z.literal("remote.event.publish"),
+    eventKind: remoteProductEventKindSchema,
+    conversationId: entityIdSchema.nullable(),
+    occurredAt: timestampSchema,
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+export const remoteConnectorPortFrameSchema = z.union([
+  remoteConnectorReadyFrameSchema,
+  remoteConnectorConfigureFrameSchema,
+  remoteConnectorDisableFrameSchema,
+  remoteRevisionRequestFrameSchema,
+  remoteRevisionResponseFrameSchema,
+  remoteApplyCommandRequestFrameSchema,
+  remoteApplyCommandResponseFrameSchema,
+  remoteLocalEventFrameSchema,
+]);
+
 export type RemoteHost = z.infer<typeof remoteHostSchema>;
 export type RemotePairingChallenge = z.infer<typeof remotePairingChallengeSchema>;
 export type RemoteDevicePairing = z.infer<typeof remoteDevicePairingSchema>;
@@ -249,3 +505,15 @@ export type AttentionRequest = z.infer<typeof attentionRequestSchema>;
 export type RemoteProductEvent = z.infer<typeof remoteProductEventSchema>;
 export type RemoteEventCursor = z.infer<typeof remoteEventCursorSchema>;
 export type PushSubscription = z.infer<typeof pushSubscriptionSchema>;
+export type RemoteCommandPayload = z.infer<typeof remoteCommandPayloadSchema>;
+export type RemotePairingAcceptInput = z.infer<typeof remotePairingAcceptInputSchema>;
+export type RemoteHostRegistrationInput = z.infer<typeof remoteHostRegistrationInputSchema>;
+export type RemoteEventPublishInput = z.infer<typeof remoteEventPublishInputSchema>;
+export type RemoteReviewResource = z.infer<typeof remoteReviewResourceSchema>;
+export type RemotePushEnvelope = z.infer<typeof remotePushEnvelopeSchema>;
+export type RemoteApplyCommandRequestFrame = z.infer<typeof remoteApplyCommandRequestFrameSchema>;
+export type RemoteApplyCommandResponseFrame = z.infer<typeof remoteApplyCommandResponseFrameSchema>;
+export type RemoteConnectorConfigureFrame = z.infer<typeof remoteConnectorConfigureFrameSchema>;
+export type RemoteRevisionRequestFrame = z.infer<typeof remoteRevisionRequestFrameSchema>;
+export type RemoteRevisionResponseFrame = z.infer<typeof remoteRevisionResponseFrameSchema>;
+export type RemoteLocalEventFrame = z.infer<typeof remoteLocalEventFrameSchema>;

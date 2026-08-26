@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 开发计划
 
-> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2-M5 LOCAL COMPLETE / NEXT M6`
+> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2-M6 LOCAL COMPLETE / NEXT M7`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -44,6 +44,7 @@ V1 完成必须同时满足：
 | M3 Billing Alpha | LOCAL COMPLETE | 服务端报价/预留/结算、额度/积分/现金复式账本、支付回调/退款/对账、最终 Billing UI、CSV/PDF | 真实支付宝/微信沙箱、商户参数、属地合规与原生发布矩阵仍是发布环境门禁；[实现与质量证据](evidence/m3-2026-08-25.md) |
 | M4 File + Artifact | LOCAL COMPLETE | 设备 Scope、受控副本、多格式引用、不可变成果、云对象恢复、Pi SessionManager | 原生双平台打开/选择器与签名包仍是发布门禁；[实现与质量证据](evidence/m4-2026-08-26.md) |
 | M5 Tool Alpha | LOCAL COMPLETE | Pi-native Web/image/Browser/Shell/Desktop/MCP、Capability Broker、长任务与权限投影 | 原生双平台桌面/沙箱、实时 Provider、第三方 MCP 与签名包仍是发布门禁；[实现与质量证据](evidence/m5-2026-08-26.md) |
+| M6 Remote Control Alpha | LOCAL COMPLETE | Expo 手机控制面、同账户配对、E2EE 协议、出站 Connector、密文 Gateway、Pi 原生命令映射、远程审批和事件游标 | iOS/Android 真机、Windows/macOS 主机矩阵、APNs/FCM 生产投递、移动附件闭环与真实网络故障演练仍是发布门禁；[实现与质量证据](evidence/m6-2026-08-26.md) |
 
 当前生产路径在未配置平台模型时明确返回 `PI_MODEL_NOT_CONFIGURED`，不以测试模型伪装可用模型。
 
@@ -160,6 +161,8 @@ MCP/OAuth 授权码流和签名包证据仍是发布环境门禁。
 
 ### M6：Remote Control Alpha — 5 至 7 周
 
+状态：`LOCAL ALPHA COMPLETE (2026-08-26)`
+
 - 新建 React Native + Expo 的 `apps/mobile`，交付 iOS/Android 的 Hosts、Tasks、Inbox 和 Settings。
 - 实现同账户二维码配对、设备密钥、主机 Presence、撤销、多主机切换和不含敏感正文的 APNs/FCM 推送。
 - 实现受监督 Remote Host Connector；只建立出站 TLS/WSS，通过私有 MessagePort 调用 App Service，不开放主机监听端口。
@@ -169,6 +172,16 @@ MCP/OAuth 授权码流和签名包证据仍是发布环境门禁。
 - 覆盖主机休眠/退出、网络切换、手机断线、多控制器、重复/乱序/过期/篡改命令、手机丢失和设备撤销。
 
 退出条件：[15-remote-control-contract.md](15-remote-control-contract.md) 全部硬门禁在 iOS/Android 真机与 Windows/macOS 主机矩阵通过；远程命令不重复调用 Pi、工具副作用、UsageRecord 或 ChargeRecord。
+
+本地检查点已完成 React Native + Expo iOS/Android 构建、同账户一次性配对、设备密钥、
+X25519/Ed25519/HKDF/XChaCha20-Poly1305 端到端协议、只出站 Remote Host Connector、密文
+Gateway、游标、回执、Start/Steer/Queue/Stop 到 Pi 原生 API 的映射、同一 Broker 远程审批和
+Electron 到模拟移动控制器的真实模型/服务端计费 E2E。命令重投只应用一次且只形成一次
+Charge；证据见 [M6 checkpoint](evidence/m6-2026-08-26.md)。
+
+本状态不等于上述 Remote Alpha 发布退出条件已经通过。iOS/Android 真机与 Windows x64、
+macOS arm64/x64 组合，生产 APNs/FCM、真实 HTTPS/WSS 部署、移动附件上传/打开以及休眠、
+切网、丢失手机和多控制器演练仍保留为发布环境硬门禁。
 
 ### M7：Skill 对齐 — 3 至 4 周
 
@@ -198,14 +211,12 @@ MCP/OAuth 授权码流和签名包证据仍是发布环境门禁。
 
 | 顺序 | ID | 工作项 | 完成证据 |
 | --- | --- | --- | --- |
-| 1 | MOBILE-001 | 建立 React Native + Expo 手机控制面骨架 | iOS/Android Hosts/Tasks/Inbox/Settings 构建 |
-| 2 | PAIR-001 | 同账户二维码配对、设备密钥和撤销 | 过期、重放、跨账户、丢失设备测试 |
-| 3 | CONNECTOR-001 | 桌面出站 Remote Host Connector | 无监听端口、睡眠/重连和撤销测试 |
-| 4 | RELAY-001 | 密文命令/事件路由、TTL、回执和游标 | 重复、乱序、过期、篡改与断线恢复 |
-| 5 | PI-REMOTE-001 | Start/Steer/Queue/Stop 到 Pi 原生 API 映射 | 单次调用、顺序、abort 和恢复证据 |
-| 6 | REMOTE-APPROVAL-001 | 手机受限审批与问题回复 | 同一 Broker、无 Scope 扩大/继承测试 |
-| 7 | REVIEW-001 | Diff/测试/终端/截图/Artifact 手机审阅 | 脱敏、分页、附件与大结果测试 |
-| 8 | QA-M6-001 | iOS/Android × Windows/macOS 故障矩阵 | Remote 合同全部硬门禁 |
+| 1 | SKILL-FOUNDATION-001 | 冻结 Pi Skill 发现、元数据和渐进加载边界 | `SKILL.md`、scripts、references、assets 合同与负向解析测试 |
+| 2 | SKILL-SCOPE-001 | 内置、个人和工作区 Skill Scope | 优先级、冲突、禁用和跨工作区隔离测试 |
+| 3 | SKILL-LIFECYCLE-001 | 安装、启用、更新、回滚和卸载 | 签名/校验、失败回滚、依赖清理和审计证据 |
+| 4 | SKILL-BROKER-001 | Skill 脚本复用 M5 Capability Broker | 文件、Shell、网络、浏览器和桌面权限无旁路测试 |
+| 5 | SKILL-SYNC-001 | 同步 Skill 安装记录而不继承设备权限 | 双设备恢复、缺失本地依赖和撤销测试 |
+| 6 | QA-M7-001 | 完成 GT-TOOL-07 至 GT-TOOL-09 与 SKILL-01 至 SKILL-10 | Codex FILE/TOOL/SKILL 能力矩阵无阻断缺口 |
 
 ## 7. 完成定义
 
@@ -254,6 +265,7 @@ MCP/OAuth 授权码流和签名包证据仍是发布环境门禁。
 
 ## 10. 当前下一步
 
-进入 M6 Remote Control Alpha。手机只作为控制面，通过配对设备密钥和加密产品命令控制在线
-桌面执行主机；Start、Steer、Queue、Stop 必须直接映射 Pi 原生 API，审批必须回到 M5 的同一
-Capability Broker。Remote 不得继承设备本地 Scope，也不得改变 M3 的服务端计费真值。
+进入 M7 Skill 对齐。Skill 必须由 Pi 原生加载并通过 M5 的同一 Capability Broker 使用文件、
+Shell、网络、浏览器和桌面能力；安装记录可以同步，但设备本地 Scope、系统权限和凭证不得
+跨设备继承。M6 的真机、生产推送和主机发布矩阵继续作为 Remote 发布硬门禁跟踪，不用本地
+检查点证据提前宣称通过。

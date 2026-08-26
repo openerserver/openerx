@@ -8,6 +8,7 @@ import {
   type PiFileToolRequestFrame,
   type PiHostEventFrame,
   type PiPromptFrame,
+  type PiSessionControlFrame,
   type PiToolRequestFrame,
   piFileToolResponseFrameSchema,
   piHostBootstrapSchema,
@@ -85,6 +86,7 @@ export function startPiHostProcess(
       bootstrap.profileDirectory,
       workspaceDirectory,
     );
+    const controlResults = new Map<string, unknown>();
 
     const fileToolTransport = {
       request: async (frame: PiFileToolRequestFrame): Promise<unknown> => {
@@ -344,6 +346,57 @@ export function startPiHostProcess(
       }
     };
 
+    const control = async (frame: PiSessionControlFrame): Promise<void> => {
+      const replay = controlResults.get(frame.requestId);
+      if (replay) {
+        port.postMessage(replay);
+        return;
+      }
+      const state = active.get(frame.generationId);
+      let result: unknown;
+      if (!state) {
+        result = {
+          kind: "pi.session.control-result",
+          requestId: frame.requestId,
+          ok: false,
+          errorCode: "PI_GENERATION_NOT_ACTIVE",
+        };
+      } else if (!state.session) {
+        result = {
+          kind: "pi.session.control-result",
+          requestId: frame.requestId,
+          ok: false,
+          errorCode: "PI_SESSION_NOT_READY",
+        };
+      } else {
+        try {
+          if (frame.action === "steer") await state.session.steer(frame.text ?? "");
+          else if (frame.action === "follow_up") await state.session.followUp(frame.text ?? "");
+          else {
+            state.abortRequested = true;
+            await state.session.abort();
+          }
+          result = { kind: "pi.session.control-result", requestId: frame.requestId, ok: true };
+        } catch (caught) {
+          result = {
+            kind: "pi.session.control-result",
+            requestId: frame.requestId,
+            ok: false,
+            errorCode:
+              caught instanceof Error && /^[A-Z][A-Z0-9_]*$/u.test(caught.message)
+                ? caught.message
+                : "PI_CONTROL_FAILED",
+          };
+        }
+      }
+      controlResults.set(frame.requestId, result);
+      if (controlResults.size > 1_000) {
+        const oldest = controlResults.keys().next().value;
+        if (oldest) controlResults.delete(oldest);
+      }
+      port.postMessage(result);
+    };
+
     port.on("message", (event) => {
       const fileToolResponse = piFileToolResponseFrameSchema.safeParse(event.data);
       if (fileToolResponse.success) {
@@ -369,6 +422,10 @@ export function startPiHostProcess(
       if (!request.success) return;
       if (request.data.kind === "pi.session.prompt") {
         void prompt(request.data);
+        return;
+      }
+      if (request.data.kind === "pi.session.control") {
+        void control(request.data);
         return;
       }
       if (request.data.kind !== "pi.session.abort") return;

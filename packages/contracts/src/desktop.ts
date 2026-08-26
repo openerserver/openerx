@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AccountBridge } from "./account";
 import type { BillingBridge } from "./billing";
+import type { RemoteDesktopBridge } from "./desktop-remote";
 import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
 import type { SyncBridge } from "./sync";
@@ -66,6 +67,10 @@ export const ipcChannels = Object.freeze({
   mcpServersList: "mcp:servers:list",
   mcpServerSave: "mcp:server:save",
   mcpServerRemove: "mcp:server:remove",
+  remoteState: "remote:state:get",
+  remoteEnable: "remote:enabled:set",
+  remotePairingChallenge: "remote:pairing-challenge:create",
+  remotePairingRevoke: "remote:pairing:revoke",
 });
 
 export const desktopEnvironmentSchema = z
@@ -85,7 +90,8 @@ export interface DesktopBridge
     SyncBridge,
     BillingBridge,
     FileBridge,
-    ToolBridge {
+    ToolBridge,
+    RemoteDesktopBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
 }
 

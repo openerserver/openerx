@@ -64,7 +64,12 @@ export class CapabilityBroker {
       (requirement.forcePerCallApproval ||
         !this.#repository
           .activeScopes(requirement.capability)
-          .some((scope) => scopeAllows(scope, requirement)));
+          .some(
+            (scope) =>
+              (scope.conversationId === null ||
+                scope.conversationId === projection.conversationId) &&
+              scopeAllows(scope, requirement),
+          ));
     if (requiresApproval) {
       const permission = this.#repository.createPermission({
         workItemId: projection.workItemId,
@@ -135,6 +140,7 @@ export class CapabilityBroker {
     permissionRequestId: string;
     decision: "once" | "session" | "persistent" | "deny";
     payloadDigest: string;
+    scopeConversationId?: string | null;
   }): PermissionRequest {
     const result = this.#repository.resolvePermission(input);
     this.#pendingApprovals

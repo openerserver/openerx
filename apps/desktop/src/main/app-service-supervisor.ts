@@ -12,6 +12,8 @@ import {
   mainCredentialRequestFrameSchema,
   type NormalizedToolResult,
   parseChatCommandResult,
+  type RemoteConnectorConfigureFrame,
+  remoteConnectorReadyFrameSchema,
   type ToolOperation,
 } from "@openerx/contracts";
 import {
@@ -46,6 +48,7 @@ export class AppServiceSupervisor {
   readonly #pending = new Map<string, PendingRequest>();
   #appProcess: UtilityProcess | null = null;
   #piHostProcess: UtilityProcess | null = null;
+  #remoteHostProcess: UtilityProcess | null = null;
   #mainPort: MessagePortMain | null = null;
   #ready: Promise<void> | null = null;
   #resolveReady: (() => void) | null = null;
@@ -53,6 +56,8 @@ export class AppServiceSupervisor {
   #stopping = false;
   #restartCount = 0;
   #handshakeComplete = false;
+  #remoteHandshakeComplete = false;
+  #remoteConfiguration: RemoteConnectorConfigureFrame | null = null;
   #capabilityHost: MainCapabilityHost | null = null;
   readonly #capabilityHostFactory: ((profileDirectory: string) => MainCapabilityHost) | null;
   readonly #capabilityRequests = new Map<string, AbortController>();
@@ -84,6 +89,7 @@ export class AppServiceSupervisor {
       return;
     }
     this.stop();
+    this.#remoteConfiguration = null;
     this.#profileDirectory = profileDirectory;
     this.#ownerProfileId = ownerProfileId;
     this.#stopping = false;
@@ -102,8 +108,10 @@ export class AppServiceSupervisor {
     this.#mainPort = null;
     this.#appProcess?.kill();
     this.#piHostProcess?.kill();
+    this.#remoteHostProcess?.kill();
     this.#appProcess = null;
     this.#piHostProcess = null;
+    this.#remoteHostProcess = null;
     this.#rejectAll(new Error("App Service stopped"));
   }
 
@@ -156,12 +164,31 @@ export class AppServiceSupervisor {
     await host.clearCredential(credentialRef);
   }
 
+  async configureRemote(
+    configuration: Omit<RemoteConnectorConfigureFrame, "kind" | "profileDirectory">,
+  ): Promise<void> {
+    await this.start();
+    this.#remoteConfiguration = {
+      kind: "remote-connector.configure",
+      profileDirectory: this.#profileDirectory,
+      ...configuration,
+    };
+    this.#mainPort?.postMessage(this.#remoteConfiguration);
+  }
+
+  async disableRemote(): Promise<void> {
+    await this.start();
+    this.#remoteConfiguration = null;
+    this.#mainPort?.postMessage({ kind: "remote-connector.disable" });
+  }
+
   #spawn(): void {
     mkdirSync(this.#profileDirectory, { recursive: true });
     const appNonce = randomBytes(32).toString("hex");
     const piHostNonce = randomBytes(32).toString("hex");
     this.#emitStatus(this.#restartCount === 0 ? "starting" : "restarting");
     this.#handshakeComplete = false;
+    this.#remoteHandshakeComplete = false;
     this.#capabilityHost = this.#capabilityHostFactory?.(this.#profileDirectory) ?? null;
     this.#ready = new Promise<void>((resolve, reject) => {
       this.#resolveReady = resolve;
@@ -170,12 +197,16 @@ export class AppServiceSupervisor {
 
     const mainChannel = new MessageChannelMain();
     const piHostChannel = new MessageChannelMain();
+    const remoteHostChannel = new MessageChannelMain();
     this.#mainPort = mainChannel.port1;
     this.#piHostProcess = utilityProcess.fork(path.join(__dirname, this.#piHostEntry), [], {
       serviceName: "OpenerX Pi Host",
     });
     this.#appProcess = utilityProcess.fork(path.join(__dirname, "app-service.js"), [], {
       serviceName: "OpenerX App Service",
+    });
+    this.#remoteHostProcess = utilityProcess.fork(path.join(__dirname, "remote-host.js"), [], {
+      serviceName: "OpenerX Remote Connector",
     });
     this.#piHostProcess.postMessage(
       {
@@ -196,14 +227,31 @@ export class AppServiceSupervisor {
         ownerProfileId: this.#ownerProfileId,
         deviceId: this.#deviceId,
       },
-      [mainChannel.port2, piHostChannel.port2],
+      [mainChannel.port2, piHostChannel.port2, remoteHostChannel.port2],
+    );
+    const remoteHostNonce = randomBytes(32).toString("hex");
+    this.#remoteHostProcess.postMessage(
+      {
+        kind: "remote-connector.bootstrap",
+        contractVersion: 1,
+        nonce: remoteHostNonce,
+      },
+      [remoteHostChannel.port1],
     );
     this.#mainPort.on("message", (event) => this.#handleMessage(event.data, appNonce));
     this.#mainPort.start();
     const appProcess = this.#appProcess;
     const piHostProcess = this.#piHostProcess;
+    const remoteHostProcess = this.#remoteHostProcess;
+    remoteHostProcess.on("message", (message) => {
+      const ready = remoteConnectorReadyFrameSchema.safeParse(message);
+      if (!ready.success || ready.data.nonce !== remoteHostNonce) return;
+      this.#remoteHandshakeComplete = true;
+      this.#resolveIfReady();
+    });
     appProcess.once("exit", () => this.#handleExit("App Service", appProcess));
     piHostProcess.once("exit", () => this.#handleExit("Pi Host", piHostProcess));
+    remoteHostProcess.once("exit", () => this.#handleExit("Remote Connector", remoteHostProcess));
   }
 
   #handleMessage(data: unknown, expectedNonce: string): void {
@@ -220,10 +268,7 @@ export class AppServiceSupervisor {
     if (ready) {
       this.#handshakeComplete = true;
       this.#restartCount = 0;
-      this.#resolveReady?.();
-      this.#resolveReady = null;
-      this.#rejectReady = null;
-      this.#emitStatus("ready");
+      this.#resolveIfReady();
       return;
     }
     const response = appServiceResponseFrameSchema.safeParse(data);
@@ -329,14 +374,34 @@ export class AppServiceSupervisor {
     if (event.success) this.#emit(event.data.event);
   }
 
-  #handleExit(processName: "App Service" | "Pi Host", exitedProcess: UtilityProcess): void {
-    const currentProcess = processName === "App Service" ? this.#appProcess : this.#piHostProcess;
+  #resolveIfReady(): void {
+    if (!this.#handshakeComplete || !this.#remoteHandshakeComplete) return;
+    this.#resolveReady?.();
+    this.#resolveReady = null;
+    this.#rejectReady = null;
+    this.#emitStatus("ready");
+    if (this.#remoteConfiguration) this.#mainPort?.postMessage(this.#remoteConfiguration);
+  }
+
+  #handleExit(
+    processName: "App Service" | "Pi Host" | "Remote Connector",
+    exitedProcess: UtilityProcess,
+  ): void {
+    const currentProcess =
+      processName === "App Service"
+        ? this.#appProcess
+        : processName === "Pi Host"
+          ? this.#piHostProcess
+          : this.#remoteHostProcess;
     if (exitedProcess !== currentProcess) return;
-    if (this.#stopping || (!this.#appProcess && !this.#piHostProcess)) return;
+    if (this.#stopping || (!this.#appProcess && !this.#piHostProcess && !this.#remoteHostProcess))
+      return;
     this.#appProcess?.kill();
     this.#piHostProcess?.kill();
+    this.#remoteHostProcess?.kill();
     this.#appProcess = null;
     this.#piHostProcess = null;
+    this.#remoteHostProcess = null;
     this.#mainPort?.close();
     this.#mainPort = null;
     this.#rejectReady?.(new Error(`${processName} exited before readiness`));

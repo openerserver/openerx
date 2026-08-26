@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M5_TOOL_ALPHA_LOCAL_COMPLETE / M6_REMOTE_CONTROL_NEXT`
+> 状态：`M6_REMOTE_CONTROL_LOCAL_ALPHA_COMPLETE / M7_SKILL_NEXT`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -26,9 +26,9 @@
 
 ## 2. V2 总体逻辑架构图
 
-下图是完整 V1 目标态。M5 本地实现已接入账户云、模型和服务端 Billing，并完成文件 Scope、
-Artifact/对象恢复、Pi SessionManager、Capability Broker 与 Tool Alpha；Skill 与 Remote 运行面
-仍按后续检查点交付，不以占位实现伪装完成。
+下图是完整 V1 目标态。M6 本地实现已接入账户云、模型和服务端 Billing，并完成文件 Scope、
+Artifact/对象恢复、Pi SessionManager、Capability Broker、Tool Alpha 与 Remote Control 本地
+纵向链路；Skill 运行面和 Remote 真机/生产发布矩阵仍按后续门禁交付。
 
 ```mermaid
 flowchart LR
@@ -294,6 +294,47 @@ capability/resource/action/risk，审批绑定完整 payload digest，副作用�
 L4/L5 操作只能逐次授权。Browser/Desktop 仅在 Main 执行，Shell 子进程由 App Service 唯一拥有，
 MCP 凭证只存在 OS 加密 Vault。启动恢复会终止中断运行、过期待批权限并撤销临时 Scope。
 
+### 2.6 M6 当前本地已实现拓扑
+
+```mermaid
+flowchart LR
+  PHONE[Expo iOS / Android<br/>Hosts · Tasks · Inbox · Settings]
+  ID[Identity API<br/>iOS / Android DeviceSession]
+  GATEWAY[(Remote Control Gateway<br/>SQLite durable metadata / opaque payload)]
+  PUSH[Push subscription<br/>opaque envelope]
+
+  subgraph DESKTOP[Electron desktop host]
+    UI[Remote Settings<br/>enable / QR / pairings / revoke]
+    VAULT[(safeStorage<br/>host private key)]
+    CONNECTOR[Remote Host Connector<br/>outbound HTTPS poll / no listener]
+    APP[App Service<br/>revision / exactly-once / Broker]
+    PIHOST[Pi Host<br/>prompt / steer / followUp / abort]
+  end
+
+  PHONE --> ID
+  PHONE <-->|signed E2EE commands / cursor events| GATEWAY
+  PHONE --> PUSH
+  CONNECTOR <-->|host-originated TLS transport| GATEWAY
+  UI --> VAULT
+  UI --> CONNECTOR
+  CONNECTOR <-->|private MessagePort| APP
+  APP --> PIHOST
+```
+
+手机和主机使用 X25519 密钥协商、HKDF-SHA256、XChaCha20-Poly1305 业务加密与 Ed25519 命令
+签名；配对证明绑定同一账户的一次性 Challenge。Gateway 只持久化 Presence、路由元数据、
+密文、TTL、回执和游标，不持有设备私钥。Connector 没有监听端口，验签/解密后还会复核
+revision、sequence、撤销和时效，再通过私有 MessagePort 调用 App Service。
+
+Gateway 和 Connector 都按至少一次传输设计；App Service 以 command ID 与 payload digest
+持久化最终应用结果，重投不再次调用 Pi、工具或计费链路。Start、Steer、Queue、Stop 分别
+落到 Pi 的 `prompt()`、`steer()`、`followUp()`、`abort()`；远程审批回到同一 Broker，Scope
+同时绑定账户、主机、Conversation 和精确待批请求。桌面主机密钥由 Electron `safeStorage`
+保护，移动私钥与序列由 SecureStore 的仅本机解锁等级保存。
+
+当前本地实现使用出站 HTTPS 轮询作为 TLS 传输适配器；生产 WSS/HTTPS 部署、APNs/FCM
+Provider、iOS/Android 真机、Windows/macOS 主机组合和移动附件完整闭环仍是发布环境门禁。
+
 ## 3. 主链路
 
 ### 3.1 聊天与收费模型调用
@@ -505,13 +546,14 @@ packages/observability           脱敏日志、Trace 和诊断
 - Pi 测试 Provider 只存在于测试代码；生产路径只有 Pi harness。
 - Windows x64、macOS arm64 和 macOS x64 进入 CI 打包矩阵；本地交叉打包不替代原生双平台运行证据。
 
-Remote M2 协议合同已冻结；M6 完成移动端、Connector、Gateway、推送及真机/主机矩阵。
-该目标态不改变已冻结的 Pi 唯一 harness 和私有进程边界。
+Remote M2 协议合同已由 M6 本地实现落地为移动端、Connector、Gateway、密文命令/事件、
+推送订阅与 Pi 映射；真机、生产推送和主机发布矩阵尚未宣称通过。该目标态不改变已冻结的
+Pi 唯一 harness 和私有进程边界。
 
 规范性细节见 [ADR 索引](adr/README.md) 和 [Electron/App Service 威胁模型](security/electron-threat-model.md)。
 
 ## 9. 当前下一步
 
-进入 M6 Remote Control Alpha：实现 iOS/Android 手机控制面、桌面出站 Connector、密文 Relay、
-Presence、配对/撤销和 Pi 原生 Start/Steer/Queue/Stop 映射。远程审批必须调用 M5 的同一 Broker，
-不得把手机决定转化为跨设备或永久 Scope。
+进入 M7 Skill 对齐：由 Pi 加载 Skill，V2 只管理安装记录、Scope、权限与审计，并复用 M5
+Capability Broker。M6 的 iOS/Android 真机、生产 APNs/FCM、Windows/macOS 主机组合和真实
+网络故障矩阵继续作为发布硬门禁补齐。

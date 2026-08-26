@@ -6,6 +6,7 @@ import type {
   PiFileToolRequestFrame,
   PiHostEventFrame,
   PiPromptFrame,
+  PiSessionControlFrame,
   PiToolRequestFrame,
 } from "@openerx/contracts";
 import { ChatRepository } from "@openerx/storage";
@@ -38,6 +39,10 @@ class ScriptedPiHostClient implements PiHostClient {
     if (!generation) return;
     generation.controller.abort();
     this.#emit(generationId, generation, { type: "stopped" });
+  }
+
+  async control(frame: PiSessionControlFrame): Promise<void> {
+    if (frame.action === "abort") await this.abort(frame.generationId);
   }
 
   onEvent(listener: (event: PiHostEventFrame) => void): () => void {

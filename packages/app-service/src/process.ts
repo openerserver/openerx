@@ -1,13 +1,19 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
+  type AppServiceAuthorization,
   appServiceBootstrapSchema,
   appServiceRequestFrameSchema,
   type ErrorEnvelope,
+  remoteApplyCommandRequestFrameSchema,
+  remoteConnectorConfigureFrameSchema,
+  remoteConnectorDisableFrameSchema,
+  remoteRevisionRequestFrameSchema,
   safeErrorMessage,
 } from "@openerx/contracts";
 import { FileAppService } from "@openerx/file-service";
-import { ChatRepository, FileRepository, ToolRepository } from "@openerx/storage";
+import { projectChatEventForRemote } from "@openerx/remote-host";
+import { ChatRepository, FileRepository, RemoteRepository, ToolRepository } from "@openerx/storage";
 import type { MessagePortMain } from "electron";
 import { ChatAppService } from "./chat-app-service";
 import { MainCapabilityClient } from "./main-capability-client";
@@ -20,8 +26,10 @@ if (!parentPort) throw new Error("App Service requires an Electron utility-proce
 
 parentPort.once("message", async (bootstrapEvent) => {
   const bootstrap = appServiceBootstrapSchema.parse(bootstrapEvent.data);
-  const [mainPort, piHostPort] = bootstrapEvent.ports as MessagePortMain[];
-  if (!mainPort || !piHostPort) throw new Error("App Service bootstrap ports are missing");
+  const [mainPort, piHostPort, remotePort] = bootstrapEvent.ports as MessagePortMain[];
+  if (!mainPort || !piHostPort || !remotePort) {
+    throw new Error("App Service bootstrap ports are missing");
+  }
 
   const piHost = new MessagePortPiHostClient(piHostPort, bootstrap.piHostNonce);
   const mainCapabilities = new MainCapabilityClient(mainPort);
@@ -42,6 +50,9 @@ parentPort.once("message", async (bootstrapEvent) => {
   const toolRepository = new ToolRepository(
     path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
     { ownerProfileId: bootstrap.ownerProfileId },
+  );
+  const remoteRepository = new RemoteRepository(
+    path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
   );
   const workspaceDirectory = path.join(bootstrap.profileDirectory, "pi-workspace");
   mkdirSync(workspaceDirectory, { recursive: true });
@@ -66,12 +77,80 @@ parentPort.once("message", async (bootstrapEvent) => {
     new SyncCoordinator(repository, new HttpAccountSyncTransport(), files),
     files,
     toolService,
+    remoteRepository,
   );
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
+  service.onEvent((event) => {
+    const projected = projectChatEventForRemote(event);
+    if (!projected) return;
+    remotePort.postMessage({
+      kind: "remote.event.publish",
+      eventKind: projected.kind,
+      conversationId: projected.conversationId,
+      occurredAt: projected.occurredAt,
+      payload: projected.payload,
+    });
+  });
   service.initialize();
+  let remoteAuthorization: AppServiceAuthorization | null = null;
+
+  remotePort.on("message", async (event) => {
+    const revisionRequest = remoteRevisionRequestFrameSchema.safeParse(event.data);
+    if (revisionRequest.success) {
+      remotePort.postMessage({
+        kind: "remote.revision.response",
+        requestId: revisionRequest.data.requestId,
+        revision: service.currentRemoteRevision(revisionRequest.data.conversationId),
+      });
+      return;
+    }
+    const applyRequest = remoteApplyCommandRequestFrameSchema.safeParse(event.data);
+    if (!applyRequest.success) return;
+    if (!remoteAuthorization) {
+      remotePort.postMessage({
+        kind: "remote.command.result",
+        requestId: applyRequest.data.requestId,
+        ok: false,
+        errorCode: "REMOTE_AUTHORIZATION_REQUIRED",
+        currentRevision: service.currentRemoteRevision(applyRequest.data.command.conversationId),
+      });
+      return;
+    }
+    try {
+      const result = await service.applyRemoteCommand(
+        applyRequest.data.command,
+        applyRequest.data.payload,
+        remoteAuthorization,
+      );
+      remotePort.postMessage({ ...result, requestId: applyRequest.data.requestId });
+    } catch (error) {
+      remotePort.postMessage({
+        kind: "remote.command.result",
+        requestId: applyRequest.data.requestId,
+        ok: false,
+        errorCode:
+          error instanceof Error && /^[A-Z][A-Z0-9_]*$/u.test(error.message.split(":", 1)[0] ?? "")
+            ? error.message.split(":", 1)[0]
+            : "REMOTE_COMMAND_APPLY_FAILED",
+        currentRevision: service.currentRemoteRevision(applyRequest.data.command.conversationId),
+      });
+    }
+  });
+  remotePort.start();
 
   mainPort.on("message", async (event) => {
     if (mainCapabilities.handleMessage(event.data)) return;
+    const remoteConfiguration = remoteConnectorConfigureFrameSchema.safeParse(event.data);
+    if (remoteConfiguration.success) {
+      remoteAuthorization = remoteConfiguration.data.authorization;
+      remotePort.postMessage(remoteConfiguration.data);
+      return;
+    }
+    if (remoteConnectorDisableFrameSchema.safeParse(event.data).success) {
+      remoteAuthorization = null;
+      remotePort.postMessage({ kind: "remote-connector.disable" });
+      return;
+    }
     const request = appServiceRequestFrameSchema.safeParse(event.data);
     if (!request.success) return;
     try {

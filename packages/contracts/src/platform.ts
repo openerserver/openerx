@@ -31,6 +31,20 @@ import type {
   UsageRecord,
 } from "./model";
 import type {
+  PushSubscription,
+  RemoteCommand,
+  RemoteCommandReceipt,
+  RemoteDevicePairing,
+  RemoteEventCursor,
+  RemoteEventPublishInput,
+  RemoteHost,
+  RemoteHostRegistrationInput,
+  RemotePairingAcceptInput,
+  RemotePairingChallenge,
+  RemoteProductEvent,
+  RemotePushEnvelope,
+} from "./remote";
+import type {
   CloudDataDeletionResult,
   SyncConflict,
   SyncOperation,
@@ -156,6 +170,45 @@ export interface ModelBillingPort {
   release(authorization: ModelBillingAuthorization): Promise<void>;
 }
 
+export interface RemoteControlServicePort {
+  registerHost(principal: AccessPrincipal, input: RemoteHostRegistrationInput): RemoteHost;
+  listHosts(principal: AccessPrincipal): RemoteHost[];
+  updatePresence(
+    principal: AccessPrincipal,
+    input: { hostDeviceId: string; presence: "online" | "degraded" | "offline"; revision: number },
+  ): RemoteHost;
+  createPairingChallenge(
+    principal: AccessPrincipal,
+    input: { hostDeviceId: string; hostPublicKey: string },
+  ): RemotePairingChallenge;
+  acceptPairing(principal: AccessPrincipal, input: RemotePairingAcceptInput): RemoteDevicePairing;
+  listPairings(principal: AccessPrincipal): RemoteDevicePairing[];
+  revokePairing(principal: AccessPrincipal, pairingId: string): RemoteDevicePairing;
+  submitCommand(principal: AccessPrincipal, command: RemoteCommand): RemoteCommandReceipt;
+  pullHostCommands(
+    principal: AccessPrincipal,
+    hostDeviceId: string,
+    limit?: number,
+  ): RemoteCommand[];
+  recordReceipt(principal: AccessPrincipal, receipt: RemoteCommandReceipt): RemoteCommandReceipt;
+  publishEvent(principal: AccessPrincipal, input: RemoteEventPublishInput): RemoteProductEvent;
+  listEvents(
+    principal: AccessPrincipal,
+    input: {
+      hostDeviceId: string;
+      conversationId?: string | null;
+      afterCursor: string | null;
+      limit?: number;
+    },
+  ): RemoteProductEvent[];
+  acknowledgeCursor(
+    principal: AccessPrincipal,
+    input: { hostDeviceId: string; conversationId: string | null; cursor: string },
+  ): RemoteEventCursor;
+  upsertPushSubscription(principal: AccessPrincipal, input: PushSubscription): PushSubscription;
+  createPushEnvelope(input: RemotePushEnvelope): RemotePushEnvelope;
+}
+
 export interface PlatformAlphaServices {
   identity: IdentityServicePort;
   sync: AccountSyncServicePort;
@@ -165,4 +218,5 @@ export interface PlatformAlphaServices {
   pricing?: PricingServicePort;
   billing?: BillingLedgerServicePort;
   payments?: PaymentServicePort;
+  remote?: RemoteControlServicePort;
 }

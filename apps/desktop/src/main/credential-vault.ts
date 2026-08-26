@@ -6,7 +6,9 @@ import {
   accountIdentitySchema,
   type DeviceSession,
   deviceSessionSchema,
+  remoteOpaqueSchema,
 } from "@openerx/contracts";
+import type { RemoteDeviceKeyPair } from "@openerx/remote-protocol";
 import { safeStorage } from "electron";
 import { z } from "zod";
 
@@ -164,5 +166,58 @@ export class ToolCredentialVault {
     } finally {
       await rm(temporaryPath, { force: true });
     }
+  }
+}
+
+const persistedRemoteKeySchema = z
+  .object({
+    version: z.literal(1),
+    publicKey: remoteOpaqueSchema,
+    privateKey: remoteOpaqueSchema,
+  })
+  .strict();
+
+export class RemoteKeyVault {
+  constructor(
+    private readonly filePath: string,
+    private readonly protector: CredentialProtector = new ElectronSafeStorageProtector(),
+  ) {}
+
+  async save(keyPair: RemoteDeviceKeyPair): Promise<void> {
+    if (!(await this.protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
+    const payload = persistedRemoteKeySchema.parse({ version: 1, ...keyPair });
+    const encrypted = await this.protector.encrypt(JSON.stringify(payload));
+    const directory = path.dirname(this.filePath);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const temporaryPath = path.join(
+      directory,
+      `.${path.basename(this.filePath)}.${randomBytes(8).toString("hex")}.tmp`,
+    );
+    try {
+      await writeFile(temporaryPath, encrypted, { mode: 0o600, flag: "wx" });
+      await rename(temporaryPath, this.filePath);
+    } finally {
+      await rm(temporaryPath, { force: true });
+    }
+  }
+
+  async load(): Promise<RemoteDeviceKeyPair | null> {
+    let encrypted: Buffer;
+    try {
+      encrypted = await readFile(this.filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    if (!(await this.protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
+    const decrypted = await this.protector.decrypt(encrypted);
+    const payload = persistedRemoteKeySchema.parse(JSON.parse(decrypted.result));
+    const keyPair = { publicKey: payload.publicKey, privateKey: payload.privateKey };
+    if (decrypted.shouldReEncrypt) await this.save(keyPair);
+    return keyPair;
+  }
+
+  async clear(): Promise<void> {
+    await rm(this.filePath, { force: true });
   }
 }
