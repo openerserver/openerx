@@ -601,4 +601,45 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "接受当前条款" }));
     expect(bridge.acceptBillingTerms).toHaveBeenCalledWith("terms-v1");
   });
+
+  it("supports the global search shortcut and reversible sidebar collapse", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.syncNow).mockResolvedValue({
+      cursor: "cursor:1",
+      pushed: 0,
+      pulled: 0,
+      pending: 0,
+      conflicts: 0,
+      syncedAt: timestamp,
+    });
+    renderApp(bridge);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "收起侧栏" }));
+    expect(screen.getByRole("button", { name: "展开侧栏" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "展开侧栏" }));
+    await user.click(screen.getByRole("button", { name: "立即同步" }));
+    expect(bridge.syncNow).toHaveBeenCalled();
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    expect(await screen.findByRole("heading", { name: "搜索对话" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("搜索关键词")));
+  });
+
+  it("keeps destructive conversation actions behind an in-product confirmation", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    nativeConfirm.mockClear();
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除对话…" }));
+    expect(screen.getByRole("alertdialog", { name: "删除这个对话？" })).toBeTruthy();
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
 });

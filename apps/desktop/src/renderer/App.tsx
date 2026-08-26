@@ -63,10 +63,10 @@ import {
 import remarkGfm from "remark-gfm";
 
 const suggestions = [
-  "法国的首都是哪里？",
-  "请把这段文字改写成正式邮件",
-  "生成一个代码块和表格",
-  "写一篇 2000 字说明",
+  "分析当前项目，列出最值得先做的三件事",
+  "把这份材料整理成一页清晰的执行摘要",
+  "检查这段代码，并给出可验证的修复方案",
+  "根据现有文件生成一份结构化报告",
 ];
 
 const chatKeys = {
@@ -90,7 +90,7 @@ const themeOptions = [
   {
     value: "dark",
     label: "深色",
-    description: "保持当前 Codex 风格的深色工作区",
+    description: "适合长时间专注工作的深色工作区",
     icon: Moon,
   },
   {
@@ -164,6 +164,14 @@ const toolCatalog = [
   { namespace: "mcp", name: "MCP", detail: "STDIO 与 Streamable HTTP 服务" },
 ] as const;
 
+const toolNamespaceLabels: Record<(typeof toolCatalog)[number]["namespace"], string> = {
+  builtin: "内置",
+  files: "文件",
+  platform: "在线服务",
+  local: "本机",
+  mcp: "外部连接",
+};
+
 function modelCapabilities(model: ModelCatalogEntry): string {
   return Object.entries(model.capabilities)
     .filter(([, enabled]) => enabled)
@@ -175,6 +183,81 @@ function conflictPayload(payload: SyncConflict["clientPayload"]): string {
   if (payload === null) return "删除";
   const title = typeof payload.title === "string" ? payload.title : null;
   return title ?? JSON.stringify(payload).slice(0, 160);
+}
+
+const messageStatusLabel: Record<Message["status"], string> = {
+  pending: "准备中",
+  streaming: "生成中",
+  completed: "已完成",
+  failed: "失败",
+  stopped: "已停止",
+};
+
+function accountStatusLabel(status: string | undefined): string {
+  switch (status) {
+    case "signed_in":
+      return "已登录";
+    case "reauth_required":
+      return "需要重新登录";
+    case "unavailable":
+      return "暂时不可用";
+    default:
+      return "未登录";
+  }
+}
+
+function accountReason(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  if (reason === "DEVICE_SESSION_REVOKED") return "此设备的登录已失效，请重新验证邮箱。";
+  if (reason === "AUTHENTICATION_REQUIRED") return "请先登录 OpenerX。";
+  return "账户状态发生变化，请重新登录后再试。";
+}
+
+function formatUpdatedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const today = new Date();
+  const sameDay = date.toDateString() === today.toDateString();
+  return new Intl.DateTimeFormat(
+    "zh-CN",
+    sameDay
+      ? { hour: "2-digit", minute: "2-digit" }
+      : {
+          month: "numeric",
+          day: "numeric",
+        },
+  ).format(date);
+}
+
+function skillName(skill: SkillInstallation): string {
+  return skill.name === "structured-report" ? "结构化报告" : skill.displayName;
+}
+
+function skillDescription(skill: SkillInstallation): string {
+  return skill.name === "structured-report"
+    ? "把材料整理成包含摘要、关键发现、证据和下一步的简明报告。"
+    : skill.description;
+}
+
+function HighlightedText({ text, query }: { text: string; query: string }): React.JSX.Element {
+  const normalized = query.trim();
+  if (!normalized) return <>{text}</>;
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "ig"));
+  let offset = 0;
+  return (
+    <>
+      {parts.map((part) => {
+        const key = `${offset}-${part}`;
+        offset += part.length;
+        return part.toLocaleLowerCase() === normalized.toLocaleLowerCase() ? (
+          <mark key={key}>{part}</mark>
+        ) : (
+          <span key={key}>{part}</span>
+        );
+      })}
+    </>
+  );
 }
 
 function Composer({
@@ -264,7 +347,7 @@ function Composer({
                 .filter(({ enabled, packageState }) => enabled && packageState === "installed")
                 .map((skill) => (
                   <option value={skill.id} key={skill.id}>
-                    {skill.displayName}
+                    {skillName(skill)}
                   </option>
                 ))}
             </select>
@@ -300,20 +383,24 @@ function Composer({
 }
 
 function NewChat(): React.JSX.Element {
+  const models = useQuery({
+    queryKey: ["models", "catalog"],
+    queryFn: () => window.openerx.listModels(),
+    retry: false,
+  });
+  const defaultModel = models.data?.find(({ status }) => status === "available");
   return (
     <main className="new-chat-page">
       <header className="new-chat-topbar">
-        <span className="topbar-product">OpenerX 2.0</span>
-        <span className="topbar-state">
-          <span className="status-dot" /> 已同步
-        </span>
+        <span className="topbar-product">新任务</span>
+        <span className="topbar-state">{defaultModel?.displayName ?? "使用账户默认模型"}</span>
       </header>
       <section className="welcome" aria-labelledby="welcome-title">
-        <p className="eyebrow">OpenerX 2.0 · Chat Alpha</p>
+        <p className="eyebrow">个人 AI 工作区</p>
         <h1 id="welcome-title">今天想完成什么？</h1>
-        <p>对话由 Pi AgentSession 驱动；模型与能力由当前个人配置决定。</p>
+        <p>描述目标，或附上文件；OpenerX 会在执行前说明需要的能力与权限。</p>
       </section>
-      <section className="suggestion-grid" aria-label="验收建议">
+      <section className="suggestion-grid" aria-label="常用任务建议">
         {suggestions.map((suggestion) => (
           <Suggestion key={suggestion} text={suggestion} />
         ))}
@@ -346,6 +433,7 @@ function Suggestion({ text }: { text: string }): React.JSX.Element {
 function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
   const { conversationId = "" } = useParams();
   const queryClient = useQueryClient();
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   const files = useQuery({
     queryKey: ["files", conversationId],
     queryFn: () => window.openerx.listFiles({ conversationId }),
@@ -440,9 +528,17 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
               </article>
             );
           })}
-          {files.isPending ? <p className="muted-copy">正在读取上下文…</p> : null}
-          {!files.isPending && fileList.length === 0 ? (
-            <p className="muted-copy">还没有添加文件。</p>
+          {files.isPending ? <p className="muted-copy">正在读取文件…</p> : null}
+          {files.error ? (
+            <div className="context-inline-state">
+              <p className="inline-error">暂时无法读取文件。</p>
+              <button type="button" onClick={() => void files.refetch()}>
+                重试
+              </button>
+            </div>
+          ) : null}
+          {!files.isPending && !files.error && fileList.length === 0 ? (
+            <p className="muted-copy">还没有添加文件。上方选择的内容只会用于当前对话。</p>
           ) : null}
         </div>
       </section>
@@ -451,9 +547,19 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
         <span>
           <CheckCircle size={16} weight="fill" /> 内容不会用于模型训练
         </span>
-        <button type="button" className="text-button">
-          了解更多
+        <button
+          type="button"
+          className="text-button"
+          aria-expanded={privacyOpen}
+          onClick={() => setPrivacyOpen((open) => !open)}
+        >
+          {privacyOpen ? "收起说明" : "了解数据边界"}
         </button>
+        {privacyOpen ? (
+          <p className="privacy-details">
+            文件会生成受控副本供当前任务使用；原始路径权限可以随时撤销。凭证、终端内容和本地路径不会进入诊断导出。
+          </p>
+        ) : null}
       </footer>
     </aside>
   );
@@ -480,6 +586,10 @@ function FilesAndArtifacts(): React.JSX.Element {
     mutationFn: () => window.openerx.chooseFiles(),
     onSuccess: () => files.refetch(),
   });
+  const chooseDirectory = useMutation({
+    mutationFn: () => window.openerx.chooseDirectory(),
+    onSuccess: () => files.refetch(),
+  });
   const preview = useQuery({
     queryKey: ["content-preview", selected?.kind, selected?.id],
     queryFn: () => {
@@ -501,9 +611,14 @@ function FilesAndArtifacts(): React.JSX.Element {
           <h1>个人文件与成果</h1>
           <p>原始路径权限与受控副本分离；生成成果按版本保留，不静默覆盖。</p>
         </div>
-        <button type="button" className="primary-action" onClick={() => chooseFiles.mutate()}>
-          <Plus size={17} /> 添加文件
-        </button>
+        <div className="library-header-actions">
+          <button type="button" onClick={() => chooseDirectory.mutate()}>
+            <FolderSimple size={17} /> 添加文件夹
+          </button>
+          <button type="button" className="primary-action" onClick={() => chooseFiles.mutate()}>
+            <Plus size={17} /> 添加文件
+          </button>
+        </div>
       </header>
       <section className="library-section" aria-labelledby="personal-files-title">
         <div className="library-section-title">
@@ -532,6 +647,20 @@ function FilesAndArtifacts(): React.JSX.Element {
             </button>
           ))}
         </div>
+        {!files.isPending && files.data?.length === 0 ? (
+          <div className="empty-state empty-state-compact">
+            <FileText size={25} />
+            <div>
+              <strong>还没有个人文件</strong>
+              <p>
+                添加文件或受控文件夹后，可以在对话中引用内容。支持 PDF、Office、图片、文本和代码。
+              </p>
+            </div>
+            <button type="button" onClick={() => chooseFiles.mutate()}>
+              选择文件
+            </button>
+          </div>
+        ) : null}
       </section>
       <section className="library-section" aria-labelledby="artifacts-title">
         <div className="library-section-title">
@@ -558,6 +687,16 @@ function FilesAndArtifacts(): React.JSX.Element {
             </button>
           ))}
         </div>
+        {!artifacts.isPending && artifacts.data?.length === 0 ? (
+          <div className="empty-state empty-state-compact">
+            <FolderSimple size={25} />
+            <div>
+              <strong>还没有生成成果</strong>
+              <p>对话中生成并保存的报告、表格和其他文件会出现在这里，并按版本保留。</p>
+            </div>
+            <NavLink to="/chat/new">开始一个新任务</NavLink>
+          </div>
+        ) : null}
       </section>
       {selected ? (
         <section className="content-preview" aria-labelledby="content-preview-title">
@@ -678,7 +817,9 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
     <article className={`message message-${message.role}`} data-message-status={message.status}>
       <header>
         <strong>{message.role === "user" ? "你" : "OpenerX"}</strong>
-        <span className={`message-status status-${message.status}`}>{message.status}</span>
+        <span className={`message-status status-${message.status}`}>
+          {messageStatusLabel[message.status]}
+        </span>
       </header>
       {editing ? (
         <form
@@ -712,6 +853,20 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
                   <a href={href} target="_blank" rel="noreferrer">
                     {children}
                   </a>
+                ),
+                pre: ({ children }) => (
+                  <div className="code-block">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        const code = event.currentTarget.nextElementSibling?.textContent ?? "";
+                        void navigator.clipboard.writeText(code);
+                      }}
+                    >
+                      复制代码
+                    </button>
+                    <pre>{children}</pre>
+                  </div>
                 ),
               }}
             >
@@ -899,6 +1054,8 @@ function ConversationToolbar({
   const queryClient = useQueryClient();
   const conversation = snapshot.conversation;
   const [renaming, setRenaming] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [nextTitle, setNextTitle] = useState(conversation.title);
   const rename = useMutation({
     mutationFn: (title: string) =>
@@ -965,7 +1122,7 @@ function ConversationToolbar({
   return (
     <header className="conversation-toolbar">
       <div className="conversation-heading">
-        <p className="eyebrow">{conversation.selectedModelRef}</p>
+        <p className="eyebrow">{selectedModel?.displayName ?? "默认模型"}</p>
         <h1>{conversation.title}</h1>
       </div>
       <div className="toolbar-actions">
@@ -1008,7 +1165,13 @@ function ConversationToolbar({
         >
           <SidebarSimple size={17} weight="regular" />
         </button>
-        <button type="button" className="toolbar-icon-button" aria-label="更多操作">
+        <button
+          type="button"
+          className="toolbar-icon-button"
+          aria-label="更多操作"
+          aria-expanded={moreOpen}
+          onClick={() => setMoreOpen((open) => !open)}
+        >
           <SlidersHorizontal size={17} weight="regular" />
         </button>
         {snapshot.branches.length > 1 ? (
@@ -1026,43 +1189,72 @@ function ConversationToolbar({
             </select>
           </label>
         ) : null}
-        {renaming ? (
-          <form
-            className="rename-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const title = nextTitle.trim();
-              if (title) rename.mutate(title);
-            }}
-          >
-            <label htmlFor="conversation-title">对话标题</label>
-            <input
-              id="conversation-title"
-              value={nextTitle}
-              onChange={(event) => setNextTitle(event.target.value)}
-            />
-            <button type="submit" disabled={!nextTitle.trim() || rename.isPending}>
-              保存标题
+        {moreOpen ? (
+          <div className="conversation-menu" role="menu" aria-label="对话操作">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMoreOpen(false);
+                setRenaming(true);
+              }}
+            >
+              重命名
             </button>
-          </form>
-        ) : (
-          <button type="button" onClick={() => setRenaming(true)}>
-            重命名
-          </button>
-        )}
-        <button type="button" onClick={() => archive.mutate()}>
-          {conversation.archivedAt ? "取消归档" : "归档"}
-        </button>
-        <button
-          type="button"
-          className="danger-action"
-          onClick={() => {
-            if (window.confirm("删除该对话？历史会保留墓碑但不再显示。")) remove.mutate();
+            <button type="button" role="menuitem" onClick={() => archive.mutate()}>
+              {conversation.archivedAt ? "取消归档" : "归档对话"}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="danger-action"
+              onClick={() => {
+                setMoreOpen(false);
+                setConfirmingDelete(true);
+              }}
+            >
+              删除对话…
+            </button>
+          </div>
+        ) : null}
+      </div>
+      {renaming ? (
+        <form
+          className="rename-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const title = nextTitle.trim();
+            if (title) rename.mutate(title);
           }}
         >
-          删除
-        </button>
-      </div>
+          <label htmlFor="conversation-title">对话标题</label>
+          <input
+            id="conversation-title"
+            value={nextTitle}
+            onChange={(event) => setNextTitle(event.target.value)}
+          />
+          <button type="submit" disabled={!nextTitle.trim() || rename.isPending}>
+            保存
+          </button>
+          <button type="button" onClick={() => setRenaming(false)}>
+            取消
+          </button>
+        </form>
+      ) : null}
+      {confirmingDelete ? (
+        <section className="confirmation-panel" role="alertdialog" aria-labelledby="delete-title">
+          <div>
+            <strong id="delete-title">删除这个对话？</strong>
+            <span>删除后将不再出现在历史记录中。此操作无法在应用内撤销。</span>
+          </div>
+          <button type="button" onClick={() => setConfirmingDelete(false)}>
+            取消
+          </button>
+          <button type="button" className="danger-action" onClick={() => remove.mutate()}>
+            确认删除
+          </button>
+        </section>
+      ) : null}
       {usage.data && usage.data.records > 0 ? (
         <div className="conversation-usage">
           {usage.data.records} 次模型调用 · Token {tokenValue(usage.data.totalTokens)}
@@ -1123,15 +1315,17 @@ function ChatPage({
 function SearchPage(): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
+  const [includeArchived, setIncludeArchived] = useState(false);
   const results = useQuery({
-    queryKey: ["chat", "search", query],
-    queryFn: () => window.openerx.search({ query, includeArchived: true }),
+    queryKey: ["chat", "search", query, includeArchived],
+    queryFn: () => window.openerx.search({ query, includeArchived }),
     enabled: Boolean(query),
   });
   return (
     <main className="search-page">
       <p className="eyebrow">本地历史</p>
       <h1>搜索对话</h1>
+      <p className="page-intro">查找标题和消息正文；结果保留在本机工作区中。</p>
       <form
         className="search-form"
         onSubmit={(event) => {
@@ -1140,7 +1334,9 @@ function SearchPage(): React.JSX.Element {
         }}
       >
         <input
+          id="global-search-input"
           aria-label="搜索关键词"
+          placeholder="输入标题或消息内容"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
         />
@@ -1148,17 +1344,45 @@ function SearchPage(): React.JSX.Element {
           搜索
         </button>
       </form>
+      <label className="search-scope">
+        <input
+          type="checkbox"
+          checked={includeArchived}
+          onChange={(event) => setIncludeArchived(event.target.checked)}
+        />
+        同时搜索已归档对话
+      </label>
       <div className="search-results">
         {results.data?.map((result) => (
           <NavLink
             key={`${result.conversationId}-${result.messageId}`}
             to={`/chat/${result.conversationId}`}
           >
-            <strong>{result.title}</strong>
-            <span>{result.excerpt}</span>
+            <div className="search-result-heading">
+              <strong>
+                <HighlightedText text={result.title} query={query} />
+              </strong>
+              <time dateTime={result.updatedAt}>{formatUpdatedAt(result.updatedAt)}</time>
+            </div>
+            <span>
+              <HighlightedText text={result.excerpt} query={query} />
+            </span>
+            <small>{result.messageId ? "消息正文" : "对话标题"}</small>
           </NavLink>
         ))}
-        {query && results.data?.length === 0 ? <p>没有匹配结果。</p> : null}
+        {!query ? (
+          <div className="empty-state">
+            <MagnifyingGlass size={26} />
+            <strong>从历史对话中快速定位内容</strong>
+            <p>按 ⌘K 可以随时来到这里。输入完整词组通常能得到更精确的结果。</p>
+          </div>
+        ) : null}
+        {query && results.data?.length === 0 ? (
+          <div className="empty-state">
+            <strong>没有找到“{query}”</strong>
+            <p>尝试更短的关键词，或开启“同时搜索已归档对话”。</p>
+          </div>
+        ) : null}
       </div>
     </main>
   );
@@ -1177,6 +1401,7 @@ function Placeholder({ title }: { title: string }): React.JSX.Element {
 function SkillCenter(): React.JSX.Element {
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<"personal" | "workspace">("personal");
+  const [skillQuery, setSkillQuery] = useState("");
   const skills = useQuery({
     queryKey: ["skills"],
     queryFn: () => window.openerx.listSkills(),
@@ -1246,9 +1471,9 @@ function SkillCenter(): React.JSX.Element {
     <main className="skill-center-page">
       <header className="skill-center-header">
         <div>
-          <p className="eyebrow">Pi Native Skills</p>
+          <p className="eyebrow">可扩展能力</p>
           <h1>助手与 Skill</h1>
-          <p>开放目录包由 Pi 渐进加载，脚本和资源统一通过 Capability Broker。</p>
+          <p>为对话增加专门的工作方式；只有在使用时才会加载，并始终遵循当前权限。</p>
         </div>
         <div className="skill-install-controls">
           <label>
@@ -1287,144 +1512,174 @@ function SkillCenter(): React.JSX.Element {
         </div>
       </section>
 
+      <div className="skill-filter">
+        <MagnifyingGlass size={17} />
+        <input
+          aria-label="搜索 Skill"
+          placeholder="按名称或用途搜索"
+          value={skillQuery}
+          onChange={(event) => setSkillQuery(event.target.value)}
+        />
+      </div>
+
       {skills.isPending ? <p>正在读取 Skill…</p> : null}
       {skills.error ? <p className="inline-error">{skills.error.message}</p> : null}
       {mutationError ? <p className="inline-error">{mutationError.message}</p> : null}
       <section className="skill-grid" aria-label="已安装 Skill">
-        {(skills.data ?? []).map((skill) => {
-          const approvalRequired =
-            skill.permissions.length > 0 &&
-            skill.approvedPermissionDigest !== skill.permissionDigest;
-          return (
-            <article className={`skill-card skill-state-${skill.packageState}`} key={skill.id}>
-              <header>
-                <div>
-                  <span className={`skill-trust trust-${skill.trust}`}>{skill.trust}</span>
-                  <h2>{skill.displayName}</h2>
-                  <p>{skill.description}</p>
-                </div>
-                <span className={`skill-enabled ${skill.enabled ? "is-enabled" : ""}`}>
-                  {skill.enabled ? "已启用" : "已停用"}
-                </span>
-              </header>
-              <dl className="skill-metadata">
-                <div>
-                  <dt>范围</dt>
-                  <dd>
-                    {skill.scope}
-                    {skill.workspaceId ? ` · ${skill.workspaceId}` : ""}
-                  </dd>
-                </div>
-                <div>
-                  <dt>版本</dt>
-                  <dd>{skill.version}</dd>
-                </div>
-                <div>
-                  <dt>发布者</dt>
-                  <dd>{skill.publisher}</dd>
-                </div>
-                <div>
-                  <dt>来源</dt>
-                  <dd>
-                    {skill.sourceKind} · {skill.sourceLabel}
-                  </dd>
-                </div>
-                <div>
-                  <dt>平台</dt>
-                  <dd>{skill.platforms.join(" / ")}</dd>
-                </div>
-                <div>
-                  <dt>校验</dt>
-                  <dd>
-                    <code>{skill.checksumSha256.slice(0, 16)}…</code>
-                  </dd>
-                </div>
-              </dl>
-              <section className="skill-dependencies">
-                <strong>依赖与权限</strong>
-                <p>
-                  工具：{skill.declaredTools.join("、") || "无"} · MCP：
-                  {skill.declaredMcpServers.join("、") || "无"}
-                </p>
-                {skill.permissions.length === 0 ? (
-                  <span>不声明额外权限</span>
-                ) : (
-                  skill.permissions.map((permission) => (
-                    <span key={`${permission.capability}-${permission.actions.join("-")}`}>
-                      {permission.capability} · {permission.actions.join("/")} ·{" "}
-                      {permission.targets.join("、") || "当前 Scope"} — {permission.reason}
+        {(skills.data ?? [])
+          .filter((skill) =>
+            `${skillName(skill)} ${skillDescription(skill)}`
+              .toLocaleLowerCase()
+              .includes(skillQuery.trim().toLocaleLowerCase()),
+          )
+          .map((skill) => {
+            const approvalRequired =
+              skill.permissions.length > 0 &&
+              skill.approvedPermissionDigest !== skill.permissionDigest;
+            return (
+              <article className={`skill-card skill-state-${skill.packageState}`} key={skill.id}>
+                <header>
+                  <div>
+                    <span className={`skill-trust trust-${skill.trust}`}>
+                      {skill.trust === "bundled" ? "内置" : "已验证来源"}
                     </span>
-                  ))
-                )}
-              </section>
-              <div className="skill-card-actions">
-                {approvalRequired ? (
-                  <button type="button" onClick={() => approve.mutate(skill)}>
-                    审核并批准权限
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() =>
-                    enable.mutate({ installationId: skill.id, enabled: !skill.enabled })
-                  }
-                  disabled={skill.packageState !== "installed" || approvalRequired}
-                >
-                  {skill.enabled ? "禁用" : "启用"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    autoInvoke.mutate({ installationId: skill.id, value: !skill.autoInvoke })
-                  }
-                  disabled={!skill.enabled}
-                >
-                  自动触发：{skill.autoInvoke ? "开" : "关"}
-                </button>
-                {skill.scope !== "builtin" ? (
-                  <button type="button" onClick={() => update.mutate(skill.id)}>
-                    更新
-                  </button>
-                ) : null}
-                {skill.rollbackVersions.length > 0 ? (
-                  <select
-                    aria-label={`回滚 ${skill.displayName}`}
-                    defaultValue=""
-                    onChange={(event) => {
-                      if (event.target.value)
-                        rollback.mutate({ installationId: skill.id, version: event.target.value });
-                      event.target.value = "";
-                    }}
-                  >
-                    <option value="">回滚版本…</option>
-                    {skill.rollbackVersions.map((version) => (
-                      <option value={version} key={version}>
-                        {version}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                {skill.permissions.length > 0 ? (
-                  <button type="button" onClick={() => reset.mutate(skill.id)}>
-                    重置权限
-                  </button>
-                ) : null}
-                {skill.scope !== "builtin" ? (
+                    <h2>{skillName(skill)}</h2>
+                    <p>{skillDescription(skill)}</p>
+                  </div>
+                  <span className={`skill-enabled ${skill.enabled ? "is-enabled" : ""}`}>
+                    {skill.enabled ? "已启用" : "已停用"}
+                  </span>
+                </header>
+                <details className="skill-technical-details">
+                  <summary>技术信息与权限</summary>
+                  <dl className="skill-metadata">
+                    <div>
+                      <dt>范围</dt>
+                      <dd>
+                        {skill.scope === "builtin"
+                          ? "内置"
+                          : skill.scope === "personal"
+                            ? "个人"
+                            : "工作区"}
+                        {skill.workspaceId ? ` · ${skill.workspaceId}` : ""}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>版本</dt>
+                      <dd>{skill.version}</dd>
+                    </div>
+                    <div>
+                      <dt>发布者</dt>
+                      <dd>{skill.publisher}</dd>
+                    </div>
+                    <div>
+                      <dt>来源</dt>
+                      <dd>
+                        {skill.sourceKind} · {skill.sourceLabel}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>平台</dt>
+                      <dd>{skill.platforms.join(" / ")}</dd>
+                    </div>
+                    <div>
+                      <dt>校验</dt>
+                      <dd>
+                        <code>{skill.checksumSha256.slice(0, 16)}…</code>
+                      </dd>
+                    </div>
+                  </dl>
+                  <section className="skill-dependencies">
+                    <strong>依赖与权限</strong>
+                    <p>
+                      工具：{skill.declaredTools.join("、") || "无"} · MCP：
+                      {skill.declaredMcpServers.join("、") || "无"}
+                    </p>
+                    {skill.permissions.length === 0 ? (
+                      <span>不声明额外权限</span>
+                    ) : (
+                      skill.permissions.map((permission) => (
+                        <span key={`${permission.capability}-${permission.actions.join("-")}`}>
+                          {permission.capability} · {permission.actions.join("/")} ·{" "}
+                          {permission.targets.join("、") || "当前 Scope"} — {permission.reason}
+                        </span>
+                      ))
+                    )}
+                  </section>
+                </details>
+                <div className="skill-card-actions">
+                  {approvalRequired ? (
+                    <button type="button" onClick={() => approve.mutate(skill)}>
+                      审核并批准权限
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className="danger-action"
-                    onClick={() => {
-                      if (window.confirm(`卸载 ${skill.displayName}？本地包会移入可恢复回收目录。`))
-                        uninstall.mutate(skill.id);
-                    }}
+                    onClick={() =>
+                      enable.mutate({ installationId: skill.id, enabled: !skill.enabled })
+                    }
+                    disabled={skill.packageState !== "installed" || approvalRequired}
                   >
-                    卸载
+                    {skill.enabled ? "禁用" : "启用"}
                   </button>
-                ) : null}
-              </div>
-            </article>
-          );
-        })}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      autoInvoke.mutate({ installationId: skill.id, value: !skill.autoInvoke })
+                    }
+                    disabled={!skill.enabled}
+                  >
+                    自动触发：{skill.autoInvoke ? "开" : "关"}
+                  </button>
+                  {skill.scope !== "builtin" ? (
+                    <button type="button" onClick={() => update.mutate(skill.id)}>
+                      更新
+                    </button>
+                  ) : null}
+                  {skill.rollbackVersions.length > 0 ? (
+                    <select
+                      aria-label={`回滚 ${skillName(skill)}`}
+                      defaultValue=""
+                      onChange={(event) => {
+                        if (event.target.value)
+                          rollback.mutate({
+                            installationId: skill.id,
+                            version: event.target.value,
+                          });
+                        event.target.value = "";
+                      }}
+                    >
+                      <option value="">回滚版本…</option>
+                      {skill.rollbackVersions.map((version) => (
+                        <option value={version} key={version}>
+                          {version}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  {skill.permissions.length > 0 ? (
+                    <button type="button" onClick={() => reset.mutate(skill.id)}>
+                      重置权限
+                    </button>
+                  ) : null}
+                  {skill.scope !== "builtin" ? (
+                    <button
+                      type="button"
+                      className="danger-action"
+                      onClick={() => {
+                        if (
+                          window.confirm(`卸载 ${skillName(skill)}？本地包会移入可恢复回收目录。`)
+                        )
+                          uninstall.mutate(skill.id);
+                      }}
+                    >
+                      卸载
+                    </button>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
       </section>
 
       <section className="skill-activity" aria-label="Skill 调用记录">
@@ -1855,14 +2110,21 @@ function AccountSettings({
   const state = account.data;
   return (
     <main className="settings-page">
-      <p className="eyebrow">Account Alpha</p>
+      <p className="eyebrow">设置</p>
       <h1>账户与设备</h1>
-      <ThemeSettings value={themePreference} onChange={onThemeChange} />
-      <DiagnosticsSettings />
-      <section className="settings-card" aria-label="账户状态">
+      <nav className="settings-section-nav" aria-label="设置分区">
+        <a href="#account-section">账户</a>
+        <a href="#appearance-section">外观</a>
+        <a href="#diagnostics-section">诊断与数据</a>
+      </nav>
+      <section
+        className="settings-card settings-account-primary"
+        id="account-section"
+        aria-label="账户状态"
+      >
         <div>
           <span className={`account-status account-${state?.status ?? "unavailable"}`}>
-            {state?.status ?? "unavailable"}
+            {accountStatusLabel(state?.status)}
           </span>
           <h2>{state?.account?.displayName ?? "登录 OpenerX"}</h2>
           <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
@@ -1910,14 +2172,29 @@ function AccountSettings({
             >
               {challengeId ? "验证并登录" : "发送验证码"}
             </button>
+            {!challengeId && !email.trim() ? (
+              <p className="field-help">输入邮箱后即可获取六位验证码。</p>
+            ) : null}
             {requestCode.error || verify.error || state?.reason ? (
               <p className="inline-error">
-                {requestCode.error?.message ?? verify.error?.message ?? state?.reason}
+                {requestCode.error?.message ??
+                  verify.error?.message ??
+                  accountReason(state?.reason)}
               </p>
             ) : null}
           </form>
         ) : null}
       </section>
+      <div id="appearance-section">
+        <ThemeSettings value={themePreference} onChange={onThemeChange} />
+      </div>
+      <details className="settings-disclosure" id="diagnostics-section">
+        <summary>
+          <span>诊断与数据</span>
+          <small>性能状态、诊断导出与个人数据导出</small>
+        </summary>
+        <DiagnosticsSettings />
+      </details>
       {state?.status === "signed_in" && state.session ? (
         <>
           <RemoteSettings />
@@ -2253,12 +2530,14 @@ function BillingSettings(): React.JSX.Element {
   if (!signedIn) {
     return (
       <main className="settings-page">
-        <p className="eyebrow">Billing Alpha</p>
+        <p className="eyebrow">账户费用</p>
         <h1>费用与账单</h1>
-        <section className="settings-card settings-stack">
+        <section className="settings-card settings-stack billing-signin-card">
           <h2>需要登录</h2>
-          <p>Billing 数据只从当前账户的服务端财务系统读取。</p>
-          <NavLink to="/settings/account">前往账户登录</NavLink>
+          <p>登录后可以查看模型用量、余额、充值记录、消费明细和可下载的月度账单。</p>
+          <NavLink className="primary-link" to="/settings/account#account-section">
+            登录并查看账单
+          </NavLink>
         </section>
       </main>
     );
@@ -2274,7 +2553,7 @@ function BillingSettings(): React.JSX.Element {
     null;
   return (
     <main className="settings-page billing-page">
-      <p className="eyebrow">Billing Alpha</p>
+      <p className="eyebrow">账户费用</p>
       <h1>费用与账单</h1>
       <p className="billing-server-note">
         Token 计量、费率匹配、报价、资金预留与最终扣费全部由服务端完成；本页只显示服务端返回的最终
@@ -2522,9 +2801,9 @@ function ToolCenter(): React.JSX.Element {
   return (
     <main className="tool-center-page">
       <header>
-        <p className="eyebrow">Tool Alpha</p>
+        <p className="eyebrow">运行与权限</p>
         <h1>任务与工具</h1>
-        <p>查看 Pi 工具活动、处理权限请求，并撤销设备本地 Scope。</p>
+        <p>查看正在运行的任务、处理授权，并管理此设备可以使用的能力。</p>
       </header>
       <section className="tool-center-summary" aria-label="工具状态摘要">
         <div>
@@ -2537,28 +2816,36 @@ function ToolCenter(): React.JSX.Element {
         </div>
         <div>
           <strong>{scopes.data?.length ?? 0}</strong>
-          <span>有效 Scope</span>
+          <span>有效授权</span>
         </div>
       </section>
-      <section className="tool-catalog" aria-label="工具目录">
-        <h2>工具目录</h2>
+      {!workItems.data?.length && !permissions.data?.length ? (
+        <div className="empty-state tool-empty-state">
+          <TerminalWindow size={26} />
+          <strong>当前没有运行中的任务</strong>
+          <p>从新对话描述一个目标；当任务需要文件、网络或桌面能力时，会在这里显示进度和授权。</p>
+          <NavLink to="/chat/new">开始新任务</NavLink>
+        </div>
+      ) : null}
+      <details className="tool-catalog disclosure-card" aria-label="工具目录">
+        <summary>查看可用能力</summary>
         <div className="tool-catalog-grid">
           {toolCatalog.map((tool) => (
             <article key={`${tool.namespace}:${tool.name}`}>
-              <small>{tool.namespace}</small>
+              <small>{toolNamespaceLabels[tool.namespace]}</small>
               <strong>{tool.name}</strong>
               <span>{tool.detail}</span>
             </article>
           ))}
         </div>
-      </section>
+      </details>
       <section className="tool-center-grid">
         <div>
           <h2>最近任务</h2>
           {workItems.data?.length ? (
             workItems.data.map((workItem) => <ToolActivity key={workItem.id} workItem={workItem} />)
           ) : (
-            <p className="muted-copy">还没有工具任务。</p>
+            <p className="muted-copy">任务开始后，执行步骤会出现在这里。</p>
           )}
         </div>
         <aside>
@@ -2581,143 +2868,145 @@ function ToolCenter(): React.JSX.Element {
             </article>
           ))}
           {!scopes.data?.length ? <p className="muted-copy">没有有效授权。</p> : null}
-          <h2>MCP 服务</h2>
-          {mcpServers.data?.map((server) => (
-            <article className="scope-card" key={server.id}>
-              <strong>{server.name}</strong>
-              <span>{server.transport === "stdio" ? server.command : server.url}</span>
-              <small>
-                {server.transport} · {server.enabled ? "已启用" : "已禁用"}
-                {server.transport === "streamable_http" ? ` · ${server.auth}` : ""}
-              </small>
-              <button
-                type="button"
-                className="danger-action"
-                onClick={() => removeMcp.mutate(server.id)}
-              >
-                移除
-              </button>
-            </article>
-          ))}
-          <form
-            className="mcp-config-form"
-            aria-label="添加 MCP 服务"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const id = crypto.randomUUID();
-              const config: McpServerConfig =
-                mcpTransport === "stdio"
-                  ? {
-                      id,
-                      name: mcpName,
-                      transport: "stdio",
-                      command: mcpEndpoint,
-                      args: [],
-                      cwd: mcpCwd,
-                      enabled: true,
-                      enabledTools: [],
-                    }
-                  : {
-                      id,
-                      name: mcpName,
-                      transport: "streamable_http",
-                      url: mcpEndpoint,
-                      auth: mcpAuth,
-                      credentialRef: null,
-                      enabled: true,
-                      enabledTools: [],
-                    };
-              saveMcp.mutate(config);
-            }}
-          >
-            <strong>添加服务</strong>
-            <input
-              aria-label="MCP 名称"
-              placeholder="名称"
-              value={mcpName}
-              onChange={(event) => setMcpName(event.target.value)}
-              required
-            />
-            <select
-              aria-label="MCP 传输"
-              value={mcpTransport}
-              onChange={(event) =>
-                setMcpTransport(event.target.value as "stdio" | "streamable_http")
-              }
+          <details className="advanced-tool-settings">
+            <summary>MCP 服务与高级连接</summary>
+            {mcpServers.data?.map((server) => (
+              <article className="scope-card" key={server.id}>
+                <strong>{server.name}</strong>
+                <span>{server.transport === "stdio" ? server.command : server.url}</span>
+                <small>
+                  {server.transport} · {server.enabled ? "已启用" : "已禁用"}
+                  {server.transport === "streamable_http" ? ` · ${server.auth}` : ""}
+                </small>
+                <button
+                  type="button"
+                  className="danger-action"
+                  onClick={() => removeMcp.mutate(server.id)}
+                >
+                  移除
+                </button>
+              </article>
+            ))}
+            <form
+              className="mcp-config-form"
+              aria-label="添加 MCP 服务"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const id = crypto.randomUUID();
+                const config: McpServerConfig =
+                  mcpTransport === "stdio"
+                    ? {
+                        id,
+                        name: mcpName,
+                        transport: "stdio",
+                        command: mcpEndpoint,
+                        args: [],
+                        cwd: mcpCwd,
+                        enabled: true,
+                        enabledTools: [],
+                      }
+                    : {
+                        id,
+                        name: mcpName,
+                        transport: "streamable_http",
+                        url: mcpEndpoint,
+                        auth: mcpAuth,
+                        credentialRef: null,
+                        enabled: true,
+                        enabledTools: [],
+                      };
+                saveMcp.mutate(config);
+              }}
             >
-              <option value="stdio">STDIO</option>
-              <option value="streamable_http">Streamable HTTP</option>
-            </select>
-            <input
-              aria-label={mcpTransport === "stdio" ? "MCP 命令" : "MCP URL"}
-              placeholder={mcpTransport === "stdio" ? "可执行文件路径" : "https://…/mcp"}
-              value={mcpEndpoint}
-              onChange={(event) => setMcpEndpoint(event.target.value)}
-              required
-            />
-            {mcpTransport === "stdio" ? (
+              <strong>添加服务</strong>
               <input
-                aria-label="MCP 工作目录"
-                placeholder="工作目录"
-                value={mcpCwd}
-                onChange={(event) => setMcpCwd(event.target.value)}
+                aria-label="MCP 名称"
+                placeholder="名称"
+                value={mcpName}
+                onChange={(event) => setMcpName(event.target.value)}
                 required
               />
-            ) : (
-              <>
-                <select
-                  aria-label="MCP 认证"
-                  value={mcpAuth}
-                  onChange={(event) => setMcpAuth(event.target.value as typeof mcpAuth)}
-                >
-                  <option value="none">无认证</option>
-                  <option value="bearer">Bearer</option>
-                  <option value="oauth">OAuth</option>
-                </select>
-                {mcpAuth === "bearer" ? (
-                  <input
-                    aria-label="MCP Bearer Token"
-                    type="password"
-                    autoComplete="off"
-                    value={mcpToken}
-                    onChange={(event) => setMcpToken(event.target.value)}
-                    required
-                  />
-                ) : mcpAuth === "oauth" ? (
-                  <>
+              <select
+                aria-label="MCP 传输"
+                value={mcpTransport}
+                onChange={(event) =>
+                  setMcpTransport(event.target.value as "stdio" | "streamable_http")
+                }
+              >
+                <option value="stdio">STDIO</option>
+                <option value="streamable_http">Streamable HTTP</option>
+              </select>
+              <input
+                aria-label={mcpTransport === "stdio" ? "MCP 命令" : "MCP URL"}
+                placeholder={mcpTransport === "stdio" ? "可执行文件路径" : "https://…/mcp"}
+                value={mcpEndpoint}
+                onChange={(event) => setMcpEndpoint(event.target.value)}
+                required
+              />
+              {mcpTransport === "stdio" ? (
+                <input
+                  aria-label="MCP 工作目录"
+                  placeholder="工作目录"
+                  value={mcpCwd}
+                  onChange={(event) => setMcpCwd(event.target.value)}
+                  required
+                />
+              ) : (
+                <>
+                  <select
+                    aria-label="MCP 认证"
+                    value={mcpAuth}
+                    onChange={(event) => setMcpAuth(event.target.value as typeof mcpAuth)}
+                  >
+                    <option value="none">无认证</option>
+                    <option value="bearer">Bearer</option>
+                    <option value="oauth">OAuth</option>
+                  </select>
+                  {mcpAuth === "bearer" ? (
                     <input
-                      aria-label="MCP OAuth Client ID"
-                      autoComplete="off"
-                      placeholder="Client ID"
-                      value={mcpOAuthClientId}
-                      onChange={(event) => setMcpOAuthClientId(event.target.value)}
-                      required
-                    />
-                    <input
-                      aria-label="MCP OAuth Client Secret"
+                      aria-label="MCP Bearer Token"
                       type="password"
                       autoComplete="off"
-                      placeholder="Client Secret"
-                      value={mcpOAuthClientSecret}
-                      onChange={(event) => setMcpOAuthClientSecret(event.target.value)}
+                      value={mcpToken}
+                      onChange={(event) => setMcpToken(event.target.value)}
                       required
                     />
-                    <input
-                      aria-label="MCP OAuth Scope"
-                      autoComplete="off"
-                      placeholder="Scope（可选）"
-                      value={mcpOAuthScope}
-                      onChange={(event) => setMcpOAuthScope(event.target.value)}
-                    />
-                  </>
-                ) : null}
-              </>
-            )}
-            <button type="submit" className="primary-action" disabled={saveMcp.isPending}>
-              保存 MCP
-            </button>
-            {saveMcp.error ? <p className="inline-error">{saveMcp.error.message}</p> : null}
-          </form>
+                  ) : mcpAuth === "oauth" ? (
+                    <>
+                      <input
+                        aria-label="MCP OAuth Client ID"
+                        autoComplete="off"
+                        placeholder="Client ID"
+                        value={mcpOAuthClientId}
+                        onChange={(event) => setMcpOAuthClientId(event.target.value)}
+                        required
+                      />
+                      <input
+                        aria-label="MCP OAuth Client Secret"
+                        type="password"
+                        autoComplete="off"
+                        placeholder="Client Secret"
+                        value={mcpOAuthClientSecret}
+                        onChange={(event) => setMcpOAuthClientSecret(event.target.value)}
+                        required
+                      />
+                      <input
+                        aria-label="MCP OAuth Scope"
+                        autoComplete="off"
+                        placeholder="Scope（可选）"
+                        value={mcpOAuthScope}
+                        onChange={(event) => setMcpOAuthScope(event.target.value)}
+                      />
+                    </>
+                  ) : null}
+                </>
+              )}
+              <button type="submit" className="primary-action" disabled={saveMcp.isPending}>
+                保存 MCP
+              </button>
+              {saveMcp.error ? <p className="inline-error">{saveMcp.error.message}</p> : null}
+            </form>
+          </details>
         </aside>
       </section>
     </main>
@@ -2727,11 +3016,14 @@ function ToolCenter(): React.JSX.Element {
 function Sidebar({
   environment,
   serviceStatus,
+  onCollapse,
 }: {
   environment: DesktopEnvironment | null;
   serviceStatus: string;
+  onCollapse: () => void;
 }): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
+  const queryClient = useQueryClient();
   const history = useQuery({
     queryKey: chatKeys.list(showArchived),
     queryFn: () => window.openerx.listConversations({ includeArchived: showArchived }),
@@ -2739,6 +3031,13 @@ function Sidebar({
   const account = useQuery({
     queryKey: accountKey,
     queryFn: () => window.openerx.getAccountState(),
+  });
+  const syncNow = useMutation({
+    mutationFn: () => window.openerx.syncNow(),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["chat"] });
+      await queryClient.invalidateQueries({ queryKey: accountKey });
+    },
   });
   const displayedStatus =
     history.isSuccess && serviceStatus === "starting" ? "ready" : serviceStatus;
@@ -2751,7 +3050,12 @@ function Sidebar({
           </span>
           <span>OpenerX</span>
         </div>
-        <button type="button" className="icon-button sidebar-collapse" aria-label="收起侧栏">
+        <button
+          type="button"
+          className="icon-button sidebar-collapse"
+          aria-label="收起侧栏"
+          onClick={onCollapse}
+        >
           <SidebarSimple size={18} weight="regular" />
         </button>
       </div>
@@ -2803,7 +3107,7 @@ function Sidebar({
             <strong>{conversation.title}</strong>
             <span>
               {conversation.archivedAt ? "已归档 · " : ""}
-              {conversation.lastMessagePreview}
+              {formatUpdatedAt(conversation.updatedAt)} · {conversation.lastMessagePreview}
             </span>
           </NavLink>
         ))}
@@ -2815,20 +3119,27 @@ function Sidebar({
           <ArrowClockwise size={16} />
         )}
         <div>
-          <strong>{displayedStatus === "ready" ? "已同步" : "正在同步"}</strong>
-          <span>
-            {environment ? `${environment.platform} · ${displayedStatus}` : "正在连接桌面服务"}
-          </span>
+          <strong>
+            {syncNow.isPending ? "正在同步" : displayedStatus === "ready" ? "同步正常" : "正在连接"}
+          </strong>
+          <span>{environment ? `此设备 · ${environment.platform}` : "正在连接桌面服务"}</span>
         </div>
-        <button type="button" className="icon-button" aria-label="立即同步">
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="立即同步"
+          onClick={() => syncNow.mutate()}
+          disabled={syncNow.isPending}
+        >
           <ArrowClockwise size={16} />
         </button>
       </div>
       <NavLink className="sidebar-account" to="/settings/account">
         <UserCircle size={23} weight="regular" />
         <strong>{account.data?.account?.displayName ?? "未登录"}</strong>
-        <span>{account.data?.status === "signed_in" ? "已登录" : "未登录"}</span>
-        <CaretDown size={15} />
+        <span>
+          {account.data?.status === "signed_in" ? account.data.account?.email : "登录以同步数据"}
+        </span>
       </NavLink>
     </aside>
   );
@@ -2838,14 +3149,25 @@ export function App(): React.JSX.Element {
   const [environment, setEnvironment] = useState<DesktopEnvironment | null>(null);
   const [serviceStatus, setServiceStatus] = useState("starting");
   const [contextOpen, setContextOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
   const location = useLocation();
-  const isConversationRoute =
-    location.pathname.startsWith("/chat/") && location.pathname !== "/chat/new";
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (location.pathname) setContextOpen(false);
+  }, [location.pathname]);
 
   useEffect(() => {
-    setContextOpen(isConversationRoute);
-  }, [isConversationRoute]);
+    const handleShortcut = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        navigate("/search");
+        window.requestAnimationFrame(() => document.getElementById("global-search-input")?.focus());
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [navigate]);
 
   useEffect(() => {
     const mediaQuery =
@@ -2912,9 +3234,28 @@ export function App(): React.JSX.Element {
   }, [queryClient]);
 
   return (
-    <div className={`app-shell ${contextOpen ? "context-is-open" : ""}`}>
-      <Sidebar environment={environment} serviceStatus={serviceStatus} />
-      <div className="app-main">
+    <div
+      className={`app-shell ${sidebarOpen ? "" : "sidebar-is-collapsed"} ${contextOpen ? "context-is-open" : ""}`}
+    >
+      <a className="skip-link" href="#main-content">
+        跳到主要内容
+      </a>
+      <Sidebar
+        environment={environment}
+        serviceStatus={serviceStatus}
+        onCollapse={() => setSidebarOpen(false)}
+      />
+      {!sidebarOpen ? (
+        <button
+          type="button"
+          className="sidebar-open"
+          aria-label="展开侧栏"
+          onClick={() => setSidebarOpen(true)}
+        >
+          <SidebarSimple size={19} />
+        </button>
+      ) : null}
+      <div className="app-main" id="main-content">
         <Routes>
           <Route path="/chat/new" element={<NewChat />} />
           <Route
@@ -2944,7 +3285,17 @@ export function App(): React.JSX.Element {
           <Route path="*" element={<Navigate to="/chat/new" replace />} />
         </Routes>
       </div>
-      {contextOpen ? <ContextDock onClose={() => setContextOpen(false)} /> : null}
+      {contextOpen ? (
+        <>
+          <button
+            type="button"
+            className="context-backdrop"
+            aria-label="关闭上下文"
+            onClick={() => setContextOpen(false)}
+          />
+          <ContextDock onClose={() => setContextOpen(false)} />
+        </>
+      ) : null}
     </div>
   );
 }

@@ -125,7 +125,7 @@ try {
   await page.getByLabel("六位验证码").fill("123456");
   await page.getByRole("button", { name: "验证并登录" }).click();
   try {
-    await page.getByLabel("账户状态").getByText("signed_in", { exact: true }).waitFor();
+    await page.getByLabel("账户状态").getByText("已登录", { exact: true }).waitFor();
   } catch (error) {
     console.error("E2E_ACCOUNT_SIGN_IN_STATE\n", await page.locator("body").innerText());
     throw error;
@@ -185,7 +185,10 @@ try {
   await application.close();
   running = await launch();
   ({ application, page } = running);
-  await page.locator(".sidebar-account").getByText("已登录", { exact: true }).waitFor();
+  await page
+    .locator(".sidebar-account")
+    .getByText("account-e2e@example.com", { exact: true })
+    .waitFor();
   const accountConversation = page.getByRole("link", { name: /账户模型测试/ });
   await accountConversation.waitFor();
   await accountConversation.click();
@@ -232,7 +235,7 @@ try {
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "退出全部设备" }).click();
-  await page.getByLabel("账户状态").getByText("signed_out", { exact: true }).waitFor();
+  await page.getByLabel("账户状态").getByText("未登录", { exact: true }).waitFor();
   assert.equal(existsSync(credentialPath), false);
 
   console.log(

@@ -78,6 +78,7 @@ try {
   await page.getByRole("button", { name: "安装 Skill" }).click();
   const card = page.locator(".skill-card").filter({ hasText: "E2E report" });
   await card.waitFor();
+  await card.getByText("技术信息与权限", { exact: true }).click();
   await card.getByText(/OpenerX Test/).waitFor();
   await card.getByRole("button", { name: "审核并批准权限" }).click();
   await card.getByRole("button", { name: "启用" }).click();

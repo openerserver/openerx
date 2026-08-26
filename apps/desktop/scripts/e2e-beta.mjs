@@ -33,9 +33,10 @@ try {
     if (typeof crash !== "function") throw new Error("Crash injection hook missing");
     crash();
   });
-  await page.getByText(/(darwin|win32) · restarting/).waitFor();
-  await page.getByText(/(darwin|win32) · ready/).waitFor();
+  await page.getByText("正在连接", { exact: true }).waitFor();
+  await page.getByText("同步正常", { exact: true }).waitFor();
   await page.getByRole("link", { name: "设置", exact: true }).click();
+  await page.locator("#diagnostics-section > summary").click();
   await page.getByRole("heading", { name: "诊断与数据" }).waitFor();
   await page.getByText("次服务重启", { exact: false }).waitFor();
 

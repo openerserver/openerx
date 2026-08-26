@@ -9,7 +9,7 @@ import type { ForgeConfig } from "@electron-forge/shared-types";
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    executableName: "openerx",
+    executableName: "OpenerX",
     name: "OpenerX",
   },
   hooks: {

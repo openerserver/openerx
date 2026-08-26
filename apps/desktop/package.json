@@ -1,5 +1,6 @@
 {
   "name": "@openerx/desktop",
+  "productName": "OpenerX",
   "version": "0.0.0",
   "private": true,
   "description": "OpenerX Electron desktop client",

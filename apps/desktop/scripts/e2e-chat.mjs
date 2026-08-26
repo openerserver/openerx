@@ -67,8 +67,15 @@ try {
   await runningMessage.getByRole("button", { name: "停止" }).dispatchEvent("click");
   await page.locator(".message-assistant[data-message-status='stopped']").last().waitFor();
 
-  await page.locator(".message-assistant").last().getByRole("button", { name: "重新生成" }).click();
-  await page.locator(".message-assistant").last().locator(".status-completed").waitFor();
+  const stoppedMessage = page.locator(".message-assistant").last();
+  await stoppedMessage.hover();
+  await stoppedMessage.getByRole("button", { name: "重新生成" }).click();
+  try {
+    await page.locator(".message-assistant").last().locator(".status-completed").waitFor();
+  } catch (error) {
+    console.error("E2E_CHAT_REGENERATE_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
   await page.getByLabel("分支").waitFor();
 
   await page.getByLabel("发送消息").fill("崩溃恢复 2000 字 [PI_TEST_SLOW]");
@@ -79,8 +86,8 @@ try {
     if (typeof crash !== "function") throw new Error("Crash injection hook missing");
     crash();
   });
-  await page.getByText(/(darwin|win32) · restarting/).waitFor();
-  await page.getByText(/(darwin|win32) · ready/).waitFor();
+  await page.locator(".sync-state.service-restarting").waitFor();
+  await page.locator(".sync-state.service-ready").waitFor();
   await page.reload();
   try {
     await page.getByText("失败原因：APP_SERVICE_RESTARTED").last().waitFor({ timeout: 60_000 });
@@ -96,9 +103,10 @@ try {
   await page.locator(".message-user").first().getByText("修改后的第一问").waitFor();
   await page.locator(".message-assistant[data-message-status='completed']").last().waitFor();
 
-  await page.getByRole("button", { name: "重命名" }).click();
+  await page.getByRole("button", { name: "更多操作" }).click();
+  await page.getByRole("menuitem", { name: "重命名" }).click();
   await page.getByLabel("对话标题").fill("M1 端到端对话");
-  await page.getByRole("button", { name: "保存标题" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
   await page.getByRole("heading", { name: "M1 端到端对话" }).waitFor();
 
   await application.close();

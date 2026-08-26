@@ -68,7 +68,7 @@ import {
   PerformanceBudgetTracker,
   PersonalDataExporter,
 } from "@openerx/observability";
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from "electron";
 import started from "electron-squirrel-startup";
 import type { z } from "zod";
 import { AccountSessionManager, HttpIdentityTransport } from "./account-session-manager";
@@ -85,6 +85,33 @@ import {
   resolveRendererAssetPath,
 } from "./security";
 import { ElectronToolCapabilityHost } from "./tool-capability-host";
+
+app.name = "OpenerX";
+
+function configureApplicationMenu(): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "OpenerX",
+        submenu: [
+          { role: "about", label: "关于 OpenerX" },
+          { type: "separator" },
+          { role: "services", label: "服务" },
+          { type: "separator" },
+          { role: "hide", label: "隐藏 OpenerX" },
+          { role: "hideOthers", label: "隐藏其他" },
+          { role: "unhide", label: "全部显示" },
+          { type: "separator" },
+          { role: "quit", label: "退出 OpenerX" },
+        ],
+      },
+      { role: "fileMenu", label: "文件" },
+      { role: "editMenu", label: "编辑" },
+      { role: "viewMenu", label: "显示" },
+      { role: "windowMenu", label: "窗口" },
+    ]),
+  );
+}
 
 const processStartedAt = performance.now();
 const performanceBudgets = new PerformanceBudgetTracker(processStartedAt);
@@ -687,6 +714,7 @@ function createMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
 let supervisor: AppServiceSupervisor | null = null;
 
 app.whenReady().then(async () => {
+  configureApplicationMenu();
   const profileDirectory = app.getPath("userData");
   mkdirSync(profileDirectory, { recursive: true });
   const diagnostics = new DiagnosticsService(

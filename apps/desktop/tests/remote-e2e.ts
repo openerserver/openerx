@@ -189,7 +189,7 @@ try {
   await page.getByRole("button", { name: "发送验证码" }).click();
   await page.getByLabel("六位验证码").fill("123456");
   await page.getByRole("button", { name: "验证并登录" }).click();
-  await page.getByLabel("账户状态").getByText("signed_in", { exact: true }).waitFor();
+  await page.getByLabel("账户状态").getByText("已登录", { exact: true }).waitFor();
 
   const mobile = await mobileSession("remote-e2e@example.com");
   await fund(mobile.accessToken);
