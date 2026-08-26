@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { AccountBridge } from "./account";
 import type { BillingBridge } from "./billing";
 import type { RemoteDesktopBridge } from "./desktop-remote";
+import type { DiagnosticsBridge } from "./diagnostics";
 import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
 import type { SkillBridge } from "./skill";
@@ -29,6 +30,10 @@ export const ipcChannels = Object.freeze({
   billingRechargeList: "billing:recharge:list",
   billingRefundList: "billing:refund:list",
   billingStatementExport: "billing:statement:export",
+  diagnosticsPreview: "diagnostics:preview",
+  diagnosticsExport: "diagnostics:export",
+  personalDataSummary: "personal-data:summary",
+  personalDataExport: "personal-data:export",
   syncNow: "sync:run",
   syncConflicts: "sync:conflicts:list",
   syncResolveConflict: "sync:conflict:resolve",
@@ -101,6 +106,7 @@ export interface DesktopBridge
     ModelUsageBridge,
     SyncBridge,
     BillingBridge,
+    DiagnosticsBridge,
     FileBridge,
     ToolBridge,
     SkillBridge,

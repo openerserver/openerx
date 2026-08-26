@@ -1489,6 +1489,130 @@ function ThemeSettings({
   );
 }
 
+const performanceLabels = {
+  desktop_interactive: "桌面可交互",
+  app_service_ready: "本地服务就绪",
+  idle_rss: "当前进程内存",
+} as const;
+
+function DiagnosticsSettings(): React.JSX.Element {
+  const diagnostics = useQuery({
+    queryKey: ["diagnostics", "preview"],
+    queryFn: () => window.openerx.getDiagnosticsPreview(),
+    retry: false,
+  });
+  const personalData = useQuery({
+    queryKey: ["personal-data", "summary"],
+    queryFn: () => window.openerx.getPersonalDataSummary(),
+    retry: false,
+  });
+  const exportDiagnostics = useMutation({
+    mutationFn: () => window.openerx.exportDiagnostics(),
+  });
+  const exportPersonalData = useMutation({
+    mutationFn: () => window.openerx.exportPersonalData(),
+  });
+  const preview = diagnostics.data;
+  const summary = personalData.data;
+
+  return (
+    <section
+      className="settings-card settings-stack diagnostics-settings"
+      aria-label="诊断与数据导出"
+    >
+      <div className="settings-heading">
+        <div>
+          <h2>诊断与数据</h2>
+          <p>先预览脱敏范围，再决定是否保存；个人内容使用独立导出。</p>
+        </div>
+        <span className={`diagnostic-health health-${preview?.health ?? "collecting"}`}>
+          {preview?.health === "ready"
+            ? "状态良好"
+            : preview?.health === "attention"
+              ? "需要关注"
+              : "正在收集"}
+        </span>
+      </div>
+      <section className="diagnostic-metrics" aria-label="性能预算">
+        {(preview?.performance ?? []).map((metric) => (
+          <article key={metric.name} className={`metric-${metric.status}`}>
+            <span>{performanceLabels[metric.name]}</span>
+            <strong>
+              {metric.value.toLocaleString()} {metric.unit}
+            </strong>
+            <small>
+              预算 ≤ {metric.budget.toLocaleString()} {metric.unit} · {metric.status}
+            </small>
+          </article>
+        ))}
+      </section>
+      {preview ? (
+        <div className="diagnostic-preview">
+          <div>
+            <strong>诊断包包含</strong>
+            {preview.includes.map((item) => (
+              <span key={item}>✓ {item}</span>
+            ))}
+          </div>
+          <div>
+            <strong>始终排除</strong>
+            {preview.excludes.map((item) => (
+              <span key={item}>— {item}</span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <p className="settings-note">
+        已记录 {preview?.eventCount ?? 0} 条脱敏事件 · {preview?.restartCount ?? 0} 次服务重启 ·{" "}
+        {preview?.errorCount ?? 0} 个错误
+      </p>
+      <section className="personal-data-summary" aria-label="本机个人数据摘要">
+        <div>
+          <strong>本机个人数据</strong>
+          <span>
+            {summary?.conversations ?? 0} 个对话 · {summary?.messages ?? 0} 条消息 ·{" "}
+            {summary?.files ?? 0} 个文件 · {summary?.artifacts ?? 0} 个成果
+          </span>
+          <small>Token、报价、费用和账单只读取服务端记录，不写入此本地导出。</small>
+        </div>
+      </section>
+      <div className="settings-actions">
+        <button
+          type="button"
+          onClick={() => exportDiagnostics.mutate()}
+          disabled={!preview || exportDiagnostics.isPending}
+        >
+          <DownloadSimple size={16} /> 导出脱敏诊断包
+        </button>
+        <button
+          type="button"
+          onClick={() => exportPersonalData.mutate()}
+          disabled={!summary || exportPersonalData.isPending}
+        >
+          <DownloadSimple size={16} /> 导出个人数据
+        </button>
+      </div>
+      {exportDiagnostics.data ? <p>诊断包已保存：{exportDiagnostics.data.fileName}</p> : null}
+      {exportPersonalData.data ? <p>个人数据已保存：{exportPersonalData.data.fileName}</p> : null}
+      {diagnostics.error ||
+      personalData.error ||
+      exportDiagnostics.error ||
+      exportPersonalData.error ? (
+        <p className="inline-error">
+          {
+            (
+              diagnostics.error ??
+              personalData.error ??
+              exportDiagnostics.error ??
+              exportPersonalData.error
+            )?.message
+          }
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function RemoteSettings(): React.JSX.Element {
   const queryClient = useQueryClient();
   const remote = useQuery({
@@ -1734,6 +1858,7 @@ function AccountSettings({
       <p className="eyebrow">Account Alpha</p>
       <h1>账户与设备</h1>
       <ThemeSettings value={themePreference} onChange={onThemeChange} />
+      <DiagnosticsSettings />
       <section className="settings-card" aria-label="账户状态">
         <div>
           <span className={`account-status account-${state?.status ?? "unavailable"}`}>

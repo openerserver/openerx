@@ -502,6 +502,11 @@ packages/file-service            File Scope Broker、解析、引用、Artifact 
 packages/observability           脱敏日志、Trace 和诊断
 ```
 
+M8 将 `packages/observability` 接入 Electron Main：Desktop、Renderer 和包含 Pi/Remote 握手的
+App Service 进程组就绪/重启只产生白名单生命周期信号，Main 汇总脱敏后向 Renderer 提供预览，
+并经原生保存对话框导出。个人数据从当前账户 Profile 的 SQLite 白名单表和受控对象区单独导出；
+服务端 Usage、报价、费用、余额和账单不落入客户端导出，也不由客户端重新计算。
+
 ## 7. Legacy 边界
 
 旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。

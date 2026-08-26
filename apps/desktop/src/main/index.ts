@@ -28,6 +28,7 @@ import {
   createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
   desktopMcpServerSaveInputSchema,
+  diagnosticsPreviewSchema,
   emptyInputSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
@@ -36,10 +37,12 @@ import {
   fileRevokeScopeInputSchema,
   fileSearchInputSchema,
   ipcChannels,
+  localExportResultSchema,
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
   permissionListInputSchema,
   permissionResolveInputSchema,
+  personalDataSummarySchema,
   remoteDesktopEnableInputSchema,
   remoteDesktopRevokeInputSchema,
   skillApprovePermissionsInputSchema,
@@ -60,6 +63,11 @@ import {
   usageRecordSchema,
   workItemGetInputSchema,
 } from "@openerx/contracts";
+import {
+  DiagnosticsService,
+  PerformanceBudgetTracker,
+  PersonalDataExporter,
+} from "@openerx/observability";
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from "electron";
 import started from "electron-squirrel-startup";
 import type { z } from "zod";
@@ -77,6 +85,9 @@ import {
   resolveRendererAssetPath,
 } from "./security";
 import { ElectronToolCapabilityHost } from "./tool-capability-host";
+
+const processStartedAt = performance.now();
+const performanceBudgets = new PerformanceBudgetTracker(processStartedAt);
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -104,6 +115,7 @@ function registerIpcHandlers(
   platformUrl: string | undefined,
   platformClient: PlatformAccountClient | null,
   remote: RemoteDesktopController,
+  diagnostics: DiagnosticsService,
 ): void {
   ipcMain.handle(ipcChannels.environmentGet, (event) => {
     assertTrustedIpcSender(event);
@@ -112,6 +124,69 @@ function registerIpcHandlers(
       arch: process.arch,
       appVersion: app.getVersion(),
     });
+  });
+
+  const activeDatabasePath = (): string => {
+    const accountId = accounts.state().account?.accountId;
+    const directory = accountId
+      ? path.join(baseProfileDirectory, "accounts", accountId)
+      : baseProfileDirectory;
+    return path.join(directory, "openerx-v2.sqlite");
+  };
+  ipcMain.handle(ipcChannels.diagnosticsPreview, (event) => {
+    assertTrustedIpcSender(event);
+    return diagnosticsPreviewSchema.parse(diagnostics.preview());
+  });
+  ipcMain.handle(ipcChannels.diagnosticsExport, async (event) => {
+    assertTrustedIpcSender(event);
+    const e2eDirectory = process.env.OPENERX_E2E_EXPORT_DIR;
+    const e2ePath =
+      process.env.OPENERX_E2E === "1" && e2eDirectory
+        ? path.join(e2eDirectory, "openerx-diagnostics.json")
+        : null;
+    const selection = e2ePath
+      ? { canceled: false, filePath: e2ePath }
+      : await dialog.showSaveDialog({
+          title: "导出脱敏诊断包",
+          defaultPath: path.join(app.getPath("documents"), "openerx-diagnostics.json"),
+          filters: [{ name: "OpenerX 诊断包", extensions: ["json"] }],
+        });
+    if (selection.canceled || !selection.filePath) return null;
+    diagnostics.record({ source: "desktop", level: "info", code: "diagnostics.exported" });
+    return localExportResultSchema.parse(
+      diagnostics.export(selection.filePath, {
+        platform: process.platform,
+        arch: process.arch,
+        appVersion: app.getVersion(),
+        electronVersion: process.versions.electron,
+      }),
+    );
+  });
+  ipcMain.handle(ipcChannels.personalDataSummary, (event) => {
+    assertTrustedIpcSender(event);
+    return personalDataSummarySchema.parse(
+      new PersonalDataExporter(activeDatabasePath()).summary(),
+    );
+  });
+  ipcMain.handle(ipcChannels.personalDataExport, async (event) => {
+    assertTrustedIpcSender(event);
+    const e2eDirectory = process.env.OPENERX_E2E_EXPORT_DIR;
+    const e2ePath =
+      process.env.OPENERX_E2E === "1" && e2eDirectory
+        ? path.join(e2eDirectory, "openerx-personal-data.zip")
+        : null;
+    const selection = e2ePath
+      ? { canceled: false, filePath: e2ePath }
+      : await dialog.showSaveDialog({
+          title: "导出个人数据",
+          defaultPath: path.join(app.getPath("documents"), "openerx-personal-data.zip"),
+          filters: [{ name: "OpenerX 个人数据", extensions: ["zip"] }],
+        });
+    if (selection.canceled || !selection.filePath) return null;
+    diagnostics.record({ source: "desktop", level: "info", code: "personal_data.exported" });
+    return localExportResultSchema.parse(
+      new PersonalDataExporter(activeDatabasePath()).export(selection.filePath),
+    );
   });
 
   ipcMain.handle(ipcChannels.accountState, (event) => {
@@ -578,10 +653,12 @@ function registerAppProtocol(): void {
   });
 }
 
-function createMainWindow(): BrowserWindow {
+function createMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
   const mainWindow = new BrowserWindow(createWindowOptions(path.join(__dirname, "preload.js")));
 
   mainWindow.once("ready-to-show", () => {
+    performanceBudgets.markDesktopInteractive();
+    diagnostics.record({ source: "renderer", level: "info", code: "renderer.interactive" });
     mainWindow.show();
   });
 
@@ -612,6 +689,11 @@ let supervisor: AppServiceSupervisor | null = null;
 app.whenReady().then(async () => {
   const profileDirectory = app.getPath("userData");
   mkdirSync(profileDirectory, { recursive: true });
+  const diagnostics = new DiagnosticsService(
+    path.join(profileDirectory, "logs", "diagnostics.jsonl"),
+    performanceBudgets,
+  );
+  diagnostics.record({ source: "desktop", level: "info", code: "desktop.started" });
   const device = await loadOrCreateDeviceDescriptor(
     path.join(profileDirectory, "account", "device.json"),
     process.platform,
@@ -664,6 +746,16 @@ app.whenReady().then(async () => {
     });
   }
   supervisor.onEvent((event) => {
+    if (event.type === "service.status" && event.payload.status) {
+      const status = event.payload.status;
+      if (status === "ready") performanceBudgets.markAppServiceReady();
+      diagnostics.record({
+        source: "app_service",
+        level: status === "unavailable" ? "error" : status === "restarting" ? "warning" : "info",
+        code: `service.${status}`,
+        ...(event.payload.reason ? { attributes: { reason: event.payload.reason } } : {}),
+      });
+    }
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(ipcChannels.chatEvent, event);
     }
@@ -676,14 +768,22 @@ app.whenReady().then(async () => {
     platformUrl,
     platformUrl ? new PlatformAccountClient(platformUrl) : null,
     remote,
+    diagnostics,
   );
-  void supervisor.start();
+  void supervisor.start().catch((error: unknown) => {
+    diagnostics.record({
+      source: "app_service",
+      level: "error",
+      code: "service.start_failed",
+      attributes: { reason: error instanceof Error ? error.message : "unknown" },
+    });
+  });
   void remote.resume();
-  createMainWindow();
+  createMainWindow(diagnostics);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+      createMainWindow(diagnostics);
     }
   });
 });

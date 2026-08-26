@@ -12,12 +12,13 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:e2e:account": "node scripts/e2e-account.mjs",
-    "test:e2e": "vite build --config vite.pi-host-test.config.mts && vite build --config vite.platform-alpha-test.config.mts && vite build --config vite.remote-e2e.config.mts && node scripts/e2e-chat.mjs && node scripts/e2e-account.mjs && node scripts/e2e-tools.mjs && node scripts/e2e-skills.mjs && node .vite/build/remote-e2e.mjs",
+    "test:e2e": "vite build --config vite.pi-host-test.config.mts && vite build --config vite.platform-alpha-test.config.mts && vite build --config vite.remote-e2e.config.mts && node scripts/e2e-chat.mjs && node scripts/e2e-account.mjs && node scripts/e2e-tools.mjs && node scripts/e2e-skills.mjs && node scripts/e2e-beta.mjs && node .vite/build/remote-e2e.mjs",
     "verify:fuses": "node scripts/verify-packaged-fuses.mjs"
   },
   "dependencies": {
     "@openerx/app-service": "0.0.0",
     "@openerx/contracts": "0.0.0",
+    "@openerx/observability": "0.0.0",
     "@openerx/pi-host": "0.0.0",
     "@openerx/remote-host": "0.0.0",
     "@openerx/remote-protocol": "0.0.0",
@@ -52,6 +53,7 @@
     "@types/qrcode": "1.5.5",
     "@vitejs/plugin-react": "4.7.0",
     "electron": "44.0.0",
+    "fflate": "0.8.2",
     "playwright": "1.62.1",
     "vite": "6.4.3"
   }

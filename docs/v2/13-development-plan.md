@@ -218,6 +218,20 @@ macOS arm64/x64 组合，生产 APNs/FCM、真实 HTTPS/WSS 部署、移动附�
 | 5 | SKILL-SYNC-001 | 同步 Skill 安装记录而不继承设备权限 | 双设备恢复、缺失本地依赖和撤销测试 |
 | 6 | QA-M7-001 | 完成 GT-TOOL-07 至 GT-TOOL-09 与 SKILL-01 至 SKILL-10 | Codex FILE/TOOL/SKILL 能力矩阵无阻断缺口 |
 
+## 6.1 M8 已完成的本地工作项
+
+| 顺序 | ID | 工作项 | 完成证据 |
+| --- | --- | --- | --- |
+| 1 | BETA-OBS-001 | 脱敏、限量的生命周期日志和诊断预览 | `packages/observability` 单元测试与设置页预览 |
+| 2 | BETA-PERF-001 | 桌面可交互、App Service 就绪和 RSS 本地预算 | 性能采样、预算状态和 Electron E2E |
+| 3 | BETA-DATA-001 | 诊断包与个人数据分别导出 | Prompt/凭证/路径 canary 负向测试和个人内容正向测试 |
+| 4 | BETA-RECOVERY-001 | App Service 崩溃恢复在诊断中可见 | 自动重启、历史恢复和重启计数 E2E |
+| 5 | QA-M8-001 | 50 条 Golden 本地证据与外部门禁台账 | `m8-gate-status.json` 和 M8 readiness test |
+
+M8 本地检查点不等于 Personal Beta 已发布。5 至 20 名目标用户、真实 Provider/支付、iOS/
+Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pending_external`，不得用本地
+fixture 或开发包提前标记通过。
+
 ## 7. 完成定义
 
 每个工作项必须：
@@ -265,7 +279,7 @@ macOS arm64/x64 组合，生产 APNs/FCM、真实 HTTPS/WSS 部署、移动附�
 
 ## 10. 当前下一步
 
-M7 本地检查点已完成，进入 M8 Personal Beta。Beta 需要以已实现的聊天、账户、服务端计费、
-文件、工具、Remote 和 Skill 纵向链路为基础，完成目标用户反馈、性能、诊断、真实 Provider/
-支付环境和签名发布矩阵。M6/M7 的真机、生产推送、签名 Skill 目录、脚本运行时和跨平台主机
-证据继续作为发布硬门禁，不用本地检查点证据提前宣称通过。
+M8 本地 Personal Beta 基础检查点已完成，下一步是收集 5 至 20 名目标用户的真实任务和反馈，
+并在真实 Provider/支付、iOS/Android Remote 真机、Windows/macOS 原生与签名安装包矩阵补齐
+外部证据。全部外部门禁通过并由用户批准后，才进入 M9 V1 Release；本地 fixture 和开发包
+不替代该批准。

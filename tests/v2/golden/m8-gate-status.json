@@ -1,0 +1,27 @@
+{
+  "checkpoint": "M8-local-personal-beta-foundation",
+  "updatedAt": "2026-08-26",
+  "localImplementation": {
+    "status": "complete",
+    "catalogTasks": 50,
+    "evidenceRecords": 50,
+    "minimumExpectedResults": 46
+  },
+  "externalBeta": {
+    "status": "pending_external",
+    "targetUsers": { "minimum": 5, "maximum": 20, "completed": 0 },
+    "requiredEvidence": [
+      "real-provider-and-server-billing",
+      "ios-android-remote-device-matrix",
+      "windows-x64-and-macos-arm64-x64",
+      "signed-install-upgrade-and-rollback",
+      "target-user-task-and-feedback-records"
+    ]
+  },
+  "performanceBudgets": {
+    "status": "provisional_local",
+    "desktopInteractiveMs": 5000,
+    "appServiceReadyMs": 5000,
+    "idleRssMiB": 512
+  }
+}

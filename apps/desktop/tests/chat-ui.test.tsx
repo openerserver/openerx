@@ -2,7 +2,7 @@
 
 import type { ConversationSnapshot, DesktopBridge, SkillInstallation } from "@openerx/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -111,6 +111,35 @@ function createBridge(): DesktopBridge {
       arch: "arm64",
       appVersion: "2.0.0-alpha.0",
     }),
+    getDiagnosticsPreview: vi.fn().mockResolvedValue({
+      generatedAt: timestamp,
+      health: "ready",
+      eventCount: 3,
+      errorCount: 0,
+      warningCount: 0,
+      restartCount: 0,
+      firstEventAt: timestamp,
+      lastEventAt: timestamp,
+      sources: ["desktop", "app_service", "renderer"],
+      performance: [
+        { name: "desktop_interactive", value: 420, unit: "ms", budget: 5_000, status: "pass" },
+        { name: "app_service_ready", value: 360, unit: "ms", budget: 5_000, status: "pass" },
+        { name: "idle_rss", value: 180, unit: "mib", budget: 512, status: "pass" },
+      ],
+      includes: ["应用版本与运行平台"],
+      excludes: ["对话与 Prompt 正文"],
+    }),
+    exportDiagnostics: vi.fn(),
+    getPersonalDataSummary: vi.fn().mockResolvedValue({
+      generatedAt: timestamp,
+      conversations: 1,
+      messages: 2,
+      files: 0,
+      artifacts: 0,
+      workItems: 0,
+      skillInstallations: 1,
+    }),
+    exportPersonalData: vi.fn(),
     getAccountState: vi.fn().mockResolvedValue({
       status: "signed_out",
       account: null,
@@ -262,6 +291,43 @@ describe("M1 chat renderer", () => {
     expect(window.localStorage.getItem("openerx.theme")).toBe("system");
 
     window.localStorage.removeItem("openerx.theme");
+  });
+
+  it("previews diagnostics separately from personal data before export", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.exportDiagnostics).mockResolvedValue({
+      kind: "diagnostics",
+      fileName: "openerx-diagnostics.json",
+      bytes: 512,
+      checksumSha256: "a".repeat(64),
+      exportedAt: timestamp,
+    });
+    vi.mocked(bridge.exportPersonalData).mockResolvedValue({
+      kind: "personal_data",
+      fileName: "openerx-personal-data.zip",
+      bytes: 1_024,
+      checksumSha256: "b".repeat(64),
+      exportedAt: timestamp,
+    });
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+
+    expect(await screen.findByText("对话与 Prompt 正文", { exact: false })).toBeTruthy();
+    const panel = screen.getByLabelText("诊断与数据导出");
+    expect(panel).toBeTruthy();
+    if (!panel) throw new Error("Diagnostics panel missing");
+    expect(within(panel).getByText("对话与 Prompt 正文", { exact: false })).toBeTruthy();
+    expect(
+      within(panel).getByText("Token、报价、费用和账单只读取服务端记录", { exact: false }),
+    ).toBeTruthy();
+    expect(within(panel).getAllByText(/pass/)).toHaveLength(3);
+    await user.click(within(panel).getByRole("button", { name: "导出脱敏诊断包" }));
+    expect(await within(panel).findByText("诊断包已保存：openerx-diagnostics.json")).toBeTruthy();
+    await user.click(within(panel).getByRole("button", { name: "导出个人数据" }));
+    expect(
+      await within(panel).findByText("个人数据已保存：openerx-personal-data.zip"),
+    ).toBeTruthy();
   });
 
   it("selects an enabled Skill in the composer and exposes lifecycle metadata", async () => {

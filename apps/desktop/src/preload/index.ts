@@ -35,6 +35,7 @@ import {
   desktopEnvironmentSchema,
   desktopMcpServerSaveInputSchema,
   deviceSessionSchema,
+  diagnosticsPreviewSchema,
   emailChallengeSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
@@ -44,6 +45,7 @@ import {
   fileSearchInputSchema,
   ipcChannels,
   ledgerTransactionSchema,
+  localExportResultSchema,
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
   mcpServerRemoveResultSchema,
@@ -51,6 +53,7 @@ import {
   parseChatCommandResult,
   permissionListInputSchema,
   permissionResolveInputSchema,
+  personalDataSummarySchema,
   rechargeOrderSchema,
   refundOrderSchema,
   remoteDesktopEnableInputSchema,
@@ -95,6 +98,22 @@ const bridge: DesktopBridge = {
   getEnvironment: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.environmentGet);
     return desktopEnvironmentSchema.parse(result);
+  },
+  getDiagnosticsPreview: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.diagnosticsPreview);
+    return diagnosticsPreviewSchema.parse(result);
+  },
+  exportDiagnostics: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.diagnosticsExport);
+    return result === null ? null : localExportResultSchema.parse(result);
+  },
+  getPersonalDataSummary: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.personalDataSummary);
+    return personalDataSummarySchema.parse(result);
+  },
+  exportPersonalData: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.personalDataExport);
+    return result === null ? null : localExportResultSchema.parse(result);
   },
   getAccountState: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.accountState);
