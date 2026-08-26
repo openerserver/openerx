@@ -92,6 +92,7 @@ export interface ToolAppServiceOptions {
   ingestDownload(path: string): Promise<{ fileId: string; displayName: string }>;
   selectedModelRef(assistantMessageId: string): string;
   emit(event: ChatEvent): void;
+  additionalAdapters?: ToolAdapter[];
 }
 
 interface ActiveProjection {
@@ -125,6 +126,7 @@ export class ToolAppService {
       new ShellToolAdapter([options.workspaceDirectory]),
       new HostCapabilityAdapter(options.host, options.resolveUploadPath, options.ingestDownload),
       this.#mcp,
+      ...(options.additionalAdapters ?? []),
     ]);
   }
 
@@ -162,7 +164,11 @@ export class ToolAppService {
       runId: projection.run.id,
       piCallRef: frame.piToolCallId,
       toolName: frame.toolName,
-      source: frame.operation.operation.startsWith("mcp_") ? "mcp" : "openerx",
+      source: frame.operation.operation.startsWith("mcp_")
+        ? "mcp"
+        : frame.operation.operation.startsWith("skill_")
+          ? "skill"
+          : "openerx",
       risk: requirement.requirement.risk,
       idempotencyKey: frame.operation.idempotencyKey,
       inputSummary: requirement.summary.input,

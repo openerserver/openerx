@@ -8,6 +8,8 @@ import {
   piHostEventFrameSchema,
   redactSensitiveText,
   safeErrorMessage,
+  skillInstallationSchema,
+  skillPackageManifestSchema,
 } from "../src";
 
 describe("desktop environment contract", () => {
@@ -131,5 +133,59 @@ describe("M1 process and chat contracts", () => {
       }),
     ).toThrow();
     expect(() => parseChatCommandResult("chat.list", [{ title: "incomplete" }])).toThrow();
+  });
+});
+
+describe("M7 Skill contracts", () => {
+  it("accepts an open Skill manifest and rejects unsafely shaped installation metadata", () => {
+    expect(
+      skillPackageManifestSchema.parse({
+        version: "1.2.3",
+        publisher: "Fixture",
+        tools: ["openerx_skill_script"],
+        permissions: [
+          {
+            capability: "shell",
+            actions: ["execute"],
+            targets: ["scripts/run.mjs"],
+            reason: "Run the declared script.",
+          },
+        ],
+        platforms: ["darwin", "win32"],
+        scripts: ["scripts/run.mjs"],
+      }),
+    ).toMatchObject({ version: "1.2.3", publisher: "Fixture" });
+    expect(() =>
+      skillInstallationSchema.parse({
+        id: crypto.randomUUID(),
+        ownerProfileId: "local-default",
+        name: "unsafe-skill",
+        displayName: "Unsafe",
+        description: "Fixture",
+        version: "1.0.0",
+        publisher: "Fixture",
+        scope: "workspace",
+        workspaceId: null,
+        sourceKind: "local_directory",
+        sourceLabel: "fixture",
+        checksumSha256: "a".repeat(64),
+        trust: "unverified",
+        enabled: false,
+        autoInvoke: false,
+        packageState: "installed",
+        permissionDigest: "b".repeat(64),
+        approvedPermissionDigest: null,
+        declaredTools: [],
+        declaredMcpServers: [],
+        permissions: [],
+        platforms: ["darwin"],
+        rollbackVersions: [],
+        installedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastUsedAt: null,
+        revision: 1,
+        localPackagePath: "/must-not-cross-contract",
+      }),
+    ).toThrow();
   });
 });

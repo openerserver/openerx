@@ -27,7 +27,62 @@ function contentText(content: unknown): string {
 function responseFor(context: Context): AssistantMessage {
   const userMessages = context.messages.filter(({ role }) => role === "user");
   const latestUser = contentText(userMessages.at(-1)?.content);
-  const toolResults = context.messages.filter(({ role }) => role === "toolResult");
+  let lastUserIndex = -1;
+  for (let index = context.messages.length - 1; index >= 0; index -= 1) {
+    if (context.messages[index]?.role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const toolResults = context.messages
+    .slice(lastUserIndex + 1)
+    .filter(({ role }) => role === "toolResult");
+  if (latestUser.includes("[PI_TEST_SKILL]") || latestUser.includes("[PI_TEST_SKILL_AUTO]")) {
+    const automatic = latestUser.includes("[PI_TEST_SKILL_AUTO]");
+    const skillContext = automatic ? `${latestUser}\n${context.systemPrompt}` : latestUser;
+    const skillName = automatic
+      ? skillContext.match(/<name>([^<]+)<\/name>/)?.[1]
+      : skillContext.match(/<skill name="([^"]+)"/)?.[1];
+    const skillFile = automatic
+      ? skillContext.match(/<location>([^<]+\/SKILL\.md)<\/location>/)?.[1]
+      : skillContext.match(/location="([^"]+\/SKILL\.md)"/)?.[1];
+    if (!skillName || !skillFile) return fauxAssistantMessage("Skill 没有通过 Pi 原生展开。");
+    if (automatic && toolResults.length === 0) {
+      return fauxAssistantMessage(
+        fauxToolCall("read", { path: skillFile }, { id: "skill-read-instructions" }),
+        { stopReason: "toolUse" },
+      );
+    }
+    if (toolResults.length === (automatic ? 1 : 0)) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "read",
+          { path: `${skillFile.slice(0, -"SKILL.md".length)}references/template.md` },
+          { id: "skill-read-reference" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    if (toolResults.length === (automatic ? 2 : 1)) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "openerx_skill_script",
+          {
+            skill: skillName,
+            script: "scripts/render.mjs",
+            args: ["M7 E2E report"],
+            timeoutMs: 5_000,
+            allowNetwork: false,
+          },
+          { id: "skill-run-script" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    return fauxAssistantMessage(
+      `Skill ${skillName} 已通过 Pi 渐进加载，并经 Broker 完成脚本：${contentText(toolResults.at(-1)?.content)}`,
+    );
+  }
   if (latestUser.includes("[PI_TEST_BROWSER]")) {
     const url = latestUser.match(/https?:\/\/\S+/)?.[0];
     const uploadFileId = latestUser.match(/FILE_ID=([0-9a-f-]+)/)?.[1];
@@ -108,8 +163,9 @@ function responseFor(context: Context): AssistantMessage {
     );
   }
   if (latestUser.includes("2000 字") || latestUser.includes("[PI_TEST_SLOW]")) {
+    const repetitions = latestUser.includes("崩溃恢复") ? 800 : 80;
     return fauxAssistantMessage(
-      `长响应开始。${"这是用于验证停止后不再追加内容的固定段落。".repeat(80)}`,
+      `长响应开始。${"这是用于验证停止后不再追加内容的固定段落。".repeat(repetitions)}`,
     );
   }
   if (userMessages.length >= 2) {

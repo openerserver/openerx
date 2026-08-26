@@ -167,6 +167,26 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         forcePerCallApproval:
           operation.operation === "mcp_connect" || operation.operation === "mcp_call",
       };
+    case "skill_read":
+      return {
+        capability: "skill",
+        risk: "L0",
+        resourceType: "skill",
+        resource: `${operation.installationId}:${operation.relativePath}`,
+        actions: ["read"],
+        reason: `读取已安装 Skill 资源：${operation.relativePath}`,
+        forcePerCallApproval: false,
+      };
+    case "skill_script_execute":
+      return {
+        capability: "skill",
+        risk: "L5",
+        resourceType: "skill",
+        resource: `${operation.installationId}:${operation.relativePath}`,
+        actions: operation.allowNetwork ? ["execute", "external_write"] : ["execute"],
+        reason: `执行 Skill 脚本：${operation.relativePath}`,
+        forcePerCallApproval: true,
+      };
   }
 }
 
@@ -234,5 +254,12 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
       return { input: operation.operation, target: operation.serverId };
     case "mcp_call":
       return { input: operation.tool, target: operation.serverId };
+    case "skill_read":
+      return { input: "read", target: `${operation.installationId}:${operation.relativePath}` };
+    case "skill_script_execute":
+      return {
+        input: operation.args.join(" ").slice(0, 2_000),
+        target: `${operation.installationId}:${operation.relativePath}`,
+      };
   }
 }

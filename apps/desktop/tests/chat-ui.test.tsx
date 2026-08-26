@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import type { ConversationSnapshot, DesktopBridge } from "@openerx/contracts";
+import type { ConversationSnapshot, DesktopBridge, SkillInstallation } from "@openerx/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -13,6 +13,35 @@ const branchId = "22222222-2222-4222-8222-222222222222";
 const userMessageId = "33333333-3333-4333-8333-333333333333";
 const assistantMessageId = "44444444-4444-4444-8444-444444444444";
 const timestamp = "2026-08-25T09:00:00.000Z";
+const skillInstallation: SkillInstallation = {
+  id: "55555555-5555-4555-8555-555555555555",
+  ownerProfileId: "local-default",
+  name: "structured-report",
+  displayName: "结构化报告",
+  description: "把输入整理为结构化报告。",
+  version: "1.0.0",
+  publisher: "OpenerX",
+  scope: "builtin",
+  workspaceId: null,
+  sourceKind: "built_in",
+  sourceLabel: "OpenerX bundled skills",
+  checksumSha256: "a".repeat(64),
+  trust: "bundled",
+  enabled: true,
+  autoInvoke: true,
+  packageState: "installed",
+  permissionDigest: "b".repeat(64),
+  approvedPermissionDigest: "b".repeat(64),
+  declaredTools: ["openerx_skill_script"],
+  declaredMcpServers: [],
+  permissions: [],
+  platforms: ["darwin", "win32"],
+  rollbackVersions: [],
+  installedAt: timestamp,
+  updatedAt: timestamp,
+  lastUsedAt: null,
+  revision: 1,
+};
 
 const snapshot: ConversationSnapshot = {
   conversation: {
@@ -159,6 +188,17 @@ function createBridge(): DesktopBridge {
     listMcpServers: vi.fn().mockResolvedValue([]),
     saveMcpServer: vi.fn(),
     removeMcpServer: vi.fn(),
+    listSkills: vi.fn().mockResolvedValue([]),
+    getSkill: vi.fn(),
+    chooseAndInstallSkill: vi.fn(),
+    chooseAndUpdateSkill: vi.fn(),
+    setSkillEnabled: vi.fn(),
+    setSkillAutoInvoke: vi.fn(),
+    approveSkillPermissions: vi.fn(),
+    resetSkillPermissions: vi.fn(),
+    rollbackSkill: vi.fn(),
+    uninstallSkill: vi.fn(),
+    listSkillInvocations: vi.fn().mockResolvedValue([]),
     onChatEvent: vi.fn().mockReturnValue(() => undefined),
   };
 }
@@ -219,6 +259,29 @@ describe("M1 chat renderer", () => {
     expect(window.localStorage.getItem("openerx.theme")).toBe("system");
 
     window.localStorage.removeItem("openerx.theme");
+  });
+
+  it("selects an enabled Skill in the composer and exposes lifecycle metadata", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listSkills).mockResolvedValue([skillInstallation]);
+    renderApp(bridge);
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText("选择 Skill"), skillInstallation.id);
+    await user.type(screen.getByLabelText("发送消息"), "生成报告");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ skillInstallationId: skillInstallation.id, text: "生成报告" }),
+    );
+    cleanup();
+
+    const managementBridge = createBridge();
+    vi.mocked(managementBridge.listSkills).mockResolvedValue([skillInstallation]);
+    renderApp(managementBridge, "/assistants");
+    expect(await screen.findByRole("heading", { name: "助手与 Skill" })).toBeTruthy();
+    expect(screen.getByText("结构化报告")).toBeTruthy();
+    expect(screen.getByText(/OpenerX bundled skills/)).toBeTruthy();
+    expect(screen.getByText(/工具：openerx_skill_script/)).toBeTruthy();
   });
 
   it("shows HTML source and an isolated preview without bridge privileges", async () => {

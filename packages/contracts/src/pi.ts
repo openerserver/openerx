@@ -3,6 +3,7 @@ import { entityIdSchema, timestampSchema } from "./chat";
 import { supportedFileFormatSchema } from "./file";
 import { usageRecordSchema } from "./model";
 import { processNonceSchema } from "./process";
+import { piSkillMountSchema } from "./skill";
 import { piActivityEventSchema, piToolRequestFrameSchema, piToolResponseFrameSchema } from "./tool";
 
 export const piHostContractVersion = 1 as const;
@@ -49,6 +50,7 @@ export const piPromptFrameSchema = z
           .strict(),
       )
       .optional(),
+    skills: z.array(piSkillMountSchema).max(500).optional(),
     platform: z
       .object({
         accountId: entityIdSchema,

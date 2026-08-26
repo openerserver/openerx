@@ -24,6 +24,46 @@ afterEach(() => {
 });
 
 describe("ToolRepository", () => {
+  it("persists Skill-origin tool calls and the matching policy vocabulary", () => {
+    const { chat, tools } = fixture();
+    const generation = chat.createGeneration({
+      text: "运行 Skill",
+      idempotencyKey: "chat-skill-tool-0001",
+    });
+    const projection = tools.createProjection({
+      conversationId: generation.receipt.conversationId,
+      messageId: generation.receipt.assistantMessageId,
+      title: "运行 Skill",
+      selectedModelRef: "platform/auto",
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 1,
+    });
+    const { toolCall } = tools.createToolCall({
+      runId: projection.run.id,
+      piCallRef: "pi-call-skill",
+      toolName: "openerx_skill_script",
+      source: "skill",
+      risk: "L5",
+      idempotencyKey: "skill-tool-side-effect-0001",
+      inputSummary: "scripts/render.mjs",
+      targetSummary: "e2e-report",
+    });
+    const scope = tools.createScope({
+      capability: "skill",
+      resourceType: "skill",
+      resource: "e2e-report:scripts/render.mjs",
+      actions: ["execute"],
+      maxRisk: "L5",
+      sessionOnly: true,
+      expiresAt: null,
+    });
+
+    expect(toolCall.source).toBe("skill");
+    expect(scope).toMatchObject({ capability: "skill", resourceType: "skill" });
+    chat.close();
+    tools.close();
+  });
+
   it("persists the Pi projection, exact once permission, and idempotent side effect", () => {
     const { chat, tools } = fixture();
     const generation = chat.createGeneration({

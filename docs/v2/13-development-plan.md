@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 开发计划
 
-> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2-M6 LOCAL COMPLETE / NEXT M7`
+> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2-M7 LOCAL COMPLETE / NEXT M8`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -207,13 +207,13 @@ macOS arm64/x64 组合，生产 APNs/FCM、真实 HTTPS/WSS 部署、移动附�
 - 依赖图证明 Release 只有 Pi harness，且手机、Relay、Connector 中没有测试 Provider、Legacy 依赖或第二套运行时队列。
 - 发布审批与回滚演练。
 
-## 6. 当前下一迭代
+## 6. M7 已完成工作项
 
 | 顺序 | ID | 工作项 | 完成证据 |
 | --- | --- | --- | --- |
 | 1 | SKILL-FOUNDATION-001 | 冻结 Pi Skill 发现、元数据和渐进加载边界 | `SKILL.md`、scripts、references、assets 合同与负向解析测试 |
 | 2 | SKILL-SCOPE-001 | 内置、个人和工作区 Skill Scope | 优先级、冲突、禁用和跨工作区隔离测试 |
-| 3 | SKILL-LIFECYCLE-001 | 安装、启用、更新、回滚和卸载 | 签名/校验、失败回滚、依赖清理和审计证据 |
+| 3 | SKILL-LIFECYCLE-001 | 安装、启用、更新、回滚和卸载 | 校验和、失败回滚、可恢复清理和审计证据 |
 | 4 | SKILL-BROKER-001 | Skill 脚本复用 M5 Capability Broker | 文件、Shell、网络、浏览器和桌面权限无旁路测试 |
 | 5 | SKILL-SYNC-001 | 同步 Skill 安装记录而不继承设备权限 | 双设备恢复、缺失本地依赖和撤销测试 |
 | 6 | QA-M7-001 | 完成 GT-TOOL-07 至 GT-TOOL-09 与 SKILL-01 至 SKILL-10 | Codex FILE/TOOL/SKILL 能力矩阵无阻断缺口 |
@@ -265,7 +265,7 @@ macOS arm64/x64 组合，生产 APNs/FCM、真实 HTTPS/WSS 部署、移动附�
 
 ## 10. 当前下一步
 
-进入 M7 Skill 对齐。Skill 必须由 Pi 原生加载并通过 M5 的同一 Capability Broker 使用文件、
-Shell、网络、浏览器和桌面能力；安装记录可以同步，但设备本地 Scope、系统权限和凭证不得
-跨设备继承。M6 的真机、生产推送和主机发布矩阵继续作为 Remote 发布硬门禁跟踪，不用本地
-检查点证据提前宣称通过。
+M7 本地检查点已完成，进入 M8 Personal Beta。Beta 需要以已实现的聊天、账户、服务端计费、
+文件、工具、Remote 和 Skill 纵向链路为基础，完成目标用户反馈、性能、诊断、真实 Provider/
+支付环境和签名发布矩阵。M6/M7 的真机、生产推送、签名 Skill 目录、脚本运行时和跨平台主机
+证据继续作为发布硬门禁，不用本地检查点证据提前宣称通过。

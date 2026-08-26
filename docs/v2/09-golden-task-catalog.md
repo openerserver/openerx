@@ -96,6 +96,9 @@ M2 本地证据只验收账户、Conversation/Branch/Message、同步、模型�
 | GT-TOOL-09 | 同步 Skill 安装记录到另一设备 | 安装记录恢复，本地文件/Shell/浏览器/桌面权限不继承 | 硬 |
 | GT-TOOL-10 | 长任务中离开、返回、停止并模拟 Pi Host/Skill 崩溃 | 持久化进度恢复，子进程停止，已有成果保留，普通聊天可继续 | 硬 |
 
+M7 本地证据已完成 GT-TOOL-07 至 GT-TOOL-09，并补齐 GT-TOOL-10 的 Skill 损坏/失败隔离
+切片；执行记录见 [M7 checkpoint](evidence/m7-2026-08-26.md) 和对应 Golden evidence。
+
 ## 7. 每次里程碑执行记录
 
 - Catalog 中固定输入、版本、原始 Prompt 和预期结果的引用。

@@ -13,7 +13,14 @@ import {
 } from "@openerx/contracts";
 import { FileAppService } from "@openerx/file-service";
 import { projectChatEventForRemote } from "@openerx/remote-host";
-import { ChatRepository, FileRepository, RemoteRepository, ToolRepository } from "@openerx/storage";
+import { SkillPackageService, SkillToolAdapter } from "@openerx/skills";
+import {
+  ChatRepository,
+  FileRepository,
+  RemoteRepository,
+  SkillRepository,
+  ToolRepository,
+} from "@openerx/storage";
 import type { MessagePortMain } from "electron";
 import { ChatAppService } from "./chat-app-service";
 import { MainCapabilityClient } from "./main-capability-client";
@@ -54,6 +61,12 @@ parentPort.once("message", async (bootstrapEvent) => {
   const remoteRepository = new RemoteRepository(
     path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
   );
+  const skillRepository = new SkillRepository(
+    path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
+    { ownerProfileId: bootstrap.ownerProfileId, deviceId: bootstrap.deviceId },
+  );
+  const skills = new SkillPackageService(skillRepository, bootstrap.profileDirectory);
+  skills.seedBuiltIns();
   const workspaceDirectory = path.join(bootstrap.profileDirectory, "pi-workspace");
   mkdirSync(workspaceDirectory, { recursive: true });
   let service: ChatAppService;
@@ -70,6 +83,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     selectedModelRef: (assistantMessageId) =>
       repository.selectedModelForMessage(assistantMessageId),
     emit: (event) => service.emitExternal(event),
+    additionalAdapters: [new SkillToolAdapter(skills)],
   });
   service = new ChatAppService(
     repository,
@@ -78,6 +92,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     files,
     toolService,
     remoteRepository,
+    skills,
   );
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.onEvent((event) => {

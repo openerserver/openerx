@@ -28,6 +28,24 @@ import {
   personalFileSchema,
 } from "./file";
 import {
+  type SkillInstallation,
+  type SkillInvocation,
+  skillApprovePermissionsInputSchema,
+  skillAutoInvokeInputSchema,
+  skillEnableInputSchema,
+  skillGetInputSchema,
+  skillInstallationSchema,
+  skillInstallPrivilegedInputSchema,
+  skillInvocationListInputSchema,
+  skillInvocationSchema,
+  skillListInputSchema,
+  skillResetPermissionsInputSchema,
+  skillRollbackInputSchema,
+  skillUninstallInputSchema,
+  skillUninstallResultSchema,
+  skillUpdatePrivilegedInputSchema,
+} from "./skill";
+import {
   localCacheClearResultSchema,
   type SyncConflict,
   syncConflictSchema,
@@ -162,6 +180,7 @@ export const chatSendInputSchema = z
     conversationId: entityIdSchema.nullable().optional(),
     text: z.string().trim().min(1).max(100_000),
     idempotencyKey: z.string().min(8).max(200),
+    skillInstallationId: entityIdSchema.optional(),
   })
   .strict();
 
@@ -284,6 +303,33 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
   z.object({ command: z.literal("mcp.servers.list"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("mcp.server.upsert"), input: mcpServerUpsertInputSchema }).strict(),
   z.object({ command: z.literal("mcp.server.remove"), input: mcpServerRemoveInputSchema }).strict(),
+  z.object({ command: z.literal("skill.list"), input: skillListInputSchema }).strict(),
+  z.object({ command: z.literal("skill.get"), input: skillGetInputSchema }).strict(),
+  z
+    .object({ command: z.literal("skill.install"), input: skillInstallPrivilegedInputSchema })
+    .strict(),
+  z
+    .object({ command: z.literal("skill.update"), input: skillUpdatePrivilegedInputSchema })
+    .strict(),
+  z.object({ command: z.literal("skill.enable"), input: skillEnableInputSchema }).strict(),
+  z.object({ command: z.literal("skill.autoInvoke"), input: skillAutoInvokeInputSchema }).strict(),
+  z
+    .object({
+      command: z.literal("skill.permissions.approve"),
+      input: skillApprovePermissionsInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal("skill.permissions.reset"),
+      input: skillResetPermissionsInputSchema,
+    })
+    .strict(),
+  z.object({ command: z.literal("skill.rollback"), input: skillRollbackInputSchema }).strict(),
+  z.object({ command: z.literal("skill.uninstall"), input: skillUninstallInputSchema }).strict(),
+  z
+    .object({ command: z.literal("skill.invocations.list"), input: skillInvocationListInputSchema })
+    .strict(),
 ]);
 
 export const deletedConversationResultSchema = z
@@ -392,6 +438,17 @@ export interface ChatCommandResultMap {
   "mcp.servers.list": z.infer<typeof mcpServerConfigSchema>[];
   "mcp.server.upsert": z.infer<typeof mcpServerConfigSchema>;
   "mcp.server.remove": z.infer<typeof mcpServerRemoveResultSchema>;
+  "skill.list": SkillInstallation[];
+  "skill.get": SkillInstallation;
+  "skill.install": SkillInstallation;
+  "skill.update": SkillInstallation;
+  "skill.enable": SkillInstallation;
+  "skill.autoInvoke": SkillInstallation;
+  "skill.permissions.approve": SkillInstallation;
+  "skill.permissions.reset": SkillInstallation;
+  "skill.rollback": SkillInstallation;
+  "skill.uninstall": z.infer<typeof skillUninstallResultSchema>;
+  "skill.invocations.list": SkillInvocation[];
 }
 
 export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
@@ -493,6 +550,25 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "mcp.server.remove":
       parsed = mcpServerRemoveResultSchema.parse(value);
+      break;
+    case "skill.list":
+      parsed = z.array(skillInstallationSchema).parse(value);
+      break;
+    case "skill.get":
+    case "skill.install":
+    case "skill.update":
+    case "skill.enable":
+    case "skill.autoInvoke":
+    case "skill.permissions.approve":
+    case "skill.permissions.reset":
+    case "skill.rollback":
+      parsed = skillInstallationSchema.parse(value);
+      break;
+    case "skill.uninstall":
+      parsed = skillUninstallResultSchema.parse(value);
+      break;
+    case "skill.invocations.list":
+      parsed = z.array(skillInvocationSchema).parse(value);
       break;
   }
   return parsed as ChatCommandResultMap[C];

@@ -68,7 +68,7 @@ describe("M5 Tool Golden Tasks", () => {
     ).toMatchObject({ capability: "web.search", risk: "L2" });
   });
 
-  it("records local M5 evidence only for the implemented non-Skill slices", () => {
+  it("keeps M5 evidence and recognizes the later M7 Skill evidence", () => {
     for (const number of [1, 2, 3, 4, 5, 6, 10]) {
       const id = `GT-TOOL-${String(number).padStart(2, "0")}`;
       const evidence = path.join(root, "docs/v2/evidence/golden/local-implementation", `${id}.md`);
@@ -77,10 +77,9 @@ describe("M5 Tool Golden Tasks", () => {
     }
     for (const number of [7, 8, 9]) {
       const id = `GT-TOOL-${String(number).padStart(2, "0")}`;
-      expect(
-        existsSync(path.join(root, "docs/v2/evidence/golden/local-implementation", `${id}.md`)),
-        `${id} must remain an M7 gate`,
-      ).toBe(false);
+      const evidence = path.join(root, "docs/v2/evidence/golden/local-implementation", `${id}.md`);
+      expect(existsSync(evidence), `${id} M7 evidence`).toBe(true);
+      expect(readFileSync(evidence, "utf8")).toContain("M7 local checkpoint");
     }
   });
 });

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import {
   type CreateAgentSessionResult,
@@ -8,7 +9,7 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { PiHistoryMessage, SupportedFileFormat } from "@openerx/contracts";
+import type { PiHistoryMessage, PiSkillMount, SupportedFileFormat } from "@openerx/contracts";
 
 const emptyUsage: AssistantMessage["usage"] = {
   input: 0,
@@ -29,6 +30,7 @@ export interface CreateProductPiSessionOptions {
   sessionManager?: SessionManager;
   customTools?: ToolDefinition[];
   files?: Array<{ personalFileId: string; displayName: string; format: SupportedFileFormat }>;
+  skills?: PiSkillMount[];
 }
 
 function seedProductHistory(
@@ -95,11 +97,24 @@ export async function createProductPiSession(
     agentDir: options.agentDir,
     settingsManager,
     noExtensions: true,
-    noSkills: true,
+    additionalSkillPaths: options.skills?.map(({ baseDir }) => baseDir) ?? [],
+    noSkills: (options.skills?.length ?? 0) === 0,
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
     systemPrompt,
+    skillsOverride: (base) => {
+      const mounts = new Map(
+        (options.skills ?? []).map((mount) => [path.resolve(mount.baseDir), mount]),
+      );
+      return {
+        skills: base.skills.flatMap((skill) => {
+          const mount = mounts.get(path.resolve(skill.baseDir));
+          return mount ? [{ ...skill, disableModelInvocation: !mount.autoInvoke }] : [];
+        }),
+        diagnostics: base.diagnostics,
+      };
+    },
   });
   await resourceLoader.reload();
 

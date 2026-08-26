@@ -42,6 +42,17 @@ import {
   permissionResolveInputSchema,
   remoteDesktopEnableInputSchema,
   remoteDesktopRevokeInputSchema,
+  skillApprovePermissionsInputSchema,
+  skillAutoInvokeInputSchema,
+  skillChooseInstallInputSchema,
+  skillChooseUpdateInputSchema,
+  skillEnableInputSchema,
+  skillGetInputSchema,
+  skillInvocationListInputSchema,
+  skillListInputSchema,
+  skillResetPermissionsInputSchema,
+  skillRollbackInputSchema,
+  skillUninstallInputSchema,
   syncResolveConflictInputSchema,
   toolListInputSchema,
   toolScopeRevokeInputSchema,
@@ -395,6 +406,92 @@ function registerIpcHandlers(
   registerChatHandler(ipcChannels.toolScopesList, "tool.scopes.list", emptyInputSchema);
   registerChatHandler(ipcChannels.toolScopeRevoke, "tool.scope.revoke", toolScopeRevokeInputSchema);
   registerChatHandler(ipcChannels.mcpServersList, "mcp.servers.list", emptyInputSchema);
+  registerChatHandler(ipcChannels.skillList, "skill.list", skillListInputSchema);
+  registerChatHandler(ipcChannels.skillGet, "skill.get", skillGetInputSchema);
+  registerChatHandler(ipcChannels.skillEnable, "skill.enable", skillEnableInputSchema, true);
+  registerChatHandler(
+    ipcChannels.skillAutoInvoke,
+    "skill.autoInvoke",
+    skillAutoInvokeInputSchema,
+    true,
+  );
+  registerChatHandler(
+    ipcChannels.skillPermissionsApprove,
+    "skill.permissions.approve",
+    skillApprovePermissionsInputSchema,
+    true,
+  );
+  registerChatHandler(
+    ipcChannels.skillPermissionsReset,
+    "skill.permissions.reset",
+    skillResetPermissionsInputSchema,
+    true,
+  );
+  registerChatHandler(ipcChannels.skillRollback, "skill.rollback", skillRollbackInputSchema, true);
+  registerChatHandler(
+    ipcChannels.skillUninstall,
+    "skill.uninstall",
+    skillUninstallInputSchema,
+    true,
+  );
+  registerChatHandler(
+    ipcChannels.skillInvocationsList,
+    "skill.invocations.list",
+    skillInvocationListInputSchema,
+  );
+  const chooseSkillSource = async (
+    title: string,
+  ): Promise<{ sourcePath: string; sourceKind: "local_directory" | "archive" } | null> => {
+    const choice = await dialog.showMessageBox({
+      type: "question",
+      title,
+      message: "选择 Skill 包来源",
+      detail: "目录应包含 SKILL.md；归档当前支持 ZIP。",
+      buttons: ["选择目录", "选择 ZIP", "取消"],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    });
+    if (choice.response === 2) return null;
+    const sourceKind = choice.response === 0 ? "local_directory" : "archive";
+    const selection = await dialog.showOpenDialog({
+      title,
+      properties: sourceKind === "local_directory" ? ["openDirectory"] : ["openFile"],
+      ...(sourceKind === "archive"
+        ? { filters: [{ name: "Skill ZIP", extensions: ["zip"] }] }
+        : {}),
+    });
+    const sourcePath = selection.filePaths[0];
+    return selection.canceled || !sourcePath ? null : { sourcePath, sourceKind };
+  };
+  ipcMain.handle(ipcChannels.skillChooseInstall, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = skillChooseInstallInputSchema.parse(input);
+    const source = await chooseSkillSource("安装 Skill");
+    if (!source) return null;
+    const authorization = platformUrl ? await accounts.authorization(platformUrl) : undefined;
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "skill.install",
+        input: { ...parsed, ...source },
+      }),
+      authorization,
+    );
+  });
+  ipcMain.handle(ipcChannels.skillChooseUpdate, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = skillChooseUpdateInputSchema.parse(input);
+    const source = await chooseSkillSource("更新 Skill");
+    if (!source) return null;
+    const authorization = platformUrl ? await accounts.authorization(platformUrl) : undefined;
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "skill.update",
+        input: { ...parsed, ...source },
+      }),
+      authorization,
+    );
+  });
   ipcMain.handle(ipcChannels.mcpServerSave, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const parsed = desktopMcpServerSaveInputSchema.parse(input);

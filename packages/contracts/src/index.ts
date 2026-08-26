@@ -12,5 +12,6 @@ export * from "./platform";
 export * from "./process";
 export * from "./redaction";
 export * from "./remote";
+export * from "./skill";
 export * from "./sync";
 export * from "./tool";

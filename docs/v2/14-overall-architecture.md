@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M6_REMOTE_CONTROL_LOCAL_ALPHA_COMPLETE / M7_SKILL_NEXT`
+> 状态：`M6_REMOTE_CONTROL_LOCAL_ALPHA_COMPLETE / M7_SKILL_LOCAL_COMPLETE / M8_BETA_NEXT`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -28,7 +28,8 @@
 
 下图是完整 V1 目标态。M6 本地实现已接入账户云、模型和服务端 Billing，并完成文件 Scope、
 Artifact/对象恢复、Pi SessionManager、Capability Broker、Tool Alpha 与 Remote Control 本地
-纵向链路；Skill 运行面和 Remote 真机/生产发布矩阵仍按后续门禁交付。
+纵向链路，并完成 Pi 原生 Skill 包、生命周期、Broker 和同步运行面；Remote/Skill 真机、签名
+和生产发布矩阵仍按后续门禁交付。
 
 ```mermaid
 flowchart LR
@@ -554,6 +555,6 @@ Pi 唯一 harness 和私有进程边界。
 
 ## 9. 当前下一步
 
-进入 M7 Skill 对齐：由 Pi 加载 Skill，V2 只管理安装记录、Scope、权限与审计，并复用 M5
-Capability Broker。M6 的 iOS/Android 真机、生产 APNs/FCM、Windows/macOS 主机组合和真实
-网络故障矩阵继续作为发布硬门禁补齐。
+进入 M8 Personal Beta：在已完成的 Pi 原生 Skill 与 M5 Capability Broker 边界上进行目标用户
+验证、性能和诊断收口。M6/M7 的 iOS/Android 真机、生产 APNs/FCM、签名 Skill 目录、脚本
+运行时、Windows/macOS 主机组合和真实网络故障矩阵继续作为发布硬门禁补齐。

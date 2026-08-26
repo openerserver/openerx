@@ -4,6 +4,7 @@ import type { BillingBridge } from "./billing";
 import type { RemoteDesktopBridge } from "./desktop-remote";
 import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
+import type { SkillBridge } from "./skill";
 import type { SyncBridge } from "./sync";
 import type { ToolBridge } from "./tool";
 
@@ -67,6 +68,17 @@ export const ipcChannels = Object.freeze({
   mcpServersList: "mcp:servers:list",
   mcpServerSave: "mcp:server:save",
   mcpServerRemove: "mcp:server:remove",
+  skillList: "skill:list",
+  skillGet: "skill:get",
+  skillChooseInstall: "skill:choose-install",
+  skillChooseUpdate: "skill:choose-update",
+  skillEnable: "skill:enable",
+  skillAutoInvoke: "skill:auto-invoke",
+  skillPermissionsApprove: "skill:permissions:approve",
+  skillPermissionsReset: "skill:permissions:reset",
+  skillRollback: "skill:rollback",
+  skillUninstall: "skill:uninstall",
+  skillInvocationsList: "skill:invocations:list",
   remoteState: "remote:state:get",
   remoteEnable: "remote:enabled:set",
   remotePairingChallenge: "remote:pairing-challenge:create",
@@ -91,6 +103,7 @@ export interface DesktopBridge
     BillingBridge,
     FileBridge,
     ToolBridge,
+    SkillBridge,
     RemoteDesktopBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
 }

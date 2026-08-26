@@ -79,8 +79,15 @@ try {
     if (typeof crash !== "function") throw new Error("Crash injection hook missing");
     crash();
   });
-  await page.getByText("失败原因：APP_SERVICE_RESTARTED").last().waitFor({ timeout: 60_000 });
+  await page.getByText(/(darwin|win32) · restarting/).waitFor();
   await page.getByText(/(darwin|win32) · ready/).waitFor();
+  await page.reload();
+  try {
+    await page.getByText("失败原因：APP_SERVICE_RESTARTED").last().waitFor({ timeout: 60_000 });
+  } catch (error) {
+    console.error("E2E_CHAT_RECOVERY_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
 
   const firstUserMessage = page.locator(".message-user").first();
   await firstUserMessage.getByRole("button", { name: "编辑并分支" }).click();

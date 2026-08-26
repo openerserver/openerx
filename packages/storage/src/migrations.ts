@@ -376,6 +376,184 @@ const migrations: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 8,
+    checksum: "skill-installation-lifecycle-v8-20260826",
+    sql: `
+      CREATE TABLE skill_installations (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        publisher TEXT NOT NULL,
+        scope TEXT NOT NULL CHECK (scope IN ('builtin', 'personal', 'workspace')),
+        workspace_id TEXT,
+        source_kind TEXT NOT NULL CHECK (source_kind IN (
+          'built_in', 'local_directory', 'archive', 'platform_catalog'
+        )),
+        source_label TEXT NOT NULL,
+        trust TEXT NOT NULL CHECK (trust IN ('bundled', 'signed', 'unverified')),
+        desired_enabled INTEGER NOT NULL CHECK (desired_enabled IN (0, 1)),
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        auto_invoke INTEGER NOT NULL CHECK (auto_invoke IN (0, 1)),
+        package_state TEXT NOT NULL CHECK (package_state IN ('installed', 'missing', 'damaged')),
+        active_version_id TEXT,
+        selected_version TEXT NOT NULL,
+        selected_checksum_sha256 TEXT NOT NULL,
+        permission_digest TEXT NOT NULL,
+        approved_permission_digest TEXT,
+        declared_tools_json TEXT NOT NULL,
+        declared_mcp_servers_json TEXT NOT NULL,
+        permissions_json TEXT NOT NULL,
+        platforms_json TEXT NOT NULL,
+        installed_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_used_at TEXT,
+        deleted_at TEXT,
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        CHECK ((scope = 'workspace' AND workspace_id IS NOT NULL) OR
+               (scope != 'workspace' AND workspace_id IS NULL))
+      ) STRICT;
+      CREATE TABLE skill_versions (
+        id TEXT PRIMARY KEY,
+        installation_id TEXT NOT NULL REFERENCES skill_installations(id) ON DELETE CASCADE,
+        version TEXT NOT NULL,
+        checksum_sha256 TEXT NOT NULL,
+        package_path TEXT NOT NULL,
+        scripts_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(installation_id, version)
+      ) STRICT;
+      CREATE TABLE skill_invocations (
+        id TEXT PRIMARY KEY,
+        installation_id TEXT NOT NULL REFERENCES skill_installations(id) ON DELETE CASCADE,
+        generation_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        trigger TEXT NOT NULL CHECK (trigger IN ('explicit', 'automatic')),
+        status TEXT NOT NULL CHECK (status IN (
+          'selected', 'loaded', 'completed', 'failed', 'cancelled'
+        )),
+        reason TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        error_code TEXT,
+        UNIQUE(generation_id, installation_id)
+      ) STRICT;
+      CREATE UNIQUE INDEX skill_installations_identity_idx
+        ON skill_installations(owner_profile_id, name, scope, COALESCE(workspace_id, ''))
+        WHERE deleted_at IS NULL;
+      CREATE INDEX skill_installations_owner_idx
+        ON skill_installations(owner_profile_id, deleted_at, scope, name);
+      CREATE INDEX skill_versions_installation_idx
+        ON skill_versions(installation_id, created_at DESC);
+      CREATE INDEX skill_invocations_generation_idx
+        ON skill_invocations(generation_id, started_at);
+    `,
+  },
+  {
+    version: 9,
+    checksum: "skill-tool-policy-v9-20260826",
+    sql: `
+      ALTER TABLE permission_requests RENAME TO permission_requests_v8;
+      ALTER TABLE tool_side_effects RENAME TO tool_side_effects_v8;
+      ALTER TABLE tool_calls RENAME TO tool_calls_v8;
+      ALTER TABLE capability_scopes RENAME TO capability_scopes_v8;
+
+      CREATE TABLE tool_calls (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        step_id TEXT NOT NULL REFERENCES run_steps(id) ON DELETE CASCADE,
+        pi_call_ref TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('builtin', 'openerx', 'mcp', 'skill')),
+        status TEXT NOT NULL CHECK (status IN (
+          'requested', 'waiting_for_permission', 'running', 'completed', 'failed', 'cancelled'
+        )),
+        risk TEXT NOT NULL CHECK (risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        idempotency_key TEXT NOT NULL,
+        input_summary TEXT NOT NULL,
+        target_summary TEXT NOT NULL,
+        result_summary TEXT,
+        error_code TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL,
+        UNIQUE(run_id, pi_call_ref),
+        UNIQUE(idempotency_key)
+      ) STRICT;
+      CREATE TABLE capability_scopes (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        capability TEXT NOT NULL CHECK (capability IN (
+          'builtin.compute', 'builtin.structured_data', 'file', 'web.search',
+          'browser', 'shell', 'desktop', 'mcp', 'skill'
+        )),
+        resource_type TEXT NOT NULL CHECK (resource_type IN (
+          'builtin', 'workspace', 'path', 'domain', 'application', 'server', 'skill'
+        )),
+        resource TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        max_risk TEXT NOT NULL CHECK (max_risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        session_only INTEGER NOT NULL CHECK (session_only IN (0, 1)),
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL,
+        conversation_id TEXT
+      ) STRICT;
+      CREATE TABLE permission_requests (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+        capability TEXT NOT NULL,
+        risk TEXT NOT NULL CHECK (risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        resource_type TEXT NOT NULL,
+        resource TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        payload_digest TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired', 'cancelled')),
+        requested_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolution TEXT CHECK (resolution IN ('once', 'session', 'persistent', 'deny')),
+        scope_id TEXT REFERENCES capability_scopes(id),
+        UNIQUE(tool_call_id, payload_digest)
+      ) STRICT;
+      CREATE TABLE tool_side_effects (
+        idempotency_key TEXT PRIMARY KEY,
+        tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+        result_json TEXT NOT NULL,
+        committed_at TEXT NOT NULL
+      ) STRICT;
+
+      INSERT INTO tool_calls SELECT * FROM tool_calls_v8;
+      INSERT INTO capability_scopes
+        (id, owner_profile_id, capability, resource_type, resource, actions_json, max_risk,
+         session_only, expires_at, revoked_at, created_at, conversation_id)
+        SELECT id, owner_profile_id, capability, resource_type, resource, actions_json, max_risk,
+               session_only, expires_at, revoked_at, created_at, conversation_id
+        FROM capability_scopes_v8;
+      INSERT INTO permission_requests SELECT * FROM permission_requests_v8;
+      INSERT INTO tool_side_effects SELECT * FROM tool_side_effects_v8;
+
+      DROP TABLE permission_requests_v8;
+      DROP TABLE tool_side_effects_v8;
+      DROP TABLE tool_calls_v8;
+      DROP TABLE capability_scopes_v8;
+
+      CREATE INDEX tool_calls_run_idx ON tool_calls(run_id, updated_at);
+      CREATE INDEX capability_scopes_match_idx
+        ON capability_scopes(owner_profile_id, capability, resource_type, resource, revoked_at);
+      CREATE INDEX capability_scopes_conversation_idx
+        ON capability_scopes(owner_profile_id, conversation_id, capability, revoked_at);
+      CREATE INDEX permission_requests_pending_idx
+        ON permission_requests(owner_profile_id, status, requested_at);
+    `,
+  },
 ];
 
 export function migrateDatabase(database: DatabaseSync): void {

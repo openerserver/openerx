@@ -13,6 +13,7 @@ import type {
   RemoteCommandPayload,
 } from "@openerx/contracts";
 import type { FileAppService } from "@openerx/file-service";
+import type { SkillPackageService } from "@openerx/skills";
 import type { ChatRepository, GenerationDraft, RemoteRepository } from "@openerx/storage";
 import type { PiHostClient } from "./pi-host-client";
 import type { SyncCoordinator } from "./sync-coordinator";
@@ -30,6 +31,7 @@ export class ChatAppService {
   readonly #files: FileAppService | null;
   readonly #tools: ToolAppService | null;
   readonly #remote: RemoteRepository | null;
+  readonly #skills: SkillPackageService | null;
   readonly #remoteApplications = new Map<string, Promise<RemoteApplyCommandResponseFrame>>();
 
   constructor(
@@ -39,6 +41,7 @@ export class ChatAppService {
     files: FileAppService | null = null,
     tools: ToolAppService | null = null,
     remote: RemoteRepository | null = null,
+    skills: SkillPackageService | null = null,
   ) {
     this.#repository = repository;
     this.#piHost = piHost;
@@ -50,6 +53,7 @@ export class ChatAppService {
     this.#files = files;
     this.#tools = tools;
     this.#remote = remote;
+    this.#skills = skills;
   }
 
   initialize(): ChatEvent[] {
@@ -64,6 +68,7 @@ export class ChatAppService {
     this.#files?.close();
     void this.#tools?.close();
     this.#remote?.close();
+    this.#skills?.close();
   }
 
   onEvent(listener: (event: ChatEvent) => void): () => void {
@@ -97,8 +102,9 @@ export class ChatAppService {
       case "chat.get":
         return this.#repository.getConversation(request.input.conversationId);
       case "chat.send": {
+        const mounts = this.#skills?.mounts("default", request.input.skillInstallationId) ?? [];
         const draft = this.#repository.createGeneration(request.input);
-        await this.#launch(draft, authorization);
+        await this.#launch(draft, authorization, mounts, request.input.skillInstallationId);
         await this.#syncIfAuthorized(authorization);
         return draft.receipt;
       }
@@ -112,6 +118,7 @@ export class ChatAppService {
         const generationId = this.#generationByMessage.get(request.input.assistantMessageId);
         if (generationId) {
           this.#tools?.cancelGeneration(generationId);
+          this.#skills?.completeGeneration(generationId, "cancelled");
           this.#forgetGeneration(generationId);
           await this.#piHost.abort(generationId);
         }
@@ -232,6 +239,64 @@ export class ChatAppService {
         return this.#requiredTools().upsertMcpServer(request.input.config);
       case "mcp.server.remove":
         return await this.#requiredTools().removeMcpServer(request.input.serverId);
+      case "skill.list":
+        return this.#requiredSkills().list(request.input);
+      case "skill.get":
+        return this.#requiredSkills().get(request.input.installationId);
+      case "skill.install": {
+        const result = this.#requiredSkills().install(request.input);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "skill.update": {
+        const result = this.#requiredSkills().update(request.input);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "skill.enable": {
+        const result = this.#requiredSkills().setEnabled(
+          request.input.installationId,
+          request.input.enabled,
+        );
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "skill.autoInvoke": {
+        const result = this.#requiredSkills().setAutoInvoke(
+          request.input.installationId,
+          request.input.autoInvoke,
+        );
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "skill.permissions.approve": {
+        const result = this.#requiredSkills().approvePermissions(
+          request.input.installationId,
+          request.input.permissionDigest,
+        );
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "skill.permissions.reset": {
+        const result = this.#requiredSkills().resetPermissions(request.input.installationId);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "skill.rollback": {
+        const result = this.#requiredSkills().rollback(
+          request.input.installationId,
+          request.input.version,
+        );
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "skill.uninstall": {
+        const result = this.#requiredSkills().uninstall(request.input.installationId);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "skill.invocations.list":
+        return this.#requiredSkills().listInvocations(request.input);
     }
   }
 
@@ -265,6 +330,11 @@ export class ChatAppService {
 
   #requiredToolsRepository() {
     return this.#requiredTools().repository();
+  }
+
+  #requiredSkills(): SkillPackageService {
+    if (!this.#skills) throw new Error("SKILL_SERVICE_UNAVAILABLE");
+    return this.#skills;
   }
 
   async #applyRemoteCommand(
@@ -345,6 +415,7 @@ export class ChatAppService {
         const stopped = this.#repository.stopMessage(conversationId, messageId);
         if (stopped.event) this.#emit(stopped.event);
         this.#tools?.cancelGeneration(generationId);
+        this.#skills?.completeGeneration(generationId, "cancelled");
         this.#forgetGeneration(generationId);
         await this.#syncIfAuthorized(authorization);
         return stopped.message;
@@ -440,16 +511,43 @@ export class ChatAppService {
     }
   }
 
-  async #launch(draft: GenerationDraft, authorization?: AppServiceAuthorization): Promise<void> {
+  async #launch(
+    draft: GenerationDraft,
+    authorization?: AppServiceAuthorization,
+    skillMounts = this.#skills?.mounts("default") ?? [],
+    selectedSkillInstallationId?: string,
+  ): Promise<void> {
     for (const event of draft.events) this.#emit(event);
     if (!draft.created) return;
     const generationId = randomUUID();
+    const history = this.#repository.piHistory(draft.receipt.assistantMessageId);
+    if (selectedSkillInstallationId) {
+      const selected = skillMounts.find(
+        ({ installationId }) => installationId === selectedSkillInstallationId,
+      );
+      if (!selected) throw new Error("SKILL_NOT_ENABLED");
+      const prompt = history.at(-1);
+      if (prompt?.role !== "user") throw new Error("SKILL_PROMPT_NOT_FOUND");
+      history[history.length - 1] = {
+        ...prompt,
+        text: `/skill:${selected.name} ${prompt.text}`,
+      };
+      this.#skills?.beginInvocation({
+        installationId: selected.installationId,
+        generationId,
+        conversationId: draft.receipt.conversationId,
+        trigger: "explicit",
+        reason: "Selected from the composer",
+        loaded: true,
+      });
+    }
     const frame: PiPromptFrame = {
       kind: "pi.session.prompt",
       generationId,
       conversationId: draft.receipt.conversationId,
       assistantMessageId: draft.receipt.assistantMessageId,
-      history: this.#repository.piHistory(draft.receipt.assistantMessageId),
+      history,
+      ...(skillMounts.length > 0 ? { skills: skillMounts } : {}),
       files: this.#files?.attachedFiles(draft.receipt.conversationId).map((file) => ({
         personalFileId: file.id,
         displayName: file.displayName,
@@ -485,6 +583,7 @@ export class ChatAppService {
         errorCode: "PI_HOST_UNAVAILABLE",
       });
       this.#forgetGeneration(generationId);
+      this.#skills?.completeGeneration(generationId, "failed", "PI_HOST_UNAVAILABLE");
       if (event) this.#emit(event);
     }
   }
@@ -503,6 +602,15 @@ export class ChatAppService {
     const authorization = this.#authorizationByGeneration.get(frame.generationId);
     if (frame.type !== "delta") {
       this.#tools?.completeGeneration(
+        frame.generationId,
+        frame.type === "completed"
+          ? "completed"
+          : frame.type === "stopped"
+            ? "cancelled"
+            : "failed",
+        frame.errorCode,
+      );
+      this.#skills?.completeGeneration(
         frame.generationId,
         frame.type === "completed"
           ? "completed"
@@ -560,6 +668,22 @@ export class ChatAppService {
       this.#messageByGeneration.get(frame.generationId) !== frame.assistantMessageId
     ) {
       throw new Error("GENERATION_NOT_ACTIVE");
+    }
+    if (
+      frame.operation.operation === "skill_read" ||
+      frame.operation.operation === "skill_script_execute"
+    ) {
+      this.#requiredSkills().beginInvocation({
+        installationId: frame.operation.installationId,
+        generationId: frame.generationId,
+        conversationId: frame.conversationId,
+        trigger: "automatic",
+        reason:
+          frame.operation.operation === "skill_read"
+            ? `Pi loaded ${frame.operation.relativePath}`
+            : `Pi executed ${frame.operation.relativePath}`,
+        loaded: true,
+      });
     }
     return await this.#requiredTools().handleRequest(
       frame,

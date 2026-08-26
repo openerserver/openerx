@@ -21,6 +21,7 @@ import { createProductCapabilityTools } from "./capability-tools";
 import { createProductFileTools } from "./file-tools";
 import { createPlatformModelProvider, HttpPlatformModelTransport } from "./platform-provider";
 import { ProductSessionRegistry } from "./session-registry";
+import { createProductSkillTools, validateSkillMounts } from "./skill-tools";
 
 interface ActiveGeneration {
   abortRequested: boolean;
@@ -225,6 +226,7 @@ export function startPiHostProcess(
           throw new PiModelNotConfiguredError("OpenerX Platform Model is not configured");
         }
         const sessionManager = await sessionRegistry.sessionManager(frame.conversationId);
+        const skills = validateSkillMounts(bootstrap.profileDirectory, frame.skills ?? []);
         const result = await createProductPiSession({
           cwd: workspaceDirectory,
           agentDir: agentDirectory,
@@ -233,6 +235,7 @@ export function startPiHostProcess(
           model,
           sessionManager,
           files: frame.files,
+          skills,
           customTools: [
             ...createProductFileTools({
               generationId: frame.generationId,
@@ -243,6 +246,13 @@ export function startPiHostProcess(
               generationId: frame.generationId,
               conversationId: frame.conversationId,
               assistantMessageId: frame.assistantMessageId,
+              transport: capabilityToolTransport,
+            }),
+            ...createProductSkillTools({
+              generationId: frame.generationId,
+              conversationId: frame.conversationId,
+              assistantMessageId: frame.assistantMessageId,
+              mounts: skills,
               transport: capabilityToolTransport,
             }),
           ],
@@ -318,7 +328,7 @@ export function startPiHostProcess(
             });
           }
         });
-        await session.prompt(promptMessage.text, { expandPromptTemplates: false });
+        await session.prompt(promptMessage.text, { expandPromptTemplates: true });
         await session.waitForIdle();
         const assistant = lastAssistantMessage(session);
         if (state.abortRequested || assistant?.stopReason === "aborted") {

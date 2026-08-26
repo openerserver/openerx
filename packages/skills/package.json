@@ -1,11 +1,10 @@
 {
-  "name": "@openerx/app-service",
+  "name": "@openerx/skills",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./process": "./src/process.ts"
+    ".": "./src/index.ts"
   },
   "types": "./src/index.ts",
   "scripts": {
@@ -15,13 +14,9 @@
   },
   "dependencies": {
     "@openerx/contracts": "0.0.0",
-    "@openerx/file-service": "0.0.0",
-    "@openerx/remote-host": "0.0.0",
-    "@openerx/skills": "0.0.0",
     "@openerx/storage": "0.0.0",
-    "@openerx/tool-sdk": "0.0.0"
-  },
-  "devDependencies": {
-    "electron": "44.0.0"
+    "@openerx/tool-sdk": "0.0.0",
+    "fflate": "0.8.2",
+    "yaml": "2.9.0"
   }
 }

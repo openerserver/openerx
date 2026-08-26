@@ -12,6 +12,7 @@ import type {
   PersonalFile,
   RechargeOrder,
   RefundOrder,
+  SkillInstallation,
   SyncConflict,
   TokenAggregateField,
   UsageRecord,
@@ -186,6 +187,7 @@ function Composer({
   contextOpen?: boolean;
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
+  const [skillInstallationId, setSkillInstallationId] = useState("");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const chooseFiles = useMutation({
@@ -194,12 +196,18 @@ function Composer({
       await queryClient.invalidateQueries({ queryKey: ["files"] });
     },
   });
+  const skills = useQuery({
+    queryKey: ["skills", "composer"],
+    queryFn: () => window.openerx.listSkills(),
+    retry: false,
+  });
   const send = useMutation({
     mutationFn: (text: string) =>
       window.openerx.sendMessage({
         conversationId: conversationId ?? null,
         text,
         idempotencyKey: idempotencyKey("send"),
+        ...(skillInstallationId ? { skillInstallationId } : {}),
       }),
     onSuccess: async (receipt) => {
       setDraft("");
@@ -243,11 +251,25 @@ function Composer({
           >
             <Paperclip size={18} weight="regular" />
           </button>
-          <button type="button" className="composer-select">
+          <label className="composer-select" htmlFor={`skill-${conversationId ?? "new"}`}>
             <Sparkle size={15} weight="regular" />
-            <span>添加 Skill</span>
+            <select
+              id={`skill-${conversationId ?? "new"}`}
+              aria-label="选择 Skill"
+              value={skillInstallationId}
+              onChange={(event) => setSkillInstallationId(event.target.value)}
+            >
+              <option value="">自动 Skill</option>
+              {(skills.data ?? [])
+                .filter(({ enabled, packageState }) => enabled && packageState === "installed")
+                .map((skill) => (
+                  <option value={skill.id} key={skill.id}>
+                    {skill.displayName}
+                  </option>
+                ))}
+            </select>
             <CaretDown size={13} weight="bold" />
-          </button>
+          </label>
           {onOpenContext ? (
             <button
               type="button"
@@ -1148,6 +1170,278 @@ function Placeholder({ title }: { title: string }): React.JSX.Element {
       <p className="eyebrow">后续检查点</p>
       <h1>{title}</h1>
       <p>该领域尚未进入当前 M1 Chat Alpha 的实现范围。</p>
+    </main>
+  );
+}
+
+function SkillCenter(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const [scope, setScope] = useState<"personal" | "workspace">("personal");
+  const skills = useQuery({
+    queryKey: ["skills"],
+    queryFn: () => window.openerx.listSkills(),
+  });
+  const invocations = useQuery({
+    queryKey: ["skills", "invocations"],
+    queryFn: () => window.openerx.listSkillInvocations({ limit: 20 }),
+  });
+  const refresh = async (): Promise<void> => {
+    await queryClient.invalidateQueries({ queryKey: ["skills"] });
+  };
+  const install = useMutation({
+    mutationFn: () =>
+      window.openerx.chooseAndInstallSkill({
+        scope,
+        workspaceId: scope === "workspace" ? "default" : null,
+      }),
+    onSuccess: refresh,
+  });
+  const enable = useMutation({
+    mutationFn: ({ installationId, enabled }: { installationId: string; enabled: boolean }) =>
+      window.openerx.setSkillEnabled({ installationId, enabled }),
+    onSuccess: refresh,
+  });
+  const autoInvoke = useMutation({
+    mutationFn: ({ installationId, value }: { installationId: string; value: boolean }) =>
+      window.openerx.setSkillAutoInvoke({ installationId, autoInvoke: value }),
+    onSuccess: refresh,
+  });
+  const approve = useMutation({
+    mutationFn: (skill: SkillInstallation) =>
+      window.openerx.approveSkillPermissions({
+        installationId: skill.id,
+        permissionDigest: skill.permissionDigest,
+      }),
+    onSuccess: refresh,
+  });
+  const reset = useMutation({
+    mutationFn: (installationId: string) =>
+      window.openerx.resetSkillPermissions({ installationId }),
+    onSuccess: refresh,
+  });
+  const update = useMutation({
+    mutationFn: (installationId: string) => window.openerx.chooseAndUpdateSkill({ installationId }),
+    onSuccess: refresh,
+  });
+  const rollback = useMutation({
+    mutationFn: ({ installationId, version }: { installationId: string; version: string }) =>
+      window.openerx.rollbackSkill({ installationId, version }),
+    onSuccess: refresh,
+  });
+  const uninstall = useMutation({
+    mutationFn: (installationId: string) => window.openerx.uninstallSkill({ installationId }),
+    onSuccess: refresh,
+  });
+  const mutationError =
+    install.error ??
+    enable.error ??
+    autoInvoke.error ??
+    approve.error ??
+    reset.error ??
+    update.error ??
+    rollback.error ??
+    uninstall.error;
+
+  return (
+    <main className="skill-center-page">
+      <header className="skill-center-header">
+        <div>
+          <p className="eyebrow">Pi Native Skills</p>
+          <h1>助手与 Skill</h1>
+          <p>开放目录包由 Pi 渐进加载，脚本和资源统一通过 Capability Broker。</p>
+        </div>
+        <div className="skill-install-controls">
+          <label>
+            安装范围
+            <select
+              value={scope}
+              onChange={(event) => setScope(event.target.value as typeof scope)}
+            >
+              <option value="personal">个人</option>
+              <option value="workspace">当前工作区</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="primary-action"
+            onClick={() => install.mutate()}
+            disabled={install.isPending}
+          >
+            <Plus size={16} weight="bold" /> 安装 Skill
+          </button>
+        </div>
+      </header>
+
+      <section className="skill-summary" aria-label="Skill 概览">
+        <div>
+          <strong>{skills.data?.length ?? 0}</strong>
+          <span>安装记录</span>
+        </div>
+        <div>
+          <strong>{skills.data?.filter(({ enabled }) => enabled).length ?? 0}</strong>
+          <span>已启用</span>
+        </div>
+        <div>
+          <strong>{invocations.data?.length ?? 0}</strong>
+          <span>最近调用</span>
+        </div>
+      </section>
+
+      {skills.isPending ? <p>正在读取 Skill…</p> : null}
+      {skills.error ? <p className="inline-error">{skills.error.message}</p> : null}
+      {mutationError ? <p className="inline-error">{mutationError.message}</p> : null}
+      <section className="skill-grid" aria-label="已安装 Skill">
+        {(skills.data ?? []).map((skill) => {
+          const approvalRequired =
+            skill.permissions.length > 0 &&
+            skill.approvedPermissionDigest !== skill.permissionDigest;
+          return (
+            <article className={`skill-card skill-state-${skill.packageState}`} key={skill.id}>
+              <header>
+                <div>
+                  <span className={`skill-trust trust-${skill.trust}`}>{skill.trust}</span>
+                  <h2>{skill.displayName}</h2>
+                  <p>{skill.description}</p>
+                </div>
+                <span className={`skill-enabled ${skill.enabled ? "is-enabled" : ""}`}>
+                  {skill.enabled ? "已启用" : "已停用"}
+                </span>
+              </header>
+              <dl className="skill-metadata">
+                <div>
+                  <dt>范围</dt>
+                  <dd>
+                    {skill.scope}
+                    {skill.workspaceId ? ` · ${skill.workspaceId}` : ""}
+                  </dd>
+                </div>
+                <div>
+                  <dt>版本</dt>
+                  <dd>{skill.version}</dd>
+                </div>
+                <div>
+                  <dt>发布者</dt>
+                  <dd>{skill.publisher}</dd>
+                </div>
+                <div>
+                  <dt>来源</dt>
+                  <dd>
+                    {skill.sourceKind} · {skill.sourceLabel}
+                  </dd>
+                </div>
+                <div>
+                  <dt>平台</dt>
+                  <dd>{skill.platforms.join(" / ")}</dd>
+                </div>
+                <div>
+                  <dt>校验</dt>
+                  <dd>
+                    <code>{skill.checksumSha256.slice(0, 16)}…</code>
+                  </dd>
+                </div>
+              </dl>
+              <section className="skill-dependencies">
+                <strong>依赖与权限</strong>
+                <p>
+                  工具：{skill.declaredTools.join("、") || "无"} · MCP：
+                  {skill.declaredMcpServers.join("、") || "无"}
+                </p>
+                {skill.permissions.length === 0 ? (
+                  <span>不声明额外权限</span>
+                ) : (
+                  skill.permissions.map((permission) => (
+                    <span key={`${permission.capability}-${permission.actions.join("-")}`}>
+                      {permission.capability} · {permission.actions.join("/")} ·{" "}
+                      {permission.targets.join("、") || "当前 Scope"} — {permission.reason}
+                    </span>
+                  ))
+                )}
+              </section>
+              <div className="skill-card-actions">
+                {approvalRequired ? (
+                  <button type="button" onClick={() => approve.mutate(skill)}>
+                    审核并批准权限
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() =>
+                    enable.mutate({ installationId: skill.id, enabled: !skill.enabled })
+                  }
+                  disabled={skill.packageState !== "installed" || approvalRequired}
+                >
+                  {skill.enabled ? "禁用" : "启用"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    autoInvoke.mutate({ installationId: skill.id, value: !skill.autoInvoke })
+                  }
+                  disabled={!skill.enabled}
+                >
+                  自动触发：{skill.autoInvoke ? "开" : "关"}
+                </button>
+                {skill.scope !== "builtin" ? (
+                  <button type="button" onClick={() => update.mutate(skill.id)}>
+                    更新
+                  </button>
+                ) : null}
+                {skill.rollbackVersions.length > 0 ? (
+                  <select
+                    aria-label={`回滚 ${skill.displayName}`}
+                    defaultValue=""
+                    onChange={(event) => {
+                      if (event.target.value)
+                        rollback.mutate({ installationId: skill.id, version: event.target.value });
+                      event.target.value = "";
+                    }}
+                  >
+                    <option value="">回滚版本…</option>
+                    {skill.rollbackVersions.map((version) => (
+                      <option value={version} key={version}>
+                        {version}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                {skill.permissions.length > 0 ? (
+                  <button type="button" onClick={() => reset.mutate(skill.id)}>
+                    重置权限
+                  </button>
+                ) : null}
+                {skill.scope !== "builtin" ? (
+                  <button
+                    type="button"
+                    className="danger-action"
+                    onClick={() => {
+                      if (window.confirm(`卸载 ${skill.displayName}？本地包会移入可恢复回收目录。`))
+                        uninstall.mutate(skill.id);
+                    }}
+                  >
+                    卸载
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </section>
+
+      <section className="skill-activity" aria-label="Skill 调用记录">
+        <h2>最近调用</h2>
+        {(invocations.data ?? []).map((invocation) => (
+          <div key={invocation.id}>
+            <strong>
+              {(skills.data ?? []).find(({ id }) => id === invocation.installationId)
+                ?.displayName ?? invocation.installationId.slice(0, 8)}
+            </strong>
+            <span>
+              {invocation.trigger} · {invocation.status} · {invocation.reason}
+            </span>
+          </div>
+        ))}
+        {invocations.data?.length === 0 ? <p>还没有 Skill 调用。</p> : null}
+      </section>
     </main>
   );
 }
@@ -2507,7 +2801,7 @@ export function App(): React.JSX.Element {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/files" element={<FilesAndArtifacts />} />
           <Route path="/tasks" element={<ToolCenter />} />
-          <Route path="/assistants" element={<Placeholder title="助手与 Skill" />} />
+          <Route path="/assistants" element={<SkillCenter />} />
           <Route path="/settings/billing" element={<BillingSettings />} />
           <Route
             path="/settings/account"

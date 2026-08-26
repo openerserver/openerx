@@ -58,6 +58,20 @@ import {
   remoteDesktopStateSchema,
   remoteDevicePairingSchema,
   remotePairingChallengeSchema,
+  skillApprovePermissionsInputSchema,
+  skillAutoInvokeInputSchema,
+  skillChooseInstallInputSchema,
+  skillChooseUpdateInputSchema,
+  skillEnableInputSchema,
+  skillGetInputSchema,
+  skillInstallationSchema,
+  skillInvocationListInputSchema,
+  skillInvocationSchema,
+  skillListInputSchema,
+  skillResetPermissionsInputSchema,
+  skillRollbackInputSchema,
+  skillUninstallInputSchema,
+  skillUninstallResultSchema,
   syncResolveConflictInputSchema,
   toolListInputSchema,
   toolScopeRevokeInputSchema,
@@ -338,6 +352,58 @@ const bridge: DesktopBridge = {
     );
     return mcpServerRemoveResultSchema.parse(value);
   },
+  listSkills: async (input = {}) =>
+    invokeChat(ipcChannels.skillList, "skill.list", skillListInputSchema.parse(input)),
+  getSkill: async (input) =>
+    invokeChat(ipcChannels.skillGet, "skill.get", skillGetInputSchema.parse(input)),
+  chooseAndInstallSkill: async (input) => {
+    const value: unknown = await ipcRenderer.invoke(
+      ipcChannels.skillChooseInstall,
+      skillChooseInstallInputSchema.parse(input),
+    );
+    return value === null ? null : skillInstallationSchema.parse(value);
+  },
+  chooseAndUpdateSkill: async (input) => {
+    const value: unknown = await ipcRenderer.invoke(
+      ipcChannels.skillChooseUpdate,
+      skillChooseUpdateInputSchema.parse(input),
+    );
+    return value === null ? null : skillInstallationSchema.parse(value);
+  },
+  setSkillEnabled: async (input) =>
+    invokeChat(ipcChannels.skillEnable, "skill.enable", skillEnableInputSchema.parse(input)),
+  setSkillAutoInvoke: async (input) =>
+    invokeChat(
+      ipcChannels.skillAutoInvoke,
+      "skill.autoInvoke",
+      skillAutoInvokeInputSchema.parse(input),
+    ),
+  approveSkillPermissions: async (input) =>
+    invokeChat(
+      ipcChannels.skillPermissionsApprove,
+      "skill.permissions.approve",
+      skillApprovePermissionsInputSchema.parse(input),
+    ),
+  resetSkillPermissions: async (input) =>
+    invokeChat(
+      ipcChannels.skillPermissionsReset,
+      "skill.permissions.reset",
+      skillResetPermissionsInputSchema.parse(input),
+    ),
+  rollbackSkill: async (input) =>
+    invokeChat(ipcChannels.skillRollback, "skill.rollback", skillRollbackInputSchema.parse(input)),
+  uninstallSkill: async (input) =>
+    invokeChat(
+      ipcChannels.skillUninstall,
+      "skill.uninstall",
+      skillUninstallInputSchema.parse(input),
+    ).then((value) => skillUninstallResultSchema.parse(value)),
+  listSkillInvocations: async (input = {}) =>
+    invokeChat(
+      ipcChannels.skillInvocationsList,
+      "skill.invocations.list",
+      skillInvocationListInputSchema.parse(input),
+    ).then((value) => skillInvocationSchema.array().parse(value)),
   onChatEvent: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {
       const parsed = chatEventSchema.safeParse(value);

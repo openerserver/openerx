@@ -11,6 +11,7 @@ export const toolCapabilitySchema = z.enum([
   "shell",
   "desktop",
   "mcp",
+  "skill",
 ]);
 
 export const capabilityActionSchema = z.enum([
@@ -37,7 +38,15 @@ export const capabilityScopeSchema = z
     id: entityIdSchema,
     ownerProfileId: z.string().min(1),
     capability: toolCapabilitySchema,
-    resourceType: z.enum(["builtin", "workspace", "path", "domain", "application", "server"]),
+    resourceType: z.enum([
+      "builtin",
+      "workspace",
+      "path",
+      "domain",
+      "application",
+      "server",
+      "skill",
+    ]),
     resource: z.string().min(1).max(2_048),
     actions: z.array(capabilityActionSchema).min(1),
     maxRisk: toolRiskSchema,
@@ -143,7 +152,7 @@ export const toolCallSchema = z
     stepId: entityIdSchema,
     piCallRef: z.string().min(1),
     toolName: z.string().min(1).max(200),
-    source: z.enum(["builtin", "openerx", "mcp"]),
+    source: z.enum(["builtin", "openerx", "mcp", "skill"]),
     status: toolCallStatusSchema,
     risk: toolRiskSchema,
     idempotencyKey: z.string().min(8).max(240),
@@ -374,6 +383,25 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
       operation: z.literal("mcp_disconnect"),
       serverId: entityIdSchema,
       clearCredentials: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("skill_read"),
+      installationId: entityIdSchema,
+      relativePath: z.string().min(1).max(1_000),
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("skill_script_execute"),
+      installationId: entityIdSchema,
+      relativePath: z.string().min(1).max(1_000),
+      args: z.array(z.string().max(8_000)).max(200),
+      timeoutMs: z.number().int().min(100).max(1_800_000),
+      allowNetwork: z.boolean().default(false),
     })
     .strict(),
 ]);

@@ -21,6 +21,7 @@ import {
   type SyncPullResult,
   type SyncPushResult,
   searchResultSchema,
+  skillInstallationSyncSchema,
   syncConflictSchema,
   syncOperationSchema,
 } from "@openerx/contracts";
@@ -1121,9 +1122,105 @@ export class ChatRepository {
           .prepare("UPDATE conversations SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?")
           .run(this.#now(), objectId);
       }
+      if (objectType === "skill_installation") {
+        this.#database
+          .prepare(
+            `UPDATE skill_installations SET enabled = 0, desired_enabled = 0,
+             deleted_at = COALESCE(deleted_at, ?), updated_at = ?
+             WHERE id = ? AND owner_profile_id = ?`,
+          )
+          .run(this.#now(), this.#now(), objectId, this.#ownerProfileId);
+      }
       return;
     }
     if (!payload) throw new Error("SYNC_PAYLOAD_MISSING");
+    if (objectType === "skill_installation") {
+      const skill = skillInstallationSyncSchema.parse(payload);
+      if (skill.ownerProfileId !== this.#ownerProfileId || skill.id !== objectId) {
+        throw new Error("ACCOUNT_SCOPE_VIOLATION");
+      }
+      const localVersion = this.#database
+        .prepare(
+          `SELECT id FROM skill_versions
+           WHERE installation_id = ? AND version = ? AND checksum_sha256 = ?`,
+        )
+        .get(skill.id, skill.version, skill.checksumSha256) as { id: string } | undefined;
+      const existing = this.#database
+        .prepare(
+          `SELECT approved_permission_digest FROM skill_installations
+           WHERE id = ? AND owner_profile_id = ?`,
+        )
+        .get(skill.id, this.#ownerProfileId) as
+        | { approved_permission_digest: string | null }
+        | undefined;
+      const approved =
+        existing?.approved_permission_digest === skill.permissionDigest
+          ? existing.approved_permission_digest
+          : null;
+      const enabled =
+        Boolean(localVersion) &&
+        skill.enabled &&
+        (skill.permissions.length === 0 || approved === skill.permissionDigest);
+      this.#database
+        .prepare(
+          `INSERT INTO skill_installations
+           (id, owner_profile_id, name, display_name, description, publisher, scope, workspace_id,
+            source_kind, source_label, trust, desired_enabled, enabled, auto_invoke, package_state,
+            active_version_id, selected_version, selected_checksum_sha256, permission_digest,
+            approved_permission_digest, declared_tools_json, declared_mcp_servers_json,
+            permissions_json, platforms_json, installed_at, updated_at, last_used_at, deleted_at,
+            revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                   NULL, NULL, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name, display_name = excluded.display_name,
+             description = excluded.description, publisher = excluded.publisher,
+             scope = excluded.scope, workspace_id = excluded.workspace_id,
+             source_kind = excluded.source_kind, source_label = excluded.source_label,
+             trust = excluded.trust, desired_enabled = excluded.desired_enabled,
+             enabled = excluded.enabled, auto_invoke = excluded.auto_invoke,
+             package_state = excluded.package_state, active_version_id = excluded.active_version_id,
+             selected_version = excluded.selected_version,
+             selected_checksum_sha256 = excluded.selected_checksum_sha256,
+             permission_digest = excluded.permission_digest,
+             approved_permission_digest = excluded.approved_permission_digest,
+             declared_tools_json = excluded.declared_tools_json,
+             declared_mcp_servers_json = excluded.declared_mcp_servers_json,
+             permissions_json = excluded.permissions_json, platforms_json = excluded.platforms_json,
+             updated_at = excluded.updated_at, deleted_at = NULL, revision = excluded.revision
+           WHERE owner_profile_id = excluded.owner_profile_id`,
+        )
+        .run(
+          skill.id,
+          skill.ownerProfileId,
+          skill.name,
+          skill.displayName,
+          skill.description,
+          skill.publisher,
+          skill.scope,
+          skill.workspaceId,
+          skill.sourceKind,
+          skill.sourceLabel,
+          skill.trust,
+          skill.enabled ? 1 : 0,
+          enabled ? 1 : 0,
+          skill.autoInvoke ? 1 : 0,
+          localVersion ? "installed" : "missing",
+          localVersion?.id ?? null,
+          skill.version,
+          skill.checksumSha256,
+          skill.permissionDigest,
+          approved,
+          JSON.stringify(skill.declaredTools),
+          JSON.stringify(skill.declaredMcpServers),
+          JSON.stringify(skill.permissions),
+          JSON.stringify(skill.platforms),
+          skill.installedAt,
+          skill.updatedAt,
+          skill.revision,
+        );
+      return;
+    }
     if (objectType === "conversation") {
       const conversation = conversationSchema.parse(payload);
       if (conversation.ownerProfileId !== this.#ownerProfileId) {
