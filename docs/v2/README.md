@@ -4,8 +4,9 @@
 >
 > 修订日期：2026-08-26
 >
-> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation、M2、
-> M3、M4、M5、M6 与 M7 本地实现检查点已完成，当前新主线只在 `apps/`、`services/` 和 `packages/` 推进。
+> 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation、M2
+> 至 M8 本地实现检查点已完成，M8 外部 Beta 证据正在补齐；新主线只在 `apps/`、`services/` 和
+> `packages/` 推进。
 
 ## 1. 当前已经确定的方向
 
@@ -73,6 +74,8 @@
 23. [evidence/m4-2026-08-26.md](evidence/m4-2026-08-26.md)：M4 文件、成果、云对象与 Pi Session 恢复检查点证据。
 24. [evidence/m5-2026-08-26.md](evidence/m5-2026-08-26.md)：M5 工具、权限、MCP 与长任务检查点证据。
 25. [evidence/m6-2026-08-26.md](evidence/m6-2026-08-26.md)：M6 手机控制面、配对、E2EE、Remote Gateway、Connector 与 Pi 映射检查点证据。
+26. [evidence/m7-2026-08-26.md](evidence/m7-2026-08-26.md)：M7 Pi-native Skill 包、生命周期、Broker 与同步检查点证据。
+27. [evidence/m8-2026-08-26.md](evidence/m8-2026-08-26.md)：M8 本地 Personal Beta 基础与真实 DeepSeek/服务端 Charge 首个外部切片证据。
 
 ## 5. V1 与未来方向边界
 
@@ -97,9 +100,9 @@
 
 1. 产品名称、导航、账户、系统范围、Pi 边界、权限、验收和商业规则均按 [00-product-decision-review.md](00-product-decision-review.md) 生效。
 2. 积分兑换数字、充值档位/上下限和支付商户参数作为运营参数，在 Billing Alpha 前配置，在发布前冻结。
-3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；M6 Remote 与
-   M7 Skill 本地检查点已完成，当前进入 M8，不设置旧执行引擎迁移阶段。Remote 真机/生产推送、真实模型、
-   支付沙箱、属地合规和原生发布矩阵证据仍按发布 Gate 补齐。
+3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；M8 本地检查点与
+   真实 DeepSeek Usage→服务端 Charge 首个切片已完成，不设置旧执行引擎迁移阶段。真实 SSE/Stop、
+   Provider 对账、Remote 真机/生产推送、支付沙箱、属地合规和原生发布矩阵证据仍按发布 Gate 补齐。
 
 `v1-backup/` 中的旧文档、旧控制平面和旧执行引擎依赖继续作为受保护资产；新 V2 主线不得从备份目录导入模块，或通过旧页面改名冒充完成。
 

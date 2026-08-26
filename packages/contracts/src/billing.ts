@@ -5,7 +5,13 @@ import { usageRecordSchema } from "./model";
 export const billingCurrencySchema = z.literal("CNY");
 export const minorAmountSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const pointAmountSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const microRateSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+// Rates are expressed in micro-minor currency units per token. Three decimal places are
+// retained so provider price tables such as 2.5 micro-minor/token can be represented exactly.
+export const microRateSchema = z
+  .number()
+  .nonnegative()
+  .max(Math.floor(Number.MAX_SAFE_INTEGER / 1_000))
+  .multipleOf(0.001);
 
 export const tokenRateSchema = z
   .object({

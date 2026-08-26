@@ -143,4 +143,105 @@ describe("Platform Model Pi Provider", () => {
     });
     session.dispose();
   });
+
+  it("preserves a provider output-limit finish reason", async () => {
+    const response: ModelGatewayResponse = {
+      text: "partial",
+      effectiveModelRef: model.modelRef,
+      fallbackReason: null,
+      finishReason: "length",
+      usage: {
+        usageId: randomUUID(),
+        accountId: randomUUID(),
+        conversationId: randomUUID(),
+        messageId: randomUUID(),
+        runId: null,
+        toolCallId: null,
+        selectedModelRef: model.modelRef,
+        effectiveModelRef: model.modelRef,
+        fallbackReason: null,
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 256,
+        reasoningTokens: null,
+        totalTokens: 257,
+        providerReported: true,
+        missingReasons: { reasoningTokens: "provider_not_reported" },
+        dedupeKey: "model-call-output-limit-test",
+        recordedAt: "2026-08-26T10:00:00.000Z",
+      },
+    };
+    const platform = createPlatformModelProvider({
+      catalog: [model],
+      transport: { execute: async () => response },
+      request: {
+        accountId: response.usage.accountId,
+        conversationId: response.usage.conversationId,
+        messageId: response.usage.messageId,
+        selectedModelRef: model.modelRef,
+        approvedFallbackModelRef: null,
+        requestDedupeKey: response.usage.dedupeKey,
+      },
+    });
+    const events: Array<{ type: string; reason?: string }> = [];
+    const stream = platform.provider.streamSimple(
+      platform.model,
+      { messages: [{ role: "user", content: "long", timestamp: Date.now() }] },
+      undefined,
+    );
+    for await (const event of stream) events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "done", reason: "length" });
+  });
+
+  it("surfaces provider filtering as a failed model stream after usage is recorded", async () => {
+    const response: ModelGatewayResponse = {
+      text: "",
+      effectiveModelRef: model.modelRef,
+      fallbackReason: null,
+      finishReason: "content_filter",
+      usage: {
+        usageId: randomUUID(),
+        accountId: randomUUID(),
+        conversationId: randomUUID(),
+        messageId: randomUUID(),
+        runId: null,
+        toolCallId: null,
+        selectedModelRef: model.modelRef,
+        effectiveModelRef: model.modelRef,
+        fallbackReason: null,
+        inputTokens: 4,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: null,
+        totalTokens: 4,
+        providerReported: true,
+        missingReasons: { reasoningTokens: "provider_not_reported" },
+        dedupeKey: "model-call-content-filter-test",
+        recordedAt: "2026-08-26T10:00:00.000Z",
+      },
+    };
+    const onUsage = vi.fn();
+    const platform = createPlatformModelProvider({
+      catalog: [model],
+      transport: { execute: async () => response },
+      request: {
+        accountId: response.usage.accountId,
+        conversationId: response.usage.conversationId,
+        messageId: response.usage.messageId,
+        selectedModelRef: model.modelRef,
+        approvedFallbackModelRef: null,
+        requestDedupeKey: response.usage.dedupeKey,
+      },
+      onUsage,
+    });
+    const events: Array<{ type: string; reason?: string }> = [];
+    const stream = platform.provider.streamSimple(
+      platform.model,
+      { messages: [{ role: "user", content: "filtered", timestamp: Date.now() }] },
+      undefined,
+    );
+    for await (const event of stream) events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "error", reason: "error" });
+    expect(onUsage).toHaveBeenCalledWith(response.usage);
+  });
 });

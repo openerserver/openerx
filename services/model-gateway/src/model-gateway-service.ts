@@ -31,6 +31,7 @@ export interface ModelExecutionResult {
   text: string;
   effectiveModelRef: string;
   fallbackReason?: string;
+  finishReason?: string;
   usage: ModelExecutionUsage;
 }
 
@@ -194,6 +195,7 @@ export class ModelGatewayService {
         text: execution.text,
         effectiveModelRef: execution.effectiveModelRef,
         fallbackReason: execution.fallbackReason ?? null,
+        ...(execution.finishReason ? { finishReason: execution.finishReason } : {}),
         usage: stored,
       });
       this.#responses.set(responseKey, response);

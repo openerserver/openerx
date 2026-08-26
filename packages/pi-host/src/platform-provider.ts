@@ -174,9 +174,23 @@ function streamPlatform(
       const block = output.content[contentIndex];
       if (block?.type !== "text") throw new Error("Platform text block is missing");
       stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
-      output.stopReason = "stop";
+      output.stopReason =
+        response.finishReason === "length"
+          ? "length"
+          : response.finishReason === "tool_calls"
+            ? "toolUse"
+            : response.finishReason === "content_filter" ||
+                response.finishReason === "insufficient_system_resource"
+              ? "error"
+              : "stop";
+      output.rawStopReason = response.finishReason ?? undefined;
       configuration.onUsage?.(response.usage);
-      stream.push({ type: "done", reason: "stop", message: output });
+      if (output.stopReason === "error") {
+        output.errorMessage = `MODEL_FINISH_REASON:${response.finishReason ?? "unknown"}`;
+        stream.push({ type: "error", reason: "error", error: output });
+      } else {
+        stream.push({ type: "done", reason: output.stopReason, message: output });
+      }
       stream.end();
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";

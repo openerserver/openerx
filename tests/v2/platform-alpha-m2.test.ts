@@ -5,7 +5,7 @@ import path from "node:path";
 import { AccountSyncService } from "@openerx/account-sync-api";
 import { automaticModelRef, type ModelCatalogEntry } from "@openerx/contracts";
 import { IdentityService } from "@openerx/identity-api";
-import { ModelGatewayService } from "@openerx/model-gateway";
+import { type ModelExecutor, ModelGatewayService } from "@openerx/model-gateway";
 import { ObjectStoreService } from "@openerx/object-store-api";
 import { createPlatformAlphaServer, listenOnEphemeralPort } from "@openerx/platform-alpha";
 import { UsageStore } from "@openerx/token-usage-store";
@@ -39,7 +39,25 @@ const catalog: ModelCatalogEntry[] = [
   },
 ];
 
-async function setup() {
+async function setup(
+  executor: ModelExecutor = {
+    async execute() {
+      return {
+        text: "HTTP 平台回答",
+        effectiveModelRef: "platform/standard",
+        usage: {
+          inputTokens: 5,
+          cachedInputTokens: 0,
+          outputTokens: 3,
+          reasoningTokens: null,
+          totalTokens: 8,
+          providerReported: true,
+          missingReasons: { reasoningTokens: "provider_not_reported" },
+        },
+      };
+    },
+  },
+) {
   const codes = new Map<string, string>();
   const identity = new IdentityService(":memory:", {
     codeFactory: () => "123456",
@@ -60,23 +78,7 @@ async function setup() {
   const models = new ModelGatewayService({
     catalog,
     usageStore: usage,
-    executor: {
-      async execute() {
-        return {
-          text: "HTTP 平台回答",
-          effectiveModelRef: "platform/standard",
-          usage: {
-            inputTokens: 5,
-            cachedInputTokens: 0,
-            outputTokens: 3,
-            reasoningTokens: null,
-            totalTokens: 8,
-            providerReported: true,
-            missingReasons: { reasoningTokens: "provider_not_reported" },
-          },
-        };
-      },
-    },
+    executor,
   });
   const listener = await listenOnEphemeralPort(
     createPlatformAlphaServer({ identity, sync, objects, usage, models }),
@@ -207,5 +209,59 @@ describe("Platform Alpha HTTP composition", () => {
       headers: secondAuthorization,
     });
     expect(revoked.status).toBe(401);
+  });
+
+  it("aborts the upstream model request when the HTTP client disconnects", async () => {
+    let started!: () => void;
+    let aborted!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const abortedPromise = new Promise<void>((resolve) => {
+      aborted = resolve;
+    });
+    const { baseUrl } = await setup({
+      async execute(_request, signal) {
+        started();
+        return await new Promise<never>((_resolve, reject) => {
+          if (!signal) {
+            reject(new Error("MODEL_ABORT_SIGNAL_MISSING"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted();
+              reject(new Error("MODEL_REQUEST_ABORTED"));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+    const grant = await signIn(baseUrl, "abort@example.com");
+    const controller = new AbortController();
+    const pending = fetch(`${baseUrl}/api/v2/model/execute`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${grant.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        accountId: grant.account.accountId,
+        conversationId: randomUUID(),
+        messageId: randomUUID(),
+        selectedModelRef: "platform/standard",
+        approvedFallbackModelRef: null,
+        requestDedupeKey: "http-model-abort",
+        requirements: {},
+        context: { messages: [] },
+      }),
+      signal: controller.signal,
+    });
+    await startedPromise;
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    await abortedPromise;
   });
 });

@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M6_REMOTE_CONTROL_LOCAL_ALPHA_COMPLETE / M7_SKILL_LOCAL_COMPLETE / M8_BETA_NEXT`
+> 状态：`M8_LOCAL_COMPLETE / M8_EXTERNAL_BETA_IN_PROGRESS`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -28,8 +28,9 @@
 
 下图是完整 V1 目标态。M6 本地实现已接入账户云、模型和服务端 Billing，并完成文件 Scope、
 Artifact/对象恢复、Pi SessionManager、Capability Broker、Tool Alpha 与 Remote Control 本地
-纵向链路，并完成 Pi 原生 Skill 包、生命周期、Broker 和同步运行面；Remote/Skill 真机、签名
-和生产发布矩阵仍按后续门禁交付。
+纵向链路，并完成 Pi 原生 Skill 包、生命周期、Broker 和同步运行面。M8 已增加真实 DeepSeek
+V4 API、Provider usage 与服务端 Usage→Quote→Reservation→Charge 首个闭环；真实 SSE/Stop、
+Provider 账单对账、Remote/Skill 真机、签名和生产发布矩阵仍按后续门禁交付。
 
 ```mermaid
 flowchart LR
@@ -78,7 +79,7 @@ flowchart LR
   end
 
   subgraph EXTERNAL["外部受信/不受信系统"]
-    PROVIDERS["平台模型 Provider"]
+    PROVIDERS["DeepSeek V4 / 平台模型 Provider"]
     CHECKOUT["无 Bridge 托管收银台"]
     PAYMENT_PROVIDER["支付宝 / 微信支付平台"]
     UNTRUSTED["公网 / MCP / 用户桌面应用"]
@@ -120,7 +121,7 @@ flowchart LR
   PUSH_PROVIDER --> MOBILE
 
   PI --> MODEL
-  MODEL --> PROVIDERS
+  MODEL -->|"HTTPS + 服务端密钥"| PROVIDERS
   MODEL --> USAGE
   MAIN -->|条款 / 充值订单 / 最终 Billing 只读快照| BILLING
   MODEL -->|服务端报价授权| PRICING
@@ -335,6 +336,27 @@ Gateway 和 Connector 都按至少一次传输设计；App Service 以 command I
 
 当前本地实现使用出站 HTTPS 轮询作为 TLS 传输适配器；生产 WSS/HTTPS 部署、APNs/FCM
 Provider、iOS/Android 真机、Windows/macOS 主机组合和移动附件完整闭环仍是发布环境门禁。
+
+### 2.7 M8 DeepSeek 真实 Provider 当前拓扑
+
+```mermaid
+flowchart LR
+  PI[Pi Platform Provider] -->|账户令牌 / typed request| HTTP[Platform Alpha HTTPS API]
+  HTTP --> GW[Model Gateway]
+  GW -->|服务端预算| PRICE[Pricing Service<br/>DeepSeek CNY snapshot]
+  PRICE -->|PriceQuote| LEDGER[Billing Ledger<br/>reserve]
+  GW -->|server-only API key<br/>Chat Completions| DS[DeepSeek V4 API]
+  DS -->|full response + provider usage| GW
+  GW --> USAGE[Usage Store]
+  GW -->|actual usage settle| LEDGER
+  LEDGER --> CHARGE[(Final ChargeRecord)]
+  CHARGE -->|read-only final billing| UI[Desktop Billing UI]
+```
+
+DeepSeek 密钥只由 Model Gateway 进程从服务端环境读取。缓存命中与未命中 Token 在服务端拆分，
+价格快照、预留和结算均不经过 Renderer。HTTP 客户端断开会传播 AbortSignal 并释放预留；Provider
+输出上限、内容过滤和资源中断保留明确终态。当前真实调用使用非流式 Chat Completions，完整
+响应返回后由 Pi Provider 投影产品事件；真实 SSE 增量和长请求 Stop 仍是 M8 外部门禁。
 
 ## 3. 主链路
 

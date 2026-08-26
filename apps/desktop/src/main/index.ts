@@ -700,9 +700,12 @@ app.whenReady().then(async () => {
     process.arch,
   );
   const platformUrl = process.env.OPENERX_PLATFORM_URL;
+  const developmentLoopbackPlatform =
+    !app.isPackaged && platformUrl?.startsWith("http://127.0.0.1:");
   if (
     platformUrl &&
     !platformUrl.startsWith("https://") &&
+    !developmentLoopbackPlatform &&
     !(process.env.OPENERX_E2E === "1" && platformUrl.startsWith("http://127.0.0.1:"))
   ) {
     throw new Error("OPENERX_PLATFORM_URL must use HTTPS outside loopback E2E");

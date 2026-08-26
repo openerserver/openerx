@@ -10,8 +10,10 @@
   "externalBeta": {
     "status": "pending_external",
     "targetUsers": { "minimum": 5, "maximum": 20, "completed": 0 },
+    "completedEvidence": ["real-deepseek-api-usage-and-server-charge-smoke"],
     "requiredEvidence": [
-      "real-provider-and-server-billing",
+      "real-provider-streaming-stop-and-provider-invoice-reconciliation",
+      "alipay-wechat-sandbox-and-payment-reconciliation",
       "ios-android-remote-device-matrix",
       "windows-x64-and-macos-arm64-x64",
       "signed-install-upgrade-and-rollback",

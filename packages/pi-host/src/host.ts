@@ -331,8 +331,17 @@ export function startPiHostProcess(
         await session.prompt(promptMessage.text, { expandPromptTemplates: true });
         await session.waitForIdle();
         const assistant = lastAssistantMessage(session);
-        if (state.abortRequested || assistant?.stopReason === "aborted") {
-          emit(frame.generationId, state, { type: "stopped" });
+        if (
+          state.abortRequested ||
+          assistant?.stopReason === "aborted" ||
+          assistant?.stopReason === "length"
+        ) {
+          emit(frame.generationId, state, {
+            type: "stopped",
+            ...(assistant?.stopReason === "length"
+              ? { errorCode: "MODEL_OUTPUT_LIMIT_REACHED" }
+              : {}),
+          });
         } else if (!assistant || assistant.stopReason === "error") {
           emit(frame.generationId, state, {
             type: "failed",

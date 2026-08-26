@@ -415,7 +415,18 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
       if (request.method === "POST" && url.pathname === "/api/v2/model/execute") {
         const input = modelGatewayRequestSchema.parse(await jsonBody(request));
         if (input.accountId !== principal.accountId) throw new Error("ACCOUNT_SCOPE_VIOLATION");
-        send(response, 200, await services.models.execute(input));
+        const abort = new AbortController();
+        const abortUpstream = () => {
+          if (!response.writableEnded) abort.abort();
+        };
+        request.once("aborted", abortUpstream);
+        response.once("close", abortUpstream);
+        try {
+          send(response, 200, await services.models.execute(input, abort.signal));
+        } finally {
+          request.off("aborted", abortUpstream);
+          response.off("close", abortUpstream);
+        }
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/v2/sync/push") {
@@ -483,6 +494,7 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
       }
       send(response, 404, { error: { code: "NOT_FOUND", message: "Not found" } });
     } catch (error) {
+      if (response.destroyed) return;
       const message = safeErrorMessage(error, "Unknown error");
       const code = message.split(":", 1)[0] || "PLATFORM_ERROR";
       const authenticationError = code.startsWith("ACCESS_") || code.startsWith("DEVICE_SESSION_");

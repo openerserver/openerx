@@ -4,9 +4,11 @@ OpenerX 2.0 是面向普通用户的个人 AI 工作客户端。V1 使用 Electr
 
 ## 当前状态
 
-V2 产品合同已经批准；M0「工程与 ADR 基线」、M1「Chat Alpha」、Pi Foundation 和
-M2「Account + Sync + Model + Usage + Remote Contract Foundation」已完成，下一检查点是
-M3「Billing Alpha」。Remote Control Alpha 在 M6 交付。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，不再属于新主线构建和依赖边界。
+V2 产品合同已经批准；M0、M1、Pi Foundation 与 M2 至 M8 本地实现检查点已经完成，当前处于
+M8 Personal Beta 外部门禁阶段。DeepSeek V4 真实 API、Provider usage 和服务端最终计费链路已
+完成首个真实烟测；目标用户、真实流式/停止、支付环境、Remote 真机、原生平台和签名安装包
+证据仍待补齐。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，
+不再属于新主线构建和依赖边界。
 
 ## 活跃目录
 
@@ -33,6 +35,8 @@ M3「Billing Alpha」。Remote Control Alpha 在 M6 交付。旧企业 AI Dev/Op
 ```bash
 npm ci
 npm run dev:v2
+npm run dev:deepseek
+npm run test:deepseek -- "只回答：连接成功"
 npm run check:v2
 ```
 

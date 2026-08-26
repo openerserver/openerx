@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 开发计划
 
-> 状态：`M0 COMPLETE / M1 COMPLETE / PI FOUNDATION COMPLETE / M2-M7 LOCAL COMPLETE / NEXT M8`
+> 状态：`M0-M8 LOCAL COMPLETE / M8 EXTERNAL BETA IN PROGRESS`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -45,6 +45,8 @@ V1 完成必须同时满足：
 | M4 File + Artifact | LOCAL COMPLETE | 设备 Scope、受控副本、多格式引用、不可变成果、云对象恢复、Pi SessionManager | 原生双平台打开/选择器与签名包仍是发布门禁；[实现与质量证据](evidence/m4-2026-08-26.md) |
 | M5 Tool Alpha | LOCAL COMPLETE | Pi-native Web/image/Browser/Shell/Desktop/MCP、Capability Broker、长任务与权限投影 | 原生双平台桌面/沙箱、实时 Provider、第三方 MCP 与签名包仍是发布门禁；[实现与质量证据](evidence/m5-2026-08-26.md) |
 | M6 Remote Control Alpha | LOCAL COMPLETE | Expo 手机控制面、同账户配对、E2EE 协议、出站 Connector、密文 Gateway、Pi 原生命令映射、远程审批和事件游标 | iOS/Android 真机、Windows/macOS 主机矩阵、APNs/FCM 生产投递、移动附件闭环与真实网络故障演练仍是发布门禁；[实现与质量证据](evidence/m6-2026-08-26.md) |
+| M7 Skill | LOCAL COMPLETE | Pi-native Skill 包、Scope、生命周期、Broker 和同步 | 签名目录、跨平台脚本运行时与原生矩阵仍是发布门禁；[实现与质量证据](evidence/m7-2026-08-26.md) |
+| M8 Personal Beta | EXTERNAL IN PROGRESS | 诊断/性能/数据恢复本地检查点；真实 DeepSeek Usage→服务端 Charge 首个闭环 | 目标用户、真实 SSE/Stop/失败、Provider 账单对账、支付、Remote 真机、原生与签名矩阵；[实现与质量证据](evidence/m8-2026-08-26.md) |
 
 当前生产路径在未配置平台模型时明确返回 `PI_MODEL_NOT_CONFIGURED`，不以测试模型伪装可用模型。
 
@@ -227,10 +229,12 @@ macOS arm64/x64 组合，生产 APNs/FCM、真实 HTTPS/WSS 部署、移动附�
 | 3 | BETA-DATA-001 | 诊断包与个人数据分别导出 | Prompt/凭证/路径 canary 负向测试和个人内容正向测试 |
 | 4 | BETA-RECOVERY-001 | App Service 崩溃恢复在诊断中可见 | 自动重启、历史恢复和重启计数 E2E |
 | 5 | QA-M8-001 | 50 条 Golden 本地证据与外部门禁台账 | `m8-gate-status.json` 和 M8 readiness test |
+| 6 | BETA-PROVIDER-001 | DeepSeek V4 真实 API、Provider usage 与服务端最终 Charge 首个闭环 | `test:deepseek` 与认证 Platform HTTP E2E；M8 evidence |
 
-M8 本地检查点不等于 Personal Beta 已发布。5 至 20 名目标用户、真实 Provider/支付、iOS/
-Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pending_external`，不得用本地
-fixture 或开发包提前标记通过。
+M8 本地检查点不等于 Personal Beta 已发布。真实 DeepSeek 请求、usage 和服务端 Charge 已有
+首个外部证据，但真实 SSE/Stop/失败、Provider 账单对账、5 至 20 名目标用户、真实支付、iOS/
+Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pending_external`，不得用单次
+烟测、fixture 或开发包提前标记通过。
 
 ## 7. 完成定义
 
@@ -279,7 +283,8 @@ fixture 或开发包提前标记通过。
 
 ## 10. 当前下一步
 
-M8 本地 Personal Beta 基础检查点已完成，下一步是收集 5 至 20 名目标用户的真实任务和反馈，
-并在真实 Provider/支付、iOS/Android Remote 真机、Windows/macOS 原生与签名安装包矩阵补齐
-外部证据。全部外部门禁通过并由用户批准后，才进入 M9 V1 Release；本地 fixture 和开发包
-不替代该批准。
+M8 本地 Personal Beta 基础检查点与真实 DeepSeek Usage→服务端 Charge 首个闭环已完成。下一步
+优先完成 DeepSeek SSE 增量、真实长请求 Stop/失败和 Provider 账单对账，再收集 5 至 20 名目标
+用户任务与反馈，并补齐支付、iOS/Android Remote 真机、Windows/macOS 原生与签名安装包矩阵。
+全部外部门禁通过并由用户批准后，才进入 M9 V1 Release；单次烟测、本地 fixture 和开发包不替代
+该批准。

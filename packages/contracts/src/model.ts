@@ -129,6 +129,7 @@ export const modelGatewayResponseSchema = z
     text: z.string(),
     effectiveModelRef: z.string().min(1),
     fallbackReason: z.string().min(1).nullable(),
+    finishReason: z.string().min(1).max(80).nullable().optional(),
     usage: usageRecordSchema,
   })
   .strict();

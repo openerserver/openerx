@@ -12,7 +12,12 @@ const status = JSON.parse(
   readFileSync(path.join(import.meta.dirname, "m8-gate-status.json"), "utf8"),
 ) as {
   localImplementation: { status: string; catalogTasks: number; evidenceRecords: number };
-  externalBeta: { status: string; targetUsers: { completed: number }; requiredEvidence: string[] };
+  externalBeta: {
+    status: string;
+    targetUsers: { completed: number };
+    completedEvidence: string[];
+    requiredEvidence: string[];
+  };
   performanceBudgets: Record<string, string | number>;
 };
 
@@ -35,7 +40,10 @@ describe("M8 Personal Beta readiness ledger", () => {
   it("keeps real-user and cross-platform Beta evidence pending instead of simulating approval", () => {
     expect(status.externalBeta.status).toBe("pending_external");
     expect(status.externalBeta.targetUsers.completed).toBe(0);
-    expect(status.externalBeta.requiredEvidence).toHaveLength(5);
+    expect(status.externalBeta.completedEvidence).toEqual([
+      "real-deepseek-api-usage-and-server-charge-smoke",
+    ]);
+    expect(status.externalBeta.requiredEvidence).toHaveLength(6);
     expect(status.performanceBudgets).toMatchObject({
       status: "provisional_local",
       desktopInteractiveMs: 5_000,

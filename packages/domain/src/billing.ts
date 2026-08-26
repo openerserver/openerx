@@ -1,9 +1,16 @@
 import type { PricingSnapshot, UsageEstimate, UsageRecord } from "@openerx/contracts";
 
 const microMinorPerMinor = 1_000_000n;
+const ratePrecision = 1_000n;
 
 function ceilDivide(value: bigint, divisor: bigint): bigint {
   return value === 0n ? 0n : (value + divisor - 1n) / divisor;
+}
+
+function scaledRate(rate: number): bigint {
+  const scaled = rate * Number(ratePrecision);
+  if (!Number.isSafeInteger(scaled)) throw new Error("BILLING_RATE_PRECISION_INVALID");
+  return BigInt(scaled);
 }
 
 export function calculateEstimatedChargeMinor(
@@ -11,12 +18,12 @@ export function calculateEstimatedChargeMinor(
   usage: UsageEstimate,
 ): number {
   const rates = snapshot.tokenRates;
-  const microMinor =
-    BigInt(usage.inputTokens) * BigInt(rates.inputMicroMinorPerToken) +
-    BigInt(usage.cachedInputTokens) * BigInt(rates.cachedInputMicroMinorPerToken) +
-    BigInt(usage.outputTokens) * BigInt(rates.outputMicroMinorPerToken) +
-    BigInt(usage.reasoningTokens) * BigInt(rates.reasoningMicroMinorPerToken);
-  const rounded = Number(ceilDivide(microMinor, microMinorPerMinor));
+  const scaledMicroMinor =
+    BigInt(usage.inputTokens) * scaledRate(rates.inputMicroMinorPerToken) +
+    BigInt(usage.cachedInputTokens) * scaledRate(rates.cachedInputMicroMinorPerToken) +
+    BigInt(usage.outputTokens) * scaledRate(rates.outputMicroMinorPerToken) +
+    BigInt(usage.reasoningTokens) * scaledRate(rates.reasoningMicroMinorPerToken);
+  const rounded = Number(ceilDivide(scaledMicroMinor, microMinorPerMinor * ratePrecision));
   const withMinimum = Math.max(snapshot.minimumChargeMinor, rounded);
   return snapshot.maximumChargeMinor === null
     ? withMinimum
