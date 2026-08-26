@@ -1,7 +1,7 @@
 {
   "name": "@openerx/desktop",
   "productName": "OpenerX",
-  "version": "0.0.0",
+  "version": "2.0.0-alpha.0",
   "private": true,
   "description": "OpenerX Electron desktop client",
   "main": ".vite/build/main.js",
@@ -14,13 +14,16 @@
     "test": "vitest run",
     "test:e2e:account": "node scripts/e2e-account.mjs",
     "test:e2e": "vite build --config vite.pi-host-test.config.mts && vite build --config vite.platform-alpha-test.config.mts && vite build --config vite.remote-e2e.config.mts && node scripts/e2e-chat.mjs && node scripts/e2e-account.mjs && node scripts/e2e-tools.mjs && node scripts/e2e-skills.mjs && node scripts/e2e-beta.mjs && node .vite/build/remote-e2e.mjs",
-    "verify:fuses": "node scripts/verify-packaged-fuses.mjs"
+    "verify:fuses": "node scripts/verify-packaged-fuses.mjs",
+    "verify:release-artifacts": "node scripts/verify-release-artifacts.mjs",
+    "verify:native-signature": "node scripts/verify-native-signature.mjs"
   },
   "dependencies": {
     "@openerx/app-service": "0.0.0",
     "@openerx/contracts": "0.0.0",
     "@openerx/observability": "0.0.0",
     "@openerx/pi-host": "0.0.0",
+    "@openerx/release": "0.0.0",
     "@openerx/remote-host": "0.0.0",
     "@openerx/remote-protocol": "0.0.0",
     "@openerx/tool-sdk": "0.0.0",

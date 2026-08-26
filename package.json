@@ -5,7 +5,7 @@
   "description": "OpenerX 2.0 personal AI desktop client",
   "packageManager": "npm@11.3.0",
   "engines": {
-    "node": ">=24.0.0",
+    "node": ">=24.3.0",
     "npm": ">=11.0.0"
   },
   "workspaces": [
@@ -16,6 +16,8 @@
   "scripts": {
     "audit:prod:v2": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org",
     "check:boundaries:v2": "node scripts/check-v2-boundaries.mjs",
+    "check:release-graph:v2": "node scripts/m9/check-release-graph.mjs",
+    "check:release:v2": "node scripts/m9/check-release-readiness.mjs --mode local",
     "dev:deepseek": "vite build --config tests/v2/vite.deepseek-platform.config.mts --logLevel error && node --env-file-if-exists=.env scripts/dev-deepseek.mjs",
     "dev:v2": "npm run start --workspace @openerx/desktop",
     "lint:v2": "biome check apps packages services scripts tests package.json tsconfig.base.json",
@@ -24,10 +26,12 @@
     "test:v2": "npm run test --workspaces --if-present && vitest run tests/v2",
     "test:deepseek": "vite build --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-smoke/deepseek-smoke.mjs",
     "test:e2e:v2": "npm run test:e2e --workspace @openerx/desktop",
-    "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/mobile && npm run build --workspace @openerx/desktop",
-    "package:v2": "npm run build --workspace @openerx/contracts && npm run package --workspace @openerx/desktop",
+    "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run build --workspace @openerx/mobile && npm run build --workspace @openerx/desktop",
+    "package:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run package --workspace @openerx/desktop",
+    "release:gate:v2": "node scripts/m9/check-release-readiness.mjs --mode publish",
+    "release:manifest:v2": "vite build --config scripts/m9/vite.release-manifest.config.mts --logLevel error && node .vite/release-tools/release-manifest.mjs",
     "verify:package:v2": "npm run verify:fuses --workspace @openerx/desktop",
-    "check:v2": "npm run check:boundaries:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2"
+    "check:v2": "npm run check:boundaries:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2 && npm run verify:release-artifacts --workspace @openerx/desktop && npm run verify:native-signature --workspace @openerx/desktop"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.84.3",

@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 整体架构
 
-> 状态：`M8_LOCAL_COMPLETE / M8_EXTERNAL_BETA_IN_PROGRESS`
+> 状态：`M9_LOCAL_RELEASE_FOUNDATION_COMPLETE / EXTERNAL_RELEASE_GATES_PENDING`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -29,8 +29,9 @@
 下图是完整 V1 目标态。M6 本地实现已接入账户云、模型和服务端 Billing，并完成文件 Scope、
 Artifact/对象恢复、Pi SessionManager、Capability Broker、Tool Alpha 与 Remote Control 本地
 纵向链路，并完成 Pi 原生 Skill 包、生命周期、Broker 和同步运行面。M8 已增加真实 DeepSeek
-V4 API、Provider usage 与服务端 Usage→Quote→Reservation→Charge 首个闭环；真实 SSE/Stop、
-Provider 账单对账、Remote/Skill 真机、签名和生产发布矩阵仍按后续门禁交付。
+V4 API、Provider usage 与服务端 Usage→Quote→Reservation→Charge 首个闭环；M9 已增加签名
+候选、Ed25519 更新清单、EAS/隐私清单和发布门禁。真实 SSE/Stop、Provider 账单对账、Remote/
+Skill 真机、签名凭证、商店和生产发布矩阵仍按外部门禁交付。
 
 ```mermaid
 flowchart LR
@@ -358,6 +359,27 @@ DeepSeek 密钥只由 Model Gateway 进程从服务端环境读取。缓存命�
 输出上限、内容过滤和资源中断保留明确终态。当前真实调用使用非流式 Chat Completions，完整
 响应返回后由 Pi Provider 投影产品事件；真实 SSE 增量和长请求 Stop 仍是 M8 外部门禁。
 
+### 2.8 M9 发布与更新拓扑
+
+```mermaid
+flowchart LR
+  SHA[Reviewed clean commit] --> LOCAL[Boundary / graph / test / build gates]
+  LOCAL --> APPROVAL[Protected production-release environment]
+  APPROVAL --> DESKTOP[Forge native makers<br/>Windows x64 / macOS arm64+x64]
+  APPROVAL --> MOBILE[EAS credentials<br/>iOS / Android]
+  DESKTOP --> SIGN[Authenticode / Developer ID / notarization]
+  SIGN --> VERIFY[Fuses / artifact contents / native signature]
+  VERIFY --> MANIFEST[Ed25519 signed manifest<br/>channel / version / rollout / exact target]
+  MANIFEST --> MAIN[Electron Main autoUpdater]
+  MAIN --> PRELOAD[Typed update state]
+  PRELOAD --> UI[Renderer status only]
+  MOBILE --> STORES[Preview / production channels<br/>runtimeVersion = appVersion]
+```
+
+发布私钥、原生证书和 EAS 凭证只进入受保护发布环境。桌面包只带公钥、key ID 和 HTTPS Manifest
+地址；Renderer 不接触 feed URL。移动端不承载 Pi、Token/报价计算或账本逻辑。发布失败先停止
+灰度/撤回，再从已知良好源码构建更高版本；客户端不会为了回滚接受未签名降级。
+
 ## 3. 主链路
 
 ### 3.1 聊天与收费模型调用
@@ -522,6 +544,7 @@ packages/ui-react                React UI 基础
 packages/storage                 本地/云存储抽象
 packages/file-service            File Scope Broker、解析、引用、Artifact 与受控对象区
 packages/observability           脱敏日志、Trace 和诊断
+packages/release                 Ed25519 清单、版本/通道/平台选择与灰度资格
 ```
 
 M8 将 `packages/observability` 接入 Electron Main：Desktop、Renderer 和包含 Pi/Remote 握手的
@@ -533,7 +556,7 @@ App Service 进程组就绪/重启只产生白名单生命周期信号，Main �
 
 旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。
 
-## 8. M1/M2/M3/M4/M5 本地已实现映射
+## 8. M1 至 M9 本地已实现映射
 
 - 根 workspace 使用 npm 11；`apps`/`services` 只通过 `packages` 共享合同和实现。
 - Electron 44 + Forge 7 + Vite 6 分别构建 Main、Preload、App Service、Pi Host 和
@@ -573,6 +596,9 @@ App Service 进程组就绪/重启只产生白名单生命周期信号，Main �
   对账只产生稳定差异，不自动修改余额。
 - Pi 测试 Provider 只存在于测试代码；生产路径只有 Pi harness。
 - Windows x64、macOS arm64 和 macOS x64 进入 CI 打包矩阵；本地交叉打包不替代原生双平台运行证据。
+- `packages/release` 对严格清单执行 Ed25519 验签、版本/通道/架构与灰度判断；Electron Main
+  是唯一更新检查方，Renderer 只得到状态。受保护发布工作流持有原生/EAS 凭证并在发布前执行
+  签名、Fuse、产物、供应链和证据台账门禁。
 
 Remote M2 协议合同已由 M6 本地实现落地为移动端、Connector、Gateway、密文命令/事件、
 推送订阅与 Pi 映射；真机、生产推送和主机发布矩阵尚未宣称通过。该目标态不改变已冻结的
@@ -582,6 +608,6 @@ Pi 唯一 harness 和私有进程边界。
 
 ## 9. 当前下一步
 
-进入 M8 Personal Beta：在已完成的 Pi 原生 Skill 与 M5 Capability Broker 边界上进行目标用户
-验证、性能和诊断收口。M6/M7 的 iOS/Android 真机、生产 APNs/FCM、签名 Skill 目录、脚本
-运行时、Windows/macOS 主机组合和真实网络故障矩阵继续作为发布硬门禁补齐。
+本地架构已推进到 M9 发布基础。下一步只补真实环境证据：M8 目标用户与真实 SSE/Stop/账单
+对账，Windows/macOS 签名安装升级回滚，iOS/Android 商店、生产 APNs/FCM 与 Remote 真机，
+以及性能、安全、隐私、支付、税务和保留评审。全部通过后由用户明确批准 stable 发布。

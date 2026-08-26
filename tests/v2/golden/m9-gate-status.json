@@ -1,0 +1,28 @@
+{
+  "checkpoint": "M9-local-release-foundation",
+  "updatedAt": "2026-08-26",
+  "localImplementation": {
+    "status": "complete",
+    "completedTasks": 8,
+    "expectedTasks": 8
+  },
+  "externalRelease": {
+    "status": "pending_external",
+    "userApproval": false,
+    "completedEvidence": [],
+    "requiredEvidence": [
+      "m8-personal-beta-approved",
+      "deepseek-streaming-stop-and-provider-invoice-reconciled",
+      "alipay-wechat-production-and-compliance-approved",
+      "windows-signed-install-upgrade-rollback",
+      "macos-signed-notarized-install-upgrade-rollback",
+      "ios-store-signing-push-update-withdrawal",
+      "android-store-signing-push-update-withdrawal",
+      "native-remote-device-matrix",
+      "approved-benchmark-machine-budgets",
+      "security-privacy-tax-retention-review",
+      "release-rollback-drill",
+      "explicit-user-release-approval"
+    ]
+  }
+}

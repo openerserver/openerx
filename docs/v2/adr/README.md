@@ -20,8 +20,9 @@ a superseding ADR that records migration and rollback impact.
 | [ADR-V2-013](013-remote-control-transport-and-application.md) | E2EE Remote transport, outbound Connector and exactly-once application | Accepted and M6 local slice implemented |
 | [ADR-V2-014](014-pi-native-skill-packages.md) | Pi-native Skill discovery, package lifecycle, Broker execution and sync | Accepted and M7 local slice implemented |
 | [ADR-V2-015](015-personal-beta-diagnostics-and-export.md) | Personal Beta diagnostics, performance budgets and separate personal-data export | Accepted and M8 local slice implemented |
+| [ADR-V2-016](016-signed-release-and-update.md) | Signed native candidates, Ed25519 update manifests, promotion and rollback | Accepted and M9 local foundation implemented |
 
-ADR-V2-001 through ADR-V2-015 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
+ADR-V2-001 through ADR-V2-016 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
 recorded in [the checkpoint report](../evidence/m2-2026-08-25.md). ADR-V2-010 is implemented by the
 [M3 checkpoint](../evidence/m3-2026-08-25.md). ADR-V2-011 is implemented by the
 [M4 checkpoint](../evidence/m4-2026-08-26.md). ADR-V2-012 is implemented by the
@@ -31,3 +32,5 @@ ADR-V2-014 is implemented by the [M7 checkpoint](../evidence/m7-2026-08-26.md); 
 cross-platform Skill release evidence remain.
 ADR-V2-015 is implemented by the [M8 checkpoint](../evidence/m8-2026-08-26.md); real-user and native
 release evidence remain external gates.
+ADR-V2-016 is implemented by the [M9 checkpoint](../evidence/m9-2026-08-26.md); native credentials,
+store validation, rollback drills and explicit release approval remain external gates.

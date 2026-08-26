@@ -5,6 +5,7 @@ import type { RemoteDesktopBridge } from "./desktop-remote";
 import type { DiagnosticsBridge } from "./diagnostics";
 import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
+import type { ReleaseUpdateBridge } from "./release";
 import type { SkillBridge } from "./skill";
 import type { SyncBridge } from "./sync";
 import type { ToolBridge } from "./tool";
@@ -88,6 +89,10 @@ export const ipcChannels = Object.freeze({
   remoteEnable: "remote:enabled:set",
   remotePairingChallenge: "remote:pairing-challenge:create",
   remotePairingRevoke: "remote:pairing:revoke",
+  releaseUpdateState: "release:update:state",
+  releaseUpdateCheck: "release:update:check",
+  releaseUpdateInstall: "release:update:install",
+  releaseUpdateEvent: "release:update:event",
 });
 
 export const desktopEnvironmentSchema = z
@@ -110,7 +115,8 @@ export interface DesktopBridge
     FileBridge,
     ToolBridge,
     SkillBridge,
-    RemoteDesktopBridge {
+    RemoteDesktopBridge,
+    ReleaseUpdateBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
 }
 

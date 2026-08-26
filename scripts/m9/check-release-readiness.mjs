@@ -1,0 +1,99 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const require = createRequire(import.meta.url);
+const modeIndex = process.argv.indexOf("--mode");
+const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : "local";
+if (mode !== "local" && mode !== "publish") throw new Error("RELEASE_GATE_MODE_INVALID");
+
+function json(relativePath) {
+  return JSON.parse(readFileSync(path.join(root, relativePath), "utf8"));
+}
+
+const rootPackage = json("package.json");
+const desktopPackage = json("apps/desktop/package.json");
+const mobilePackage = json("apps/mobile/package.json");
+const mobileApp = json("apps/mobile/app.json").expo;
+const eas = json("apps/mobile/eas.json");
+const m8 = json("tests/v2/golden/m8-gate-status.json");
+const m9 = json("tests/v2/golden/m9-gate-status.json");
+const configureMobile = require(path.join(root, "apps/mobile/app.config.js"));
+const failures = [];
+
+function assert(condition, message) {
+  if (!condition) failures.push(message);
+}
+
+assert(rootPackage.version === desktopPackage.version, "desktop version must match root version");
+assert(
+  rootPackage.version === mobilePackage.version,
+  "mobile package version must match root version",
+);
+assert(rootPackage.version === mobileApp.version, "mobile app version must match root version");
+assert(
+  mobileApp.runtimeVersion?.policy === "appVersion",
+  "mobile runtimeVersion must use appVersion",
+);
+assert(Number.isInteger(mobileApp.android?.versionCode), "Android versionCode is required");
+assert(typeof mobileApp.ios?.buildNumber === "string", "iOS buildNumber is required");
+assert(
+  mobileApp.ios?.privacyManifests?.NSPrivacyTracking === false,
+  "iOS privacy manifest must explicitly disable tracking",
+);
+assert(
+  (mobileApp.ios?.privacyManifests?.NSPrivacyAccessedAPITypes?.length ?? 0) >= 4,
+  "iOS required-reason API declarations are incomplete",
+);
+assert(eas.cli?.requireCommit === true, "EAS release must require a clean commit");
+assert(eas.build?.production?.channel === "production", "EAS production channel is missing");
+assert(
+  m9.localImplementation?.status === "complete",
+  "M9 local implementation ledger is incomplete",
+);
+
+const previousReleaseMode = process.env.OPENERX_RELEASE_MODE;
+const previousProjectId = process.env.EXPO_PROJECT_ID;
+try {
+  delete process.env.EXPO_PROJECT_ID;
+  process.env.OPENERX_RELEASE_MODE = "1";
+  let failedClosed = false;
+  try {
+    configureMobile({ config: mobileApp });
+  } catch (error) {
+    failedClosed =
+      error instanceof Error && error.message === "RELEASE_ENV_REQUIRED:EXPO_PROJECT_ID";
+  }
+  assert(failedClosed, "mobile release config must fail closed without an EAS project ID");
+} finally {
+  if (previousReleaseMode === undefined) delete process.env.OPENERX_RELEASE_MODE;
+  else process.env.OPENERX_RELEASE_MODE = previousReleaseMode;
+  if (previousProjectId === undefined) delete process.env.EXPO_PROJECT_ID;
+  else process.env.EXPO_PROJECT_ID = previousProjectId;
+}
+
+if (mode === "publish") {
+  assert(!rootPackage.version.includes("-"), "publish version must not be a prerelease");
+  assert(m8.externalBeta?.status === "complete", "M8 external Beta is not complete");
+  assert(m9.externalRelease?.status === "approved", "M9 external release is not approved");
+  assert(m9.externalRelease?.userApproval === true, "explicit user release approval is missing");
+  const completed = new Set(m9.externalRelease?.completedEvidence ?? []);
+  for (const evidence of m9.externalRelease?.requiredEvidence ?? []) {
+    assert(completed.has(evidence), `missing external release evidence: ${evidence}`);
+  }
+}
+
+if (failures.length > 0) {
+  console.error(`[m9-release-gate] ${mode.toUpperCase()} BLOCKED`);
+  for (const failure of failures) console.error(`- ${failure}`);
+  process.exitCode = 1;
+} else {
+  const remaining = (m9.externalRelease?.requiredEvidence ?? []).filter(
+    (item) => !(m9.externalRelease?.completedEvidence ?? []).includes(item),
+  ).length;
+  console.log(
+    `[m9-release-gate] ${mode.toUpperCase()} OK: local release foundation is consistent; ${remaining} external evidence groups remain.`,
+  );
+}

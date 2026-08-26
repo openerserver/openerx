@@ -56,6 +56,7 @@ import {
   personalDataSummarySchema,
   rechargeOrderSchema,
   refundOrderSchema,
+  releaseUpdateStateSchema,
   remoteDesktopEnableInputSchema,
   remoteDesktopRevokeInputSchema,
   remoteDesktopStateSchema,
@@ -98,6 +99,26 @@ const bridge: DesktopBridge = {
   getEnvironment: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.environmentGet);
     return desktopEnvironmentSchema.parse(result);
+  },
+  getReleaseUpdateState: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.releaseUpdateState);
+    return releaseUpdateStateSchema.parse(result);
+  },
+  checkForReleaseUpdate: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.releaseUpdateCheck);
+    return releaseUpdateStateSchema.parse(result);
+  },
+  installReleaseUpdate: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.releaseUpdateInstall);
+    return releaseUpdateStateSchema.parse(result);
+  },
+  onReleaseUpdateState: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      const parsed = releaseUpdateStateSchema.safeParse(value);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on(ipcChannels.releaseUpdateEvent, wrapped);
+    return () => ipcRenderer.removeListener(ipcChannels.releaseUpdateEvent, wrapped);
   },
   getDiagnosticsPreview: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.diagnosticsPreview);

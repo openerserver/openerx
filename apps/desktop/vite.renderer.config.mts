@@ -4,6 +4,6 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   build: {
-    sourcemap: true,
+    sourcemap: process.env.OPENERX_RELEASE_MODE !== "1",
   },
 });

@@ -43,6 +43,7 @@ import {
   permissionListInputSchema,
   permissionResolveInputSchema,
   personalDataSummarySchema,
+  releaseUpdateStateSchema,
   remoteDesktopEnableInputSchema,
   remoteDesktopRevokeInputSchema,
   skillApprovePermissionsInputSchema,
@@ -68,7 +69,17 @@ import {
   PerformanceBudgetTracker,
   PersonalDataExporter,
 } from "@openerx/observability";
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from "electron";
+import {
+  app,
+  autoUpdater,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  net,
+  protocol,
+  shell,
+} from "electron";
 import started from "electron-squirrel-startup";
 import type { z } from "zod";
 import { AccountSessionManager, HttpIdentityTransport } from "./account-session-manager";
@@ -85,6 +96,12 @@ import {
   resolveRendererAssetPath,
 } from "./security";
 import { ElectronToolCapabilityHost } from "./tool-capability-host";
+import {
+  type DesktopAutoUpdater,
+  DesktopUpdateService,
+  developmentUpdateConfiguration,
+  loadPackagedUpdateConfiguration,
+} from "./update-service";
 
 app.name = "OpenerX";
 
@@ -143,6 +160,7 @@ function registerIpcHandlers(
   platformClient: PlatformAccountClient | null,
   remote: RemoteDesktopController,
   diagnostics: DiagnosticsService,
+  updates: DesktopUpdateService,
 ): void {
   ipcMain.handle(ipcChannels.environmentGet, (event) => {
     assertTrustedIpcSender(event);
@@ -151,6 +169,18 @@ function registerIpcHandlers(
       arch: process.arch,
       appVersion: app.getVersion(),
     });
+  });
+  ipcMain.handle(ipcChannels.releaseUpdateState, (event) => {
+    assertTrustedIpcSender(event);
+    return releaseUpdateStateSchema.parse(updates.state());
+  });
+  ipcMain.handle(ipcChannels.releaseUpdateCheck, async (event) => {
+    assertTrustedIpcSender(event);
+    return releaseUpdateStateSchema.parse(await updates.check());
+  });
+  ipcMain.handle(ipcChannels.releaseUpdateInstall, (event) => {
+    assertTrustedIpcSender(event);
+    return releaseUpdateStateSchema.parse(updates.install());
   });
 
   const activeDatabasePath = (): string => {
@@ -727,6 +757,19 @@ app.whenReady().then(async () => {
     process.platform,
     process.arch,
   );
+  const desktopPlatform = process.platform === "darwin" ? "darwin" : "win32";
+  const desktopArch = process.arch === "arm64" ? "arm64" : "x64";
+  const updates = new DesktopUpdateService({
+    configuration: app.isPackaged
+      ? loadPackagedUpdateConfiguration(app.getAppPath())
+      : developmentUpdateConfiguration(),
+    currentVersion: app.getVersion(),
+    platform: desktopPlatform,
+    arch: desktopArch,
+    cohortId: device.deviceId,
+    updater: autoUpdater as unknown as DesktopAutoUpdater,
+    fetch: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
+  });
   const platformUrl = process.env.OPENERX_PLATFORM_URL;
   const developmentLoopbackPlatform =
     !app.isPackaged && platformUrl?.startsWith("http://127.0.0.1:");
@@ -791,6 +834,17 @@ app.whenReady().then(async () => {
       window.webContents.send(ipcChannels.chatEvent, event);
     }
   });
+  updates.onState((state) => {
+    diagnostics.record({
+      source: "desktop",
+      level: state.status === "error" ? "error" : "info",
+      code: `update.${state.status}`,
+      ...(state.reason ? { attributes: { reason: state.reason } } : {}),
+    });
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(ipcChannels.releaseUpdateEvent, state);
+    }
+  });
   registerAppProtocol();
   registerIpcHandlers(
     supervisor,
@@ -800,6 +854,7 @@ app.whenReady().then(async () => {
     platformUrl ? new PlatformAccountClient(platformUrl) : null,
     remote,
     diagnostics,
+    updates,
   );
   void supervisor.start().catch((error: unknown) => {
     diagnostics.record({
@@ -811,6 +866,7 @@ app.whenReady().then(async () => {
   });
   void remote.resume();
   createMainWindow(diagnostics);
+  if (updates.state().status === "idle") void updates.check();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

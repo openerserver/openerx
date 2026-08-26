@@ -12,6 +12,7 @@ import type {
   PersonalFile,
   RechargeOrder,
   RefundOrder,
+  ReleaseUpdateState,
   SkillInstallation,
   SyncConflict,
   TokenAggregateField,
@@ -1750,6 +1751,89 @@ const performanceLabels = {
   idle_rss: "当前进程内存",
 } as const;
 
+const releaseUpdateStatusLabels: Record<ReleaseUpdateState["status"], string> = {
+  disabled: "开发包未启用更新",
+  idle: "可以检查更新",
+  checking: "正在验证更新清单",
+  available: "发现新版本",
+  downloading: "正在下载更新",
+  downloaded: "更新已下载",
+  up_to_date: "已是最新版本",
+  error: "更新检查失败",
+};
+
+function ReleaseUpdateSettings(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const update = useQuery({
+    queryKey: ["release", "update"],
+    queryFn: () => window.openerx.getReleaseUpdateState(),
+    retry: false,
+  });
+  useEffect(
+    () =>
+      window.openerx.onReleaseUpdateState((state) => {
+        queryClient.setQueryData(["release", "update"], state);
+      }),
+    [queryClient],
+  );
+  const check = useMutation({
+    mutationFn: () => window.openerx.checkForReleaseUpdate(),
+    onSuccess: (state) => queryClient.setQueryData(["release", "update"], state),
+  });
+  const install = useMutation({
+    mutationFn: () => window.openerx.installReleaseUpdate(),
+    onSuccess: (state) => queryClient.setQueryData(["release", "update"], state),
+  });
+  const state = update.data;
+  return (
+    <section className="settings-card settings-stack release-update-settings" aria-label="应用更新">
+      <div className="settings-heading">
+        <div>
+          <h2>应用更新</h2>
+          <p>仅接受与当前平台、架构和发布通道匹配的 Ed25519 签名更新清单。</p>
+        </div>
+        <span className={`release-status status-${state?.status ?? "checking"}`}>
+          {state ? releaseUpdateStatusLabels[state.status] : "正在读取"}
+        </span>
+      </div>
+      <div className="release-update-summary">
+        <span>当前版本 {state?.currentVersion ?? "—"}</span>
+        <span>通道 {state?.channel ?? "—"}</span>
+        {state?.availableVersion ? <strong>可用版本 {state.availableVersion}</strong> : null}
+        {state?.progressPercentage !== null && state?.progressPercentage !== undefined ? (
+          <span>下载 {state.progressPercentage.toFixed(1)}%</span>
+        ) : null}
+      </div>
+      <div className="settings-actions">
+        <button
+          type="button"
+          onClick={() => check.mutate()}
+          disabled={
+            !state ||
+            state.status === "disabled" ||
+            state.status === "checking" ||
+            state.status === "downloading" ||
+            check.isPending
+          }
+        >
+          <ArrowClockwise size={16} /> 检查更新
+        </button>
+        {state?.status === "downloaded" ? (
+          <button type="button" onClick={() => install.mutate()} disabled={install.isPending}>
+            安装并重启
+          </button>
+        ) : null}
+      </div>
+      {state?.status === "disabled" ? (
+        <p className="settings-note">正式签名包才会内置更新公钥和 HTTPS Manifest 地址。</p>
+      ) : null}
+      {state?.reason && state.status === "error" ? (
+        <p className="inline-error">更新错误：{state.reason}</p>
+      ) : null}
+    </section>
+  );
+}
+
 function DiagnosticsSettings(): React.JSX.Element {
   const diagnostics = useQuery({
     queryKey: ["diagnostics", "preview"],
@@ -2115,6 +2199,7 @@ function AccountSettings({
       <nav className="settings-section-nav" aria-label="设置分区">
         <a href="#account-section">账户</a>
         <a href="#appearance-section">外观</a>
+        <a href="#update-section">更新</a>
         <a href="#diagnostics-section">诊断与数据</a>
       </nav>
       <section
@@ -2187,6 +2272,9 @@ function AccountSettings({
       </section>
       <div id="appearance-section">
         <ThemeSettings value={themePreference} onChange={onThemeChange} />
+      </div>
+      <div id="update-section">
+        <ReleaseUpdateSettings />
       </div>
       <details className="settings-disclosure" id="diagnostics-section">
         <summary>

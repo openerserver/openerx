@@ -12,6 +12,7 @@ export * from "./pi";
 export * from "./platform";
 export * from "./process";
 export * from "./redaction";
+export * from "./release";
 export * from "./remote";
 export * from "./skill";
 export * from "./sync";

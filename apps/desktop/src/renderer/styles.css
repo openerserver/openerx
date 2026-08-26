@@ -293,6 +293,34 @@ select:focus-visible {
   gap: 7px;
   align-items: center;
 }
+.release-status {
+  padding: 6px 10px;
+  color: #6f6754;
+  background: #f0ede4;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.release-status.status-downloaded,
+.release-status.status-up_to_date {
+  color: #356142;
+  background: #e3eee5;
+}
+.release-status.status-error {
+  color: #91453d;
+  background: #f5e5e3;
+}
+.release-update-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: #777c74;
+  font-size: 13px;
+}
+.release-update-summary strong {
+  color: #242923;
+}
 .billing-server-note {
   margin: 14px 0 20px;
   padding: 12px 14px;

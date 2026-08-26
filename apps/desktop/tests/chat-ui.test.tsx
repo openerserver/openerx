@@ -111,6 +111,18 @@ function createBridge(): DesktopBridge {
       arch: "arm64",
       appVersion: "2.0.0-alpha.0",
     }),
+    getReleaseUpdateState: vi.fn().mockResolvedValue({
+      status: "disabled",
+      channel: "internal",
+      currentVersion: "2.0.0-alpha.0",
+      availableVersion: null,
+      progressPercentage: null,
+      lastCheckedAt: null,
+      reason: "UPDATE_NOT_CONFIGURED",
+    }),
+    checkForReleaseUpdate: vi.fn(),
+    installReleaseUpdate: vi.fn(),
+    onReleaseUpdateState: vi.fn().mockReturnValue(() => undefined),
     getDiagnosticsPreview: vi.fn().mockResolvedValue({
       generatedAt: timestamp,
       health: "ready",
@@ -328,6 +340,35 @@ describe("M1 chat renderer", () => {
     expect(
       await within(panel).findByText("个人数据已保存：openerx-personal-data.zip"),
     ).toBeTruthy();
+  });
+
+  it("shows release updates as signed-package state without exposing a feed URL", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.getReleaseUpdateState).mockResolvedValue({
+      status: "downloaded",
+      channel: "stable",
+      currentVersion: "2.0.0",
+      availableVersion: "2.0.1",
+      progressPercentage: 100,
+      lastCheckedAt: timestamp,
+      reason: null,
+    });
+    vi.mocked(bridge.installReleaseUpdate).mockResolvedValue({
+      status: "downloaded",
+      channel: "stable",
+      currentVersion: "2.0.0",
+      availableVersion: "2.0.1",
+      progressPercentage: 100,
+      lastCheckedAt: timestamp,
+      reason: null,
+    });
+    renderApp(bridge, "/settings/account");
+    const panel = await screen.findByLabelText("应用更新");
+    expect(await within(panel).findByText("可用版本 2.0.1")).toBeTruthy();
+    expect(panel.textContent).not.toContain("https://");
+    await userEvent.setup().click(within(panel).getByRole("button", { name: "安装并重启" }));
+    expect(bridge.installReleaseUpdate).toHaveBeenCalledOnce();
   });
 
   it("selects an enabled Skill in the composer and exposes lifecycle metadata", async () => {

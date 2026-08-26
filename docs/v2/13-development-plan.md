@@ -1,6 +1,6 @@
 # OpenerX 2.0 V1 开发计划
 
-> 状态：`M0-M8 LOCAL COMPLETE / M8 EXTERNAL BETA IN PROGRESS`
+> 状态：`M0-M9 LOCAL COMPLETE / EXTERNAL BETA AND RELEASE GATES PENDING`
 >
 > 更新日期：2026-08-26（Asia/Shanghai）
 >
@@ -47,6 +47,7 @@ V1 完成必须同时满足：
 | M6 Remote Control Alpha | LOCAL COMPLETE | Expo 手机控制面、同账户配对、E2EE 协议、出站 Connector、密文 Gateway、Pi 原生命令映射、远程审批和事件游标 | iOS/Android 真机、Windows/macOS 主机矩阵、APNs/FCM 生产投递、移动附件闭环与真实网络故障演练仍是发布门禁；[实现与质量证据](evidence/m6-2026-08-26.md) |
 | M7 Skill | LOCAL COMPLETE | Pi-native Skill 包、Scope、生命周期、Broker 和同步 | 签名目录、跨平台脚本运行时与原生矩阵仍是发布门禁；[实现与质量证据](evidence/m7-2026-08-26.md) |
 | M8 Personal Beta | EXTERNAL IN PROGRESS | 诊断/性能/数据恢复本地检查点；真实 DeepSeek Usage→服务端 Charge 首个闭环 | 目标用户、真实 SSE/Stop/失败、Provider 账单对账、支付、Remote 真机、原生与签名矩阵；[实现与质量证据](evidence/m8-2026-08-26.md) |
+| M9 V1 Release | LOCAL COMPLETE | 签名发布工作流、Ed25519 更新清单、Main-only 更新、EAS/隐私清单、发布图扫描、回滚手册 | 12 组外部发布证据与明确用户批准；[实现与质量证据](evidence/m9-2026-08-26.md) |
 
 当前生产路径在未配置平台模型时明确返回 `PI_MODEL_NOT_CONFIGURED`，不以测试模型伪装可用模型。
 
@@ -203,11 +204,18 @@ macOS arm64/x64 组合，生产 APNs/FCM、真实 HTTPS/WSS 部署、移动附�
 
 ### M9：V1 Release — 2 至 3 周
 
+状态：`LOCAL RELEASE FOUNDATION COMPLETE (2026-08-26) / EXTERNAL RELEASE BLOCKED`
+
 - Windows/macOS 签名、公证、安装、升级、回滚和更新源验证。
 - iOS/Android 商店签名、隐私清单、推送生产环境、更新和紧急撤回验证。
 - 安全、隐私、支付、税务和数据保留清单。
 - 依赖图证明 Release 只有 Pi harness，且手机、Relay、Connector 中没有测试 Provider、Legacy 依赖或第二套运行时队列。
 - 发布审批与回滚演练。
+
+本地检查点已实现桌面签名/公证配置、严格的 Ed25519 更新清单、Main-only 更新状态桥、EAS
+商店构建配置、iOS 隐私清单、生产依赖图扫描、签名产物检查、受保护发布工作流和可执行回滚
+手册。它不等于 V1 已发布；正式证书、公证、商店/推送、真机升级回滚、法规/支付/税务评审、
+M8 Beta 批准和明确用户发布批准仍是外部硬门禁。
 
 ## 6. M7 已完成工作项
 
@@ -235,6 +243,22 @@ M8 本地检查点不等于 Personal Beta 已发布。真实 DeepSeek 请求、u
 首个外部证据，但真实 SSE/Stop/失败、Provider 账单对账、5 至 20 名目标用户、真实支付、iOS/
 Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pending_external`，不得用单次
 烟测、fixture 或开发包提前标记通过。
+
+## 6.2 M9 已完成的本地工作项
+
+| 顺序 | ID | 工作项 | 完成证据 |
+| --- | --- | --- | --- |
+| 1 | RELEASE-CONTRACT-001 | 版本、通道、平台产物与签名清单合同 | `packages/contracts/src/release.ts` |
+| 2 | RELEASE-UPDATE-001 | Ed25519 验签、版本/通道/架构/灰度选择与 Main-only 更新 | `packages/release`、桌面更新服务和负向测试 |
+| 3 | RELEASE-DESKTOP-001 | Windows/macOS 签名、公证、Fuse 与产物检查配置 | Forge 配置及 native/artifact verifier |
+| 4 | RELEASE-MOBILE-001 | iOS/Android EAS 商店构建、runtime channel 与隐私清单 | `app.config.js`、`app.json`、`eas.json` |
+| 5 | RELEASE-SUPPLY-001 | Release 只有 Pi harness，无 Legacy/test Provider/第二队列 | `check-release-graph.mjs` |
+| 6 | RELEASE-CI-001 | 普通矩阵 CI 与受保护签名发布工作流分离 | `v2-ci.yml`、`v2-release.yml` |
+| 7 | RELEASE-ROLLBACK-001 | 发布、灰度、撤回、密钥轮换和数据不变量手册 | `docs/v2/release` |
+| 8 | QA-M9-001 | 本地/发布双模式门禁与外部证据台账 | `m9-gate-status.json`、M9 readiness tests |
+
+机器台账故意保留 12 组 `pending_external` 证据，且发布模式要求稳定版本、M8 外部完成和明确
+用户批准。本地成功不能把这些状态自动改成通过。
 
 ## 7. 完成定义
 
@@ -283,8 +307,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-M8 本地 Personal Beta 基础检查点与真实 DeepSeek Usage→服务端 Charge 首个闭环已完成。下一步
-优先完成 DeepSeek SSE 增量、真实长请求 Stop/失败和 Provider 账单对账，再收集 5 至 20 名目标
-用户任务与反馈，并补齐支付、iOS/Android Remote 真机、Windows/macOS 原生与签名安装包矩阵。
-全部外部门禁通过并由用户批准后，才进入 M9 V1 Release；单次烟测、本地 fixture 和开发包不替代
-该批准。
+M9 本地发布基础已经完成，当前只推进真实环境证据：先完成 M8 的 DeepSeek SSE/Stop/失败、
+Provider 账单对账和目标用户 Beta，再运行 Windows/macOS 签名安装升级回滚、iOS/Android
+商店/推送/Remote 真机矩阵、批准机器性能预算及安全/隐私/支付/税务/保留评审。12 组证据全部
+完成并取得明确用户批准后，才可把 `2.0.0-alpha.0` 冻结为稳定版本并开放 stable 发布门禁。

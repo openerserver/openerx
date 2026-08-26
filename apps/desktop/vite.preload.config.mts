@@ -7,6 +7,6 @@ export default defineConfig({
         entryFileNames: "preload.js",
       },
     },
-    sourcemap: true,
+    sourcemap: process.env.OPENERX_RELEASE_MODE !== "1",
   },
 });

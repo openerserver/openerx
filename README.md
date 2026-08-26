@@ -4,10 +4,11 @@ OpenerX 2.0 是面向普通用户的个人 AI 工作客户端。V1 使用 Electr
 
 ## 当前状态
 
-V2 产品合同已经批准；M0、M1、Pi Foundation 与 M2 至 M8 本地实现检查点已经完成，当前处于
-M8 Personal Beta 外部门禁阶段。DeepSeek V4 真实 API、Provider usage 和服务端最终计费链路已
-完成首个真实烟测；目标用户、真实流式/停止、支付环境、Remote 真机、原生平台和签名安装包
-证据仍待补齐。旧企业 AI Dev/Ops 控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，
+V2 产品合同已经批准；M0、M1、Pi Foundation 与 M2 至 M9 本地实现检查点已经完成，当前处于
+M8/M9 外部 Beta 与发布门禁阶段。DeepSeek V4 真实 API、Provider usage 和服务端最终计费链路已
+完成首个真实烟测，签名更新、商店构建和回滚的本地基础也已就绪；目标用户、真实流式/停止、
+支付环境、Remote 真机、原生签名/公证/商店和明确发布批准证据仍待补齐。旧企业 AI Dev/Ops
+控制平面已完整归档到 [`v1-backup/`](v1-backup/README.md)，
 不再属于新主线构建和依赖边界。
 
 ## 活跃目录
@@ -19,6 +20,7 @@ M8 Personal Beta 外部门禁阶段。DeepSeek V4 真实 API、Provider usage �
 | `apps/sync-service` | 本地同步队列和云同步适配 |
 | `services` | 身份、同步、模型、Token、价格、账本和支付服务 |
 | `packages/pi-host` | Pi `AgentSession` 组合、事件投影和隔离进程入口 |
+| `packages/release` | 签名发布清单、版本/通道/架构与灰度验证 |
 | `packages` | 领域、合同、工具/Skill、UI、存储和可观测性共享包 |
 | `docs/v2` | 已批准的产品、架构、迁移、验收和开发合同 |
 | `v1-backup` | 只读旧系统快照和本地旧运行状态 |

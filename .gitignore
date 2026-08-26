@@ -6,6 +6,12 @@ out/
 coverage/
 .env
 .env.local
+credentials.json
+*.p12
+*.p8
+*.pfx
+*.jks
+*.keystore
 *.db
 
 *.db-journal
