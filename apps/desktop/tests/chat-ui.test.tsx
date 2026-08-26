@@ -219,6 +219,9 @@ describe("M1 chat renderer", () => {
   it("sends through the narrow bridge and renders GFM code and tables", async () => {
     const bridge = createBridge();
     renderApp(bridge);
+    expect(document.querySelector<HTMLImageElement>(".brand-mark img")?.getAttribute("src")).toBe(
+      "/assets/china-unicom-logo.png",
+    );
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("发送消息"), "生成代码块和表格");
     await user.click(screen.getByRole("button", { name: "发送" }));

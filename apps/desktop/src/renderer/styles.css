@@ -966,15 +966,18 @@ body,
 }
 
 .brand-mark {
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  color: var(--workspace-accent-ink);
-  background: var(--workspace-accent);
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 800;
+  display: block;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 24px;
+  overflow: hidden;
+}
+
+.brand-mark img {
+  display: block;
+  width: auto;
+  max-width: none;
+  height: 24px;
 }
 
 .icon-button,

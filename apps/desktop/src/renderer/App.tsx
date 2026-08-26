@@ -2621,7 +2621,10 @@ function Sidebar({
     <aside className="sidebar">
       <div className="brand-row">
         <div className="brand">
-          <span className="brand-mark">O</span>OpenerX
+          <span className="brand-mark">
+            <img src="/assets/china-unicom-logo.png" alt="中国联通官方标志" />
+          </span>
+          <span>OpenerX</span>
         </div>
         <button type="button" className="icon-button sidebar-collapse" aria-label="收起侧栏">
           <SidebarSimple size={18} weight="regular" />
