@@ -33,8 +33,8 @@ try {
     if (typeof crash !== "function") throw new Error("Crash injection hook missing");
     crash();
   });
-  await page.getByText("正在连接", { exact: true }).waitFor();
-  await page.getByText("同步正常", { exact: true }).waitFor();
+  await page.locator(".sync-state.service-restarting").waitFor();
+  await page.locator(".sync-state.service-ready").waitFor();
   await page.getByRole("link", { name: "设置", exact: true }).click();
   await page.locator("#diagnostics-section > summary").click();
   await page.getByRole("heading", { name: "诊断与数据" }).waitFor();

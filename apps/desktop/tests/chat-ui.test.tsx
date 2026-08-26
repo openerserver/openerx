@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 
-import type { ConversationSnapshot, DesktopBridge, SkillInstallation } from "@openerx/contracts";
+import type {
+  ChatEvent,
+  ConversationSnapshot,
+  DesktopBridge,
+  SkillInstallation,
+} from "@openerx/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -257,6 +262,61 @@ function renderApp(bridge: DesktopBridge, initialEntry = "/chat/new"): void {
 }
 
 describe("M1 chat renderer", () => {
+  it("applies model deltas immediately through one Codex-style waterfall response", async () => {
+    const bridge = createBridge();
+    const userSnapshot = snapshot.messages[0];
+    const assistantSnapshot = snapshot.messages[1];
+    const assistantPart = assistantSnapshot?.parts[0];
+    if (!userSnapshot || !assistantSnapshot || !assistantPart) {
+      throw new Error("CHAT_STREAM_FIXTURE_INVALID");
+    }
+    const streamingMessage = {
+      ...assistantSnapshot,
+      status: "streaming" as const,
+      parts: [{ ...assistantPart, text: "第一段" }],
+      revision: 3,
+    };
+    vi.mocked(bridge.getConversation).mockResolvedValue({
+      ...snapshot,
+      messages: [userSnapshot, streamingMessage],
+    });
+    let listener: ((event: ChatEvent) => void) | undefined;
+    vi.mocked(bridge.onChatEvent).mockImplementation((next) => {
+      listener = next;
+      return () => undefined;
+    });
+    renderApp(bridge, `/chat/${conversationId}`);
+
+    expect(await screen.findByText("第一段")).toBeTruthy();
+    await waitFor(() => expect(listener).toBeTypeOf("function"));
+    const assistant = document.querySelector<HTMLElement>(".message-assistant");
+    expect(assistant?.getAttribute("aria-busy")).toBe("true");
+    expect(assistant?.querySelector(".response-waterfall .stream-tail")).toBeTruthy();
+
+    const event: ChatEvent = {
+      eventId: crypto.randomUUID(),
+      type: "message.delta",
+      conversationId,
+      messageId: assistantMessageId,
+      sequence: 1,
+      occurredAt: timestamp,
+      payloadVersion: 1,
+      payload: {
+        delta: "第二段",
+        message: {
+          ...streamingMessage,
+          parts: [{ ...assistantPart, text: "第一段第二段" }],
+          revision: 4,
+        },
+      },
+    };
+    act(() => listener?.(event));
+
+    expect(await screen.findByText("第一段第二段")).toBeTruthy();
+    expect(bridge.getConversation).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
   it("sends through the narrow bridge and renders GFM code and tables", async () => {
     const bridge = createBridge();
     renderApp(bridge);
@@ -735,6 +795,24 @@ describe("M1 chat renderer", () => {
     const diagnostics = document.getElementById("diagnostics-section") as HTMLDetailsElement;
     await waitFor(() => expect(document.activeElement).toBe(diagnostics));
     expect(diagnostics.open).toBe(true);
+  });
+
+  it("nests billing under settings instead of the primary sidebar", async () => {
+    cleanup();
+    renderApp(createBridge(), "/settings/account");
+    const user = userEvent.setup();
+    const mainNavigation = screen.getByRole("navigation", { name: "主导航" });
+
+    expect(within(mainNavigation).queryByRole("link", { name: "费用与账单" })).toBeNull();
+    expect(within(mainNavigation).getByRole("link", { name: "设置" }).classList).toContain(
+      "active",
+    );
+
+    await user.click(await screen.findByRole("link", { name: "查看费用与账单" }));
+    expect(await screen.findByRole("heading", { name: "费用与账单" })).toBeTruthy();
+    expect(within(mainNavigation).getByRole("link", { name: "设置" }).classList).toContain(
+      "active",
+    );
   });
 
   it("focuses and contains the context drawer, maps raw errors, then restores focus", async () => {

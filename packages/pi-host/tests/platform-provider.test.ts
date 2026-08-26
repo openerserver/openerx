@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { defineTool } from "@earendil-works/pi-coding-agent";
 import {
   automaticModelRef,
   type ModelCatalogEntry,
+  type ModelGatewayRequestDto,
   type ModelGatewayResponse,
 } from "@openerx/contracts";
+import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProductPiSession, ModelRuntime } from "../src/agent-session";
 import { createPlatformModelProvider } from "../src/platform-provider";
@@ -97,10 +100,15 @@ describe("Platform Model Pi Provider", () => {
       },
     };
     const execute = vi.fn(async () => response);
+    const stream = vi.fn(async function* () {
+      yield { type: "delta" as const, delta: "这是来自平台" };
+      yield { type: "delta" as const, delta: "模型网关的流式回答。" };
+      yield { type: "completed" as const, response };
+    });
     const onUsage = vi.fn();
     const platform = createPlatformModelProvider({
       catalog: [model],
-      transport: { execute },
+      transport: { execute, stream },
       request: {
         accountId,
         conversationId,
@@ -130,10 +138,11 @@ describe("Platform Model Pi Provider", () => {
     await session.prompt("测试平台模型", { expandPromptTemplates: false });
     await session.waitForIdle();
     expect(deltas.join("")).toBe(response.text);
-    expect(execute).toHaveBeenCalledWith(
+    expect(stream).toHaveBeenCalledWith(
       expect.objectContaining({ accountId, conversationId, messageId }),
       expect.any(AbortSignal),
     );
+    expect(execute).not.toHaveBeenCalled();
     expect(onUsage).toHaveBeenCalledWith(response.usage);
     expect(session.messages.at(-1)).toMatchObject({
       role: "assistant",
@@ -243,5 +252,133 @@ describe("Platform Model Pi Provider", () => {
     for await (const event of stream) events.push(event);
     expect(events.at(-1)).toMatchObject({ type: "error", reason: "error" });
     expect(onUsage).toHaveBeenCalledWith(response.usage);
+  });
+
+  it("executes a native gateway tool call and continues with a distinct model-round key", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openerx-platform-tool-loop-"));
+    temporaryDirectories.push(root);
+    const cwd = path.join(root, "workspace");
+    const agentDir = path.join(root, "agent");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    const accountId = randomUUID();
+    const conversationId = randomUUID();
+    const messageId = randomUUID();
+    const toolModel: ModelCatalogEntry = {
+      ...model,
+      capabilities: { ...model.capabilities, tools: true },
+    };
+    const requests: ModelGatewayRequestDto[] = [];
+    const execute = vi.fn(async (gatewayRequest: ModelGatewayRequestDto) => {
+      requests.push(gatewayRequest);
+      const context = gatewayRequest.context as { messages?: Array<{ role?: unknown }> };
+      const hasToolResult = context.messages?.some(({ role }) => role === "toolResult") ?? false;
+      const response: ModelGatewayResponse = {
+        text: hasToolResult ? "检查完成，最优先处理消息协议。" : "我先检查项目。",
+        ...(hasToolResult
+          ? { finishReason: "stop" }
+          : {
+              finishReason: "tool_calls",
+              toolCalls: [
+                {
+                  id: "call_inspect_1",
+                  name: "inspect_project",
+                  arguments: {},
+                },
+              ],
+            }),
+        effectiveModelRef: toolModel.modelRef,
+        fallbackReason: null,
+        usage: {
+          usageId: randomUUID(),
+          accountId,
+          conversationId,
+          messageId,
+          runId: null,
+          toolCallId: null,
+          selectedModelRef: toolModel.modelRef,
+          effectiveModelRef: toolModel.modelRef,
+          fallbackReason: null,
+          inputTokens: hasToolResult ? 20 : 10,
+          cachedInputTokens: 0,
+          outputTokens: hasToolResult ? 8 : 4,
+          reasoningTokens: null,
+          totalTokens: hasToolResult ? 28 : 14,
+          providerReported: true,
+          missingReasons: { reasoningTokens: "provider_not_reported" },
+          dedupeKey: gatewayRequest.requestDedupeKey,
+          recordedAt: "2026-08-26T10:00:00.000Z",
+        },
+      };
+      return response;
+    });
+    const platform = createPlatformModelProvider({
+      catalog: [toolModel],
+      transport: { execute },
+      request: {
+        accountId,
+        conversationId,
+        messageId,
+        selectedModelRef: toolModel.modelRef,
+        approvedFallbackModelRef: null,
+        requestDedupeKey: "model-call-tool-loop",
+      },
+      streamChunkSize: 1_000,
+    });
+    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    runtime.registerNativeProvider(platform.provider);
+    const executeTool = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "package.json" }],
+      details: { entries: ["package.json"] },
+    }));
+    const { session } = await createProductPiSession({
+      cwd,
+      agentDir,
+      history: [],
+      modelRuntime: runtime,
+      model: platform.model,
+      customTools: [
+        defineTool({
+          name: "inspect_project",
+          label: "Inspect project",
+          description: "List the project root.",
+          parameters: Type.Object({}, { additionalProperties: false }),
+          execute: executeTool,
+        }),
+      ],
+    });
+    const deltas: string[] = [];
+    const toolStarts: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        deltas.push(event.assistantMessageEvent.delta);
+      }
+      if (event.type === "tool_execution_start") toolStarts.push(event.toolName);
+    });
+
+    await session.prompt("检查项目", { expandPromptTemplates: false });
+    await session.waitForIdle();
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(toolStarts).toEqual(["inspect_project"]);
+    expect(deltas.join("")).toBe("我先检查项目。检查完成，最优先处理消息协议。");
+    expect(deltas.join("")).not.toContain("DSML");
+    expect(requests.every(({ requirements }) => requirements.tools === true)).toBe(true);
+    expect(new Set(requests.map(({ requestDedupeKey }) => requestDedupeKey)).size).toBe(2);
+    expect(
+      requests.every(({ requestDedupeKey }) =>
+        /^model-call-tool-loop:ctx:[a-f0-9]{64}$/u.test(requestDedupeKey),
+      ),
+    ).toBe(true);
+    const continuationContext = requests[1]?.context as
+      | { messages?: Array<{ role?: unknown }> }
+      | undefined;
+    expect(continuationContext?.messages?.some(({ role }) => role === "toolResult")).toBe(true);
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "stop",
+    });
+    session.dispose();
   });
 });

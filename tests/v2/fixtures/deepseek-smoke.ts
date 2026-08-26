@@ -70,19 +70,30 @@ try {
       usageStore,
       billing: serverBilling,
     });
-    const result = await gateway.execute({
-      accountId,
-      conversationId: randomUUID(),
-      messageId: randomUUID(),
-      selectedModelRef: automaticModelRef,
-      approvedFallbackModelRef: null,
-      requestDedupeKey: `deepseek-smoke-${randomUUID()}`,
-      requirements: {},
-      context: {
-        systemPrompt: "You are a concise connection-test assistant.",
-        messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+    const deltas: string[] = [];
+    let terminalObserved = false;
+    const result = await gateway.stream(
+      {
+        accountId,
+        conversationId: randomUUID(),
+        messageId: randomUUID(),
+        selectedModelRef: automaticModelRef,
+        approvedFallbackModelRef: null,
+        requestDedupeKey: `deepseek-smoke-${randomUUID()}`,
+        requirements: {},
+        context: {
+          systemPrompt: "You are a concise connection-test assistant.",
+          messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+        },
       },
-    });
+      (delta) => {
+        if (terminalObserved) throw new Error("DEEPSEEK_SMOKE_DELTA_AFTER_TERMINAL");
+        deltas.push(delta);
+      },
+    );
+    terminalObserved = true;
+    if (deltas.length === 0) throw new Error("DEEPSEEK_SMOKE_STREAM_EMPTY");
+    if (deltas.join("") !== result.text) throw new Error("DEEPSEEK_SMOKE_STREAM_TEXT_MISMATCH");
     const charge = billing.listCharges(accountId)[0];
     if (!charge) throw new Error("DEEPSEEK_SMOKE_FINAL_BILLING_MISSING");
     process.stdout.write(
@@ -91,6 +102,11 @@ try {
           ok: true,
           effectiveModelRef: result.effectiveModelRef,
           text: result.text,
+          stream: {
+            deltaCount: deltas.length,
+            reconstructedTextMatches: true,
+            terminalAfterDeltas: terminalObserved,
+          },
           usage: result.usage,
           finalBilling: {
             chargeId: charge.chargeId,

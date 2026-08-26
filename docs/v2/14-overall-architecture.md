@@ -30,8 +30,9 @@
 Artifact/对象恢复、Pi SessionManager、Capability Broker、Tool Alpha 与 Remote Control 本地
 纵向链路，并完成 Pi 原生 Skill 包、生命周期、Broker 和同步运行面。M8 已增加真实 DeepSeek
 V4 API、Provider usage 与服务端 Usage→Quote→Reservation→Charge 首个闭环；M9 已增加签名
-候选、Ed25519 更新清单、EAS/隐私清单和发布门禁。真实 SSE/Stop、Provider 账单对账、Remote/
-Skill 真机、签名凭证、商店和生产发布矩阵仍按外部门禁交付。
+候选、Ed25519 更新清单、EAS/隐私清单和发布门禁。真实 SSE 到桌面瀑布展示已有首个纵向证据；
+长请求 Stop/失败、Provider 账单对账、Remote/Skill 真机、签名凭证、商店和生产发布矩阵仍按
+外部门禁交付。
 
 ```mermaid
 flowchart LR
@@ -349,7 +350,7 @@ flowchart LR
   GW -->|服务端预算| PRICE[Pricing Service<br/>DeepSeek CNY snapshot]
   PRICE -->|PriceQuote| LEDGER[Billing Ledger<br/>reserve]
   GW -->|server-only API key<br/>Chat Completions| DS[DeepSeek V4 API]
-  DS -->|full response + provider usage| GW
+  DS -->|SSE deltas + terminal provider usage| GW
   GW --> USAGE[Usage Store]
   GW -->|actual usage settle| LEDGER
   LEDGER --> CHARGE[(Final ChargeRecord)]
@@ -358,8 +359,9 @@ flowchart LR
 
 DeepSeek 密钥只由 Model Gateway 进程从服务端环境读取。缓存命中与未命中 Token 在服务端拆分，
 价格快照、预留和结算均不经过 Renderer。HTTP 客户端断开会传播 AbortSignal 并释放预留；Provider
-输出上限、内容过滤和资源中断保留明确终态。当前真实调用使用非流式 Chat Completions，完整
-响应返回后由 Pi Provider 投影产品事件；真实 SSE 增量和长请求 Stop 仍是 M8 外部门禁。
+输出上限、内容过滤和资源中断保留明确终态。当前真实调用使用 SSE Chat Completions；Platform
+Alpha 转发统一流事件，Pi Provider 投影 `message.delta`，Renderer 直接增量展示并在用户未上滚
+时跟随回复。真实长请求 Stop/失败和供应商账单对账仍是 M8 外部门禁。
 
 ### 2.8 M9 发布与更新拓扑
 
@@ -610,6 +612,6 @@ Pi 唯一 harness 和私有进程边界。
 
 ## 9. 当前下一步
 
-本地架构已推进到 M9 发布基础。下一步只补真实环境证据：M8 目标用户与真实 SSE/Stop/账单
-对账，Windows/macOS 签名安装升级回滚，iOS/Android 商店、生产 APNs/FCM 与 Remote 真机，
+本地架构已推进到 M9 发布基础。下一步只补真实环境证据：M8 目标用户、真实长请求 Stop/失败
+与账单对账，Windows/macOS 签名安装升级回滚，iOS/Android 商店、生产 APNs/FCM 与 Remote 真机，
 以及性能、安全、隐私、支付、税务和保留评审。全部通过后由用户明确批准 stable 发布。

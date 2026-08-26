@@ -211,6 +211,87 @@ describe("Platform Alpha HTTP composition", () => {
     expect(revoked.status).toBe(401);
   });
 
+  it("flushes model deltas over SSE before usage settlement and the terminal event", async () => {
+    let releaseTerminal!: () => void;
+    const terminalGate = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
+    const { baseUrl } = await setup({
+      async execute() {
+        throw new Error("NON_STREAM_EXECUTOR_USED");
+      },
+      async stream(_request, onDelta) {
+        onDelta("第一段");
+        await terminalGate;
+        onDelta("第二段");
+        return {
+          text: "第一段第二段",
+          effectiveModelRef: "platform/standard",
+          usage: {
+            inputTokens: 5,
+            cachedInputTokens: 0,
+            outputTokens: 4,
+            reasoningTokens: null,
+            totalTokens: 9,
+            providerReported: true,
+            missingReasons: { reasoningTokens: "provider_not_reported" },
+          },
+        };
+      },
+    });
+    const grant = await signIn(baseUrl, "stream@example.com");
+    const authorization = { authorization: `Bearer ${grant.accessToken}` };
+    const response = await fetch(`${baseUrl}/api/v2/model/stream`, {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        accountId: grant.account.accountId,
+        conversationId: randomUUID(),
+        messageId: randomUUID(),
+        selectedModelRef: "platform/standard",
+        approvedFallbackModelRef: null,
+        requestDedupeKey: "http-model-stream",
+        requirements: {},
+        context: { messages: [] },
+      }),
+    });
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("MODEL_STREAM_TEST_BODY_MISSING");
+    const decoder = new TextDecoder();
+    let wire = "";
+    try {
+      while (!wire.includes("第一段")) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error("MODEL_STREAM_ENDED_BEFORE_FIRST_DELTA");
+        wire += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(wire).not.toContain('"completed"');
+      const beforeTerminal = await fetch(`${baseUrl}/api/v2/usage/records`, {
+        headers: authorization,
+      }).then((result) => result.json());
+      expect(beforeTerminal).toEqual([]);
+    } finally {
+      releaseTerminal();
+    }
+    while (true) {
+      const chunk = await reader.read();
+      wire += decoder.decode(chunk.value, { stream: !chunk.done });
+      if (chunk.done) break;
+    }
+    expect(wire).toContain("第二段");
+    expect(wire).toContain('"type":"completed"');
+    const afterTerminal = await fetch(`${baseUrl}/api/v2/usage/records`, {
+      headers: authorization,
+    }).then((result) => result.json());
+    expect(afterTerminal).toEqual([
+      expect.objectContaining({
+        selectedModelRef: "platform/standard",
+        effectiveModelRef: "platform/standard",
+      }),
+    ]);
+  });
+
   it("aborts the upstream model request when the HTTP client disconnects", async () => {
     let started!: () => void;
     let aborted!: () => void;

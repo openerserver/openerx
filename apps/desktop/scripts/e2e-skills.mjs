@@ -114,8 +114,8 @@ try {
   await page.getByRole("heading", { name: "助手与 Skill" }).waitFor();
   const activity = page.locator(".skill-activity");
   await activity.getByText("E2E report", { exact: true }).first().waitFor();
-  await activity.getByText(/explicit · completed · Selected from the composer/).waitFor();
-  await activity.getByText(/automatic · completed · Pi loaded SKILL.md/).waitFor();
+  await activity.getByText(/explicit · 已完成 · 在消息输入区手动选择/).waitFor();
+  await activity.getByText(/automatic · 已完成 · Pi loaded SKILL.md/).waitFor();
   const bridgeBoundary = await page.evaluate(() => ({
     hasProcess: typeof process !== "undefined",
     hasRequire: typeof require !== "undefined",

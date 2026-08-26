@@ -104,8 +104,9 @@
 1. 产品名称、导航、账户、系统范围、Pi 边界、权限、验收和商业规则均按 [00-product-decision-review.md](00-product-decision-review.md) 生效。
 2. 积分兑换数字、充值档位/上下限和支付商户参数作为运营参数，在 Billing Alpha 前配置，在发布前冻结。
 3. 实现按 [13-development-plan.md](13-development-plan.md) 的阶段退出条件推进；M9 本地发布基础与
-   真实 DeepSeek Usage→服务端 Charge 首个切片已完成，不设置旧执行引擎迁移阶段。真实 SSE/Stop、
-   Provider 对账、Remote 真机/生产推送、支付、属地合规、签名/商店和批准证据仍按发布 Gate 补齐。
+   真实 DeepSeek SSE→Pi→桌面瀑布与 Usage→服务端 Charge 首个切片已完成，不设置旧执行引擎迁移
+   阶段。真实长请求 Stop/失败、Provider 对账、Remote 真机/生产推送、支付、属地合规、签名/
+   商店和批准证据仍按发布 Gate 补齐。
 
 `v1-backup/` 中的旧文档、旧控制平面和旧执行引擎依赖继续作为受保护资产；新 V2 主线不得从备份目录导入模块，或通过旧页面改名冒充完成。
 

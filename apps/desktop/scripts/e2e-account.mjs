@@ -137,7 +137,8 @@ try {
 
   const billingSession = await signInDevice("account-e2e@example.com", "Billing Setup");
   await fundBilling(billingSession.accessToken);
-  await page.getByRole("link", { name: "费用与账单" }).click();
+  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "查看费用与账单" }).click();
   await page.getByText("¥50.00", { exact: true }).first().waitFor();
   await page.getByText(/已接受/).waitFor();
   await page.getByText("credited", { exact: true }).waitFor();
@@ -171,7 +172,8 @@ try {
     headers: { authorization: `Bearer ${billingSession.accessToken}` },
   }).then((response) => response.json());
   assert.equal(settledCharges.length, 2, JSON.stringify(settledCharges));
-  await page.getByRole("link", { name: "费用与账单" }).click();
+  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "查看费用与账单" }).click();
   try {
     await page.getByLabel("消费明细").getByText("2 笔", { exact: true }).waitFor();
     await page.getByText("¥49.58", { exact: true }).first().waitFor();

@@ -306,6 +306,11 @@ function focusSection(sectionId: string): void {
   window.requestAnimationFrame(() => section.focus({ preventScroll: true }));
 }
 
+function scrollDocumentToEnd(behavior: ScrollBehavior = "auto"): void {
+  const scrollingElement = document.scrollingElement ?? document.documentElement;
+  window.scrollTo({ top: scrollingElement.scrollHeight, behavior });
+}
+
 function trapFocus(event: React.KeyboardEvent<HTMLElement>): void {
   if (event.key !== "Tab") return;
   const focusable = Array.from(
@@ -1135,7 +1140,11 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
   const execution: UsageRecord | undefined = usageRecords.data?.at(-1);
 
   return (
-    <article className={`message message-${message.role}`} data-message-status={message.status}>
+    <article
+      className={`message message-${message.role} ${running ? "message-is-streaming" : ""}`}
+      data-message-status={message.status}
+      aria-busy={running || undefined}
+    >
       <header>
         <strong>{message.role === "user" ? "你" : "OpenerX"}</strong>
         <span className={`message-status status-${message.status}`}>
@@ -1168,37 +1177,40 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
           </div>
         </form>
       ) : message.role === "assistant" ? (
-        <div className="markdown-body">
-          {text ? (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                a: ({ href, children }) => (
-                  <a href={href} target="_blank" rel="noreferrer">
-                    {children}
-                  </a>
-                ),
-                pre: ({ children }) => (
-                  <div className="code-block">
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        const code = event.currentTarget.nextElementSibling?.textContent ?? "";
-                        void copyText(code, "代码已复制到剪贴板。");
-                      }}
-                    >
-                      {actionNotice === "代码已复制到剪贴板。" ? "已复制" : "复制代码"}
-                    </button>
-                    <pre>{children}</pre>
-                  </div>
-                ),
-              }}
-            >
-              {text}
-            </ReactMarkdown>
-          ) : (
-            <p className="thinking">正在思考…</p>
-          )}
+        <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
+          <div className="markdown-body">
+            {text ? (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children }) => (
+                    <a href={href} target="_blank" rel="noreferrer">
+                      {children}
+                    </a>
+                  ),
+                  pre: ({ children }) => (
+                    <div className="code-block">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          const code = event.currentTarget.nextElementSibling?.textContent ?? "";
+                          void copyText(code, "代码已复制到剪贴板。");
+                        }}
+                      >
+                        {actionNotice === "代码已复制到剪贴板。" ? "已复制" : "复制代码"}
+                      </button>
+                      <pre>{children}</pre>
+                    </div>
+                  ),
+                }}
+              >
+                {text}
+              </ReactMarkdown>
+            ) : (
+              <p className="thinking">正在思考…</p>
+            )}
+          </div>
+          {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
         </div>
       ) : (
         <p className="user-text">{text}</p>
@@ -1675,11 +1687,53 @@ function ChatPage({
   onToggleContext: () => void;
 }): React.JSX.Element {
   const { conversationId = "" } = useParams();
+  const messageListRef = useRef<HTMLElement>(null);
+  const followingRef = useRef(true);
+  const previousConversationIdRef = useRef(conversationId);
+  const [following, setFollowing] = useState(true);
   const snapshot = useQuery({
     queryKey: chatKeys.conversation(conversationId),
     queryFn: () => window.openerx.getConversation({ conversationId }),
     enabled: Boolean(conversationId),
   });
+  const ready = Boolean(snapshot.data);
+  const hasRunningMessage =
+    snapshot.data?.messages.some(
+      (message) =>
+        message.role === "assistant" && ["pending", "streaming"].includes(message.status),
+    ) ?? false;
+  useEffect(() => {
+    if (previousConversationIdRef.current === conversationId) return;
+    previousConversationIdRef.current = conversationId;
+    followingRef.current = true;
+    setFollowing(true);
+  }, [conversationId]);
+  useEffect(() => {
+    const updateFollowing = (): void => {
+      const scrollingElement = document.scrollingElement ?? document.documentElement;
+      const distanceFromBottom =
+        scrollingElement.scrollHeight -
+        (scrollingElement.scrollTop + scrollingElement.clientHeight);
+      const next = distanceFromBottom <= 140;
+      followingRef.current = next;
+      setFollowing((current) => (current === next ? current : next));
+    };
+    window.addEventListener("scroll", updateFollowing, { passive: true });
+    updateFollowing();
+    return () => window.removeEventListener("scroll", updateFollowing);
+  }, []);
+  useEffect(() => {
+    if (!ready) return;
+    const messageList = messageListRef.current;
+    if (!messageList || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!followingRef.current) return;
+      window.requestAnimationFrame(() => scrollDocumentToEnd());
+    });
+    observer.observe(messageList);
+    if (followingRef.current) window.requestAnimationFrame(() => scrollDocumentToEnd());
+    return () => observer.disconnect();
+  }, [ready]);
   const workItems = useQuery({
     queryKey: ["tools", "work-items", conversationId],
     queryFn: () => window.openerx.listWorkItems({ conversationId, limit: 100 }),
@@ -1694,7 +1748,14 @@ function ChatPage({
   return (
     <main className="conversation-page">
       <ConversationToolbar snapshot={snapshot.data} onToggleContext={onToggleContext} />
-      <section className="message-list" aria-live="polite" aria-label="对话消息">
+      <section
+        ref={messageListRef}
+        className="message-list"
+        aria-live="polite"
+        aria-atomic="false"
+        aria-relevant="additions text"
+        aria-label="对话消息"
+      >
         {snapshot.data.messages.map((message) => (
           <section className="message-stack" key={message.id}>
             <MessageCard message={message} />
@@ -1706,6 +1767,20 @@ function ChatPage({
           </section>
         ))}
       </section>
+      {hasRunningMessage && !following ? (
+        <button
+          type="button"
+          className="jump-to-latest"
+          onClick={() => {
+            followingRef.current = true;
+            setFollowing(true);
+            scrollDocumentToEnd("smooth");
+          }}
+        >
+          <CaretDown size={15} />
+          回到最新回复
+        </button>
+      ) : null}
       <Composer
         conversationId={conversationId}
         onOpenContext={onToggleContext}
@@ -2743,6 +2818,9 @@ function AccountSettings({
         <button type="button" onClick={() => focusSection("account-section")}>
           账户
         </button>
+        <button type="button" onClick={() => focusSection("billing-section")}>
+          费用与账单
+        </button>
         <button type="button" onClick={() => focusSection("appearance-section")}>
           外观
         </button>
@@ -2821,6 +2899,23 @@ function AccountSettings({
             ) : null}
           </form>
         ) : null}
+      </section>
+      <section
+        className="settings-card settings-stack settings-billing-entry"
+        id="billing-section"
+        tabIndex={-1}
+        aria-label="费用与账单"
+      >
+        <div className="settings-heading">
+          <div>
+            <h2>费用与账单</h2>
+            <p>查看账户额度、充值记录、消费明细和月度账单。</p>
+          </div>
+          <Receipt size={22} weight="regular" />
+        </div>
+        <NavLink className="primary-link" to="/settings/billing">
+          查看费用与账单
+        </NavLink>
       </section>
       <div id="appearance-section" tabIndex={-1}>
         <ThemeSettings value={themePreference} onChange={onThemeChange} />
@@ -3833,11 +3928,7 @@ function Sidebar({
             <Sparkle size={17} />
             <span>助手与 Skill</span>
           </NavLink>
-          <NavLink to="/settings/billing">
-            <Receipt size={17} />
-            <span>费用与账单</span>
-          </NavLink>
-          <NavLink to="/settings/account">
+          <NavLink to="/settings">
             <GearSix size={17} />
             <span>设置</span>
           </NavLink>
@@ -4000,8 +4091,26 @@ export function App(): React.JSX.Element {
       } else if (event.sequence > previous) {
         sequenceByConversation.current.set(conversationId, event.sequence);
       }
-      void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
-      void queryClient.invalidateQueries({ queryKey: ["chat", "list"] });
+      if (event.type === "message.delta" && event.payload.message) {
+        const streamedMessage = event.payload.message;
+        queryClient.setQueryData<ConversationSnapshot>(
+          chatKeys.conversation(conversationId),
+          (current) => {
+            if (!current) return current;
+            const index = current.messages.findIndex(({ id }) => id === streamedMessage.id);
+            if (index < 0) return current;
+            return {
+              ...current,
+              messages: current.messages.map((message, messageIndex) =>
+                messageIndex === index ? streamedMessage : message,
+              ),
+            };
+          },
+        );
+      } else {
+        void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
+        void queryClient.invalidateQueries({ queryKey: ["chat", "list"] });
+      }
     };
     const unsubscribe = window.openerx.onChatEvent(applyEvent);
     return () => {
@@ -4054,6 +4163,7 @@ export function App(): React.JSX.Element {
           <Route path="/files" element={<FilesAndArtifacts />} />
           <Route path="/tasks" element={<ToolCenter />} />
           <Route path="/assistants" element={<SkillCenter />} />
+          <Route path="/settings" element={<Navigate to="/settings/account" replace />} />
           <Route path="/settings/billing" element={<BillingSettings />} />
           <Route
             path="/settings/account"

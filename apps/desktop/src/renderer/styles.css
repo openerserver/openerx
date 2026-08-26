@@ -39,8 +39,7 @@ button:focus-visible,
 textarea:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 3px solid #68a8ff;
-  outline-offset: 2px;
+  outline: 0;
 }
 
 .app-shell {
@@ -1580,6 +1579,63 @@ h1 {
   border-bottom-color: var(--workspace-border);
 }
 
+.message-assistant.message-is-streaming {
+  border-bottom-color: color-mix(in srgb, var(--workspace-accent) 34%, var(--workspace-border));
+}
+
+.assistant-response {
+  min-width: 0;
+}
+
+.response-waterfall {
+  overflow-anchor: auto;
+}
+
+.stream-tail {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-top: 7px;
+  background: var(--workspace-accent);
+  border-radius: 2px;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--workspace-accent) 48%, transparent);
+  animation: stream-tail-pulse 0.9s ease-in-out infinite;
+}
+
+.jump-to-latest {
+  position: sticky;
+  z-index: 3;
+  bottom: 18px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  align-self: center;
+  margin: -6px 0 8px;
+  padding: 7px 11px;
+  color: var(--workspace-text);
+  background: color-mix(in srgb, var(--workspace-surface-raised) 94%, transparent);
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 999px;
+  box-shadow: var(--workspace-shadow);
+  backdrop-filter: blur(10px);
+  font-size: 11px;
+}
+
+.jump-to-latest:hover {
+  border-color: var(--workspace-accent-strong);
+}
+
+@keyframes stream-tail-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .message-status,
 .usage-line,
 .model-execution {
@@ -1588,6 +1644,12 @@ h1 {
 
 .status-streaming {
   color: var(--workspace-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-tail {
+    animation: none;
+  }
 }
 
 .markdown-body pre {
@@ -2283,9 +2345,8 @@ h1 {
   pointer-events: none;
 }
 
-.theme-option:focus-within {
-  outline: 2px solid var(--workspace-accent-strong);
-  outline-offset: 2px;
+.theme-option:has(input:focus-visible) {
+  outline: 0;
 }
 
 .theme-option:hover {
@@ -2294,8 +2355,7 @@ h1 {
 
 .theme-option.is-selected {
   background: var(--workspace-accent-soft);
-  border-color: var(--workspace-accent-strong);
-  box-shadow: inset 0 0 0 1px var(--workspace-accent-soft);
+  border-color: var(--workspace-border);
 }
 
 .theme-options .theme-option > svg {
@@ -2933,13 +2993,16 @@ button:disabled {
   border-color: var(--workspace-border-strong);
 }
 
-#account-section:focus,
-#appearance-section:focus,
-#update-section:focus,
-#diagnostics-section:focus,
+#account-section:focus-visible,
+#billing-section:focus-visible,
+#appearance-section:focus-visible,
+#update-section:focus-visible,
+#diagnostics-section:focus-visible {
+  outline: 0;
+}
+
 .app-main:focus {
-  outline: 3px solid var(--workspace-accent-strong);
-  outline-offset: -3px;
+  outline: 0;
 }
 
 .tool-center-grid {
@@ -3097,8 +3160,7 @@ textarea:focus-visible,
 input:focus-visible,
 select:focus-visible,
 summary:focus-visible {
-  outline: 3px solid var(--workspace-accent-strong);
-  outline-offset: 2px;
+  outline: 0;
 }
 
 .skip-link {
@@ -3466,7 +3528,7 @@ summary:focus-visible {
   top: 0;
   display: flex;
   gap: 8px;
-  margin: -12px 0 18px;
+  margin: -12px 0 0;
   padding: 10px 0;
   background: var(--workspace-bg);
 }
@@ -3514,7 +3576,22 @@ summary:focus-visible {
 }
 
 .settings-account-primary {
-  border-color: color-mix(in srgb, var(--workspace-accent) 38%, var(--workspace-border));
+  border-color: var(--workspace-border);
+}
+
+.settings-page > .settings-card,
+.settings-page > #appearance-section,
+.settings-page > #update-section,
+.billing-page > .billing-assets {
+  margin-top: 18px;
+}
+
+.settings-billing-entry .settings-heading > svg {
+  color: var(--workspace-muted-strong);
+}
+
+.settings-page :is(a, button, textarea, input, select, summary):focus-visible {
+  outline: 0;
 }
 
 .field-help {
@@ -3525,7 +3602,7 @@ summary:focus-visible {
 }
 
 .settings-disclosure {
-  margin-top: 16px;
+  margin-top: 18px;
   background: var(--workspace-surface);
   border: 1px solid var(--workspace-border);
   border-radius: 14px;

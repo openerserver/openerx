@@ -137,6 +137,85 @@ describe("ModelGatewayService", () => {
     expect(usageStore.records).toHaveLength(1);
   });
 
+  it("forwards executor deltas and records usage only at the completed terminal", async () => {
+    const usageStore = new TestUsageStore();
+    stores.push(usageStore);
+    const execution = {
+      text: "平台流式回答",
+      effectiveModelRef: "platform/standard",
+      usage: {
+        inputTokens: 11,
+        cachedInputTokens: 3,
+        outputTokens: 7,
+        reasoningTokens: null,
+        totalTokens: 21,
+        providerReported: true,
+        missingReasons: { reasoningTokens: "provider_not_reported" },
+      },
+    };
+    const stream = vi.fn(async (_input, onDelta: (delta: string) => void) => {
+      expect(usageStore.records).toHaveLength(0);
+      onDelta("平台");
+      onDelta("流式回答");
+      expect(usageStore.records).toHaveLength(0);
+      return execution;
+    });
+    const gateway = new ModelGatewayService({
+      catalog,
+      executor: { execute: vi.fn(async () => execution), stream },
+      usageStore,
+    });
+    const deltas: string[] = [];
+    const result = await gateway.stream(request(), (delta) => deltas.push(delta));
+
+    expect(deltas).toEqual(["平台", "流式回答"]);
+    expect(result.text).toBe("平台流式回答");
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(usageStore.records).toHaveLength(1);
+  });
+
+  it("preserves structured tool calls in the unified response", async () => {
+    const usageStore = new TestUsageStore();
+    stores.push(usageStore);
+    const execution = {
+      text: "我先检查。",
+      toolCalls: [
+        {
+          id: "call_inspect_1",
+          name: "inspect_project",
+          arguments: { depth: 2 },
+        },
+      ],
+      finishReason: "tool_calls",
+      effectiveModelRef: "platform/tools",
+      usage: {
+        inputTokens: 10,
+        cachedInputTokens: 0,
+        outputTokens: 4,
+        reasoningTokens: null,
+        totalTokens: 14,
+        providerReported: true,
+        missingReasons: { reasoningTokens: "provider_not_reported" },
+      },
+    };
+    const gateway = new ModelGatewayService({
+      catalog,
+      executor: { execute: vi.fn(async () => execution) },
+      usageStore,
+    });
+
+    const result = await gateway.execute(
+      request({ selectedModelRef: "platform/tools", requirements: { tools: true } }),
+    );
+
+    expect(result).toMatchObject({
+      text: "我先检查。",
+      finishReason: "tool_calls",
+      toolCalls: execution.toolCalls,
+    });
+    expect(usageStore.records).toHaveLength(1);
+  });
+
   it("blocks unsupported capabilities before execution and suggests compatible models", async () => {
     const { gateway, execute } = setup();
     const check = gateway.checkSelection("platform/standard", { tools: true, fileInput: true });

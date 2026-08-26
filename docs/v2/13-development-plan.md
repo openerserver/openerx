@@ -46,7 +46,7 @@ V1 完成必须同时满足：
 | M5 Tool Alpha | LOCAL COMPLETE | Pi-native Web/image/Browser/Shell/Desktop/MCP、Capability Broker、长任务与权限投影 | 原生双平台桌面/沙箱、实时 Provider、第三方 MCP 与签名包仍是发布门禁；[实现与质量证据](evidence/m5-2026-08-26.md) |
 | M6 Remote Control Alpha | LOCAL COMPLETE | Expo 手机控制面、同账户配对、E2EE 协议、出站 Connector、密文 Gateway、Pi 原生命令映射、远程审批和事件游标 | iOS/Android 真机、Windows/macOS 主机矩阵、APNs/FCM 生产投递、移动附件闭环与真实网络故障演练仍是发布门禁；[实现与质量证据](evidence/m6-2026-08-26.md) |
 | M7 Skill | LOCAL COMPLETE | Pi-native Skill 包、Scope、生命周期、Broker 和同步 | 签名目录、跨平台脚本运行时与原生矩阵仍是发布门禁；[实现与质量证据](evidence/m7-2026-08-26.md) |
-| M8 Personal Beta | EXTERNAL IN PROGRESS | 诊断/性能/数据恢复本地检查点；真实 DeepSeek Usage→服务端 Charge 首个闭环 | 目标用户、真实 SSE/Stop/失败、Provider 账单对账、支付、Remote 真机、原生与签名矩阵；[实现与质量证据](evidence/m8-2026-08-26.md) |
+| M8 Personal Beta | EXTERNAL IN PROGRESS | 诊断/性能/数据恢复本地检查点；真实 DeepSeek SSE→Pi→桌面瀑布与 Usage→服务端 Charge 首个闭环 | 目标用户、真实长请求 Stop/失败、Provider 账单对账、支付、Remote 真机、原生与签名矩阵；[M8 证据](evidence/m8-2026-08-26.md)；[流式瀑布证据](evidence/streaming-waterfall-2026-08-26.md) |
 | M9 V1 Release | LOCAL COMPLETE | 签名发布工作流、Ed25519 更新清单、Main-only 更新、EAS/隐私清单、发布图扫描、回滚手册 | 12 组外部发布证据与明确用户批准；[实现与质量证据](evidence/m9-2026-08-26.md) |
 
 受支持启动路径必须在展示聊天界面前准备好真实 Platform Model Gateway 和默认
@@ -243,8 +243,8 @@ M8 Beta 批准和明确用户发布批准仍是外部硬门禁。
 | 5 | QA-M8-001 | 50 条 Golden 本地证据与外部门禁台账 | `m8-gate-status.json` 和 M8 readiness test |
 | 6 | BETA-PROVIDER-001 | DeepSeek V4 真实 API、Provider usage 与服务端最终 Charge 首个闭环 | `test:deepseek` 与认证 Platform HTTP E2E；M8 evidence |
 
-M8 本地检查点不等于 Personal Beta 已发布。真实 DeepSeek 请求、usage 和服务端 Charge 已有
-首个外部证据，但真实 SSE/Stop/失败、Provider 账单对账、5 至 20 名目标用户、真实支付、iOS/
+M8 本地检查点不等于 Personal Beta 已发布。真实 DeepSeek SSE、usage、服务端 Charge 和桌面
+增量展示已有首个纵向证据，但真实长请求 Stop/失败、Provider 账单对账、5 至 20 名目标用户、真实支付、iOS/
 Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pending_external`，不得用单次
 烟测、fixture 或开发包提前标记通过。
 
@@ -284,7 +284,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 | --- | --- | --- |
 | Chat + Pi | Pi 原生事件、停止、恢复、IPC、Message、Renderer E2E | Windows/macOS 启动与交互 |
 | Account | 身份、同步、冲突、隔离、设备撤销、本机缓存/云删除边界 | 原生 Windows/macOS 双设备恢复 |
-| Model + Usage | Pi Provider、自动/明确选模、实际模型、Token 去重、错误归一化 | 真实付费模型流式/停止 |
+| Model + Usage | Pi Provider、统一流事件、自动/明确选模、实际模型、Token 去重、错误归一化 | 真实长请求停止/失败与 Provider 账单对账 |
 | Billing | 报价、预留、账本、Webhook、退款、对账 | 支付测试环境与合规确认 |
 | File | Scope、解析、引用、版本、渲染 | 每种办公成果真实打开 |
 | Tool | Pi tool lifecycle、Broker、取消、MCP | 浏览器/Shell/桌面双平台 |
@@ -311,7 +311,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-M9 本地发布基础已经完成，当前只推进真实环境证据：先完成 M8 的 DeepSeek SSE/Stop/失败、
+M9 本地发布基础已经完成，当前只推进真实环境证据：先完成 M8 的 DeepSeek 长请求 Stop/失败、
 Provider 账单对账和目标用户 Beta，再运行 Windows/macOS 签名安装升级回滚、iOS/Android
 商店/推送/Remote 真机矩阵、批准机器性能预算及安全/隐私/支付/税务/保留评审。12 组证据全部
 完成并取得明确用户批准后，才可把 `2.0.0-alpha.0` 冻结为稳定版本并开放 stable 发布门禁。

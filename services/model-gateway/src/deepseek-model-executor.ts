@@ -2,6 +2,7 @@ import {
   automaticModelRef,
   type ModelCatalogEntry,
   type ModelGatewayRequestDto,
+  type ModelGatewayToolCall,
   redactSensitiveText,
 } from "@openerx/contracts";
 import type {
@@ -52,8 +53,8 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
       text: true,
       imageInput: false,
       fileInput: false,
-      tools: false,
-      mcp: false,
+      tools: true,
+      mcp: true,
       imageGeneration: false,
     },
     contextWindow: 1_000_000,
@@ -71,8 +72,8 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
       text: true,
       imageInput: false,
       fileInput: false,
-      tools: false,
-      mcp: false,
+      tools: true,
+      mcp: true,
       imageGeneration: false,
     },
     contextWindow: 1_000_000,
@@ -111,10 +112,28 @@ export function createDeepSeekModelCatalog(
 
 export const deepSeekModelCatalog = createDeepSeekModelCatalog();
 
-interface DeepSeekMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+interface DeepSeekFunctionTool {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
+
+interface DeepSeekWireToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+type DeepSeekMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: DeepSeekWireToolCall[] }
+  | { role: "tool"; content: string; tool_call_id: string };
 
 interface DeepSeekUsage {
   prompt_tokens?: unknown;
@@ -130,9 +149,22 @@ interface DeepSeekResponse {
   model?: unknown;
   choices?: Array<{
     finish_reason?: unknown;
-    message?: { content?: unknown };
+    message?: { content?: unknown; tool_calls?: unknown };
   }>;
   usage?: DeepSeekUsage;
+}
+
+interface DeepSeekStreamChunk {
+  model?: unknown;
+  choices?: Array<{
+    finish_reason?: unknown;
+    delta?: {
+      content?: unknown;
+      reasoning_content?: unknown;
+      tool_calls?: unknown;
+    };
+  }>;
+  usage?: DeepSeekUsage | null;
 }
 
 export interface DeepSeekModelExecutorOptions {
@@ -155,25 +187,128 @@ function nonnegativeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
-function textParts(content: unknown): { text: string; hasUnsupportedMedia: boolean } {
-  if (typeof content === "string") return { text: content, hasUnsupportedMedia: false };
-  if (!Array.isArray(content)) return { text: "", hasUnsupportedMedia: false };
+function plainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function productToolCall(value: unknown): ModelGatewayToolCall {
+  if (!plainRecord(value)) throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+  const id = value.id;
+  const name = value.name;
+  const args = value.arguments;
+  if (
+    typeof id !== "string" ||
+    id.length < 1 ||
+    id.length > 240 ||
+    typeof name !== "string" ||
+    !/^[A-Za-z0-9_-]{1,64}$/u.test(name) ||
+    !plainRecord(args)
+  ) {
+    throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+  }
+  return { id, name, arguments: structuredClone(args) };
+}
+
+function textParts(content: unknown): {
+  text: string;
+  toolCalls: ModelGatewayToolCall[];
+  hasUnsupportedMedia: boolean;
+} {
+  if (typeof content === "string") {
+    return { text: content, toolCalls: [], hasUnsupportedMedia: false };
+  }
+  if (!Array.isArray(content)) {
+    return { text: "", toolCalls: [], hasUnsupportedMedia: false };
+  }
   const text: string[] = [];
+  const toolCalls: ModelGatewayToolCall[] = [];
   let hasUnsupportedMedia = false;
   for (const part of content) {
     if (!part || typeof part !== "object") continue;
-    const candidate = part as { type?: unknown; text?: unknown };
+    const candidate = part as {
+      type?: unknown;
+      text?: unknown;
+      id?: unknown;
+      name?: unknown;
+      arguments?: unknown;
+    };
     if (candidate.type === "text" && typeof candidate.text === "string") {
       text.push(candidate.text);
+    } else if (candidate.type === "toolCall") {
+      toolCalls.push(productToolCall(candidate));
     } else if (candidate.type !== "thinking") {
       hasUnsupportedMedia = true;
     }
   }
-  return { text: text.join("\n"), hasUnsupportedMedia };
+  return { text: text.join("\n"), toolCalls, hasUnsupportedMedia };
+}
+
+function wireToolCall(toolCall: ModelGatewayToolCall): DeepSeekWireToolCall {
+  return {
+    id: toolCall.id,
+    type: "function",
+    function: {
+      name: toolCall.name,
+      arguments: JSON.stringify(toolCall.arguments),
+    },
+  };
+}
+
+function parseToolCallArguments(value: unknown): Record<string, unknown> {
+  if (typeof value !== "string") throw new Error("DEEPSEEK_TOOL_ARGUMENTS_INVALID");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("DEEPSEEK_TOOL_ARGUMENTS_INVALID");
+  }
+  if (!plainRecord(parsed)) throw new Error("DEEPSEEK_TOOL_ARGUMENTS_INVALID");
+  return parsed;
+}
+
+function parseDeepSeekToolCalls(value: unknown): ModelGatewayToolCall[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 128) {
+    throw new Error("DEEPSEEK_TOOL_CALLS_INVALID");
+  }
+  return value.map((raw) => {
+    if (!plainRecord(raw) || raw.type !== "function" || !plainRecord(raw.function)) {
+      throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+    }
+    return productToolCall({
+      id: raw.id,
+      name: raw.function.name,
+      arguments: parseToolCallArguments(raw.function.arguments),
+    });
+  });
+}
+
+function toDeepSeekTools(context: unknown): DeepSeekFunctionTool[] {
+  if (!plainRecord(context)) throw new Error("DEEPSEEK_CONTEXT_INVALID");
+  if (context.tools === undefined) return [];
+  if (!Array.isArray(context.tools) || context.tools.length > 128) {
+    throw new Error("DEEPSEEK_TOOL_LIMIT_EXCEEDED");
+  }
+  return context.tools.map((raw) => {
+    if (!plainRecord(raw)) throw new Error("DEEPSEEK_TOOL_DEFINITION_INVALID");
+    const { name, description, parameters } = raw;
+    if (
+      typeof name !== "string" ||
+      !/^[A-Za-z0-9_-]{1,64}$/u.test(name) ||
+      typeof description !== "string" ||
+      !plainRecord(parameters)
+    ) {
+      throw new Error("DEEPSEEK_TOOL_DEFINITION_INVALID");
+    }
+    return {
+      type: "function",
+      function: { name, description, parameters: structuredClone(parameters) },
+    };
+  });
 }
 
 function toDeepSeekMessages(context: unknown): DeepSeekMessage[] {
-  if (!context || typeof context !== "object") throw new Error("DEEPSEEK_CONTEXT_INVALID");
+  if (!plainRecord(context)) throw new Error("DEEPSEEK_CONTEXT_INVALID");
   const candidate = context as { systemPrompt?: unknown; messages?: unknown };
   if (!Array.isArray(candidate.messages)) throw new Error("DEEPSEEK_CONTEXT_INVALID");
   const messages: DeepSeekMessage[] = [];
@@ -185,20 +320,37 @@ function toDeepSeekMessages(context: unknown): DeepSeekMessage[] {
     const message = raw as {
       role?: unknown;
       content?: unknown;
+      toolCallId?: unknown;
       toolName?: unknown;
       isError?: unknown;
     };
     const content = textParts(message.content);
     if (content.hasUnsupportedMedia) throw new Error("DEEPSEEK_MEDIA_INPUT_UNSUPPORTED");
-    if (!content.text) continue;
-    if (message.role === "user" || message.role === "assistant") {
-      messages.push({ role: message.role, content: content.text });
+    if (message.role === "user") {
+      if (content.toolCalls.length > 0) throw new Error("DEEPSEEK_CONTEXT_INVALID");
+      if (content.text) messages.push({ role: "user", content: content.text });
+      continue;
+    }
+    if (message.role === "assistant") {
+      if (!content.text && content.toolCalls.length === 0) continue;
+      messages.push({
+        role: "assistant",
+        content: content.text || null,
+        ...(content.toolCalls.length > 0
+          ? { tool_calls: content.toolCalls.map(wireToolCall) }
+          : {}),
+      });
       continue;
     }
     if (message.role === "toolResult") {
-      const toolName = typeof message.toolName === "string" ? message.toolName : "tool";
-      const status = message.isError === true ? "error" : "result";
-      messages.push({ role: "user", content: `[${toolName} ${status}]\n${content.text}` });
+      if (content.toolCalls.length > 0 || typeof message.toolCallId !== "string") {
+        throw new Error("DEEPSEEK_CONTEXT_INVALID");
+      }
+      messages.push({
+        role: "tool",
+        tool_call_id: message.toolCallId,
+        content: message.isError === true ? `[tool error]\n${content.text}` : content.text,
+      });
     }
   }
   if (!messages.some(({ role }) => role === "user"))
@@ -264,6 +416,108 @@ function usageFrom(response: DeepSeekResponse): ModelExecutionUsage {
   };
 }
 
+function sseEventData(event: string): string | null {
+  const values = event
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart());
+  return values.length > 0 ? values.join("\n") : null;
+}
+
+async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let readerDone = false;
+  try {
+    while (!readerDone) {
+      const result = await reader.read();
+      readerDone = result.done;
+      buffer += decoder.decode(result.value, { stream: !readerDone });
+      if (buffer.length > 1_000_000) throw new Error("DEEPSEEK_STREAM_EVENT_TOO_LARGE");
+      let boundary = buffer.search(/\r?\n\r?\n/u);
+      while (boundary >= 0) {
+        const separator = buffer.slice(boundary).startsWith("\r\n\r\n") ? 4 : 2;
+        const event = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + separator);
+        const data = sseEventData(event);
+        if (data !== null) yield data;
+        boundary = buffer.search(/\r?\n\r?\n/u);
+      }
+    }
+    const trailing = sseEventData(buffer);
+    if (trailing !== null) yield trailing;
+  } finally {
+    if (!readerDone) await reader.cancel();
+    reader.releaseLock();
+  }
+}
+
+interface StreamToolCallAccumulator {
+  id: string;
+  name: string;
+  argumentsJson: string;
+}
+
+function mergeStreamName(current: string, next: string): string {
+  if (!current || next.startsWith(current)) return next;
+  if (current.startsWith(next)) return current;
+  return `${current}${next}`;
+}
+
+function accumulateStreamToolCalls(
+  value: unknown,
+  accumulators: Map<number, StreamToolCallAccumulator>,
+): void {
+  if (value === undefined || value === null) return;
+  if (!Array.isArray(value)) throw new Error("DEEPSEEK_TOOL_CALLS_INVALID");
+  for (const raw of value) {
+    if (!plainRecord(raw)) throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+    const index = nonnegativeInteger(raw.index);
+    if (index === null || index >= 128) throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+    const current = accumulators.get(index) ?? { id: "", name: "", argumentsJson: "" };
+    if (raw.type !== undefined && raw.type !== "function") {
+      throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+    }
+    if (raw.id !== undefined) {
+      if (typeof raw.id !== "string" || (current.id && current.id !== raw.id)) {
+        throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+      }
+      current.id = raw.id;
+    }
+    if (raw.function !== undefined) {
+      if (!plainRecord(raw.function)) throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+      if (raw.function.name !== undefined) {
+        if (typeof raw.function.name !== "string") {
+          throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+        }
+        current.name = mergeStreamName(current.name, raw.function.name);
+      }
+      if (raw.function.arguments !== undefined) {
+        if (typeof raw.function.arguments !== "string") {
+          throw new Error("DEEPSEEK_TOOL_CALL_INVALID");
+        }
+        current.argumentsJson += raw.function.arguments;
+      }
+    }
+    accumulators.set(index, current);
+  }
+}
+
+function completedStreamToolCalls(
+  accumulators: Map<number, StreamToolCallAccumulator>,
+): ModelGatewayToolCall[] {
+  return [...accumulators.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, toolCall]) =>
+      productToolCall({
+        id: toolCall.id,
+        name: toolCall.name,
+        arguments: parseToolCallArguments(toolCall.argumentsJson),
+      }),
+    );
+}
+
 export class DeepSeekModelExecutor implements ModelExecutor {
   readonly #apiKey: string;
   readonly #defaultModel: DeepSeekModelId;
@@ -291,6 +545,8 @@ export class DeepSeekModelExecutor implements ModelExecutor {
         ? this.#defaultModel
         : modelIdByRef[request.selectedModelRef];
     if (!model) throw new Error(`DEEPSEEK_MODEL_NOT_CONFIGURED:${request.selectedModelRef}`);
+    const messages = toDeepSeekMessages(request.context);
+    const tools = toDeepSeekTools(request.context);
     const timeout = AbortSignal.timeout(this.#timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response: Response;
@@ -303,7 +559,8 @@ export class DeepSeekModelExecutor implements ModelExecutor {
         },
         body: JSON.stringify({
           model,
-          messages: toDeepSeekMessages(request.context),
+          messages,
+          ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
           thinking: { type: this.#thinking },
           max_tokens: deepSeekProviderMaxOutputTokens,
           stream: false,
@@ -324,13 +581,22 @@ export class DeepSeekModelExecutor implements ModelExecutor {
     }
     if (!response.ok) throw providerError(body, response.status);
     const parsed = body as DeepSeekResponse;
-    const text = parsed.choices?.[0]?.message?.content;
-    if (typeof text !== "string") throw new Error("DEEPSEEK_RESPONSE_TEXT_MISSING");
-    const rawFinishReason = parsed.choices?.[0]?.finish_reason;
+    const choice = parsed.choices?.[0];
+    const toolCalls = parseDeepSeekToolCalls(choice?.message?.tool_calls);
+    const rawText = choice?.message?.content;
+    const text = rawText === null || rawText === undefined ? "" : rawText;
+    if (typeof text !== "string") throw new Error("DEEPSEEK_RESPONSE_TEXT_INVALID");
+    const rawFinishReason = choice?.finish_reason;
     const finishReason =
       typeof rawFinishReason === "string" && rawFinishReason.length > 0
         ? rawFinishReason.slice(0, 80)
         : undefined;
+    if (finishReason === "tool_calls" && toolCalls.length === 0) {
+      throw new Error("DEEPSEEK_TOOL_CALLS_MISSING");
+    }
+    if (!text && toolCalls.length === 0 && (!finishReason || finishReason === "stop")) {
+      throw new Error("DEEPSEEK_RESPONSE_CONTENT_MISSING");
+    }
     const responseModel =
       typeof parsed.model === "string" && parsed.model in modelRefById
         ? (parsed.model as DeepSeekModelId)
@@ -341,10 +607,138 @@ export class DeepSeekModelExecutor implements ModelExecutor {
       responseModel === model ? undefined : `provider_response_model:${model}->${responseModel}`;
     return {
       text,
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
       effectiveModelRef,
       ...(fallbackReason ? { fallbackReason } : {}),
       ...(finishReason ? { finishReason } : {}),
       usage: usageFrom(parsed),
+    };
+  }
+
+  async stream(
+    request: ModelGatewayRequestDto,
+    onDelta: (delta: string) => void,
+    signal: AbortSignal | undefined,
+  ): Promise<ModelExecutionResult> {
+    const model =
+      request.selectedModelRef === automaticModelRef
+        ? this.#defaultModel
+        : modelIdByRef[request.selectedModelRef];
+    if (!model) throw new Error(`DEEPSEEK_MODEL_NOT_CONFIGURED:${request.selectedModelRef}`);
+    const messages = toDeepSeekMessages(request.context);
+    const tools = toDeepSeekTools(request.context);
+    const timeout = AbortSignal.timeout(this.#timeoutMs);
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    let response: Response;
+    try {
+      response = await this.#fetch(`${deepSeekApiBaseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.#apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
+          thinking: { type: this.#thinking },
+          max_tokens: deepSeekProviderMaxOutputTokens,
+          stream: true,
+          stream_options: { include_usage: true },
+          user_id: request.accountId,
+        }),
+        signal: requestSignal,
+      });
+    } catch (error) {
+      if (signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
+      if (timeout.aborted) throw new Error("DEEPSEEK_REQUEST_TIMEOUT");
+      throw new Error(`DEEPSEEK_NETWORK_ERROR:${redactSensitiveText(String(error)).slice(0, 240)}`);
+    }
+    if (!response.ok) {
+      let body: unknown = null;
+      try {
+        body = await response.json();
+      } catch {
+        // providerError supplies a redacted generic message for non-JSON failures.
+      }
+      throw providerError(body, response.status);
+    }
+    if (!response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
+      throw new Error("DEEPSEEK_STREAM_CONTENT_TYPE_INVALID");
+    }
+    if (!response.body) throw new Error("DEEPSEEK_STREAM_BODY_MISSING");
+
+    let text = "";
+    let finishReason: string | undefined;
+    let responseModel: DeepSeekModelId | null = null;
+    let usage: DeepSeekUsage | undefined;
+    let completed = false;
+    const streamedToolCalls = new Map<number, StreamToolCallAccumulator>();
+    try {
+      for await (const data of sseData(response.body)) {
+        if (signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
+        if (data === "[DONE]") {
+          completed = true;
+          break;
+        }
+        let chunk: DeepSeekStreamChunk;
+        try {
+          chunk = JSON.parse(data) as DeepSeekStreamChunk;
+        } catch {
+          throw new Error("DEEPSEEK_STREAM_CHUNK_INVALID");
+        }
+        if (typeof chunk.model === "string") {
+          if (!(chunk.model in modelRefById)) {
+            throw new Error("DEEPSEEK_RESPONSE_MODEL_INVALID");
+          }
+          responseModel = chunk.model as DeepSeekModelId;
+          const effectiveModelRef = modelRefById[responseModel];
+          if (responseModel !== model && request.approvedFallbackModelRef !== effectiveModelRef) {
+            throw new Error("MODEL_SILENT_FALLBACK_REJECTED");
+          }
+        }
+        if (chunk.usage) usage = chunk.usage;
+        const choice = chunk.choices?.[0];
+        const delta = choice?.delta?.content;
+        if (typeof delta === "string" && delta.length > 0) {
+          text += delta;
+          onDelta(delta);
+        }
+        accumulateStreamToolCalls(choice?.delta?.tool_calls, streamedToolCalls);
+        if (typeof choice?.finish_reason === "string" && choice.finish_reason.length > 0) {
+          finishReason = choice.finish_reason.slice(0, 80);
+        }
+      }
+    } catch (error) {
+      if (signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
+      if (timeout.aborted) throw new Error("DEEPSEEK_REQUEST_TIMEOUT");
+      if (
+        error instanceof Error &&
+        (error.message.startsWith("DEEPSEEK_") || error.message.startsWith("MODEL_"))
+      ) {
+        throw error;
+      }
+      throw new Error(`DEEPSEEK_STREAM_ERROR:${redactSensitiveText(String(error)).slice(0, 240)}`);
+    }
+    if (!completed) throw new Error("DEEPSEEK_STREAM_INCOMPLETE");
+    if (!responseModel) throw new Error("DEEPSEEK_RESPONSE_MODEL_INVALID");
+    const toolCalls = completedStreamToolCalls(streamedToolCalls);
+    if (finishReason === "tool_calls" && toolCalls.length === 0) {
+      throw new Error("DEEPSEEK_TOOL_CALLS_MISSING");
+    }
+    if (!text && toolCalls.length === 0 && (!finishReason || finishReason === "stop")) {
+      throw new Error("DEEPSEEK_RESPONSE_CONTENT_MISSING");
+    }
+    const effectiveModelRef = modelRefById[responseModel];
+    const fallbackReason =
+      responseModel === model ? undefined : `provider_response_model:${model}->${responseModel}`;
+    return {
+      text,
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      effectiveModelRef,
+      ...(fallbackReason ? { fallbackReason } : {}),
+      ...(finishReason ? { finishReason } : {}),
+      usage: usageFrom({ usage }),
     };
   }
 }

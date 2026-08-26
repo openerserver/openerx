@@ -124,9 +124,18 @@ export const modelGatewayRequestSchema = z
   })
   .strict();
 
+export const modelGatewayToolCallSchema = z
+  .object({
+    id: z.string().min(1).max(240),
+    name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u),
+    arguments: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
 export const modelGatewayResponseSchema = z
   .object({
     text: z.string(),
+    toolCalls: z.array(modelGatewayToolCallSchema).max(128).optional(),
     effectiveModelRef: z.string().min(1),
     fallbackReason: z.string().min(1).nullable(),
     finishReason: z.string().min(1).max(80).nullable().optional(),
@@ -134,8 +143,31 @@ export const modelGatewayResponseSchema = z
   })
   .strict();
 
+export const modelGatewayStreamEventSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("delta"),
+      delta: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("completed"),
+      response: modelGatewayResponseSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("failed"),
+      errorCode: z.string().min(1).max(500),
+    })
+    .strict(),
+]);
+
 export type ModelGatewayRequestDto = z.infer<typeof modelGatewayRequestSchema>;
+export type ModelGatewayToolCall = z.infer<typeof modelGatewayToolCallSchema>;
 export type ModelGatewayResponse = z.infer<typeof modelGatewayResponseSchema>;
+export type ModelGatewayStreamEvent = z.infer<typeof modelGatewayStreamEventSchema>;
 
 export const usageQueryInputSchema = z
   .object({

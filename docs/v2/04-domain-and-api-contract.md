@@ -391,6 +391,8 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 /api/v2/assistants
 /api/v2/skills
 /api/v2/models
+/api/v2/model/execute
+/api/v2/model/stream
 /api/v2/tools
 /api/v2/mcp-servers
 /api/v2/usage
@@ -417,6 +419,7 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 - 请求和响应有版本化 Schema。
 - 消息发送支持客户端幂等键。
 - 流式事件可按游标补读。
+- 模型流使用类型化 `delta/completed/failed` 终态；只有 `completed` 可携带权威 Usage 并进入结算。
 - Preload 只暴露按业务动作定义的窄接口，不暴露原始 `ipcRenderer`、Node 或文件系统对象。
 - 主进程验证 IPC sender、窗口、参数和当前权限。
 - 文件使用受控本地句柄；上传或下载云副本使用短期、账户绑定的预签名入口。

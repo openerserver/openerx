@@ -118,6 +118,11 @@ export interface UsageStorePort {
 export interface ModelGatewayServicePort {
   catalog(): ModelCatalogEntry[];
   execute(request: ModelGatewayRequestDto, signal?: AbortSignal): Promise<ModelGatewayResponse>;
+  stream(
+    request: ModelGatewayRequestDto,
+    onDelta: (delta: string) => void,
+    signal?: AbortSignal,
+  ): Promise<ModelGatewayResponse>;
 }
 
 export interface PricingServicePort {

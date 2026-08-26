@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type AssistantMessage,
   type AssistantMessageEventStream,
@@ -7,19 +8,69 @@ import {
   type Model,
   type Provider,
   type SimpleStreamOptions,
+  type ToolCall,
 } from "@earendil-works/pi-ai";
 import {
   automaticModelRef,
   type ModelCatalogEntry,
   type ModelGatewayRequestDto,
   type ModelGatewayResponse,
+  type ModelGatewayStreamEvent,
   modelCatalogEntrySchema,
   modelGatewayResponseSchema,
+  modelGatewayStreamEventSchema,
   type UsageRecord,
 } from "@openerx/contracts";
 
 export interface PlatformModelTransport {
   execute(request: ModelGatewayRequestDto, signal?: AbortSignal): Promise<ModelGatewayResponse>;
+  stream?(
+    request: ModelGatewayRequestDto,
+    signal?: AbortSignal,
+  ): AsyncIterable<ModelGatewayStreamEvent>;
+}
+
+function streamEventData(event: string): string | null {
+  const values = event
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart());
+  return values.length > 0 ? values.join("\n") : null;
+}
+
+async function* readModelStream(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<ModelGatewayStreamEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let readerDone = false;
+  try {
+    while (!readerDone) {
+      const result = await reader.read();
+      readerDone = result.done;
+      buffer += decoder.decode(result.value, { stream: !readerDone });
+      if (buffer.length > 1_000_000) throw new Error("MODEL_STREAM_EVENT_TOO_LARGE");
+      let boundary = buffer.search(/\r?\n\r?\n/u);
+      while (boundary >= 0) {
+        const separator = buffer.slice(boundary).startsWith("\r\n\r\n") ? 4 : 2;
+        const event = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + separator);
+        const data = streamEventData(event);
+        if (data !== null) {
+          yield modelGatewayStreamEventSchema.parse(JSON.parse(data));
+        }
+        boundary = buffer.search(/\r?\n\r?\n/u);
+      }
+    }
+    const trailing = streamEventData(buffer);
+    if (trailing !== null) {
+      yield modelGatewayStreamEventSchema.parse(JSON.parse(trailing));
+    }
+  } finally {
+    if (!readerDone) await reader.cancel();
+    reader.releaseLock();
+  }
 }
 
 export class HttpPlatformModelTransport implements PlatformModelTransport {
@@ -47,6 +98,27 @@ export class HttpPlatformModelTransport implements PlatformModelTransport {
         signal,
       }),
     );
+  }
+
+  async *stream(
+    request: ModelGatewayRequestDto,
+    signal?: AbortSignal,
+  ): AsyncGenerator<ModelGatewayStreamEvent> {
+    const response = await fetch(`${this.#baseUrl}/api/v2/model/stream`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.#accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(request),
+      signal,
+    });
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: { code?: string } };
+      throw new Error(body.error?.code ?? `PLATFORM_HTTP_${response.status}`);
+    }
+    if (!response.body) throw new Error("MODEL_STREAM_BODY_MISSING");
+    yield* readModelStream(response.body);
   }
 
   async #json(pathname: string, init: RequestInit): Promise<unknown> {
@@ -118,6 +190,11 @@ function piUsage(record: UsageRecord): AssistantMessage["usage"] {
   };
 }
 
+function roundDedupeKey(baseKey: string, context: Context): string {
+  const digest = createHash("sha256").update(JSON.stringify(context), "utf8").digest("hex");
+  return `${baseKey.slice(0, 160)}:ctx:${digest}`;
+}
+
 function streamPlatform(
   model: Model<string>,
   context: Context,
@@ -145,46 +222,114 @@ function streamPlatform(
   stream.push({ type: "start", partial: output });
   void (async () => {
     try {
-      const response = modelGatewayResponseSchema.parse(
-        await configuration.transport.execute(
-          {
-            ...configuration.request,
-            requirements: {},
-            context,
-          },
-          options?.signal,
-        ),
-      );
-      if (options?.signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
-      output.responseModel = response.effectiveModelRef;
-      output.usage = piUsage(response.usage);
-      output.content.push({ type: "text", text: "" });
-      const contentIndex = output.content.length - 1;
-      stream.push({ type: "text_start", contentIndex, partial: output });
-      const chunkSize = Math.max(1, configuration.streamChunkSize ?? 24);
-      for (let index = 0; index < response.text.length; index += chunkSize) {
+      let textContentIndex: number | undefined;
+      const ensureTextBlock = (): number => {
+        if (textContentIndex !== undefined) return textContentIndex;
+        output.content.push({ type: "text", text: "" });
+        textContentIndex = output.content.length - 1;
+        stream.push({ type: "text_start", contentIndex: textContentIndex, partial: output });
+        return textContentIndex;
+      };
+      const request = {
+        ...configuration.request,
+        requestDedupeKey: roundDedupeKey(configuration.request.requestDedupeKey, context),
+        requirements: {
+          ...(context.tools && context.tools.length > 0 ? { tools: true } : {}),
+        },
+        context,
+      };
+      const pushDelta = (delta: string): void => {
         if (options?.signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
-        const delta = response.text.slice(index, index + chunkSize);
+        const contentIndex = ensureTextBlock();
         const block = output.content[contentIndex];
         if (block?.type !== "text") throw new Error("Platform text block is missing");
         block.text += delta;
         stream.push({ type: "text_delta", contentIndex, delta, partial: output });
-        await new Promise<void>((resolve) => setImmediate(resolve));
+      };
+      let response: ModelGatewayResponse | undefined;
+      if (configuration.transport.stream) {
+        for await (const event of configuration.transport.stream(request, options?.signal)) {
+          if (event.type === "delta") {
+            pushDelta(event.delta);
+          } else if (event.type === "completed") {
+            response = modelGatewayResponseSchema.parse(event.response);
+          } else {
+            throw new Error(event.errorCode);
+          }
+        }
+      } else {
+        response = modelGatewayResponseSchema.parse(
+          await configuration.transport.execute(request, options?.signal),
+        );
+        const chunkSize = Math.max(1, configuration.streamChunkSize ?? 24);
+        for (let index = 0; index < response.text.length; index += chunkSize) {
+          pushDelta(response.text.slice(index, index + chunkSize));
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
       }
-      const block = output.content[contentIndex];
-      if (block?.type !== "text") throw new Error("Platform text block is missing");
-      stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
+      if (!response) throw new Error("MODEL_STREAM_TERMINAL_EVENT_MISSING");
+      if (options?.signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
+      // The gateway has already settled this model call once it emits the terminal
+      // response. Preserve that authoritative usage even when the payload is later
+      // rejected locally (for example, a provider content filter or malformed stream).
+      output.responseModel = response.effectiveModelRef;
+      output.usage = piUsage(response.usage);
+      configuration.onUsage?.(response.usage);
+      const textBlock =
+        textContentIndex === undefined ? undefined : output.content[textContentIndex];
+      if (textBlock !== undefined && textBlock.type !== "text") {
+        throw new Error("Platform text block is missing");
+      }
+      if ((textBlock?.text ?? "") !== response.text) throw new Error("MODEL_STREAM_TEXT_MISMATCH");
+      if (textBlock && textContentIndex !== undefined) {
+        stream.push({
+          type: "text_end",
+          contentIndex: textContentIndex,
+          content: textBlock.text,
+          partial: output,
+        });
+      }
+      const toolCalls = response.toolCalls ?? [];
+      if (response.finishReason === "tool_calls" && toolCalls.length === 0) {
+        throw new Error("MODEL_TOOL_CALLS_MISSING");
+      }
+      if (
+        !response.text &&
+        toolCalls.length === 0 &&
+        (!response.finishReason || response.finishReason === "stop")
+      ) {
+        throw new Error("MODEL_RESPONSE_CONTENT_MISSING");
+      }
+      for (const responseToolCall of toolCalls) {
+        const block: ToolCall = {
+          type: "toolCall",
+          id: responseToolCall.id,
+          name: responseToolCall.name,
+          arguments: {},
+        };
+        output.content.push(block);
+        const contentIndex = output.content.length - 1;
+        stream.push({ type: "toolcall_start", contentIndex, partial: output });
+        const argumentsJson = JSON.stringify(responseToolCall.arguments);
+        block.arguments = structuredClone(responseToolCall.arguments);
+        stream.push({
+          type: "toolcall_delta",
+          contentIndex,
+          delta: argumentsJson,
+          partial: output,
+        });
+        stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+      }
       output.stopReason =
-        response.finishReason === "length"
-          ? "length"
-          : response.finishReason === "tool_calls"
-            ? "toolUse"
+        toolCalls.length > 0
+          ? "toolUse"
+          : response.finishReason === "length"
+            ? "length"
             : response.finishReason === "content_filter" ||
                 response.finishReason === "insufficient_system_resource"
               ? "error"
               : "stop";
       output.rawStopReason = response.finishReason ?? undefined;
-      configuration.onUsage?.(response.usage);
       if (output.stopReason === "error") {
         output.errorMessage = `MODEL_FINISH_REASON:${response.finishReason ?? "unknown"}`;
         stream.push({ type: "error", reason: "error", error: output });

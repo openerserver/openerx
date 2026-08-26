@@ -15,6 +15,7 @@ M2 Account Alpha 冻结版本化模型目录、能力预检、显式降级批准
 
 ```bash
 npm run test:deepseek -- "只回答：连接成功"
+npm run test:deepseek:tools
 ```
 
 该命令必须同时得到 `providerReported=true` 的 UsageRecord 和 `status=settled` 的
@@ -37,5 +38,10 @@ npm run dev:deepseek
 设置中接受服务端条款；首次模型授权会得到一笔幂等的本地开发额度，最终 Charge 仍由服务端
 形成。打包后的桌面应用仍拒绝明文 HTTP Platform 地址。
 
-当前 DeepSeek Chat Completions 请求使用非流式上游响应，完成后再进入 Pi 产品事件投影；真实
-SSE 增量与真实长请求 Stop 演练仍是 M8 外部门禁，不以本烟测冒充完成。
+当前 DeepSeek Chat Completions 请求使用官方 SSE，并请求带最终 Usage 的流终态。Platform Alpha
+以账户鉴权的 `text/event-stream` 转发统一 `delta/completed/failed` 事件，Pi Provider 再把增量
+投影为产品 `message.delta`；不支持原生流的其他执行器仍通过同一协议兼容。Pi 的工具定义通过
+官方 `tools` 字段发送，DeepSeek `tool_calls` 作为结构化终态返回给 Pi，工具结果使用 `tool`
+消息续跑。一次用户回复内的每个模型轮次按完整上下文派生独立幂等键，避免首轮工具调用被缓存
+后重复回放。真实长请求 Stop、供应商失败与账单对账演练仍是 M8 外部门禁，不以单次流式烟测
+冒充完成。

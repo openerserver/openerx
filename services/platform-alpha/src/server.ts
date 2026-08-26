@@ -10,6 +10,7 @@ import {
   cloudObjectIntentInputSchema,
   createRechargeOrderInputSchema,
   deviceDescriptorSchema,
+  type ModelGatewayStreamEvent,
   modelGatewayRequestSchema,
   type PlatformAlphaServices,
   paymentCallbackSchema,
@@ -36,6 +37,22 @@ function send(response: ServerResponse, status: number, body: unknown): void {
     "x-content-type-options": "nosniff",
   });
   response.end(JSON.stringify(body));
+}
+
+function startModelStream(response: ServerResponse): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+    "x-content-type-options": "nosniff",
+  });
+  response.flushHeaders();
+}
+
+function writeModelStreamEvent(response: ServerResponse, event: ModelGatewayStreamEvent): void {
+  if (response.destroyed || response.writableEnded) return;
+  response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
 function sendBytes(
@@ -426,6 +443,37 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         } finally {
           request.off("aborted", abortUpstream);
           response.off("close", abortUpstream);
+        }
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/model/stream") {
+        const input = modelGatewayRequestSchema.parse(await jsonBody(request));
+        if (input.accountId !== principal.accountId) throw new Error("ACCOUNT_SCOPE_VIOLATION");
+        const abort = new AbortController();
+        const abortUpstream = () => {
+          if (!response.writableEnded) abort.abort();
+        };
+        request.once("aborted", abortUpstream);
+        response.once("close", abortUpstream);
+        startModelStream(response);
+        try {
+          const result = await services.models.stream(
+            input,
+            (delta) => writeModelStreamEvent(response, { type: "delta", delta }),
+            abort.signal,
+          );
+          writeModelStreamEvent(response, { type: "completed", response: result });
+        } catch (error) {
+          if (!abort.signal.aborted && !response.destroyed) {
+            writeModelStreamEvent(response, {
+              type: "failed",
+              errorCode: safeErrorMessage(error, "MODEL_STREAM_FAILED").slice(0, 500),
+            });
+          }
+        } finally {
+          request.off("aborted", abortUpstream);
+          response.off("close", abortUpstream);
+          if (!response.destroyed && !response.writableEnded) response.end();
         }
         return;
       }

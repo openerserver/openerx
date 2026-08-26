@@ -90,7 +90,11 @@ try {
   await page.locator(".sync-state.service-ready").waitFor();
   await page.reload();
   try {
-    await page.getByText("失败原因：APP_SERVICE_RESTARTED").last().waitFor({ timeout: 60_000 });
+    const recoveredFailure = page
+      .locator(".message-assistant[data-message-status='failed']")
+      .last();
+    await recoveredFailure.waitFor({ timeout: 60_000 });
+    await recoveredFailure.getByText("本次生成没有完成，可以重试并保留当前内容。").waitFor();
   } catch (error) {
     console.error("E2E_CHAT_RECOVERY_STATE\n", await page.locator("body").innerText());
     throw error;
@@ -99,7 +103,7 @@ try {
   const firstUserMessage = page.locator(".message-user").first();
   await firstUserMessage.getByRole("button", { name: "编辑并分支" }).click();
   await firstUserMessage.locator("textarea").fill("修改后的第一问");
-  await firstUserMessage.getByRole("button", { name: "创建分支" }).click();
+  await firstUserMessage.getByRole("button", { name: "保存并新建分支" }).click();
   await page.locator(".message-user").first().getByText("修改后的第一问").waitFor();
   await page.locator(".message-assistant[data-message-status='completed']").last().waitFor();
 

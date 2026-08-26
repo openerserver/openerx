@@ -40,7 +40,272 @@ function successResponse(): Response {
   });
 }
 
+function streamingResponse(
+  model: "deepseek-v4-flash" | "deepseek-v4-pro" = "deepseek-v4-flash",
+): Response {
+  const events = [
+    {
+      model,
+      choices: [{ delta: { role: "assistant", content: "连接" }, finish_reason: null }],
+      usage: null,
+    },
+    {
+      model,
+      choices: [{ delta: { content: "成功" }, finish_reason: "stop" }],
+      usage: null,
+    },
+    {
+      model: "deepseek-v4-flash",
+      choices: [],
+      usage: {
+        prompt_tokens: 12,
+        prompt_cache_hit_tokens: 4,
+        prompt_cache_miss_tokens: 8,
+        completion_tokens: 3,
+        total_tokens: 15,
+        completion_tokens_details: { reasoning_tokens: 0 },
+      },
+    },
+  ];
+  return new Response(
+    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
+    {
+      headers: { "content-type": "text/event-stream" },
+    },
+  );
+}
+
+function streamingToolResponse(): Response {
+  const events = [
+    {
+      model: "deepseek-v4-flash",
+      choices: [{ delta: { role: "assistant", content: "我先检查。" }, finish_reason: null }],
+      usage: null,
+    },
+    {
+      model: "deepseek-v4-flash",
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_shell_1",
+                type: "function",
+                function: {
+                  name: "openerx_shell",
+                  arguments: '{"cwd":"/workspace","command":"ls",',
+                },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+      usage: null,
+    },
+    {
+      model: "deepseek-v4-flash",
+      choices: [
+        {
+          delta: {
+            tool_calls: [{ index: 0, function: { arguments: '"args":["-la"]}' } }],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: null,
+    },
+    {
+      model: "deepseek-v4-flash",
+      choices: [],
+      usage: {
+        prompt_tokens: 20,
+        prompt_cache_hit_tokens: 5,
+        prompt_cache_miss_tokens: 15,
+        completion_tokens: 12,
+        total_tokens: 32,
+      },
+    },
+  ];
+  return new Response(
+    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
+    { headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 describe("DeepSeekModelExecutor", () => {
+  it("forwards official SSE deltas before the authoritative usage terminal", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      streamingResponse(),
+    );
+    const executor = new DeepSeekModelExecutor({
+      apiKey: `sk-${"s".repeat(32)}`,
+      fetch: fetchMock,
+      thinking: "disabled",
+    });
+    const deltas: string[] = [];
+    const result = await executor.stream(request(), (delta) => deltas.push(delta), undefined);
+
+    expect(deltas).toEqual(["连接", "成功"]);
+    expect(result).toEqual({
+      text: "连接成功",
+      effectiveModelRef: deepSeekModelRefs.flash,
+      finishReason: "stop",
+      usage: {
+        inputTokens: 8,
+        cachedInputTokens: 4,
+        outputTokens: 3,
+        reasoningTokens: 0,
+        totalTokens: 15,
+        providerReported: true,
+        missingReasons: {},
+      },
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+  });
+
+  it("streams native tool calls structurally instead of leaking provider markup as text", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      streamingToolResponse(),
+    );
+    const executor = new DeepSeekModelExecutor({
+      apiKey: `sk-${"t".repeat(32)}`,
+      fetch: fetchMock,
+      thinking: "disabled",
+    });
+    const deltas: string[] = [];
+    const result = await executor.stream(
+      request({
+        requirements: { tools: true },
+        context: {
+          systemPrompt: "You are OpenerX.",
+          messages: [{ role: "user", content: "检查项目", timestamp: Date.now() }],
+          tools: [
+            {
+              name: "openerx_shell",
+              description: "Run one approved command.",
+              parameters: {
+                type: "object",
+                properties: {
+                  cwd: { type: "string" },
+                  command: { type: "string" },
+                  args: { type: "array", items: { type: "string" } },
+                },
+                required: ["cwd", "command", "args"],
+              },
+            },
+          ],
+        },
+      }),
+      (delta) => deltas.push(delta),
+      undefined,
+    );
+
+    expect(deltas).toEqual(["我先检查。"]);
+    expect(deltas.join("")).not.toContain("DSML");
+    expect(result).toMatchObject({
+      text: "我先检查。",
+      finishReason: "tool_calls",
+      toolCalls: [
+        {
+          id: "call_shell_1",
+          name: "openerx_shell",
+          arguments: { cwd: "/workspace", command: "ls", args: ["-la"] },
+        },
+      ],
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.tool_choice).toBe("auto");
+    expect(body.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({ name: "openerx_shell" }),
+      }),
+    ]);
+  });
+
+  it("round-trips assistant tool calls and tool results as native DeepSeek messages", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      successResponse(),
+    );
+    const executor = new DeepSeekModelExecutor({
+      apiKey: `sk-${"r".repeat(32)}`,
+      fetch: fetchMock,
+      thinking: "disabled",
+    });
+    await executor.execute(
+      request({
+        context: {
+          messages: [
+            { role: "user", content: "检查项目", timestamp: 1 },
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: "我先检查。" },
+                {
+                  type: "toolCall",
+                  id: "call_shell_1",
+                  name: "openerx_shell",
+                  arguments: { cwd: "/workspace", command: "ls", args: ["-la"] },
+                },
+              ],
+              timestamp: 2,
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_shell_1",
+              toolName: "openerx_shell",
+              content: [{ type: "text", text: "package.json" }],
+              isError: false,
+              timestamp: 3,
+            },
+          ],
+        },
+      }),
+      undefined,
+    );
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.messages).toEqual([
+      { role: "user", content: "检查项目" },
+      {
+        role: "assistant",
+        content: "我先检查。",
+        tool_calls: [
+          {
+            id: "call_shell_1",
+            type: "function",
+            function: {
+              name: "openerx_shell",
+              arguments: '{"cwd":"/workspace","command":"ls","args":["-la"]}',
+            },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "call_shell_1", content: "package.json" },
+    ]);
+  });
+
+  it("rejects an unapproved provider fallback before forwarding its first delta", async () => {
+    const executor = new DeepSeekModelExecutor({
+      apiKey: `sk-${"f".repeat(32)}`,
+      fetch: vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+        streamingResponse("deepseek-v4-pro"),
+      ),
+      thinking: "disabled",
+    });
+    const deltas: string[] = [];
+
+    await expect(
+      executor.stream(request(), (delta) => deltas.push(delta), undefined),
+    ).rejects.toThrow("MODEL_SILENT_FALLBACK_REJECTED");
+    expect(deltas).toEqual([]);
+  });
+
   it("calls only the official endpoint and maps automatic selection to V4 Flash", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       successResponse(),

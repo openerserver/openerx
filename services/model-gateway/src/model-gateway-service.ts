@@ -6,6 +6,7 @@ import {
   type ModelCatalogEntry,
   type ModelGatewayRequestDto,
   type ModelGatewayResponse,
+  type ModelGatewayToolCall,
   type ModelRequirement,
   type ModelSelectionCheck,
   modelCatalogEntrySchema,
@@ -29,6 +30,7 @@ export interface ModelExecutionUsage {
 
 export interface ModelExecutionResult {
   text: string;
+  toolCalls?: ModelGatewayToolCall[];
   effectiveModelRef: string;
   fallbackReason?: string;
   finishReason?: string;
@@ -38,6 +40,11 @@ export interface ModelExecutionResult {
 export interface ModelExecutor {
   execute(
     request: ModelGatewayRequestDto,
+    signal: AbortSignal | undefined,
+  ): Promise<ModelExecutionResult>;
+  stream?(
+    request: ModelGatewayRequestDto,
+    onDelta: (delta: string) => void,
     signal: AbortSignal | undefined,
   ): Promise<ModelExecutionResult>;
 }
@@ -148,10 +155,29 @@ export class ModelGatewayService {
     input: ModelGatewayRequestDto,
     signal?: AbortSignal,
   ): Promise<ModelGatewayResponse> {
+    return this.#execute(input, undefined, signal);
+  }
+
+  async stream(
+    input: ModelGatewayRequestDto,
+    onDelta: (delta: string) => void,
+    signal?: AbortSignal,
+  ): Promise<ModelGatewayResponse> {
+    return this.#execute(input, onDelta, signal);
+  }
+
+  async #execute(
+    input: ModelGatewayRequestDto,
+    onDelta: ((delta: string) => void) | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<ModelGatewayResponse> {
     const request = modelGatewayRequestSchema.parse(input);
     const responseKey = `${request.accountId}:${request.requestDedupeKey}`;
     const replay = this.#responses.get(responseKey);
-    if (replay) return structuredClone(replay);
+    if (replay) {
+      if (onDelta && replay.text) onDelta(replay.text);
+      return structuredClone(replay);
+    }
     const selection = this.checkSelection(request.selectedModelRef, request.requirements);
     if (!selection.supported) {
       throw new Error(
@@ -162,7 +188,20 @@ export class ModelGatewayService {
     let billingAuthorization: ModelBillingAuthorization | undefined;
     try {
       billingAuthorization = await this.#billing?.authorize(request);
-      const execution = await this.#executor.execute(request, signal);
+      let streamedText = "";
+      const forwardDelta = (delta: string): void => {
+        if (!delta) return;
+        streamedText += delta;
+        onDelta?.(delta);
+      };
+      const execution =
+        onDelta && this.#executor.stream
+          ? await this.#executor.stream(request, forwardDelta, signal)
+          : await this.#executor.execute(request, signal);
+      if (onDelta && !this.#executor.stream && execution.text) forwardDelta(execution.text);
+      if (onDelta && streamedText !== execution.text) {
+        throw new Error("MODEL_STREAM_TEXT_MISMATCH");
+      }
       if (request.selectedModelRef === automaticModelRef) {
         if (execution.effectiveModelRef === automaticModelRef) {
           throw new Error("MODEL_AUTO_ROUTE_UNRESOLVED");
@@ -193,6 +232,9 @@ export class ModelGatewayService {
       }
       const response = modelGatewayResponseSchema.parse({
         text: execution.text,
+        ...(execution.toolCalls && execution.toolCalls.length > 0
+          ? { toolCalls: execution.toolCalls }
+          : {}),
         effectiveModelRef: execution.effectiveModelRef,
         fallbackReason: execution.fallbackReason ?? null,
         ...(execution.finishReason ? { finishReason: execution.finishReason } : {}),
