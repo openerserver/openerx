@@ -211,7 +211,7 @@ Message -> WorkItem/ExecutionRun product projection -> Pi AgentSession
 | Frame | 方向 | 含义 |
 | --- | --- | --- |
 | `pi-host.bootstrap` / `pi-host.ready` | Main ↔ Pi Host | 版本、profile 和启动 nonce 握手 |
-| `pi.session.prompt` | App Service → Pi Host | 把已批准产品上下文提交给新的 Pi `AgentSession` |
+| `pi.session.prompt` | App Service → Pi Host | 把已批准产品上下文和会话 `thinkingLevel` 提交给新的 Pi `AgentSession` |
 | `pi.session.steer` | App Service → Pi Host | 调用 Pi `AgentSession.steer()`，在当前 turn 的工具调用后改变下一次模型调用 |
 | `pi.session.follow-up` | App Service → Pi Host | 调用 Pi `AgentSession.followUp()`，在当前工作完成后提交排队指令 |
 | `pi.session.abort` | App Service → Pi Host | 调用 Pi `AgentSession.abort()` |
@@ -222,9 +222,11 @@ M1 当前实现在 `packages/contracts/src/pi.ts` 和 `packages/pi-host`，覆�
 ## 7.1 平台模型目录与 Gateway
 
 - Model Catalog 是服务端版本化配置，客户端只展示账户当前可用模型。
-- 目录声明模型能力、限制、状态、推荐用途、价格引用和用户可见计价摘要。
+- 目录声明模型能力、支持的思考等级、限制、状态、推荐用途、价格引用和用户可见计价摘要。
 - “自动”路由与用户明确选择使用同一合同；明确选择具有优先级。
 - 请求记录 `selectedModelRef`，Gateway 记录 `effectiveModelRef`；静默跨模型替换被禁止。
+- 会话使用 Pi 原生 `ThinkingLevel` 集合，默认 `medium`；Pi 按模型 `thinkingLevelMap` 限定可选值，并在首轮和工具续跑的每一轮模型请求中显式传给 Gateway。
+- Gateway 在调用 Provider 前同时校验能力与 `thinkingLevel`，不支持的等级返回可解释错误和兼容模型建议，不静默改成其他等级。
 - 模型不可用时先返回可解释错误或请求用户允许的降级；紧急平台降级也必须进入消息和用量记录。
 - V1 不实现 BYOK、自定义 Provider endpoint 或本地模型入口。
 

@@ -115,6 +115,7 @@ erDiagram
 - `title`
 - `activeBranchId`
 - `selectedModelRef`
+- `thinkingLevel`（`off | minimal | low | medium | high | xhigh | max`）
 - `assistantProfileId`
 - `createdAt`、`updatedAt`、`archivedAt`、`deletedAt`
 - `revision`、`syncState` 和 `lastSyncedAt`
@@ -170,6 +171,7 @@ ModelCatalogEntry 由平台下发，至少包含：
 
 - `modelRef`、用户可见名称和版本。
 - 文本、图片、文件、工具、MCP、图片生成等能力声明。
+- `thinkingLevels`，只列出该模型真实支持且可供用户选择的思考等级，并始终包含 `off`。
 - 上下文限制和可用状态。
 - 当前 `priceRef`、计价摘要和免费/收费状态。
 

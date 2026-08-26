@@ -27,6 +27,7 @@ import {
   chatRenameInputSchema,
   chatSearchInputSchema,
   chatSelectModelInputSchema,
+  chatSelectThinkingLevelInputSchema,
   chatSendInputSchema,
   chatStopInputSchema,
   cloudDataDeletionResultSchema,
@@ -298,6 +299,12 @@ const bridge: DesktopBridge = {
       ipcChannels.chatSelectModel,
       "chat.selectModel",
       chatSelectModelInputSchema.parse(input),
+    ),
+  selectConversationThinkingLevel: async (input) =>
+    invokeChat(
+      ipcChannels.chatSelectThinkingLevel,
+      "chat.selectThinkingLevel",
+      chatSelectThinkingLevelInputSchema.parse(input),
     ),
   search: async (input) =>
     invokeChat(ipcChannels.chatSearch, "chat.search", chatSearchInputSchema.parse(input)),

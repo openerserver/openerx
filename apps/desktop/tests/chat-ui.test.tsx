@@ -4,6 +4,7 @@ import type {
   ChatEvent,
   ConversationSnapshot,
   DesktopBridge,
+  ModelCatalogEntry,
   PersonalFile,
   SkillInstallation,
 } from "@openerx/contracts";
@@ -49,6 +50,27 @@ const skillInstallation: SkillInstallation = {
   revision: 1,
 };
 
+const thinkingModel: ModelCatalogEntry = {
+  modelRef: "pi/default",
+  displayName: "默认推理模型",
+  version: "2026-08-26",
+  capabilities: {
+    text: true,
+    imageInput: false,
+    fileInput: false,
+    tools: true,
+    mcp: true,
+    imageGeneration: false,
+  },
+  contextWindow: 128_000,
+  maxOutputTokens: 16_384,
+  status: "available",
+  priceRef: "price/test",
+  priceSummary: "测试计量",
+  free: true,
+  thinkingLevels: ["off", "medium"],
+};
+
 const snapshot: ConversationSnapshot = {
   conversation: {
     id: conversationId,
@@ -56,6 +78,7 @@ const snapshot: ConversationSnapshot = {
     title: "Markdown 验收",
     activeBranchId: branchId,
     selectedModelRef: "pi/default",
+    thinkingLevel: "medium",
     createdAt: timestamp,
     updatedAt: timestamp,
     archivedAt: null,
@@ -213,6 +236,7 @@ function createBridge(): DesktopBridge {
     setConversationArchived: vi.fn(),
     deleteConversation: vi.fn(),
     selectConversationModel: vi.fn(),
+    selectConversationThinkingLevel: vi.fn(),
     search: vi.fn().mockResolvedValue([]),
     activateBranch: vi.fn(),
     getChatEvents: vi.fn().mockResolvedValue([]),
@@ -334,6 +358,41 @@ describe("M1 chat renderer", () => {
     expect(document.querySelector(".markdown-body table")).toBeTruthy();
     expect(bridge.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: null, text: "生成代码块和表格" }),
+    );
+  });
+
+  it("selects thinking strength for a new task and persists changes for later messages", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listModels).mockResolvedValue([thinkingModel]);
+    renderApp(bridge);
+    const user = userEvent.setup();
+
+    await user.selectOptions(await screen.findByLabelText("新任务思考强度"), "off");
+    await user.type(screen.getByLabelText("发送消息"), "快速回答");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "快速回答", thinkingLevel: "off" }),
+    );
+    cleanup();
+
+    const conversationBridge = createBridge();
+    vi.mocked(conversationBridge.listModels).mockResolvedValue([thinkingModel]);
+    vi.mocked(conversationBridge.selectConversationThinkingLevel).mockResolvedValue({
+      ...snapshot.conversation,
+      thinkingLevel: "off",
+      revision: snapshot.conversation.revision + 1,
+    });
+    renderApp(conversationBridge, `/chat/${conversationId}`);
+
+    const conversationThinking = await screen.findByLabelText("后续消息思考强度");
+    await waitFor(() => expect((conversationThinking as HTMLSelectElement).disabled).toBe(false));
+    await userEvent.setup().selectOptions(conversationThinking, "off");
+    await waitFor(() =>
+      expect(conversationBridge.selectConversationThinkingLevel).toHaveBeenCalledWith({
+        conversationId,
+        thinkingLevel: "off",
+      }),
     );
   });
 

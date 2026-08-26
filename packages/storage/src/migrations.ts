@@ -554,6 +554,14 @@ const migrations: readonly Migration[] = [
         ON permission_requests(owner_profile_id, status, requested_at);
     `,
   },
+  {
+    version: 10,
+    checksum: "conversation-thinking-level-v10-20260826",
+    sql: `
+      ALTER TABLE conversations ADD COLUMN thinking_level TEXT NOT NULL DEFAULT 'medium'
+        CHECK (thinking_level IN ('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'));
+    `,
+  },
 ];
 
 export function migrateDatabase(database: DatabaseSync): void {

@@ -20,9 +20,11 @@ npm run test:deepseek:tools
 ```
 
 该命令必须同时得到 `providerReported=true` 的 UsageRecord 和 `status=settled` 的
-`finalBilling`，才算通过。默认使用 `deepseek-v4-flash` 且关闭 thinking。请求使用 DeepSeek
-V4 官方单次最大输出 384,000 Token；实际输出仍受供应商模型上限约束。可用环境变量见根目录
-`.env.example`。
+`finalBilling`，才算通过。默认使用 `deepseek-v4-flash`。产品请求按会话显式发送 Pi
+`thinkingLevel`：当前 DeepSeek 目录只发布 `off` 和 `medium`，分别映射为
+`thinking.disabled` 和 `thinking.enabled`；新会话默认 `medium`。`DEEPSEEK_THINKING` 仅作为未携带
+产品等级的直接/兼容调用后备值。请求使用 DeepSeek V4 官方单次最大输出 384,000 Token；实际输出
+仍受供应商模型上限约束。可用环境变量见根目录 `.env.example`。
 
 服务端价格快照采用 2026-08-26 官方人民币费率：Flash 缓存命中/未命中输入/输出分别为
 ¥0.02/¥1/¥2 每百万 Token，Pro 为 ¥0.025/¥3/¥6。`prompt_cache_miss_tokens` 和

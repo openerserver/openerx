@@ -9,7 +9,12 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { PiHistoryMessage, PiSkillMount, SupportedFileFormat } from "@openerx/contracts";
+import type {
+  PiHistoryMessage,
+  PiSkillMount,
+  SupportedFileFormat,
+  ThinkingLevel,
+} from "@openerx/contracts";
 
 const emptyUsage: AssistantMessage["usage"] = {
   input: 0,
@@ -24,6 +29,7 @@ export interface CreateProductPiSessionOptions {
   cwd: string;
   agentDir: string;
   history: PiHistoryMessage[];
+  thinkingLevel?: ThinkingLevel;
   modelRuntime?: ModelRuntime;
   model?: Model<string>;
   settingsManager?: SettingsManager;
@@ -123,6 +129,7 @@ export async function createProductPiSession(
     agentDir: options.agentDir,
     modelRuntime: options.modelRuntime,
     model: options.model,
+    thinkingLevel: options.thinkingLevel,
     noTools: "builtin",
     customTools: options.customTools,
     resourceLoader,

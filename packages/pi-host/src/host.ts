@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
+  defaultThinkingLevel,
   type PiActivityEvent,
   type PiFileToolRequestFrame,
   type PiHostEventFrame,
@@ -203,6 +204,7 @@ export function startPiHostProcess(
           const platform = createPlatformModelProvider({
             catalog,
             transport,
+            thinkingLevel: frame.thinkingLevel ?? defaultThinkingLevel,
             requiresImageInput: (frame.images?.length ?? 0) > 0,
             request: {
               accountId: frame.platform.accountId,
@@ -232,6 +234,7 @@ export function startPiHostProcess(
           cwd: workspaceDirectory,
           agentDir: agentDirectory,
           history: frame.history.slice(0, -1),
+          thinkingLevel: frame.thinkingLevel ?? defaultThinkingLevel,
           modelRuntime,
           model,
           sessionManager,

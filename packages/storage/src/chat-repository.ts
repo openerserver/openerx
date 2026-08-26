@@ -11,6 +11,7 @@ import {
   conversationSchema,
   conversationSnapshotSchema,
   conversationSummarySchema,
+  defaultThinkingLevel,
   type GenerationReceipt,
   generationReceiptSchema,
   type Message,
@@ -24,6 +25,7 @@ import {
   skillInstallationSyncSchema,
   syncConflictSchema,
   syncOperationSchema,
+  type ThinkingLevel,
 } from "@openerx/contracts";
 import {
   assertMessageTransition,
@@ -37,6 +39,7 @@ type SqlRow = Record<string, unknown>;
 interface RepositoryOptions {
   ownerProfileId?: string;
   selectedModelRef?: string;
+  thinkingLevel?: ThinkingLevel;
   now?: () => string;
   idFactory?: () => string;
   deviceId?: string;
@@ -46,6 +49,7 @@ export interface GenerationDraft {
   receipt: GenerationReceipt;
   events: ChatEvent[];
   created: boolean;
+  thinkingLevel: ThinkingLevel;
 }
 
 export interface PiProductEvent {
@@ -61,6 +65,7 @@ export class ChatRepository {
   readonly #database: DatabaseSync;
   readonly #ownerProfileId: string;
   readonly #selectedModelRef: string;
+  readonly #thinkingLevel: ThinkingLevel;
   readonly #now: () => string;
   readonly #idFactory: () => string;
   readonly #deviceId: string | null;
@@ -69,6 +74,7 @@ export class ChatRepository {
     this.#database = new DatabaseSync(databasePath);
     this.#ownerProfileId = options.ownerProfileId ?? "local-default";
     this.#selectedModelRef = options.selectedModelRef ?? "pi/default";
+    this.#thinkingLevel = options.thinkingLevel ?? defaultThinkingLevel;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#deviceId = options.deviceId ?? null;
@@ -121,9 +127,17 @@ export class ChatRepository {
     conversationId?: string | null;
     text: string;
     idempotencyKey: string;
+    thinkingLevel?: ThinkingLevel;
   }): GenerationDraft {
     const duplicate = this.#idempotentResult(input.idempotencyKey, "chat.send");
-    if (duplicate) return { receipt: duplicate, events: [], created: false };
+    if (duplicate) {
+      return {
+        receipt: duplicate,
+        events: [],
+        created: false,
+        thinkingLevel: this.thinkingLevelForMessage(duplicate.assistantMessageId),
+      };
+    }
     return this.#transaction(() => {
       const now = this.#now();
       let conversation: Conversation;
@@ -139,9 +153,9 @@ export class ChatRepository {
         this.#database
           .prepare(
             `INSERT INTO conversations
-             (id, owner_profile_id, title, active_branch_id, selected_model_ref, created_at,
-              updated_at, archived_at, deleted_at, revision)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1)`,
+             (id, owner_profile_id, title, active_branch_id, selected_model_ref, thinking_level,
+              created_at, updated_at, archived_at, deleted_at, revision)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1)`,
           )
           .run(
             conversationId,
@@ -149,6 +163,7 @@ export class ChatRepository {
             deriveConversationTitle(input.text),
             branchId,
             this.#selectedModelRef,
+            input.thinkingLevel ?? this.#thinkingLevel,
             now,
             now,
           );
@@ -215,7 +230,7 @@ export class ChatRepository {
         assistantMessageId: assistantMessage.id,
       });
       this.#storeIdempotentResult(input.idempotencyKey, "chat.send", receipt, now);
-      return { receipt, events, created: true };
+      return { receipt, events, created: true, thinkingLevel: conversation.thinkingLevel };
     });
   }
 
@@ -225,7 +240,14 @@ export class ChatRepository {
     idempotencyKey: string;
   }): GenerationDraft {
     const duplicate = this.#idempotentResult(input.idempotencyKey, "chat.regenerate");
-    if (duplicate) return { receipt: duplicate, events: [], created: false };
+    if (duplicate) {
+      return {
+        receipt: duplicate,
+        events: [],
+        created: false,
+        thinkingLevel: this.thinkingLevelForMessage(duplicate.assistantMessageId),
+      };
+    }
     return this.#forkGeneration({
       command: "chat.regenerate",
       conversationId: input.conversationId,
@@ -242,7 +264,14 @@ export class ChatRepository {
     idempotencyKey: string;
   }): GenerationDraft {
     const duplicate = this.#idempotentResult(input.idempotencyKey, "chat.edit");
-    if (duplicate) return { receipt: duplicate, events: [], created: false };
+    if (duplicate) {
+      return {
+        receipt: duplicate,
+        events: [],
+        created: false,
+        thinkingLevel: this.thinkingLevelForMessage(duplicate.assistantMessageId),
+      };
+    }
     return this.#forkGeneration({
       command: "chat.edit",
       conversationId: input.conversationId,
@@ -386,6 +415,13 @@ export class ChatRepository {
     return this.#updateConversation(conversationId, "selected_model_ref = ?", [modelRef]);
   }
 
+  selectConversationThinkingLevel(
+    conversationId: string,
+    thinkingLevel: ThinkingLevel,
+  ): { conversation: Conversation; event: ChatEvent } {
+    return this.#updateConversation(conversationId, "thinking_level = ?", [thinkingLevel]);
+  }
+
   selectedModelForMessage(messageId: string): string {
     const row = this.#database
       .prepare(
@@ -395,6 +431,17 @@ export class ChatRepository {
       .get(messageId) as SqlRow | undefined;
     if (!row) throw new Error("Message not found");
     return String(row.selected_model_ref);
+  }
+
+  thinkingLevelForMessage(messageId: string): ThinkingLevel {
+    const row = this.#database
+      .prepare(
+        `SELECT c.thinking_level FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id WHERE m.id = ?`,
+      )
+      .get(messageId) as SqlRow | undefined;
+    if (!row) throw new Error("Message not found");
+    return String(row.thinking_level) as ThinkingLevel;
   }
 
   setConversationArchived(
@@ -811,7 +858,7 @@ export class ChatRepository {
         assistantMessageId: assistant.id,
       });
       this.#storeIdempotentResult(input.idempotencyKey, input.command, receipt, now);
-      return { receipt, events, created: true };
+      return { receipt, events, created: true, thinkingLevel: conversation.thinkingLevel };
     });
   }
 
@@ -934,6 +981,7 @@ export class ChatRepository {
       title: row.title,
       activeBranchId: row.active_branch_id,
       selectedModelRef: row.selected_model_ref,
+      thinkingLevel: row.thinking_level,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       archivedAt: row.archived_at,
@@ -1229,14 +1277,15 @@ export class ChatRepository {
       this.#database
         .prepare(
           `INSERT INTO conversations
-           (id, owner_profile_id, title, active_branch_id, selected_model_ref, created_at,
-            updated_at, archived_at, deleted_at, revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, owner_profile_id, title, active_branch_id, selected_model_ref, thinking_level,
+            created_at, updated_at, archived_at, deleted_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              owner_profile_id = excluded.owner_profile_id,
              title = excluded.title,
              active_branch_id = excluded.active_branch_id,
              selected_model_ref = excluded.selected_model_ref,
+             thinking_level = excluded.thinking_level,
              updated_at = excluded.updated_at,
              archived_at = excluded.archived_at,
              deleted_at = excluded.deleted_at,
@@ -1248,6 +1297,7 @@ export class ChatRepository {
           conversation.title,
           conversation.activeBranchId,
           conversation.selectedModelRef,
+          conversation.thinkingLevel,
           conversation.createdAt,
           conversation.updatedAt,
           conversation.archivedAt,

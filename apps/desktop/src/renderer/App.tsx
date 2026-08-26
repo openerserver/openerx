@@ -1,25 +1,28 @@
-import type {
-  Attachment,
-  BillingOverview,
-  ChargeRecord,
-  ChatEvent,
-  ConversationSnapshot,
-  ConversationSummary,
-  DesktopEnvironment,
-  DeviceSession,
-  McpServerConfig,
-  Message,
-  ModelCatalogEntry,
-  PersonalFile,
-  RechargeOrder,
-  RefundOrder,
-  ReleaseUpdateState,
-  SkillInstallation,
-  SyncConflict,
-  TokenAggregateField,
-  UsageRecord,
-  WorkItem,
-  WorkItemDetail,
+import {
+  type Attachment,
+  automaticModelRef,
+  type BillingOverview,
+  type ChargeRecord,
+  type ChatEvent,
+  type ConversationSnapshot,
+  type ConversationSummary,
+  type DesktopEnvironment,
+  type DeviceSession,
+  defaultThinkingLevel,
+  type McpServerConfig,
+  type Message,
+  type ModelCatalogEntry,
+  type PersonalFile,
+  type RechargeOrder,
+  type RefundOrder,
+  type ReleaseUpdateState,
+  type SkillInstallation,
+  type SyncConflict,
+  type ThinkingLevel,
+  type TokenAggregateField,
+  type UsageRecord,
+  type WorkItem,
+  type WorkItemDetail,
 } from "@openerx/contracts";
 import {
   ArrowClockwise,
@@ -52,7 +55,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Navigate,
@@ -154,6 +157,24 @@ const capabilityLabels: Record<keyof ModelCatalogEntry["capabilities"], string> 
   mcp: "MCP",
   imageGeneration: "图片生成",
 };
+
+const thinkingLevelLabels: Record<ThinkingLevel, string> = {
+  off: "关闭",
+  minimal: "最少",
+  low: "低",
+  medium: "标准",
+  high: "高",
+  xhigh: "超高",
+  max: "最大",
+};
+
+function modelThinkingLevels(model: ModelCatalogEntry): ThinkingLevel[] {
+  return model.thinkingLevels ?? ["off"];
+}
+
+function preferredThinkingLevel(levels: ThinkingLevel[]): ThinkingLevel {
+  return levels.includes(defaultThinkingLevel) ? defaultThinkingLevel : (levels[0] ?? "off");
+}
 
 const toolCatalog = [
   { namespace: "builtin", name: "确定性计算", detail: "无网络算术计算" },
@@ -481,6 +502,7 @@ function Composer({
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const [skillInstallationId, setSkillInstallationId] = useState("");
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(defaultThinkingLevel);
   const [pendingFiles, setPendingFiles] = useState<PersonalFile[]>([]);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const previousConversationIdRef = useRef(conversationId);
@@ -515,12 +537,37 @@ function Composer({
     queryFn: () => window.openerx.listSkills(),
     retry: false,
   });
+  const models = useQuery({
+    queryKey: ["models", "catalog"],
+    queryFn: () => window.openerx.listModels(),
+    enabled: !conversationId,
+    retry: false,
+  });
+  const newConversationModel =
+    models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
+    models.data?.find(({ status }) => status === "available");
+  const newConversationThinkingLevels = useMemo(
+    () =>
+      newConversationModel ? modelThinkingLevels(newConversationModel) : [defaultThinkingLevel],
+    [newConversationModel],
+  );
+  useEffect(() => {
+    if (
+      conversationId ||
+      !newConversationModel ||
+      newConversationThinkingLevels.includes(thinkingLevel)
+    ) {
+      return;
+    }
+    setThinkingLevel(preferredThinkingLevel(newConversationThinkingLevels));
+  }, [conversationId, newConversationModel, newConversationThinkingLevels, thinkingLevel]);
   const send = useMutation({
     mutationFn: (text: string) =>
       window.openerx.sendMessage({
         conversationId: conversationId ?? null,
         text,
         idempotencyKey: idempotencyKey("send"),
+        ...(!conversationId ? { thinkingLevel } : {}),
         ...(pendingFiles.length > 0 ? { personalFileIds: pendingFiles.map(({ id }) => id) } : {}),
         ...(skillInstallationId ? { skillInstallationId } : {}),
       }),
@@ -587,6 +634,28 @@ function Composer({
           >
             <Paperclip size={18} weight="regular" />
           </button>
+          {!conversationId ? (
+            <div className="composer-select">
+              <SlidersHorizontal size={15} weight="regular" />
+              <span className="composer-select-label">
+                思考 · {thinkingLevelLabels[thinkingLevel]}
+              </span>
+              <select
+                id="thinking-level-new"
+                aria-label="新任务思考强度"
+                value={thinkingLevel}
+                disabled={!newConversationModel}
+                onChange={(event) => setThinkingLevel(event.target.value as ThinkingLevel)}
+              >
+                {newConversationThinkingLevels.map((level) => (
+                  <option value={level} key={level}>
+                    {thinkingLevelLabels[level]}
+                  </option>
+                ))}
+              </select>
+              <CaretDown size={13} weight="bold" aria-hidden="true" />
+            </div>
+          ) : null}
           <div className="composer-select">
             <Sparkle size={15} weight="regular" />
             <span className="composer-select-label">
@@ -657,7 +726,12 @@ function NewChat(): React.JSX.Element {
     queryFn: () => window.openerx.listModels(),
     retry: false,
   });
-  const defaultModel = models.data?.find(({ status }) => status === "available");
+  const defaultModel =
+    models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
+    models.data?.find(({ status }) => status === "available");
+  const suggestionThinkingLevel = defaultModel
+    ? preferredThinkingLevel(modelThinkingLevels(defaultModel))
+    : defaultThinkingLevel;
   return (
     <main className="new-chat-page">
       <header className="new-chat-topbar">
@@ -674,7 +748,7 @@ function NewChat(): React.JSX.Element {
       </section>
       <section className="suggestion-grid" aria-label="常用任务建议">
         {suggestions.map((suggestion) => (
-          <Suggestion key={suggestion} text={suggestion} />
+          <Suggestion key={suggestion} text={suggestion} thinkingLevel={suggestionThinkingLevel} />
         ))}
       </section>
       <Composer />
@@ -682,13 +756,20 @@ function NewChat(): React.JSX.Element {
   );
 }
 
-function Suggestion({ text }: { text: string }): React.JSX.Element {
+function Suggestion({
+  text,
+  thinkingLevel,
+}: {
+  text: string;
+  thinkingLevel: ThinkingLevel;
+}): React.JSX.Element {
   const navigate = useNavigate();
   const send = useMutation({
     mutationFn: () =>
       window.openerx.sendMessage({
         conversationId: null,
         text,
+        thinkingLevel,
         idempotencyKey: idempotencyKey("suggestion"),
       }),
     onSuccess: (receipt) => navigate(`/chat/${receipt.conversationId}`),
@@ -1615,8 +1696,20 @@ function ConversationToolbar({
     retry: false,
   });
   const selectModel = useMutation({
-    mutationFn: (modelRef: string) =>
-      window.openerx.selectConversationModel({ conversationId: conversation.id, modelRef }),
+    mutationFn: async (modelRef: string) => {
+      const updated = await window.openerx.selectConversationModel({
+        conversationId: conversation.id,
+        modelRef,
+      });
+      const nextModel = models.data?.find((model) => model.modelRef === modelRef);
+      if (!nextModel) return updated;
+      const levels = modelThinkingLevels(nextModel);
+      if (levels.includes(updated.thinkingLevel)) return updated;
+      return await window.openerx.selectConversationThinkingLevel({
+        conversationId: conversation.id,
+        thinkingLevel: preferredThinkingLevel(levels),
+      });
+    },
     onSuccess: (updated) => {
       queryClient.setQueryData<ConversationSnapshot>(
         chatKeys.conversation(conversation.id),
@@ -1627,6 +1720,23 @@ function ConversationToolbar({
   const selectedModel = models.data?.find(
     ({ modelRef }) => modelRef === conversation.selectedModelRef,
   );
+  const supportedThinkingLevels = selectedModel
+    ? modelThinkingLevels(selectedModel)
+    : [conversation.thinkingLevel];
+  const selectThinkingLevel = useMutation({
+    mutationFn: (thinkingLevel: ThinkingLevel) =>
+      window.openerx.selectConversationThinkingLevel({
+        conversationId: conversation.id,
+        thinkingLevel,
+      }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<ConversationSnapshot>(
+        chatKeys.conversation(conversation.id),
+        (current) => (current ? { ...current, conversation: updated } : current),
+      );
+      setToolbarNotice(`后续消息思考强度已设为${thinkingLevelLabels[updated.thinkingLevel]}。`);
+    },
+  });
 
   return (
     <header className="conversation-toolbar">
@@ -1656,9 +1766,35 @@ function ConversationToolbar({
             </select>
           </label>
         ) : null}
+        <label>
+          思考强度
+          <select
+            aria-label="后续消息思考强度"
+            value={conversation.thinkingLevel}
+            onChange={(event) => selectThinkingLevel.mutate(event.target.value as ThinkingLevel)}
+            disabled={selectThinkingLevel.isPending || !selectedModel}
+          >
+            {!supportedThinkingLevels.includes(conversation.thinkingLevel) ? (
+              <option value={conversation.thinkingLevel} disabled>
+                {thinkingLevelLabels[conversation.thinkingLevel]} · 当前模型不支持
+              </option>
+            ) : null}
+            {supportedThinkingLevels.map((level) => (
+              <option value={level} key={level}>
+                {thinkingLevelLabels[level]}
+              </option>
+            ))}
+          </select>
+        </label>
         {selectedModel ? (
           <div className="model-details">
             <span>{modelCapabilities(selectedModel)}</span>
+            <span>
+              思考{" "}
+              {modelThinkingLevels(selectedModel)
+                .map((level) => thinkingLevelLabels[level])
+                .join(" / ")}
+            </span>
             <span>
               上下文 {selectedModel.contextWindow.toLocaleString()} · 最大输出{" "}
               {selectedModel.maxOutputTokens.toLocaleString()}
@@ -1793,10 +1929,18 @@ function ConversationToolbar({
       ) : null}
       <div className="toolbar-feedback" aria-live="polite">
         {toolbarNotice ? <p>{toolbarNotice}</p> : null}
-        {rename.error || archive.error || activate.error ? (
+        {rename.error ||
+        archive.error ||
+        activate.error ||
+        selectModel.error ||
+        selectThinkingLevel.error ? (
           <p className="inline-error">
             {userFacingError(
-              rename.error ?? archive.error ?? activate.error,
+              rename.error ??
+                archive.error ??
+                activate.error ??
+                selectModel.error ??
+                selectThinkingLevel.error,
               "对话操作暂时没有完成，请重试。",
             )}
           </p>

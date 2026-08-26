@@ -20,6 +20,31 @@ afterEach(() => {
 });
 
 describe("ChatRepository", () => {
+  it("persists the conversation thinking level and resolves it for each model message", () => {
+    const file = databasePath();
+    const repository = new ChatRepository(file);
+    const draft = repository.createGeneration({
+      text: "需要仔细分析",
+      idempotencyKey: "thinking-send-0001",
+      thinkingLevel: "high",
+    });
+
+    expect(
+      repository.getConversation(draft.receipt.conversationId).conversation.thinkingLevel,
+    ).toBe("high");
+    expect(repository.thinkingLevelForMessage(draft.receipt.assistantMessageId)).toBe("high");
+    repository.selectConversationThinkingLevel(draft.receipt.conversationId, "off");
+    expect(draft.thinkingLevel).toBe("high");
+    repository.close();
+
+    const reopened = new ChatRepository(file);
+    expect(reopened.getConversation(draft.receipt.conversationId).conversation.thinkingLevel).toBe(
+      "off",
+    );
+    expect(reopened.thinkingLevelForMessage(draft.receipt.assistantMessageId)).toBe("off");
+    reopened.close();
+  });
+
   it("persists a stream and replays strictly ordered product events", () => {
     const repository = new ChatRepository(databasePath());
     const draft = repository.createGeneration({

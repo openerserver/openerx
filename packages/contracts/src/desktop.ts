@@ -50,6 +50,7 @@ export const ipcChannels = Object.freeze({
   chatArchive: "chat:conversation:archive",
   chatDelete: "chat:conversation:delete",
   chatSelectModel: "chat:conversation:model:select",
+  chatSelectThinkingLevel: "chat:conversation:thinking:select",
   chatSearch: "chat:search",
   chatActivateBranch: "chat:branch:activate",
   chatEvents: "chat:events:list",

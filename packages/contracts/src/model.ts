@@ -1,5 +1,28 @@
 import { z } from "zod";
-import { entityIdSchema, timestampSchema } from "./chat";
+import { entityIdSchema, timestampSchema } from "./common";
+
+export const thinkingLevelValues = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export const thinkingLevelSchema = z.enum(thinkingLevelValues);
+export const defaultThinkingLevel = "medium" as const;
+
+const supportedThinkingLevelsSchema = z
+  .array(thinkingLevelSchema)
+  .min(1)
+  .max(thinkingLevelValues.length)
+  .refine((levels) => new Set(levels).size === levels.length, {
+    message: "Thinking levels must be unique",
+  })
+  .refine((levels) => levels.includes("off"), {
+    message: "Thinking levels must include off",
+  });
 
 export const modelCapabilitiesSchema = z
   .object({
@@ -24,6 +47,7 @@ export const modelCatalogEntrySchema = z
     priceRef: z.string().min(1),
     priceSummary: z.string().min(1),
     free: z.boolean(),
+    thinkingLevels: supportedThinkingLevelsSchema.optional(),
   })
   .strict();
 
@@ -96,6 +120,7 @@ export const modelSelectionCheckSchema = z.discriminatedUnion("supported", [
 ]);
 
 export type ModelCatalogEntry = z.infer<typeof modelCatalogEntrySchema>;
+export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 export type UsageAggregate = z.infer<typeof usageAggregateSchema>;
 export type TokenAggregateField = z.infer<typeof tokenAggregateFieldSchema>;
@@ -107,6 +132,7 @@ export interface ModelGatewayRequest {
   conversationId: string;
   messageId: string;
   selectedModelRef: string;
+  thinkingLevel?: ThinkingLevel;
   requestDedupeKey: string;
   context: unknown;
 }
@@ -118,6 +144,7 @@ export const modelGatewayRequestSchema = z
     messageId: entityIdSchema,
     selectedModelRef: z.string().min(1),
     approvedFallbackModelRef: z.string().min(1).nullable(),
+    thinkingLevel: thinkingLevelSchema.optional(),
     requestDedupeKey: z.string().min(8).max(240),
     requirements: modelRequirementSchema,
     context: z.unknown(),

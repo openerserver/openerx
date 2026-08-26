@@ -140,6 +140,7 @@ describe("DeepSeekModelExecutor", () => {
     const catalog = createDeepSeekModelCatalog();
     expect(catalog.find(({ modelRef }) => modelRef === automaticModelRef)).toMatchObject({
       capabilities: { imageInput: true },
+      thinkingLevels: ["off", "medium"],
     });
     expect(catalog).toContainEqual(
       expect.objectContaining({
@@ -148,6 +149,25 @@ describe("DeepSeekModelExecutor", () => {
         capabilities: expect.objectContaining({ imageInput: true, tools: true }),
       }),
     );
+  });
+
+  it("maps each explicit product thinking level to the DeepSeek request", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      successResponse(),
+    );
+    const executor = new DeepSeekModelExecutor({
+      apiKey: `sk-${"r".repeat(32)}`,
+      fetch: fetchMock,
+      thinking: "enabled",
+    });
+
+    await executor.execute(request({ thinkingLevel: "off" }), undefined);
+    await executor.execute(request({ thinkingLevel: "medium" }), undefined);
+
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(firstBody.thinking).toEqual({ type: "disabled" });
+    expect(secondBody.thinking).toEqual({ type: "enabled" });
   });
 
   it("routes automatic image input to Vision and emits the official image_url payload", async () => {

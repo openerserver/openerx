@@ -19,6 +19,8 @@ import {
   modelCatalogEntrySchema,
   modelGatewayResponseSchema,
   modelGatewayStreamEventSchema,
+  type ThinkingLevel,
+  thinkingLevelValues,
   type UsageRecord,
 } from "@openerx/contracts";
 
@@ -148,6 +150,7 @@ export interface CreatePlatformProviderOptions {
   catalog: ModelCatalogEntry[];
   transport: PlatformModelTransport;
   request: PlatformModelRequestContext;
+  thinkingLevel?: ThinkingLevel;
   requiresImageInput?: boolean;
   onUsage?: (record: UsageRecord) => void;
   streamChunkSize?: number;
@@ -159,18 +162,28 @@ export interface PlatformProviderHandle {
 }
 
 function toPiModel(entry: ModelCatalogEntry): Model<string> {
+  const supported = new Set(entry.thinkingLevels ?? ["off"]);
+  const thinkingLevelMap: NonNullable<Model<string>["thinkingLevelMap"]> = {};
+  for (const level of thinkingLevelValues) {
+    thinkingLevelMap[level] = supported.has(level) ? level : null;
+  }
   return {
     id: entry.modelRef,
     name: entry.displayName,
     api: "openerx-platform",
     provider: "openerx-platform",
     baseUrl: "openerx://model-gateway",
-    reasoning: false,
+    reasoning: [...supported].some((level) => level !== "off"),
+    thinkingLevelMap,
     input: entry.capabilities.imageInput ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: entry.contextWindow,
     maxTokens: entry.maxOutputTokens,
   };
+}
+
+function supportsThinkingLevel(entry: ModelCatalogEntry, thinkingLevel: ThinkingLevel): boolean {
+  return (entry.thinkingLevels ?? ["off"]).includes(thinkingLevel);
 }
 
 function piUsage(record: UsageRecord): AssistantMessage["usage"] {
@@ -241,8 +254,9 @@ function streamPlatform(
         stream.push({ type: "text_start", contentIndex: textContentIndex, partial: output });
         return textContentIndex;
       };
-      const request = {
+      const request: ModelGatewayRequestDto = {
         ...configuration.request,
+        thinkingLevel: options?.reasoning ?? "off",
         requestDedupeKey: roundDedupeKey(configuration.request.requestDedupeKey, context),
         requirements: {
           ...(contextHasImages(context) ? { imageInput: true } : {}),
@@ -367,11 +381,14 @@ export function createPlatformModelProvider(
   const available = catalog.filter(
     ({ modelRef, status }) => modelRef !== automaticModelRef && status === "available",
   );
+  const requestedThinkingLevel = options.thinkingLevel;
   const selectedEntry =
     options.request.selectedModelRef === automaticModelRef
       ? available.find(
-          ({ capabilities }) =>
-            options.requiresImageInput !== true || capabilities.imageInput === true,
+          (entry) =>
+            (options.requiresImageInput !== true || entry.capabilities.imageInput === true) &&
+            (requestedThinkingLevel === undefined ||
+              supportsThinkingLevel(entry, requestedThinkingLevel)),
         )
       : catalog.find(({ modelRef }) => modelRef === options.request.selectedModelRef);
   if (selectedEntry?.status !== "available") {
@@ -383,6 +400,22 @@ export function createPlatformModelProvider(
       .map(({ modelRef }) => modelRef)
       .join(",");
     throw new Error(`MODEL_CAPABILITY_UNSUPPORTED:imageInput:${suggestions}`);
+  }
+  if (
+    requestedThinkingLevel !== undefined &&
+    !supportsThinkingLevel(selectedEntry, requestedThinkingLevel)
+  ) {
+    const suggestions = available
+      .filter(
+        (entry) =>
+          supportsThinkingLevel(entry, requestedThinkingLevel) &&
+          (options.requiresImageInput !== true || entry.capabilities.imageInput),
+      )
+      .map(({ modelRef }) => modelRef)
+      .join(",");
+    throw new Error(
+      `MODEL_CAPABILITY_UNSUPPORTED:thinking:${requestedThinkingLevel}:${suggestions}`,
+    );
   }
   const selected = models.find(({ id }) => id === selectedEntry.modelRef);
   if (!selected) throw new Error(`PLATFORM_MODEL_NOT_FOUND:${selectedEntry.modelRef}`);

@@ -151,6 +151,35 @@ describe("M1 process and chat contracts", () => {
     ).toThrow();
   });
 
+  it("carries validated thinking levels through chat and Pi prompt contracts", () => {
+    expect(
+      chatCommandEnvelopeSchema.parse({
+        command: "chat.send",
+        input: {
+          text: "深入分析",
+          idempotencyKey: "thinking-contract-0001",
+          thinkingLevel: "high",
+        },
+      }),
+    ).toMatchObject({ input: { thinkingLevel: "high" } });
+    expect(
+      piPromptFrameSchema.parse({
+        kind: "pi.session.prompt",
+        generationId: crypto.randomUUID(),
+        conversationId: crypto.randomUUID(),
+        assistantMessageId: crypto.randomUUID(),
+        thinkingLevel: "xhigh",
+        history: [{ role: "user", text: "分析" }],
+      }),
+    ).toMatchObject({ thinkingLevel: "xhigh" });
+    expect(() =>
+      chatCommandEnvelopeSchema.parse({
+        command: "chat.selectThinkingLevel",
+        input: { conversationId: crypto.randomUUID(), thinkingLevel: "unlimited" },
+      }),
+    ).toThrow();
+  });
+
   it("requires exact process versions and 256-bit boot nonces", () => {
     const nonce = "a".repeat(64);
     expect(

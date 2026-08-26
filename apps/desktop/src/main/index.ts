@@ -23,6 +23,7 @@ import {
   chatRenameInputSchema,
   chatSearchInputSchema,
   chatSelectModelInputSchema,
+  chatSelectThinkingLevelInputSchema,
   chatSendInputSchema,
   chatStopInputSchema,
   createRechargeOrderInputSchema,
@@ -437,6 +438,12 @@ function registerIpcHandlers(
     ipcChannels.chatSelectModel,
     "chat.selectModel",
     chatSelectModelInputSchema,
+    true,
+  );
+  registerChatHandler(
+    ipcChannels.chatSelectThinkingLevel,
+    "chat.selectThinkingLevel",
+    chatSelectThinkingLevelInputSchema,
     true,
   );
   registerChatHandler(ipcChannels.chatSearch, "chat.search", chatSearchInputSchema);

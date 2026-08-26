@@ -46,6 +46,7 @@ const catalog: ModelCatalogEntry[] = [
     priceRef: "price/standard-2026-08",
     priceSummary: "Alpha 免费计量",
     free: true,
+    thinkingLevels: ["off"],
   },
   {
     modelRef: "platform/tools",
@@ -65,6 +66,7 @@ const catalog: ModelCatalogEntry[] = [
     priceRef: "price/tools-2026-08",
     priceSummary: "Alpha 免费计量",
     free: true,
+    thinkingLevels: ["off", "medium"],
   },
 ];
 
@@ -227,6 +229,21 @@ describe("ModelGatewayService", () => {
     });
     await expect(gateway.execute(request({ requirements: { tools: true } }))).rejects.toThrow(
       "MODEL_CAPABILITY_UNSUPPORTED",
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("blocks unsupported thinking levels before provider execution", async () => {
+    const { gateway, execute } = setup();
+    expect(gateway.checkSelection("platform/standard", {}, "medium")).toEqual({
+      supported: false,
+      modelRef: "platform/standard",
+      missingCapabilities: ["thinking:medium"],
+      suggestedModelRefs: ["platform/tools"],
+    });
+    expect(gateway.checkSelection("platform/tools", {}, "medium")).toEqual({ supported: true });
+    await expect(gateway.execute(request({ thinkingLevel: "medium" }))).rejects.toThrow(
+      "MODEL_CAPABILITY_UNSUPPORTED:thinking:medium",
     );
     expect(execute).not.toHaveBeenCalled();
   });

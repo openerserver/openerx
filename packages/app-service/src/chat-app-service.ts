@@ -178,6 +178,15 @@ export class ChatAppService {
         await this.#syncIfAuthorized(authorization);
         return result.conversation;
       }
+      case "chat.selectThinkingLevel": {
+        const result = this.#repository.selectConversationThinkingLevel(
+          request.input.conversationId,
+          request.input.thinkingLevel,
+        );
+        this.#emit(result.event);
+        await this.#syncIfAuthorized(authorization);
+        return result.conversation;
+      }
       case "chat.search":
         return this.#repository.search(request.input.query, request.input.includeArchived ?? false);
       case "chat.activateBranch": {
@@ -578,6 +587,7 @@ export class ChatAppService {
         generationId,
         conversationId: draft.receipt.conversationId,
         assistantMessageId: draft.receipt.assistantMessageId,
+        thinkingLevel: draft.thinkingLevel,
         history,
         ...(skillMounts.length > 0 ? { skills: skillMounts } : {}),
         files: attachedFiles?.map((file) => ({

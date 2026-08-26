@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { entityIdSchema, timestampSchema } from "./chat";
 import { supportedFileFormatSchema } from "./file";
-import { usageRecordSchema } from "./model";
+import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { processNonceSchema } from "./process";
 import { piSkillMountSchema } from "./skill";
 import { piActivityEventSchema, piToolRequestFrameSchema, piToolResponseFrameSchema } from "./tool";
@@ -56,6 +56,7 @@ export const piPromptFrameSchema = z
     generationId: entityIdSchema,
     conversationId: entityIdSchema,
     assistantMessageId: entityIdSchema,
+    thinkingLevel: thinkingLevelSchema.optional(),
     history: z.array(piHistoryMessageSchema).min(1),
     files: z
       .array(

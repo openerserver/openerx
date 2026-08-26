@@ -27,6 +27,7 @@ import {
   type PersonalFile,
   personalFileSchema,
 } from "./file";
+import { defaultThinkingLevel, thinkingLevelSchema } from "./model";
 import {
   type SkillInstallation,
   type SkillInvocation,
@@ -115,6 +116,7 @@ export const conversationSchema = z
     title: z.string().min(1).max(120),
     activeBranchId: entityIdSchema,
     selectedModelRef: z.string().min(1),
+    thinkingLevel: thinkingLevelSchema.default(defaultThinkingLevel),
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
     archivedAt: timestampSchema.nullable(),
@@ -183,6 +185,7 @@ export const chatSendInputSchema = z
     idempotencyKey: z.string().min(8).max(200),
     personalFileIds: z.array(entityIdSchema).max(100).optional(),
     skillInstallationId: entityIdSchema.optional(),
+    thinkingLevel: thinkingLevelSchema.optional(),
   })
   .strict();
 
@@ -233,6 +236,13 @@ export const chatSelectModelInputSchema = z
   })
   .strict();
 
+export const chatSelectThinkingLevelInputSchema = z
+  .object({
+    conversationId: entityIdSchema,
+    thinkingLevel: thinkingLevelSchema,
+  })
+  .strict();
+
 export const chatSearchInputSchema = z
   .object({
     query: z.string().trim().min(1).max(500),
@@ -271,6 +281,12 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
   z.object({ command: z.literal("chat.archive"), input: chatArchiveInputSchema }).strict(),
   z.object({ command: z.literal("chat.delete"), input: chatDeleteInputSchema }).strict(),
   z.object({ command: z.literal("chat.selectModel"), input: chatSelectModelInputSchema }).strict(),
+  z
+    .object({
+      command: z.literal("chat.selectThinkingLevel"),
+      input: chatSelectThinkingLevelInputSchema,
+    })
+    .strict(),
   z.object({ command: z.literal("chat.search"), input: chatSearchInputSchema }).strict(),
   z
     .object({ command: z.literal("chat.activateBranch"), input: chatActivateBranchInputSchema })
@@ -416,6 +432,7 @@ export interface ChatCommandResultMap {
   "chat.archive": Conversation;
   "chat.delete": z.infer<typeof deletedConversationResultSchema>;
   "chat.selectModel": Conversation;
+  "chat.selectThinkingLevel": Conversation;
   "chat.search": SearchResult[];
   "chat.activateBranch": ConversationSnapshot;
   "chat.events": ChatEvent[];
@@ -487,6 +504,7 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
     case "chat.rename":
     case "chat.archive":
     case "chat.selectModel":
+    case "chat.selectThinkingLevel":
       parsed = conversationSchema.parse(value);
       break;
     case "chat.delete":
@@ -589,6 +607,9 @@ export interface ChatBridge {
     input: z.input<typeof chatDeleteInputSchema>,
   ): Promise<z.infer<typeof deletedConversationResultSchema>>;
   selectConversationModel(input: z.input<typeof chatSelectModelInputSchema>): Promise<Conversation>;
+  selectConversationThinkingLevel(
+    input: z.input<typeof chatSelectThinkingLevelInputSchema>,
+  ): Promise<Conversation>;
   search(input: z.input<typeof chatSearchInputSchema>): Promise<SearchResult[]>;
   activateBranch(
     input: z.input<typeof chatActivateBranchInputSchema>,

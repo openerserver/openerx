@@ -68,6 +68,7 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
     priceRef: deepSeekPriceRefs.flash,
     priceSummary: "服务端按 DeepSeek 官方人民币费率和实际 Token 结算",
     free: false,
+    thinkingLevels: ["off", "medium"],
   },
   {
     modelRef: deepSeekModelRefs.pro,
@@ -87,6 +88,7 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
     priceRef: deepSeekPriceRefs.pro,
     priceSummary: "服务端按 DeepSeek 官方人民币费率和实际 Token 结算",
     free: false,
+    thinkingLevels: ["off", "medium"],
   },
   {
     modelRef: deepSeekModelRefs.vision,
@@ -106,6 +108,7 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
     priceRef: deepSeekPriceRefs.vision,
     priceSummary: "实验视觉模型；服务端按 DeepSeek 官方费率和实际 Token 结算",
     free: false,
+    thinkingLevels: ["off", "medium"],
   },
 ];
 
@@ -452,6 +455,14 @@ function modelForRequest(
   return model;
 }
 
+function thinkingModeForRequest(
+  request: ModelGatewayRequestDto,
+  fallback: DeepSeekThinkingMode,
+): DeepSeekThinkingMode {
+  if (request.thinkingLevel === undefined) return fallback;
+  return request.thinkingLevel === "off" ? "disabled" : "enabled";
+}
+
 function providerError(body: unknown, status: number): Error {
   const candidate = body as { error?: { code?: unknown; message?: unknown } } | null;
   const code =
@@ -651,7 +662,7 @@ export class DeepSeekModelExecutor implements ModelExecutor {
           model,
           messages,
           ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-          thinking: { type: this.#thinking },
+          thinking: { type: thinkingModeForRequest(request, this.#thinking) },
           max_tokens: deepSeekProviderMaxOutputTokens,
           stream: false,
           user_id: request.accountId,
@@ -727,7 +738,7 @@ export class DeepSeekModelExecutor implements ModelExecutor {
           model,
           messages,
           ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-          thinking: { type: this.#thinking },
+          thinking: { type: thinkingModeForRequest(request, this.#thinking) },
           max_tokens: deepSeekProviderMaxOutputTokens,
           stream: true,
           stream_options: { include_usage: true },

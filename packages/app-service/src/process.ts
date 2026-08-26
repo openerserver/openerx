@@ -46,6 +46,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     {
       ownerProfileId: bootstrap.ownerProfileId,
       selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
       deviceId: bootstrap.deviceId,
     },
   );

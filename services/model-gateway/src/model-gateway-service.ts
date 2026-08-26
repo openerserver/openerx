@@ -13,6 +13,7 @@ import {
   modelGatewayRequestSchema,
   modelGatewayResponseSchema,
   modelSelectionCheckSchema,
+  type ThinkingLevel,
   type UsageRecord,
   type UsageStorePort,
   usageRecordSchema,
@@ -59,6 +60,10 @@ export interface ModelGatewayServiceOptions {
 
 const capabilityKeys = ["imageInput", "fileInput", "tools", "mcp", "imageGeneration"] as const;
 
+function supportsThinkingLevel(entry: ModelCatalogEntry, thinkingLevel: ThinkingLevel): boolean {
+  return (entry.thinkingLevels ?? ["off"]).includes(thinkingLevel);
+}
+
 function deterministicUsageId(accountId: string, dedupeKey: string): string {
   const hex = createHash("sha256").update(`${accountId}\0${dedupeKey}`, "utf8").digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
@@ -102,7 +107,11 @@ export class ModelGatewayService {
     return structuredClone(this.#catalog);
   }
 
-  checkSelection(modelRef: string, requirements: ModelRequirement): ModelSelectionCheck {
+  checkSelection(
+    modelRef: string,
+    requirements: ModelRequirement,
+    thinkingLevel?: ThinkingLevel,
+  ): ModelSelectionCheck {
     if (modelRef === automaticModelRef) {
       const candidates = this.#catalog.filter(
         (entry) =>
@@ -110,7 +119,8 @@ export class ModelGatewayService {
           entry.status === "available" &&
           capabilityKeys.every(
             (capability) => requirements[capability] !== true || entry.capabilities[capability],
-          ),
+          ) &&
+          (thinkingLevel === undefined || supportsThinkingLevel(entry, thinkingLevel)),
       );
       if (candidates.length > 0) return { supported: true };
       return modelSelectionCheckSchema.parse({
@@ -131,16 +141,22 @@ export class ModelGatewayService {
           .map(({ modelRef: candidate }) => candidate),
       });
     }
-    const missingCapabilities = capabilityKeys.filter(
+    const missingCapabilities: string[] = capabilityKeys.filter(
       (capability) => requirements[capability] === true && !selected.capabilities[capability],
     );
+    if (thinkingLevel !== undefined && !supportsThinkingLevel(selected, thinkingLevel)) {
+      missingCapabilities.push(`thinking:${thinkingLevel}`);
+    }
     if (missingCapabilities.length === 0) return { supported: true };
     const suggestedModelRefs = this.#catalog
       .filter(
         (entry) =>
           entry.modelRef !== automaticModelRef &&
           entry.status === "available" &&
-          missingCapabilities.every((capability) => entry.capabilities[capability]),
+          capabilityKeys.every(
+            (capability) => requirements[capability] !== true || entry.capabilities[capability],
+          ) &&
+          (thinkingLevel === undefined || supportsThinkingLevel(entry, thinkingLevel)),
       )
       .map(({ modelRef: candidate }) => candidate);
     return modelSelectionCheckSchema.parse({
@@ -178,7 +194,11 @@ export class ModelGatewayService {
       if (onDelta && replay.text) onDelta(replay.text);
       return structuredClone(replay);
     }
-    const selection = this.checkSelection(request.selectedModelRef, request.requirements);
+    const selection = this.checkSelection(
+      request.selectedModelRef,
+      request.requirements,
+      request.thinkingLevel,
+    );
     if (!selection.supported) {
       throw new Error(
         `MODEL_CAPABILITY_UNSUPPORTED:${selection.missingCapabilities.join(",")}:${selection.suggestedModelRefs.join(",")}`,

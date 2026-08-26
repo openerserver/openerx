@@ -40,6 +40,7 @@ const model: ModelCatalogEntry = {
   priceRef: "price/standard-alpha",
   priceSummary: "Alpha 免费计量",
   free: true,
+  thinkingLevels: ["off", "medium"],
 };
 
 const visionModel: ModelCatalogEntry = {
@@ -112,6 +113,30 @@ describe("Platform Model Pi Provider", () => {
     ).toThrow(`MODEL_CAPABILITY_UNSUPPORTED:imageInput:${visionModel.modelRef}`);
   });
 
+  it("rejects a thinking level the selected model does not expose", () => {
+    const offOnly: ModelCatalogEntry = {
+      ...model,
+      modelRef: "platform/off-only",
+      displayName: "无推理模型",
+      thinkingLevels: ["off"],
+    };
+    expect(() =>
+      createPlatformModelProvider({
+        catalog: [offOnly, model],
+        transport: { execute: vi.fn() },
+        thinkingLevel: "medium",
+        request: {
+          accountId: randomUUID(),
+          conversationId: randomUUID(),
+          messageId: randomUUID(),
+          selectedModelRef: offOnly.modelRef,
+          approvedFallbackModelRef: null,
+          requestDedupeKey: "model-call-thinking-rejection",
+        },
+      }),
+    ).toThrow(`MODEL_CAPABILITY_UNSUPPORTED:thinking:medium:${model.modelRef}`);
+  });
+
   it("marks image-bearing Pi context as a gateway imageInput requirement", async () => {
     const accountId = randomUUID();
     const conversationId = randomUUID();
@@ -175,7 +200,7 @@ describe("Platform Model Pi Provider", () => {
       // Exhaust the provider stream so the transport request completes.
     }
     expect(execute).toHaveBeenCalledWith(
-      expect.objectContaining({ requirements: { imageInput: true } }),
+      expect.objectContaining({ requirements: { imageInput: true }, thinkingLevel: "off" }),
       undefined,
     );
   });
@@ -242,6 +267,7 @@ describe("Platform Model Pi Provider", () => {
       cwd,
       agentDir,
       history: [],
+      thinkingLevel: "medium",
       modelRuntime: runtime,
       model: platform.model,
     });
@@ -255,7 +281,7 @@ describe("Platform Model Pi Provider", () => {
     await session.waitForIdle();
     expect(deltas.join("")).toBe(response.text);
     expect(stream).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId, conversationId, messageId }),
+      expect.objectContaining({ accountId, conversationId, messageId, thinkingLevel: "medium" }),
       expect.any(AbortSignal),
     );
     expect(execute).not.toHaveBeenCalled();
