@@ -17,6 +17,80 @@ afterEach(() => {
 });
 
 describe("Pi AgentSession composition", () => {
+  it("places prompt-frame images into the Pi user message content", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-host-vision-"));
+    temporaryDirectories.push(root);
+    const parentPort = new EventEmitter();
+    let observedUserContent: unknown;
+    let resolveTerminal!: () => void;
+    const terminal = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
+    const piPort = Object.assign(new EventEmitter(), {
+      sent: [] as unknown[],
+      postMessage(frame: unknown): void {
+        this.sent.push(frame);
+        if (
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "pi.product-event" &&
+          "type" in frame &&
+          frame.type === "completed"
+        ) {
+          resolveTerminal();
+        }
+      },
+      start(): void {},
+    });
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const faux = fauxProvider({ tokensPerSecond: 10_000 });
+    modelRuntime.registerNativeProvider(faux.provider);
+    faux.setResponses([
+      (context) => {
+        observedUserContent = context.messages.at(-1)?.content;
+        return fauxAssistantMessage("视觉输入已接收。");
+      },
+    ]);
+    startPiHostProcess(parentPort as unknown as Electron.ParentPort, {
+      modelRuntime,
+      model: faux.getModel(),
+    });
+    parentPort.emit("message", {
+      data: {
+        kind: "pi-host.bootstrap",
+        contractVersion: 1,
+        nonce: "b".repeat(64),
+        profileDirectory: root,
+      },
+      ports: [piPort],
+    });
+    const generationId = randomUUID();
+    piPort.emit("message", {
+      data: {
+        kind: "pi.session.prompt",
+        generationId,
+        conversationId: randomUUID(),
+        assistantMessageId: randomUUID(),
+        history: [{ role: "user", text: "图片里有什么？" }],
+        images: [
+          {
+            personalFileId: randomUUID(),
+            displayName: "fixture.png",
+            data: "aW1hZ2U=",
+            mimeType: "image/png",
+          },
+        ],
+      },
+    });
+    await terminal;
+
+    expect(observedUserContent).toEqual([
+      { type: "text", text: "图片里有什么？" },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+    ]);
+  });
+
   it("uses Pi session state, native events and the Pi tool registry", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-host-"));
     temporaryDirectories.push(root);

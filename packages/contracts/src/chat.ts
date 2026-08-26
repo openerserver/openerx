@@ -144,6 +144,7 @@ export const conversationSnapshotSchema = z
     conversation: conversationSchema,
     branches: z.array(branchSchema),
     messages: z.array(messageSchema),
+    attachments: z.array(attachmentSchema).default([]),
   })
   .strict();
 
@@ -180,6 +181,7 @@ export const chatSendInputSchema = z
     conversationId: entityIdSchema.nullable().optional(),
     text: z.string().trim().min(1).max(100_000),
     idempotencyKey: z.string().min(8).max(200),
+    personalFileIds: z.array(entityIdSchema).max(100).optional(),
     skillInstallationId: entityIdSchema.optional(),
   })
   .strict();

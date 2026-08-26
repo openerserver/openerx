@@ -246,7 +246,7 @@ export class FileRepository {
     const rows = conversationId
       ? (this.#database
           .prepare(
-            `SELECT f.* FROM personal_files f
+            `SELECT DISTINCT f.* FROM personal_files f
              JOIN attachments a ON a.personal_file_id = f.id
              WHERE a.conversation_id = ? AND f.owner_profile_id = ?
              ORDER BY f.updated_at DESC, f.id`,
@@ -259,6 +259,17 @@ export class FileRepository {
           )
           .all(this.#ownerProfileId) as SqlRow[]);
     return rows.map((row) => this.#personalFile(row));
+  }
+
+  attachments(conversationId: string): Attachment[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM attachments
+         WHERE conversation_id = ?
+         ORDER BY created_at, id`,
+      )
+      .all(conversationId) as SqlRow[];
+    return rows.map((row) => this.#attachment(row));
   }
 
   citations(personalFileId: string): FileCitation[] {

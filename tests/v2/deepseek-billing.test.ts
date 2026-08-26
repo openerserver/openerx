@@ -12,6 +12,20 @@ import { UsageStore } from "@openerx/token-usage-store";
 import { describe, expect, it } from "vitest";
 
 describe("DeepSeek authoritative billing", () => {
+  it("publishes a frozen price entry for the experimental vision model", () => {
+    const vision = createDeepSeekPriceCatalog().find(
+      ({ modelRef }) => modelRef === deepSeekModelRefs.vision,
+    );
+    expect(vision).toMatchObject({
+      priceRef: "price/deepseek-v4-flash-vision-exp-official-cn-2026-08-26",
+      tokenRates: {
+        inputMicroMinorPerToken: 100,
+        cachedInputMicroMinorPerToken: 2,
+        outputMicroMinorPerToken: 200,
+      },
+    });
+  });
+
   it("settles provider usage with the server-frozen Pro price and exposes only final billing", async () => {
     const accountId = randomUUID();
     const pricing = new PricingService(":memory:", {

@@ -18,6 +18,7 @@ export const supportedFileFormatSchema = z.enum([
   "yaml",
   "png",
   "jpeg",
+  "gif",
   "webp",
   "html",
 ]);
@@ -167,6 +168,21 @@ export const contentPreviewSchema = z
     displayName: z.string().min(1),
     format: supportedFileFormatSchema,
     source: z.string().nullable(),
+    imageDataUrl: z
+      .string()
+      .max(45_000_000)
+      .refine(
+        (value) =>
+          [
+            "data:image/gif;base64,",
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,",
+          ].some((prefix) => value.startsWith(prefix)),
+        { message: "Expected a supported image data URL" },
+      )
+      .nullable()
+      .default(null),
     parsedText: z.string(),
     citations: z.array(fileCitationSchema),
   })

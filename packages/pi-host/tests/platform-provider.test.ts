@@ -42,6 +42,13 @@ const model: ModelCatalogEntry = {
   free: true,
 };
 
+const visionModel: ModelCatalogEntry = {
+  ...model,
+  modelRef: "platform/deepseek-v4-flash-vision-exp",
+  displayName: "DeepSeek V4 Flash Vision（实验）",
+  capabilities: { ...model.capabilities, imageInput: true },
+};
+
 describe("Platform Model Pi Provider", () => {
   it("binds the automatic product selection to a concrete Pi model", () => {
     const automatic: ModelCatalogEntry = {
@@ -62,6 +69,115 @@ describe("Platform Model Pi Provider", () => {
       },
     });
     expect(platform.model.id).toBe(model.modelRef);
+  });
+
+  it("binds automatic image prompts to an image-capable Pi model", () => {
+    const automatic: ModelCatalogEntry = {
+      ...model,
+      modelRef: automaticModelRef,
+      displayName: "自动",
+    };
+    const platform = createPlatformModelProvider({
+      catalog: [automatic, model, visionModel],
+      transport: { execute: vi.fn() },
+      requiresImageInput: true,
+      request: {
+        accountId: randomUUID(),
+        conversationId: randomUUID(),
+        messageId: randomUUID(),
+        selectedModelRef: automaticModelRef,
+        approvedFallbackModelRef: null,
+        requestDedupeKey: "model-call-auto-vision-binding",
+      },
+    });
+    expect(platform.model.id).toBe(visionModel.modelRef);
+    expect(platform.model.input).toEqual(["text", "image"]);
+  });
+
+  it("rejects an explicit text-only model before accepting image input", () => {
+    expect(() =>
+      createPlatformModelProvider({
+        catalog: [model, visionModel],
+        transport: { execute: vi.fn() },
+        requiresImageInput: true,
+        request: {
+          accountId: randomUUID(),
+          conversationId: randomUUID(),
+          messageId: randomUUID(),
+          selectedModelRef: model.modelRef,
+          approvedFallbackModelRef: null,
+          requestDedupeKey: "model-call-explicit-image-rejection",
+        },
+      }),
+    ).toThrow(`MODEL_CAPABILITY_UNSUPPORTED:imageInput:${visionModel.modelRef}`);
+  });
+
+  it("marks image-bearing Pi context as a gateway imageInput requirement", async () => {
+    const accountId = randomUUID();
+    const conversationId = randomUUID();
+    const messageId = randomUUID();
+    const execute = vi.fn(async (gatewayRequest: ModelGatewayRequestDto) => ({
+      text: "视觉回答",
+      effectiveModelRef: visionModel.modelRef,
+      fallbackReason: null,
+      finishReason: "stop" as const,
+      usage: {
+        usageId: randomUUID(),
+        accountId,
+        conversationId,
+        messageId,
+        runId: null,
+        toolCallId: null,
+        selectedModelRef: gatewayRequest.selectedModelRef,
+        effectiveModelRef: visionModel.modelRef,
+        fallbackReason: null,
+        inputTokens: 5,
+        cachedInputTokens: 0,
+        outputTokens: 2,
+        reasoningTokens: null,
+        totalTokens: 7,
+        providerReported: true,
+        missingReasons: { reasoningTokens: "provider_not_reported" },
+        dedupeKey: gatewayRequest.requestDedupeKey,
+        recordedAt: "2026-08-26T10:00:00.000Z",
+      },
+    }));
+    const platform = createPlatformModelProvider({
+      catalog: [visionModel],
+      transport: { execute },
+      requiresImageInput: true,
+      request: {
+        accountId,
+        conversationId,
+        messageId,
+        selectedModelRef: visionModel.modelRef,
+        approvedFallbackModelRef: null,
+        requestDedupeKey: "model-call-image-requirement",
+      },
+    });
+    const stream = platform.provider.streamSimple(
+      platform.model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "图片里有什么？" },
+              { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+            ],
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      undefined,
+    );
+    for await (const _event of stream) {
+      // Exhaust the provider stream so the transport request completes.
+    }
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({ requirements: { imageInput: true } }),
+      undefined,
+    );
   });
 
   it("streams a Gateway response through Pi and preserves authoritative unknown usage", async () => {

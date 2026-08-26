@@ -203,6 +203,7 @@ export function startPiHostProcess(
           const platform = createPlatformModelProvider({
             catalog,
             transport,
+            requiresImageInput: (frame.images?.length ?? 0) > 0,
             request: {
               accountId: frame.platform.accountId,
               conversationId: frame.conversationId,
@@ -328,7 +329,18 @@ export function startPiHostProcess(
             });
           }
         });
-        await session.prompt(promptMessage.text, { expandPromptTemplates: true });
+        await session.prompt(promptMessage.text, {
+          expandPromptTemplates: true,
+          ...(frame.images && frame.images.length > 0
+            ? {
+                images: frame.images.map(({ data, mimeType }) => ({
+                  type: "image" as const,
+                  data,
+                  mimeType,
+                })),
+              }
+            : {}),
+        });
         await session.waitForIdle();
         const assistant = lastAssistantMessage(session);
         if (

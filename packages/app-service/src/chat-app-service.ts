@@ -3,6 +3,7 @@ import type {
   AppServiceAuthorization,
   ChatCommandEnvelope,
   ChatEvent,
+  ConversationSnapshot,
   PiActivityEvent,
   PiFileToolRequestFrame,
   PiHostEventFrame,
@@ -12,7 +13,7 @@ import type {
   RemoteCommand,
   RemoteCommandPayload,
 } from "@openerx/contracts";
-import type { FileAppService } from "@openerx/file-service";
+import { type FileAppService, FileServiceError } from "@openerx/file-service";
 import type { SkillPackageService } from "@openerx/skills";
 import type { ChatRepository, GenerationDraft, RemoteRepository } from "@openerx/storage";
 import type { PiHostClient } from "./pi-host-client";
@@ -100,11 +101,19 @@ export class ChatAppService {
       case "chat.list":
         return this.#repository.listConversations(request.input.includeArchived ?? false);
       case "chat.get":
-        return this.#repository.getConversation(request.input.conversationId);
+        return this.#withAttachments(
+          this.#repository.getConversation(request.input.conversationId),
+        );
       case "chat.send": {
         const mounts = this.#skills?.mounts("default", request.input.skillInstallationId) ?? [];
         const draft = this.#repository.createGeneration(request.input);
-        await this.#launch(draft, authorization, mounts, request.input.skillInstallationId);
+        await this.#launch(
+          draft,
+          authorization,
+          mounts,
+          request.input.skillInstallationId,
+          request.input.personalFileIds,
+        );
         await this.#syncIfAuthorized(authorization);
         return draft.receipt;
       }
@@ -178,7 +187,7 @@ export class ChatAppService {
         );
         this.#emit(result.event);
         await this.#syncIfAuthorized(authorization);
-        return result.snapshot;
+        return this.#withAttachments(result.snapshot);
       }
       case "chat.events":
         return this.#repository.listEvents(
@@ -511,11 +520,19 @@ export class ChatAppService {
     }
   }
 
+  #withAttachments(snapshot: ConversationSnapshot): ConversationSnapshot {
+    return {
+      ...snapshot,
+      attachments: this.#files?.attachments(snapshot.conversation.id) ?? [],
+    };
+  }
+
   async #launch(
     draft: GenerationDraft,
     authorization?: AppServiceAuthorization,
     skillMounts = this.#skills?.mounts("default") ?? [],
     selectedSkillInstallationId?: string,
+    personalFileIds: string[] = [],
   ): Promise<void> {
     for (const event of draft.events) this.#emit(event);
     if (!draft.created) return;
@@ -541,49 +558,67 @@ export class ChatAppService {
         loaded: true,
       });
     }
-    const frame: PiPromptFrame = {
-      kind: "pi.session.prompt",
-      generationId,
-      conversationId: draft.receipt.conversationId,
-      assistantMessageId: draft.receipt.assistantMessageId,
-      history,
-      ...(skillMounts.length > 0 ? { skills: skillMounts } : {}),
-      files: this.#files?.attachedFiles(draft.receipt.conversationId).map((file) => ({
-        personalFileId: file.id,
-        displayName: file.displayName,
-        format: file.format,
-      })),
-      ...(authorization
-        ? {
-            platform: {
-              accountId: authorization.accountId,
-              accessToken: authorization.accessToken,
-              platformBaseUrl: authorization.platformBaseUrl,
-              selectedModelRef: this.#repository.selectedModelForMessage(
-                draft.receipt.assistantMessageId,
-              ),
-              approvedFallbackModelRef: null,
-              requestDedupeKey: `model-call:${draft.receipt.assistantMessageId}:1`,
-            },
-          }
-        : {}),
-    };
     this.#generationByMessage.set(draft.receipt.assistantMessageId, generationId);
     this.#messageByGeneration.set(generationId, draft.receipt.assistantMessageId);
     this.#conversationByGeneration.set(generationId, draft.receipt.conversationId);
     if (authorization) this.#authorizationByGeneration.set(generationId, authorization);
     try {
+      if (personalFileIds.length > 0) {
+        const userMessageId = draft.receipt.userMessageId;
+        if (!userMessageId) throw new Error("CHAT_USER_MESSAGE_REQUIRED");
+        const files = this.#requiredFiles();
+        for (const personalFileId of personalFileIds) {
+          files.attach(draft.receipt.conversationId, personalFileId, userMessageId);
+        }
+      }
+      const attachedFiles = this.#files?.attachedFiles(draft.receipt.conversationId);
+      const images = this.#files?.modelImages(draft.receipt.conversationId);
+      const frame: PiPromptFrame = {
+        kind: "pi.session.prompt",
+        generationId,
+        conversationId: draft.receipt.conversationId,
+        assistantMessageId: draft.receipt.assistantMessageId,
+        history,
+        ...(skillMounts.length > 0 ? { skills: skillMounts } : {}),
+        files: attachedFiles?.map((file) => ({
+          personalFileId: file.id,
+          displayName: file.displayName,
+          format: file.format,
+        })),
+        ...(images && images.length > 0 ? { images } : {}),
+        ...(authorization
+          ? {
+              platform: {
+                accountId: authorization.accountId,
+                accessToken: authorization.accessToken,
+                platformBaseUrl: authorization.platformBaseUrl,
+                selectedModelRef: this.#repository.selectedModelForMessage(
+                  draft.receipt.assistantMessageId,
+                ),
+                approvedFallbackModelRef: null,
+                requestDedupeKey: `model-call:${draft.receipt.assistantMessageId}:1`,
+              },
+            }
+          : {}),
+      };
       await this.#piHost.prompt(frame);
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const launchErrorCode =
+        error instanceof FileServiceError
+          ? error.code
+          : /^FILE_[A-Z0-9_]+$/u.test(message)
+            ? message
+            : "PI_HOST_UNAVAILABLE";
       const event = this.#repository.appendPiEvent(draft.receipt.assistantMessageId, {
         eventId: randomUUID(),
         sequence: 1,
         occurredAt: new Date().toISOString(),
         type: "failed",
-        errorCode: "PI_HOST_UNAVAILABLE",
+        errorCode: launchErrorCode,
       });
       this.#forgetGeneration(generationId);
-      this.#skills?.completeGeneration(generationId, "failed", "PI_HOST_UNAVAILABLE");
+      this.#skills?.completeGeneration(generationId, "failed", launchErrorCode);
       if (event) this.#emit(event);
     }
   }

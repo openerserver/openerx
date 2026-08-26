@@ -29,6 +29,41 @@ afterEach(() => {
 });
 
 describe("M4 file scope and controlled copies", () => {
+  it("materializes attached images as bounded model-ready base64 from the controlled store", async () => {
+    const { root, database, profile } = fixture();
+    const sourceImage = path.join(root, "fixture.png");
+    const imageBytes = Buffer.from("controlled-image-bytes", "utf8");
+    writeFileSync(sourceImage, imageBytes);
+    const chats = new ChatRepository(database);
+    const draft = chats.createGeneration({
+      text: "解析图片",
+      idempotencyKey: "m4-vision-conversation-0001",
+    });
+    chats.close();
+    const parser = new MultiFormatParser({
+      extract: async () => ({ text: "", citations: [] }),
+    });
+    const service = new FileAppService(new FileRepository(database), profile, { parser });
+    const [file] = await service.importPaths([sourceImage], draft.receipt.conversationId);
+    if (!file) throw new Error("IMAGE_FIXTURE_IMPORT_FAILED");
+
+    expect(service.modelImages(draft.receipt.conversationId)).toEqual([
+      {
+        personalFileId: file.id,
+        displayName: "fixture.png",
+        data: imageBytes.toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
+    expect(service.previewFile(file.id).imageDataUrl).toBe(
+      `data:image/png;base64,${imageBytes.toString("base64")}`,
+    );
+    expect(service.attachments(draft.receipt.conversationId)).toMatchObject([
+      { personalFileId: file.id, messageId: null },
+    ]);
+    service.close();
+  });
+
   it("imports a folder, creates searchable stable citations and survives permission revocation", async () => {
     const { root, database, profile } = fixture();
     const source = path.join(root, "source");

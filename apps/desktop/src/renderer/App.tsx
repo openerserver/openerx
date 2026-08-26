@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   BillingOverview,
   ChargeRecord,
   ChatEvent,
@@ -32,6 +33,7 @@ import {
   FileText,
   FolderSimple,
   GearSix,
+  ImageSquare,
   Info,
   MagnifyingGlass,
   Moon,
@@ -270,6 +272,12 @@ function userFacingError(error: unknown, fallback: string): string {
 }
 
 function messageFailureLabel(errorCode: string): string {
+  if (errorCode === "MODEL_CAPABILITY_UNSUPPORTED") {
+    return "当前模型不支持图片输入，请切换到自动或 DeepSeek V4 Flash Vision（实验）后重试。";
+  }
+  if (errorCode === "FILE_TOO_LARGE") {
+    return "图片总大小超过视觉模型限制，请压缩图片或减少附件后重试。";
+  }
   if (errorCode === "PI_MODEL_NOT_CONFIGURED") {
     return "默认模型暂时未就绪，请稍后重试。";
   }
@@ -407,6 +415,61 @@ function HighlightedText({ text, query }: { text: string; query: string }): Reac
   );
 }
 
+const imageFileFormats = new Set<PersonalFile["format"]>(["gif", "jpeg", "png", "webp"]);
+
+function AttachmentCard({
+  file,
+  placement,
+  onRemove,
+}: {
+  file: PersonalFile;
+  placement: "composer" | "message";
+  onRemove?: () => void;
+}): React.JSX.Element {
+  const imageFile = imageFileFormats.has(file.format);
+  const preview = useQuery({
+    queryKey: ["files", "image-preview", file.id],
+    queryFn: () => window.openerx.previewFile({ personalFileId: file.id }),
+    enabled: imageFile,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+  return (
+    <li
+      className={`attachment-card attachment-card-${placement} ${imageFile ? "attachment-card-image" : ""}`}
+    >
+      <div
+        className="attachment-visual"
+        aria-hidden={preview.data?.imageDataUrl ? undefined : true}
+      >
+        {preview.data?.imageDataUrl ? (
+          <img src={preview.data.imageDataUrl} alt={file.displayName} />
+        ) : imageFile ? (
+          <ImageSquare size={24} weight="regular" />
+        ) : (
+          <FileText size={24} weight="regular" />
+        )}
+      </div>
+      <div className="attachment-copy">
+        <strong title={file.displayName}>{file.displayName}</strong>
+        <span>
+          {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
+        </span>
+      </div>
+      {onRemove ? (
+        <button
+          type="button"
+          className="attachment-remove"
+          aria-label={`移除附件 ${file.displayName}`}
+          onClick={onRemove}
+        >
+          <X size={13} weight="bold" />
+        </button>
+      ) : null}
+    </li>
+  );
+}
+
 function Composer({
   conversationId,
   onOpenContext,
@@ -418,15 +481,32 @@ function Composer({
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const [skillInstallationId, setSkillInstallationId] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<PersonalFile[]>([]);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+  const previousConversationIdRef = useRef(conversationId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  useEffect(() => {
+    if (previousConversationIdRef.current === conversationId) return;
+    previousConversationIdRef.current = conversationId;
+    setPendingFiles([]);
+    setAttachmentNotice(null);
+  }, [conversationId]);
   const chooseFiles = useMutation({
-    mutationFn: () => window.openerx.chooseFiles({ conversationId: conversationId ?? null }),
+    mutationFn: () => window.openerx.chooseFiles({ conversationId: null }),
     onSuccess: async (selectedFiles) => {
+      if (selectedFiles.length > 0) {
+        setPendingFiles((current) => {
+          const merged = new Map(current.map((file) => [file.id, file]));
+          for (const file of selectedFiles) merged.set(file.id, file);
+          return [...merged.values()];
+        });
+      }
       await queryClient.invalidateQueries({ queryKey: ["files"] });
       setAttachmentNotice(
-        selectedFiles.length > 0 ? `已添加 ${selectedFiles.length} 个文件。` : "已取消文件选择。",
+        selectedFiles.length > 0
+          ? `已选择 ${selectedFiles.length} 个附件，将随本条消息发送。`
+          : "未新增附件。",
       );
     },
   });
@@ -441,11 +521,17 @@ function Composer({
         conversationId: conversationId ?? null,
         text,
         idempotencyKey: idempotencyKey("send"),
+        ...(pendingFiles.length > 0 ? { personalFileIds: pendingFiles.map(({ id }) => id) } : {}),
         ...(skillInstallationId ? { skillInstallationId } : {}),
       }),
     onSuccess: async (receipt) => {
       setDraft("");
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
+      setPendingFiles([]);
+      setAttachmentNotice(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["chat"] }),
+        queryClient.invalidateQueries({ queryKey: ["files"] }),
+      ]);
       if (!conversationId) navigate(`/chat/${receipt.conversationId}`);
     },
   });
@@ -461,6 +547,21 @@ function Composer({
       }}
     >
       <label htmlFor={`message-${conversationId ?? "new"}`}>发送消息</label>
+      {pendingFiles.length > 0 ? (
+        <ul className="composer-attachments" aria-label="待发送附件">
+          {pendingFiles.map((file) => (
+            <AttachmentCard
+              key={file.id}
+              file={file}
+              placement="composer"
+              onRemove={() => {
+                setPendingFiles((current) => current.filter(({ id }) => id !== file.id));
+                setAttachmentNotice(`已从本条消息移除 ${file.displayName}。`);
+              }}
+            />
+          ))}
+        </ul>
+      ) : null}
       <textarea
         id={`message-${conversationId ?? "new"}`}
         rows={3}
@@ -1074,7 +1175,15 @@ function FilesAndArtifacts(): React.JSX.Element {
   );
 }
 
-function MessageCard({ message }: { message: Message }): React.JSX.Element {
+function MessageCard({
+  message,
+  attachments,
+  filesById,
+}: {
+  message: Message;
+  attachments: Attachment[];
+  filesById: ReadonlyMap<string, PersonalFile>;
+}): React.JSX.Element {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.parts[0]?.text ?? "");
@@ -1151,6 +1260,29 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
           {messageStatusLabel[message.status]}
         </span>
       </header>
+      {attachments.length > 0 ? (
+        <ul className="message-attachments" aria-label="消息附件">
+          {attachments.map((attachment) => {
+            const file = filesById.get(attachment.personalFileId);
+            return file ? (
+              <AttachmentCard key={attachment.id} file={file} placement="message" />
+            ) : (
+              <li
+                key={attachment.id}
+                className="attachment-card attachment-card-message attachment-card-missing"
+              >
+                <div className="attachment-visual" aria-hidden="true">
+                  <FileText size={24} weight="regular" />
+                </div>
+                <div className="attachment-copy">
+                  <strong>附件</strong>
+                  <span>正在读取…</span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
       {editing ? (
         <form
           className="edit-message"
@@ -1696,6 +1828,11 @@ function ChatPage({
     queryFn: () => window.openerx.getConversation({ conversationId }),
     enabled: Boolean(conversationId),
   });
+  const conversationFiles = useQuery({
+    queryKey: ["files", "conversation", conversationId],
+    queryFn: () => window.openerx.listFiles({ conversationId }),
+    enabled: Boolean(conversationId),
+  });
   const ready = Boolean(snapshot.data);
   const hasRunningMessage =
     snapshot.data?.messages.some(
@@ -1745,6 +1882,7 @@ function ChatPage({
       <main className="center-state inline-error">无法读取对话：{snapshot.error?.message}</main>
     );
   }
+  const filesById = new Map((conversationFiles.data ?? []).map((file) => [file.id, file] as const));
   return (
     <main className="conversation-page">
       <ConversationToolbar snapshot={snapshot.data} onToggleContext={onToggleContext} />
@@ -1758,7 +1896,13 @@ function ChatPage({
       >
         {snapshot.data.messages.map((message) => (
           <section className="message-stack" key={message.id}>
-            <MessageCard message={message} />
+            <MessageCard
+              message={message}
+              attachments={snapshot.data.attachments.filter(
+                ({ messageId }) => messageId === message.id,
+              )}
+              filesById={filesById}
+            />
             {workItems.data
               ?.filter((workItem) => workItem.messageId === message.id)
               .map((workItem) => (

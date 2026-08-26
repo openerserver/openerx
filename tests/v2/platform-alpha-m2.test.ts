@@ -119,6 +119,30 @@ async function signIn(baseUrl: string, email: string) {
 }
 
 describe("Platform Alpha HTTP composition", () => {
+  it("accepts model request bodies above the generic one-megabyte JSON limit", async () => {
+    const { baseUrl } = await setup();
+    const grant = await signIn(baseUrl, "model-body@example.com");
+    const response = await fetch(`${baseUrl}/api/v2/model/execute`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${grant.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        accountId: grant.account.accountId,
+        conversationId: randomUUID(),
+        messageId: randomUUID(),
+        selectedModelRef: "platform/standard",
+        approvedFallbackModelRef: null,
+        requestDedupeKey: "http-large-model-body",
+        requirements: {},
+        context: { messages: [], fixturePadding: "x".repeat(1_100_000) },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ text: "HTTP 平台回答" });
+  });
+
   it("connects account, model, usage and revocation boundaries", async () => {
     const { baseUrl, codes } = await setup();
     const grant = await signIn(baseUrl, "http@example.com");

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { automaticModelRef, type ModelGatewayRequestDto } from "@openerx/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createDeepSeekModelCatalog,
   createDeepSeekModelExecutorFromEnv,
   DeepSeekModelExecutor,
   deepSeekApiBaseUrl,
@@ -135,6 +136,105 @@ function streamingToolResponse(): Response {
 }
 
 describe("DeepSeekModelExecutor", () => {
+  it("publishes the experimental vision model with image input enabled", () => {
+    const catalog = createDeepSeekModelCatalog();
+    expect(catalog.find(({ modelRef }) => modelRef === automaticModelRef)).toMatchObject({
+      capabilities: { imageInput: true },
+    });
+    expect(catalog).toContainEqual(
+      expect.objectContaining({
+        modelRef: deepSeekModelRefs.vision,
+        version: "official-experimental-2026-08-21",
+        capabilities: expect.objectContaining({ imageInput: true, tools: true }),
+      }),
+    );
+  });
+
+  it("routes automatic image input to Vision and emits the official image_url payload", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({
+        model: "deepseek-v4-flash-vision-exp",
+        choices: [{ finish_reason: "stop", message: { content: "图中是蓝色方块。" } }],
+        usage: { prompt_tokens: 18, completion_tokens: 6, total_tokens: 24 },
+      }),
+    );
+    const executor = new DeepSeekModelExecutor({
+      apiKey: `sk-${"v".repeat(32)}`,
+      fetch: fetchMock,
+      thinking: "disabled",
+    });
+    const imageData = Buffer.from("fixture-image", "utf8").toString("base64");
+
+    const result = await executor.execute(
+      request({
+        requirements: { imageInput: true },
+        context: {
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "图片里有什么？" },
+                { type: "image", data: imageData, mimeType: "image/png" },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+      }),
+      undefined,
+    );
+
+    expect(result.effectiveModelRef).toBe(deepSeekModelRefs.vision);
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).toMatchObject({
+      model: "deepseek-v4-flash-vision-exp",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "图片里有什么？" },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${imageData}` },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("never forwards image content to a text-only DeepSeek model", async () => {
+    const fetchMock = vi.fn(async () => successResponse());
+    const executor = new DeepSeekModelExecutor({
+      apiKey: `sk-${"n".repeat(32)}`,
+      fetch: fetchMock,
+    });
+    await expect(
+      executor.execute(
+        request({
+          selectedModelRef: deepSeekModelRefs.flash,
+          context: {
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "解析图片" },
+                  {
+                    type: "image",
+                    data: Buffer.from("image").toString("base64"),
+                    mimeType: "image/png",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        undefined,
+      ),
+    ).rejects.toThrow("DEEPSEEK_MEDIA_INPUT_UNSUPPORTED");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("forwards official SSE deltas before the authoritative usage terminal", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       streamingResponse(),

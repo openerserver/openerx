@@ -26,6 +26,7 @@ const formats: Record<string, { format: SupportedFileFormat; mediaType: string }
   ".png": { format: "png", mediaType: "image/png" },
   ".jpg": { format: "jpeg", mediaType: "image/jpeg" },
   ".jpeg": { format: "jpeg", mediaType: "image/jpeg" },
+  ".gif": { format: "gif", mediaType: "image/gif" },
   ".webp": { format: "webp", mediaType: "image/webp" },
   ".html": { format: "html", mediaType: "text/html" },
   ".htm": { format: "html", mediaType: "text/html" },

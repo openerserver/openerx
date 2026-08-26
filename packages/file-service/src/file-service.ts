@@ -7,6 +7,7 @@ import type {
   FileScope,
   FileSearchResult,
   PersonalFile,
+  PiImageInput,
   SupportedFileFormat,
   SyncChange,
   SyncConflict,
@@ -21,6 +22,14 @@ import { detectFileFormat } from "./formats";
 import { MultiFormatParser } from "./parser";
 
 const defaultMaxFileBytes = 50 * 1024 * 1024;
+const maxVisionImageBytes = 32 * 1024 * 1024;
+const maxVisionImageTotalBytes = 32 * 1024 * 1024;
+const visionMediaTypeByFormat = {
+  gif: "image/gif",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+} as const;
 
 export class FileAppService {
   readonly #repository: FileRepository;
@@ -62,6 +71,10 @@ export class FileAppService {
     return this.#repository.listFiles(conversationId);
   }
 
+  attachments(conversationId: string): Attachment[] {
+    return this.#repository.attachments(conversationId);
+  }
+
   search(query: string, fileIds?: string[]): FileSearchResult[] {
     return this.#repository.search(query, fileIds);
   }
@@ -70,6 +83,26 @@ export class FileAppService {
     return this.#repository
       .attachedFileIds(conversationId)
       .map((personalFileId) => this.#repository.personalFile(personalFileId));
+  }
+
+  modelImages(conversationId: string): PiImageInput[] {
+    let totalBytes = 0;
+    return this.attachedFiles(conversationId).flatMap((file) => {
+      const mimeType = visionMediaTypeByFormat[file.format as keyof typeof visionMediaTypeByFormat];
+      if (!mimeType) return [];
+      const bytes = this.#store.read(file.objectRef);
+      if (bytes.byteLength > maxVisionImageBytes) throw new FileServiceError("FILE_TOO_LARGE");
+      totalBytes += bytes.byteLength;
+      if (totalBytes > maxVisionImageTotalBytes) throw new FileServiceError("FILE_TOO_LARGE");
+      return [
+        {
+          personalFileId: file.id,
+          displayName: file.displayName,
+          data: bytes.toString("base64"),
+          mimeType,
+        },
+      ];
+    });
   }
 
   readParsedFile(personalFileId: string): {
@@ -89,12 +122,19 @@ export class FileAppService {
     const source = isTextPreviewFormat(parsed.file.format)
       ? this.#store.read(parsed.file.objectRef).toString("utf8")
       : null;
+    const imageMediaType =
+      visionMediaTypeByFormat[parsed.file.format as keyof typeof visionMediaTypeByFormat];
+    const imageDataUrl =
+      imageMediaType && parsed.file.sizeBytes <= maxVisionImageBytes
+        ? `data:${imageMediaType};base64,${this.#store.read(parsed.file.objectRef).toString("base64")}`
+        : null;
     return {
       objectKind: "personal_file",
       objectId: parsed.file.id,
       displayName: parsed.file.displayName,
       format: parsed.file.format,
       source,
+      imageDataUrl,
       parsedText: parsed.text,
       citations: parsed.citations,
     };
@@ -104,8 +144,12 @@ export class FileAppService {
     return this.#repository.revokeScope(scopeId);
   }
 
-  attach(conversationId: string, personalFileId: string): Attachment {
-    return this.#repository.attach(conversationId, personalFileId);
+  attach(
+    conversationId: string,
+    personalFileId: string,
+    messageId: string | null = null,
+  ): Attachment {
+    return this.#repository.attach(conversationId, personalFileId, messageId);
   }
 
   createArtifact(input: {
@@ -167,6 +211,7 @@ export class FileAppService {
       displayName: artifact.displayName,
       format: artifact.format,
       source,
+      imageDataUrl: null,
       parsedText: source ?? "",
       citations: [],
     };

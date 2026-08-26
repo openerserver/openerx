@@ -17,16 +17,19 @@ export const deepSeekProviderMaxOutputTokens = 384_000 as const;
 export const deepSeekModelRefs = {
   flash: "platform/deepseek-v4-flash",
   pro: "platform/deepseek-v4-pro",
+  vision: "platform/deepseek-v4-flash-vision-exp",
 } as const;
 
 export const deepSeekPriceRefs = {
   flash: "price/deepseek-v4-flash-official-cn-2026-08-26",
   pro: "price/deepseek-v4-pro-official-cn-2026-08-26",
+  vision: "price/deepseek-v4-flash-vision-exp-official-cn-2026-08-26",
   automaticFlash: "price/deepseek-auto-flash-official-cn-2026-08-26",
   automaticPro: "price/deepseek-auto-pro-official-cn-2026-08-26",
 } as const;
 
-export type DeepSeekModelId = "deepseek-v4-flash" | "deepseek-v4-pro";
+export type DeepSeekDefaultModelId = "deepseek-v4-flash" | "deepseek-v4-pro";
+export type DeepSeekModelId = DeepSeekDefaultModelId | "deepseek-v4-flash-vision-exp";
 export type DeepSeekThinkingMode = "enabled" | "disabled";
 export type DeepSeekFetch = (
   input: string | URL | Request,
@@ -37,11 +40,13 @@ export type DeepSeekEnvironment = Readonly<Record<string, string | undefined>>;
 const modelIdByRef: Readonly<Record<string, DeepSeekModelId>> = {
   [deepSeekModelRefs.flash]: "deepseek-v4-flash",
   [deepSeekModelRefs.pro]: "deepseek-v4-pro",
+  [deepSeekModelRefs.vision]: "deepseek-v4-flash-vision-exp",
 };
 
 const modelRefById: Readonly<Record<DeepSeekModelId, string>> = {
   "deepseek-v4-flash": deepSeekModelRefs.flash,
   "deepseek-v4-pro": deepSeekModelRefs.pro,
+  "deepseek-v4-flash-vision-exp": deepSeekModelRefs.vision,
 };
 
 const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
@@ -83,10 +88,29 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
     priceSummary: "服务端按 DeepSeek 官方人民币费率和实际 Token 结算",
     free: false,
   },
+  {
+    modelRef: deepSeekModelRefs.vision,
+    displayName: "DeepSeek V4 Flash Vision（实验）",
+    version: "official-experimental-2026-08-21",
+    capabilities: {
+      text: true,
+      imageInput: true,
+      fileInput: false,
+      tools: true,
+      mcp: true,
+      imageGeneration: false,
+    },
+    contextWindow: 1_000_000,
+    maxOutputTokens: 384_000,
+    status: "available",
+    priceRef: deepSeekPriceRefs.vision,
+    priceSummary: "实验视觉模型；服务端按 DeepSeek 官方费率和实际 Token 结算",
+    free: false,
+  },
 ];
 
 export function createDeepSeekModelCatalog(
-  defaultModel: DeepSeekModelId = "deepseek-v4-flash",
+  defaultModel: DeepSeekDefaultModelId = "deepseek-v4-flash",
 ): ModelCatalogEntry[] {
   const defaultRef = modelRefById[defaultModel];
   const defaultEntry = deepSeekProviderModelCatalog.find(({ modelRef }) => modelRef === defaultRef);
@@ -96,6 +120,7 @@ export function createDeepSeekModelCatalog(
     modelRef: automaticModelRef,
     displayName: `自动 · ${defaultEntry.displayName}`,
     version: `auto:${defaultEntry.version}`,
+    capabilities: { ...defaultEntry.capabilities, imageInput: true },
     priceRef:
       defaultModel === "deepseek-v4-flash"
         ? deepSeekPriceRefs.automaticFlash
@@ -130,8 +155,21 @@ interface DeepSeekWireToolCall {
   };
 }
 
+interface DeepSeekTextContentPart {
+  type: "text";
+  text: string;
+}
+
+interface DeepSeekImageContentPart {
+  type: "image_url";
+  image_url: { url: string };
+}
+
+type DeepSeekUserContentPart = DeepSeekTextContentPart | DeepSeekImageContentPart;
+
 type DeepSeekMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | DeepSeekUserContentPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: DeepSeekWireToolCall[] }
   | { role: "tool"; content: string; tool_call_id: string };
 
@@ -169,7 +207,7 @@ interface DeepSeekStreamChunk {
 
 export interface DeepSeekModelExecutorOptions {
   apiKey: string;
-  defaultModel?: DeepSeekModelId;
+  defaultModel?: DeepSeekDefaultModelId;
   thinking?: DeepSeekThinkingMode;
   timeoutMs?: number;
   fetch?: DeepSeekFetch;
@@ -209,19 +247,26 @@ function productToolCall(value: unknown): ModelGatewayToolCall {
   return { id, name, arguments: structuredClone(args) };
 }
 
-function textParts(content: unknown): {
+function contentParts(content: unknown): {
   text: string;
   toolCalls: ModelGatewayToolCall[];
+  userContent: DeepSeekUserContentPart[];
   hasUnsupportedMedia: boolean;
 } {
   if (typeof content === "string") {
-    return { text: content, toolCalls: [], hasUnsupportedMedia: false };
+    return {
+      text: content,
+      toolCalls: [],
+      userContent: content ? [{ type: "text", text: content }] : [],
+      hasUnsupportedMedia: false,
+    };
   }
   if (!Array.isArray(content)) {
-    return { text: "", toolCalls: [], hasUnsupportedMedia: false };
+    return { text: "", toolCalls: [], userContent: [], hasUnsupportedMedia: false };
   }
   const text: string[] = [];
   const toolCalls: ModelGatewayToolCall[] = [];
+  const userContent: DeepSeekUserContentPart[] = [];
   let hasUnsupportedMedia = false;
   for (const part of content) {
     if (!part || typeof part !== "object") continue;
@@ -231,16 +276,39 @@ function textParts(content: unknown): {
       id?: unknown;
       name?: unknown;
       arguments?: unknown;
+      data?: unknown;
+      mimeType?: unknown;
     };
     if (candidate.type === "text" && typeof candidate.text === "string") {
       text.push(candidate.text);
+      userContent.push({ type: "text", text: candidate.text });
+    } else if (candidate.type === "image") {
+      const data = candidate.data;
+      const mimeType = candidate.mimeType;
+      if (
+        typeof data !== "string" ||
+        data.length < 4 ||
+        data.length > 44_739_244 ||
+        data.length % 4 !== 0 ||
+        !/^[A-Za-z0-9+/]*={0,2}$/u.test(data) ||
+        (mimeType !== "image/gif" &&
+          mimeType !== "image/jpeg" &&
+          mimeType !== "image/png" &&
+          mimeType !== "image/webp")
+      ) {
+        throw new Error("DEEPSEEK_IMAGE_INPUT_INVALID");
+      }
+      userContent.push({
+        type: "image_url",
+        image_url: { url: `data:${mimeType};base64,${data}` },
+      });
     } else if (candidate.type === "toolCall") {
       toolCalls.push(productToolCall(candidate));
     } else if (candidate.type !== "thinking") {
       hasUnsupportedMedia = true;
     }
   }
-  return { text: text.join("\n"), toolCalls, hasUnsupportedMedia };
+  return { text: text.join("\n"), toolCalls, userContent, hasUnsupportedMedia };
 }
 
 function wireToolCall(toolCall: ModelGatewayToolCall): DeepSeekWireToolCall {
@@ -307,7 +375,7 @@ function toDeepSeekTools(context: unknown): DeepSeekFunctionTool[] {
   });
 }
 
-function toDeepSeekMessages(context: unknown): DeepSeekMessage[] {
+function toDeepSeekMessages(context: unknown, allowImages: boolean): DeepSeekMessage[] {
   if (!plainRecord(context)) throw new Error("DEEPSEEK_CONTEXT_INVALID");
   const candidate = context as { systemPrompt?: unknown; messages?: unknown };
   if (!Array.isArray(candidate.messages)) throw new Error("DEEPSEEK_CONTEXT_INVALID");
@@ -324,14 +392,24 @@ function toDeepSeekMessages(context: unknown): DeepSeekMessage[] {
       toolName?: unknown;
       isError?: unknown;
     };
-    const content = textParts(message.content);
+    const content = contentParts(message.content);
     if (content.hasUnsupportedMedia) throw new Error("DEEPSEEK_MEDIA_INPUT_UNSUPPORTED");
     if (message.role === "user") {
       if (content.toolCalls.length > 0) throw new Error("DEEPSEEK_CONTEXT_INVALID");
-      if (content.text) messages.push({ role: "user", content: content.text });
+      const hasImages = content.userContent.some(({ type }) => type === "image_url");
+      if (hasImages && !allowImages) throw new Error("DEEPSEEK_MEDIA_INPUT_UNSUPPORTED");
+      if (content.userContent.length > 0) {
+        messages.push({
+          role: "user",
+          content: hasImages ? content.userContent : content.text,
+        });
+      }
       continue;
     }
     if (message.role === "assistant") {
+      if (content.userContent.some(({ type }) => type === "image_url")) {
+        throw new Error("DEEPSEEK_MEDIA_INPUT_UNSUPPORTED");
+      }
       if (!content.text && content.toolCalls.length === 0) continue;
       messages.push({
         role: "assistant",
@@ -343,7 +421,11 @@ function toDeepSeekMessages(context: unknown): DeepSeekMessage[] {
       continue;
     }
     if (message.role === "toolResult") {
-      if (content.toolCalls.length > 0 || typeof message.toolCallId !== "string") {
+      if (
+        content.toolCalls.length > 0 ||
+        content.userContent.some(({ type }) => type === "image_url") ||
+        typeof message.toolCallId !== "string"
+      ) {
         throw new Error("DEEPSEEK_CONTEXT_INVALID");
       }
       messages.push({
@@ -356,6 +438,18 @@ function toDeepSeekMessages(context: unknown): DeepSeekMessage[] {
   if (!messages.some(({ role }) => role === "user"))
     throw new Error("DEEPSEEK_USER_MESSAGE_REQUIRED");
   return messages;
+}
+
+function modelForRequest(
+  request: ModelGatewayRequestDto,
+  defaultModel: DeepSeekDefaultModelId,
+): DeepSeekModelId {
+  if (request.selectedModelRef === automaticModelRef) {
+    return request.requirements.imageInput === true ? "deepseek-v4-flash-vision-exp" : defaultModel;
+  }
+  const model = modelIdByRef[request.selectedModelRef];
+  if (!model) throw new Error(`DEEPSEEK_MODEL_NOT_CONFIGURED:${request.selectedModelRef}`);
+  return model;
 }
 
 function providerError(body: unknown, status: number): Error {
@@ -520,7 +614,7 @@ function completedStreamToolCalls(
 
 export class DeepSeekModelExecutor implements ModelExecutor {
   readonly #apiKey: string;
-  readonly #defaultModel: DeepSeekModelId;
+  readonly #defaultModel: DeepSeekDefaultModelId;
   readonly #thinking: DeepSeekThinkingMode;
   readonly #timeoutMs: number;
   readonly #fetch: DeepSeekFetch;
@@ -540,12 +634,8 @@ export class DeepSeekModelExecutor implements ModelExecutor {
     request: ModelGatewayRequestDto,
     signal: AbortSignal | undefined,
   ): Promise<ModelExecutionResult> {
-    const model =
-      request.selectedModelRef === automaticModelRef
-        ? this.#defaultModel
-        : modelIdByRef[request.selectedModelRef];
-    if (!model) throw new Error(`DEEPSEEK_MODEL_NOT_CONFIGURED:${request.selectedModelRef}`);
-    const messages = toDeepSeekMessages(request.context);
+    const model = modelForRequest(request, this.#defaultModel);
+    const messages = toDeepSeekMessages(request.context, model === "deepseek-v4-flash-vision-exp");
     const tools = toDeepSeekTools(request.context);
     const timeout = AbortSignal.timeout(this.#timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -620,12 +710,8 @@ export class DeepSeekModelExecutor implements ModelExecutor {
     onDelta: (delta: string) => void,
     signal: AbortSignal | undefined,
   ): Promise<ModelExecutionResult> {
-    const model =
-      request.selectedModelRef === automaticModelRef
-        ? this.#defaultModel
-        : modelIdByRef[request.selectedModelRef];
-    if (!model) throw new Error(`DEEPSEEK_MODEL_NOT_CONFIGURED:${request.selectedModelRef}`);
-    const messages = toDeepSeekMessages(request.context);
+    const model = modelForRequest(request, this.#defaultModel);
+    const messages = toDeepSeekMessages(request.context, model === "deepseek-v4-flash-vision-exp");
     const tools = toDeepSeekTools(request.context);
     const timeout = AbortSignal.timeout(this.#timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -768,7 +854,7 @@ export function createDeepSeekModelExecutorFromEnv(
 
 export function deepSeekDefaultModelFromEnv(
   environment: DeepSeekEnvironment = process.env,
-): DeepSeekModelId {
+): DeepSeekDefaultModelId {
   const defaultModel = environment.DEEPSEEK_MODEL?.trim() || "deepseek-v4-flash";
   if (defaultModel !== "deepseek-v4-flash" && defaultModel !== "deepseek-v4-pro") {
     throw new Error("DEEPSEEK_MODEL_INVALID");

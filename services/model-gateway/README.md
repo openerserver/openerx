@@ -15,6 +15,7 @@ M2 Account Alpha 冻结版本化模型目录、能力预检、显式降级批准
 
 ```bash
 npm run test:deepseek -- "只回答：连接成功"
+npm run test:deepseek:vision
 npm run test:deepseek:tools
 ```
 
@@ -27,6 +28,17 @@ V4 官方单次最大输出 384,000 Token；实际输出仍受供应商模型上
 ¥0.02/¥1/¥2 每百万 Token，Pro 为 ¥0.025/¥3/¥6。`prompt_cache_miss_tokens` 和
 `prompt_cache_hit_tokens` 分开写入 UsageRecord，Pro 的 2.5 micro-minor 精度保留到单笔最终
 人民币分位向上取整。客户端不生成 Token 估算、费率、报价或 Charge。
+
+`deepseek-v4-flash-vision-exp` 以
+`platform/deepseek-v4-flash-vision-exp` 发布到模型目录，并声明 `imageInput=true`。聊天附件中的
+JPEG、PNG、GIF 和 WebP 原始受控副本会作为 OpenAI 兼容的 `user.content[].image_url` Data URL
+发送；本地 OCR 仍只用于文件搜索和预览，不再代替模型视觉理解。自动选模在请求含图片时路由到
+该视觉模型；显式选中的 Flash/Pro 不支持图片时会失败并要求用户切换，不进行静默替换。
+
+客户端限制单张图片和单次视觉请求的原始图片总量均不超过 32 MiB，Platform 模型接口允许的
+JSON 请求体上限为 48 MiB，与 DeepSeek 内联请求边界一致。真实视觉冒烟必须返回
+`effectiveModelRef=platform/deepseek-v4-flash-vision-exp`、非空流式正文和
+`providerReported=true` 的 UsageRecord。
 
 启动包含本地 Platform Gateway 的 V2 桌面开发环境：
 

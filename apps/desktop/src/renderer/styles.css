@@ -3703,6 +3703,126 @@ summary:focus-visible {
   font-size: 10px;
 }
 
+.composer-attachments,
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.composer-attachments {
+  padding-bottom: 2px;
+}
+
+.message-attachments {
+  margin-bottom: 2px;
+}
+
+.attachment-card {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  min-height: 62px;
+  padding: 7px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.attachment-card-composer {
+  flex: 0 1 220px;
+  padding-right: 32px;
+}
+
+.attachment-card-message {
+  width: min(100%, 270px);
+}
+
+.attachment-visual {
+  display: grid;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  color: var(--workspace-muted-strong);
+  background: color-mix(in srgb, var(--workspace-surface) 75%, transparent);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.attachment-visual img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.attachment-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.attachment-copy strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-copy span {
+  color: var(--workspace-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.attachment-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 21px;
+  height: 21px;
+  padding: 0;
+  place-items: center;
+  color: var(--workspace-muted-strong);
+  background: color-mix(in srgb, var(--workspace-surface) 92%, transparent);
+  border: 1px solid var(--workspace-border);
+  border-radius: 999px;
+}
+
+.attachment-remove:hover {
+  color: var(--workspace-text);
+  border-color: var(--workspace-border-strong);
+}
+
+.attachment-card-message.attachment-card-image {
+  display: grid;
+  width: min(100%, 280px);
+  padding: 6px;
+}
+
+.attachment-card-message.attachment-card-image .attachment-visual {
+  width: 100%;
+  height: 168px;
+}
+
+.attachment-card-message.attachment-card-image .attachment-copy {
+  padding: 2px 4px 3px;
+}
+
+.attachment-card-missing {
+  opacity: 0.72;
+}
+
 @media (max-width: 860px) {
   .app-shell,
   .app-shell.context-is-open {
@@ -3760,5 +3880,13 @@ summary:focus-visible {
     align-items: stretch;
     flex-direction: column;
     grid-template-columns: 1fr;
+  }
+
+  .attachment-card-composer,
+  .attachment-card-message,
+  .attachment-card-message.attachment-card-image {
+    width: 100%;
+    max-width: none;
+    flex-basis: 100%;
   }
 }

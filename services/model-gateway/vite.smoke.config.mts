@@ -6,7 +6,12 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig(({ mode }) => {
   const toolSmoke = mode === "tool";
-  const entryName = toolSmoke ? "deepseek-tool-smoke" : "deepseek-smoke";
+  const visionSmoke = mode === "vision";
+  const entryName = toolSmoke
+    ? "deepseek-tool-smoke"
+    : visionSmoke
+      ? "deepseek-vision-smoke"
+      : "deepseek-smoke";
   return {
     build: {
       emptyOutDir: true,
@@ -18,7 +23,11 @@ export default defineConfig(({ mode }) => {
       ssr: path.join(
         repositoryRoot,
         "tests/v2/fixtures",
-        toolSmoke ? "deepseek-tool-smoke.ts" : "deepseek-smoke.ts",
+        toolSmoke
+          ? "deepseek-tool-smoke.ts"
+          : visionSmoke
+            ? "deepseek-vision-smoke.ts"
+            : "deepseek-smoke.ts",
       ),
       target: "node24",
     },

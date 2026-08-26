@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
+  ConversationSnapshot,
   PiActivityEvent,
   PiFileToolRequestFrame,
   PiHostEventFrame,
@@ -9,7 +10,8 @@ import type {
   PiSessionControlFrame,
   PiToolRequestFrame,
 } from "@openerx/contracts";
-import { ChatRepository } from "@openerx/storage";
+import { FileAppService, MultiFormatParser } from "@openerx/file-service";
+import { ChatRepository, FileRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatAppService, type PiHostClient } from "../src";
 
@@ -20,11 +22,13 @@ interface TestGeneration {
 }
 
 class ScriptedPiHostClient implements PiHostClient {
+  readonly prompts: PiPromptFrame[] = [];
   readonly #listeners = new Set<(event: PiHostEventFrame) => void>();
   readonly #generations = new Map<string, TestGeneration>();
   readonly #failedPrompts = new Set<string>();
 
   async prompt(frame: PiPromptFrame): Promise<void> {
+    this.prompts.push(frame);
     const generation: TestGeneration = {
       controller: new AbortController(),
       sequence: 0,
@@ -153,6 +157,61 @@ async function waitForTerminal(service: ChatAppService, conversationId: string):
 }
 
 describe("ChatAppService", () => {
+  it("attaches a pending new-chat image to the user message and forwards it to Pi", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-app-service-vision-"));
+    temporaryDirectories.push(directory);
+    const database = path.join(directory, "openerx.sqlite");
+    const profile = path.join(directory, "profile");
+    const sourceImage = path.join(directory, "fixture.png");
+    const imageBytes = Buffer.from("new-chat-image", "utf8");
+    writeFileSync(sourceImage, imageBytes);
+    const files = new FileAppService(new FileRepository(database), profile, {
+      parser: new MultiFormatParser({
+        extract: async () => ({ text: "", citations: [] }),
+      }),
+    });
+    const [image] = await files.importPaths([sourceImage], null);
+    if (!image) throw new Error("vision fixture import failed");
+    const piHost = new ScriptedPiHostClient();
+    const service = new ChatAppService(new ChatRepository(database), piHost, null, files);
+
+    const receipt = (await service.handle({
+      command: "chat.send",
+      input: {
+        conversationId: null,
+        text: "图片里有什么？",
+        idempotencyKey: "service-vision-send-0001",
+        personalFileIds: [image.id],
+      },
+    })) as { conversationId: string; userMessageId: string };
+
+    expect(files.listFiles(receipt.conversationId)).toHaveLength(1);
+    const snapshot = (await service.handle({
+      command: "chat.get",
+      input: { conversationId: receipt.conversationId },
+    })) as ConversationSnapshot;
+    expect(snapshot.attachments).toMatchObject([
+      {
+        conversationId: receipt.conversationId,
+        messageId: receipt.userMessageId,
+        personalFileId: image.id,
+      },
+    ]);
+    expect(piHost.prompts[0]).toMatchObject({
+      conversationId: receipt.conversationId,
+      images: [
+        {
+          personalFileId: image.id,
+          displayName: "fixture.png",
+          data: imageBytes.toString("base64"),
+          mimeType: "image/png",
+        },
+      ],
+    });
+    await waitForTerminal(service, receipt.conversationId);
+    service.close();
+  });
+
   it("projects Pi Host events into durable conversation state", async () => {
     const service = createService();
     const receipt = (await service.handle({

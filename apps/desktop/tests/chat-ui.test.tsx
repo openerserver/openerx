@@ -4,6 +4,7 @@ import type {
   ChatEvent,
   ConversationSnapshot,
   DesktopBridge,
+  PersonalFile,
   SkillInstallation,
 } from "@openerx/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -107,6 +108,7 @@ const snapshot: ConversationSnapshot = {
       revision: 2,
     },
   ],
+  attachments: [],
 };
 
 function createBridge(): DesktopBridge {
@@ -335,6 +337,166 @@ describe("M1 chat renderer", () => {
     );
   });
 
+  it("carries images selected before a new conversation into the first send", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const personalFileId = crypto.randomUUID();
+    vi.mocked(bridge.chooseFiles).mockResolvedValue([
+      {
+        id: personalFileId,
+        ownerProfileId: "local-default",
+        displayName: "vision.png",
+        format: "png",
+        mediaType: "image/png",
+        sizeBytes: 12,
+        checksumSha256: "a".repeat(64),
+        objectRef: `objects/sha256/aa/${"a".repeat(64)}`,
+        sourceScopeId: crypto.randomUUID(),
+        sourceRelativePath: "vision.png",
+        parseStatus: "ready",
+        parseErrorCode: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        revision: 1,
+      },
+    ]);
+    vi.mocked(bridge.previewFile).mockResolvedValue({
+      objectKind: "personal_file",
+      objectId: personalFileId,
+      displayName: "vision.png",
+      format: "png",
+      source: null,
+      imageDataUrl: "data:image/png;base64,aW1hZ2U=",
+      parsedText: "",
+      citations: [],
+    });
+    renderApp(bridge);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "添加附件" }));
+    expect(await screen.findByText("已选择 1 个附件，将随本条消息发送。")).toBeTruthy();
+    expect(await screen.findByRole("img", { name: "vision.png" })).toBeTruthy();
+    await user.type(screen.getByLabelText("发送消息"), "解析这张图片");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(bridge.chooseFiles).toHaveBeenCalledWith({ conversationId: null });
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: null,
+        text: "解析这张图片",
+        personalFileIds: [personalFileId],
+      }),
+    );
+  });
+
+  it("keeps an existing-chat image pending until send and supports removing it", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const personalFileId = crypto.randomUUID();
+    const file: PersonalFile = {
+      id: personalFileId,
+      ownerProfileId: "local-default",
+      displayName: "existing-chat.png",
+      format: "png",
+      mediaType: "image/png",
+      sizeBytes: 18,
+      checksumSha256: "b".repeat(64),
+      objectRef: `objects/sha256/bb/${"b".repeat(64)}`,
+      sourceScopeId: crypto.randomUUID(),
+      sourceRelativePath: "existing-chat.png",
+      parseStatus: "ready",
+      parseErrorCode: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    };
+    vi.mocked(bridge.chooseFiles).mockResolvedValue([file]);
+    vi.mocked(bridge.previewFile).mockResolvedValue({
+      objectKind: "personal_file",
+      objectId: personalFileId,
+      displayName: file.displayName,
+      format: "png",
+      source: null,
+      imageDataUrl: "data:image/png;base64,aW1hZ2U=",
+      parsedText: "",
+      citations: [],
+    });
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "添加附件" }));
+    expect(bridge.chooseFiles).toHaveBeenCalledWith({ conversationId: null });
+    expect(await screen.findByRole("img", { name: file.displayName })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: `移除附件 ${file.displayName}` }));
+    expect(screen.queryByRole("img", { name: file.displayName })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "添加附件" }));
+    await user.type(screen.getByLabelText("发送消息"), "继续解析图片");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId,
+        text: "继续解析图片",
+        personalFileIds: [personalFileId],
+      }),
+    );
+  });
+
+  it("renders a sent image on the user message that owns the attachment", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const personalFileId = crypto.randomUUID();
+    const file: PersonalFile = {
+      id: personalFileId,
+      ownerProfileId: "local-default",
+      displayName: "sent-image.webp",
+      format: "webp",
+      mediaType: "image/webp",
+      sizeBytes: 24,
+      checksumSha256: "c".repeat(64),
+      objectRef: `objects/sha256/cc/${"c".repeat(64)}`,
+      sourceScopeId: crypto.randomUUID(),
+      sourceRelativePath: "sent-image.webp",
+      parseStatus: "ready",
+      parseErrorCode: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    };
+    vi.mocked(bridge.getConversation).mockResolvedValue({
+      ...snapshot,
+      attachments: [
+        {
+          id: crypto.randomUUID(),
+          conversationId,
+          messageId: userMessageId,
+          personalFileId,
+          createdAt: timestamp,
+        },
+      ],
+    });
+    vi.mocked(bridge.listFiles).mockResolvedValue([file]);
+    vi.mocked(bridge.previewFile).mockResolvedValue({
+      objectKind: "personal_file",
+      objectId: personalFileId,
+      displayName: file.displayName,
+      format: "webp",
+      source: null,
+      imageDataUrl: "data:image/webp;base64,aW1hZ2U=",
+      parsedText: "",
+      citations: [],
+    });
+
+    renderApp(bridge, `/chat/${conversationId}`);
+
+    const userText = await screen.findByText("生成代码块和表格");
+    const userMessage = userText.closest("article");
+    if (!userMessage) throw new Error("USER_MESSAGE_NOT_FOUND");
+    expect(await within(userMessage).findByRole("img", { name: file.displayName })).toBeTruthy();
+    expect(within(userMessage).getByLabelText("消息附件")).toBeTruthy();
+    expect(document.querySelector(".message-assistant img")).toBeNull();
+  });
+
   it("lets users select and persist system, dark and light themes", async () => {
     window.localStorage.removeItem("openerx.theme");
     const bridge = createBridge();
@@ -484,6 +646,7 @@ describe("M1 chat renderer", () => {
       displayName: "preview.html",
       format: "html",
       source: "<h1>isolated</h1><script>window.probe = typeof window.openerx</script>",
+      imageDataUrl: null,
       parsedText: "isolated",
       citations: [],
     });
@@ -533,6 +696,7 @@ describe("M1 chat renderer", () => {
       displayName: "report.md",
       format: "markdown",
       source: "# report",
+      imageDataUrl: null,
       parsedText: "# report",
       citations: [],
     });

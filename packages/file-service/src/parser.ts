@@ -75,7 +75,7 @@ export class MultiFormatParser {
     if (format === "docx") return this.#docx(filePath);
     if (format === "xlsx") return this.#xlsx(filePath);
     if (format === "pptx") return this.#pptx(filePath);
-    if (format === "png" || format === "jpeg" || format === "webp") {
+    if (format === "png" || format === "jpeg" || format === "gif" || format === "webp") {
       return await this.#ocr.extract(filePath);
     }
     return this.#text(filePath, format);

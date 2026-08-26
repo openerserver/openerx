@@ -32,6 +32,24 @@ export const piHistoryMessageSchema = z
   })
   .strict();
 
+export const piImageInputSchema = z
+  .object({
+    personalFileId: entityIdSchema,
+    displayName: z.string().trim().min(1),
+    data: z.string().min(4).max(44_739_244),
+    mimeType: z.enum(["image/gif", "image/jpeg", "image/png", "image/webp"]),
+  })
+  .strict()
+  .superRefine((image, context) => {
+    if (image.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(image.data)) {
+      context.addIssue({
+        code: "custom",
+        message: "Pi image data must be canonical base64",
+        path: ["data"],
+      });
+    }
+  });
+
 export const piPromptFrameSchema = z
   .object({
     kind: z.literal("pi.session.prompt"),
@@ -50,6 +68,7 @@ export const piPromptFrameSchema = z
           .strict(),
       )
       .optional(),
+    images: z.array(piImageInputSchema).max(100).optional(),
     skills: z.array(piSkillMountSchema).max(500).optional(),
     platform: z
       .object({
@@ -211,6 +230,7 @@ export const piHostPortFrameSchema = z.union([
 ]);
 
 export type PiHistoryMessage = z.infer<typeof piHistoryMessageSchema>;
+export type PiImageInput = z.infer<typeof piImageInputSchema>;
 export type PiPromptFrame = z.infer<typeof piPromptFrameSchema>;
 export type PiHostEventFrame = z.infer<typeof piHostEventFrameSchema>;
 export type PiSessionControlFrame = z.infer<typeof piSessionControlFrameSchema>;

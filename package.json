@@ -26,6 +26,7 @@
     "typecheck:v2": "npm run typecheck --workspaces --if-present",
     "test:v2": "npm run test --workspaces --if-present && vitest run tests/v2",
     "test:deepseek": "vite build --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-smoke/deepseek-smoke.mjs",
+    "test:deepseek:vision": "vite build --mode vision --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-vision-smoke/deepseek-vision-smoke.mjs",
     "test:deepseek:tools": "vite build --mode tool --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-tool-smoke/deepseek-tool-smoke.mjs",
     "test:e2e:v2": "npm run test:e2e --workspace @openerx/desktop",
     "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run build --workspace @openerx/mobile && npm run build --workspace @openerx/desktop",

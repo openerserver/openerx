@@ -148,6 +148,7 @@ export interface CreatePlatformProviderOptions {
   catalog: ModelCatalogEntry[];
   transport: PlatformModelTransport;
   request: PlatformModelRequestContext;
+  requiresImageInput?: boolean;
   onUsage?: (record: UsageRecord) => void;
   streamChunkSize?: number;
 }
@@ -195,6 +196,16 @@ function roundDedupeKey(baseKey: string, context: Context): string {
   return `${baseKey.slice(0, 160)}:ctx:${digest}`;
 }
 
+function contextHasImages(context: Context): boolean {
+  return context.messages.some(
+    (message) =>
+      Array.isArray(message.content) &&
+      message.content.some(
+        (part) => typeof part === "object" && part !== null && part.type === "image",
+      ),
+  );
+}
+
 function streamPlatform(
   model: Model<string>,
   context: Context,
@@ -234,6 +245,7 @@ function streamPlatform(
         ...configuration.request,
         requestDedupeKey: roundDedupeKey(configuration.request.requestDedupeKey, context),
         requirements: {
+          ...(contextHasImages(context) ? { imageInput: true } : {}),
           ...(context.tools && context.tools.length > 0 ? { tools: true } : {}),
         },
         context,
@@ -352,11 +364,28 @@ export function createPlatformModelProvider(
 ): PlatformProviderHandle {
   const catalog = options.catalog.map((entry) => modelCatalogEntrySchema.parse(entry));
   const models = catalog.map(toPiModel);
-  const selected =
+  const available = catalog.filter(
+    ({ modelRef, status }) => modelRef !== automaticModelRef && status === "available",
+  );
+  const selectedEntry =
     options.request.selectedModelRef === automaticModelRef
-      ? models.find(({ id }) => id !== automaticModelRef)
-      : models.find(({ id }) => id === options.request.selectedModelRef);
-  if (!selected) throw new Error(`PLATFORM_MODEL_NOT_FOUND:${options.request.selectedModelRef}`);
+      ? available.find(
+          ({ capabilities }) =>
+            options.requiresImageInput !== true || capabilities.imageInput === true,
+        )
+      : catalog.find(({ modelRef }) => modelRef === options.request.selectedModelRef);
+  if (selectedEntry?.status !== "available") {
+    throw new Error(`PLATFORM_MODEL_NOT_FOUND:${options.request.selectedModelRef}`);
+  }
+  if (options.requiresImageInput && !selectedEntry.capabilities.imageInput) {
+    const suggestions = available
+      .filter(({ capabilities }) => capabilities.imageInput)
+      .map(({ modelRef }) => modelRef)
+      .join(",");
+    throw new Error(`MODEL_CAPABILITY_UNSUPPORTED:imageInput:${suggestions}`);
+  }
+  const selected = models.find(({ id }) => id === selectedEntry.modelRef);
+  if (!selected) throw new Error(`PLATFORM_MODEL_NOT_FOUND:${selectedEntry.modelRef}`);
   const provider = createProvider<string>({
     id: "openerx-platform",
     name: "OpenerX Platform",

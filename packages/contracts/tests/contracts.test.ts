@@ -6,6 +6,7 @@ import {
   errorEnvelopeSchema,
   parseChatCommandResult,
   piHostEventFrameSchema,
+  piPromptFrameSchema,
   redactSensitiveText,
   safeErrorMessage,
   skillInstallationSchema,
@@ -87,6 +88,60 @@ describe("error envelope contract", () => {
 });
 
 describe("M1 process and chat contracts", () => {
+  it("accepts bounded canonical image data and pending file ids in prompt contracts", () => {
+    const personalFileId = crypto.randomUUID();
+    expect(
+      chatCommandEnvelopeSchema.parse({
+        command: "chat.send",
+        input: {
+          text: "解析图片",
+          idempotencyKey: "image-send-contract-0001",
+          personalFileIds: [personalFileId],
+        },
+      }),
+    ).toMatchObject({ input: { personalFileIds: [personalFileId] } });
+    const baseFrame = {
+      kind: "pi.session.prompt" as const,
+      generationId: crypto.randomUUID(),
+      conversationId: crypto.randomUUID(),
+      assistantMessageId: crypto.randomUUID(),
+      history: [{ role: "user" as const, text: "解析图片" }],
+      images: [
+        {
+          personalFileId,
+          displayName: "fixture.png",
+          data: "aW1hZ2U=",
+          mimeType: "image/png" as const,
+        },
+      ],
+    };
+    expect(piPromptFrameSchema.parse(baseFrame).images).toHaveLength(1);
+    expect(() =>
+      piPromptFrameSchema.parse({
+        ...baseFrame,
+        images: [{ ...baseFrame.images[0], data: "not base64" }],
+      }),
+    ).toThrow();
+
+    const preview = {
+      objectKind: "personal_file" as const,
+      objectId: personalFileId,
+      displayName: "fixture.png",
+      format: "png" as const,
+      source: null,
+      imageDataUrl: "data:image/png;base64,aW1hZ2U=",
+      parsedText: "",
+      citations: [],
+    };
+    expect(parseChatCommandResult("file.preview", preview).imageDataUrl).toBe(preview.imageDataUrl);
+    expect(() =>
+      parseChatCommandResult("file.preview", {
+        ...preview,
+        imageDataUrl: "data:image/svg+xml;base64,PHN2Zz4=",
+      }),
+    ).toThrow();
+  });
+
   it("rejects unknown chat fields and weak mutation idempotency keys", () => {
     expect(() =>
       chatCommandEnvelopeSchema.parse({

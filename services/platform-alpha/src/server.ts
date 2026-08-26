@@ -71,13 +71,19 @@ function sendBytes(
   response.end(body);
 }
 
-async function jsonBody(request: IncomingMessage): Promise<unknown> {
+const defaultJsonBodyBytes = 1_000_000;
+const modelJsonBodyBytes = 48 * 1024 * 1024;
+
+async function jsonBody(
+  request: IncomingMessage,
+  maxBytes: number = defaultJsonBodyBytes,
+): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > 1_000_000) throw new Error("REQUEST_TOO_LARGE");
+    if (size > maxBytes) throw new Error("REQUEST_TOO_LARGE");
     chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
@@ -430,7 +436,7 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/v2/model/execute") {
-        const input = modelGatewayRequestSchema.parse(await jsonBody(request));
+        const input = modelGatewayRequestSchema.parse(await jsonBody(request, modelJsonBodyBytes));
         if (input.accountId !== principal.accountId) throw new Error("ACCOUNT_SCOPE_VIOLATION");
         const abort = new AbortController();
         const abortUpstream = () => {
@@ -447,7 +453,7 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/v2/model/stream") {
-        const input = modelGatewayRequestSchema.parse(await jsonBody(request));
+        const input = modelGatewayRequestSchema.parse(await jsonBody(request, modelJsonBodyBytes));
         if (input.accountId !== principal.accountId) throw new Error("ACCOUNT_SCOPE_VIOLATION");
         const abort = new AbortController();
         const abortUpstream = () => {

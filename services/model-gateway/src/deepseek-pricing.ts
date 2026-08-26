@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { automaticModelRef, type BillingTerms, type PriceCatalogEntry } from "@openerx/contracts";
 import {
+  type DeepSeekDefaultModelId,
   type DeepSeekModelId,
   deepSeekModelRefs,
   deepSeekPriceRefs,
@@ -39,6 +40,12 @@ const ratesByModel: Readonly<
     outputMicroMinorPerToken: 600,
     reasoningMicroMinorPerToken: 0,
   },
+  "deepseek-v4-flash-vision-exp": {
+    inputMicroMinorPerToken: 100,
+    cachedInputMicroMinorPerToken: 2,
+    outputMicroMinorPerToken: 200,
+    reasoningMicroMinorPerToken: 0,
+  },
 };
 
 function entry(modelRef: string, priceRef: string, model: DeepSeekModelId): PriceCatalogEntry {
@@ -61,7 +68,7 @@ function entry(modelRef: string, priceRef: string, model: DeepSeekModelId): Pric
 }
 
 export function createDeepSeekPriceCatalog(
-  defaultModel: DeepSeekModelId = "deepseek-v4-flash",
+  defaultModel: DeepSeekDefaultModelId = "deepseek-v4-flash",
 ): PriceCatalogEntry[] {
   return [
     entry(
@@ -73,5 +80,6 @@ export function createDeepSeekPriceCatalog(
     ),
     entry(deepSeekModelRefs.flash, deepSeekPriceRefs.flash, "deepseek-v4-flash"),
     entry(deepSeekModelRefs.pro, deepSeekPriceRefs.pro, "deepseek-v4-pro"),
+    entry(deepSeekModelRefs.vision, deepSeekPriceRefs.vision, "deepseek-v4-flash-vision-exp"),
   ];
 }

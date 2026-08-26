@@ -479,6 +479,7 @@ function registerIpcHandlers(
             "png",
             "jpg",
             "jpeg",
+            "gif",
             "webp",
             "html",
             "htm",

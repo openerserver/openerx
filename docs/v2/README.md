@@ -79,6 +79,7 @@
 28. [adr/016-signed-release-and-update.md](adr/016-signed-release-and-update.md)：签名候选、更新信任根、灰度和回滚决策。
 29. [release/01-release-runbook.md](release/01-release-runbook.md)：V1 发布、升级、撤回和回滚操作手册。
 30. [evidence/m9-2026-08-26.md](evidence/m9-2026-08-26.md)：M9 本地发布基础检查点证据。
+31. [evidence/deepseek-vision-2026-08-26.md](evidence/deepseek-vision-2026-08-26.md)：图片上传到 Pi、自动视觉选模、DeepSeek 多模态请求与真实接口证据。
 
 ## 5. V1 与未来方向边界
 
