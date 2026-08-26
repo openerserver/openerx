@@ -240,6 +240,147 @@ function skillDescription(skill: SkillInstallation): string {
     : skill.description;
 }
 
+function userFacingError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message.includes("PI_MODEL_NOT_CONFIGURED")) {
+    return "默认模型暂时未就绪，OpenerX 正在自动恢复；请稍后重试。";
+  }
+  if (message.includes("PI_PROVIDER_FAILURE") || message.includes("MODEL_PROVIDER")) {
+    return "模型服务暂时没有响应，请检查网络后重试。";
+  }
+  if (message.includes("AUTHENTICATION_REQUIRED")) {
+    return "当前处于本机模式；登录后即可使用账户同步。";
+  }
+  if (
+    message.includes("invalid_format") ||
+    message.includes("Invalid input") ||
+    message.includes("Zod") ||
+    message.trim().startsWith("[") ||
+    message.trim().startsWith("{")
+  ) {
+    return fallback;
+  }
+  if (message.includes("UI_REQUEST_TIMEOUT")) {
+    return `${fallback} 请求等待时间过长，请重试。`;
+  }
+  if (/^[\p{Script=Han}，。；：！？、（）\s·]+$/u.test(message) && message.length <= 120) {
+    return message;
+  }
+  return fallback;
+}
+
+function messageFailureLabel(errorCode: string): string {
+  if (errorCode === "PI_MODEL_NOT_CONFIGURED") {
+    return "默认模型暂时未就绪，请稍后重试。";
+  }
+  if (errorCode === "PI_PROVIDER_FAILURE") {
+    return "模型服务暂时没有响应，请检查网络后重试。";
+  }
+  if (errorCode === "AUTHENTICATION_REQUIRED") {
+    return "此操作需要登录，请先前往账户设置。";
+  }
+  return "本次生成没有完成，可以重试并保留当前内容。";
+}
+
+function withUiTimeout<T>(promise: Promise<T>, timeoutMs = 8_000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error("UI_REQUEST_TIMEOUT")), timeoutMs);
+    void promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function focusSection(sectionId: string): void {
+  const section = document.getElementById(sectionId);
+  if (!(section instanceof HTMLElement)) return;
+  if (section instanceof HTMLDetailsElement) section.open = true;
+  section.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  window.requestAnimationFrame(() => section.focus({ preventScroll: true }));
+}
+
+function trapFocus(event: React.KeyboardEvent<HTMLElement>): void {
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => !element.hasAttribute("hidden"));
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first?.focus();
+  }
+}
+
+function ConfirmDialog({
+  title,
+  description,
+  confirmLabel,
+  pending = false,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  pending?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}): React.JSX.Element {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    window.requestAnimationFrame(() => cancelButtonRef.current?.focus());
+    return () => {
+      if (typeof dialog.close === "function" && dialog.open) dialog.close();
+      else dialog.removeAttribute("open");
+    };
+  }, []);
+  return (
+    <dialog
+      ref={dialogRef}
+      className="confirmation-dialog"
+      role="alertdialog"
+      aria-modal="true"
+      aria-label={title}
+      onCancel={(event) => {
+        event.preventDefault();
+        onCancel();
+      }}
+    >
+      <div>
+        <strong>{title}</strong>
+        <p>{description}</p>
+      </div>
+      <div className="confirmation-dialog-actions">
+        <button ref={cancelButtonRef} type="button" onClick={onCancel}>
+          取消
+        </button>
+        <button type="button" className="danger-action" disabled={pending} onClick={onConfirm}>
+          {pending ? "处理中…" : confirmLabel}
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
 function HighlightedText({ text, query }: { text: string; query: string }): React.JSX.Element {
   const normalized = query.trim();
   if (!normalized) return <>{text}</>;
@@ -272,12 +413,16 @@ function Composer({
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const [skillInstallationId, setSkillInstallationId] = useState("");
+  const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles({ conversationId: conversationId ?? null }),
-    onSuccess: async () => {
+    onSuccess: async (selectedFiles) => {
       await queryClient.invalidateQueries({ queryKey: ["files"] });
+      setAttachmentNotice(
+        selectedFiles.length > 0 ? `已添加 ${selectedFiles.length} 个文件。` : "已取消文件选择。",
+      );
     },
   });
   const skills = useQuery({
@@ -299,6 +444,7 @@ function Composer({
       if (!conversationId) navigate(`/chat/${receipt.conversationId}`);
     },
   });
+  const selectedSkill = skills.data?.find(({ id }) => id === skillInstallationId);
 
   return (
     <form
@@ -335,8 +481,11 @@ function Composer({
           >
             <Paperclip size={18} weight="regular" />
           </button>
-          <label className="composer-select" htmlFor={`skill-${conversationId ?? "new"}`}>
+          <div className="composer-select">
             <Sparkle size={15} weight="regular" />
+            <span className="composer-select-label">
+              {selectedSkill ? skillName(selectedSkill) : "自动 Skill"}
+            </span>
             <select
               id={`skill-${conversationId ?? "new"}`}
               aria-label="选择 Skill"
@@ -352,8 +501,8 @@ function Composer({
                   </option>
                 ))}
             </select>
-            <CaretDown size={13} weight="bold" />
-          </label>
+            <CaretDown size={13} weight="bold" aria-hidden="true" />
+          </div>
           {onOpenContext ? (
             <button
               type="button"
@@ -377,8 +526,21 @@ function Composer({
           <kbd>↵</kbd>
         </button>
       </div>
-      {send.error ? <p className="inline-error">{send.error.message}</p> : null}
-      {chooseFiles.error ? <p className="inline-error">{chooseFiles.error.message}</p> : null}
+      <div className="composer-feedback" aria-live="polite">
+        {attachmentNotice && !chooseFiles.error ? (
+          <p className="inline-success">{attachmentNotice}</p>
+        ) : null}
+        {send.error ? (
+          <p className="inline-error">
+            {userFacingError(send.error, "消息暂时未能发送，请重试。")}
+          </p>
+        ) : null}
+        {chooseFiles.error ? (
+          <p className="inline-error">
+            {userFacingError(chooseFiles.error, "暂时无法添加文件，请重新选择。")}
+          </p>
+        ) : null}
+      </div>
     </form>
   );
 }
@@ -394,7 +556,10 @@ function NewChat(): React.JSX.Element {
     <main className="new-chat-page">
       <header className="new-chat-topbar">
         <span className="topbar-product">新任务</span>
-        <span className="topbar-state">{defaultModel?.displayName ?? "使用账户默认模型"}</span>
+        <span className="topbar-state">
+          {defaultModel?.displayName ??
+            (models.isPending ? "正在连接默认模型" : "默认模型自动可用")}
+        </span>
       </header>
       <section className="welcome" aria-labelledby="welcome-title">
         <p className="eyebrow">个人 AI 工作区</p>
@@ -423,39 +588,94 @@ function Suggestion({ text }: { text: string }): React.JSX.Element {
     onSuccess: (receipt) => navigate(`/chat/${receipt.conversationId}`),
   });
   return (
-    <button type="button" className="suggestion-card" onClick={() => send.mutate()}>
-      <Sparkle size={17} weight="regular" />
-      {text}
-      <ArrowUp size={17} weight="regular" />
-    </button>
+    <div className="suggestion-item">
+      <button
+        type="button"
+        className="suggestion-card"
+        onClick={() => send.mutate()}
+        disabled={send.isPending}
+      >
+        <Sparkle size={17} weight="regular" />
+        {send.isPending ? "正在开始任务…" : text}
+        <ArrowUp size={17} weight="regular" />
+      </button>
+      {send.error ? (
+        <span className="suggestion-error" role="alert">
+          {userFacingError(send.error, "暂时无法开始任务，请重试。")}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
-function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const { conversationId = "" } = useParams();
+function ContextDock({
+  conversationId,
+  onClose,
+}: {
+  conversationId: string;
+  onClose: () => void;
+}): React.JSX.Element {
   const queryClient = useQueryClient();
   const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [contextNotice, setContextNotice] = useState<string | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const chooseFilesButtonRef = useRef<HTMLButtonElement>(null);
+  const chooseDirectoryButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => closeButtonRef.current?.focus(), []);
   const files = useQuery({
     queryKey: ["files", conversationId],
-    queryFn: () => window.openerx.listFiles({ conversationId }),
+    queryFn: () => withUiTimeout(window.openerx.listFiles({ conversationId })),
     enabled: Boolean(conversationId),
+    retry: false,
   });
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles({ conversationId }),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["files"] }),
+    onSuccess: async (selectedFiles) => {
+      await queryClient.invalidateQueries({ queryKey: ["files"] });
+      setContextNotice(
+        selectedFiles.length > 0
+          ? `已把 ${selectedFiles.length} 个文件加入当前对话。`
+          : "已取消文件选择。",
+      );
+    },
+    onSettled: () => window.requestAnimationFrame(() => chooseFilesButtonRef.current?.focus()),
   });
   const chooseDirectory = useMutation({
     mutationFn: () => window.openerx.chooseDirectory({ conversationId }),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["files"] }),
+    onSuccess: async (selectedFiles) => {
+      await queryClient.invalidateQueries({ queryKey: ["files"] });
+      setContextNotice(
+        selectedFiles.length > 0
+          ? `已从所选文件夹加入 ${selectedFiles.length} 个文件。`
+          : "已取消文件夹选择。",
+      );
+    },
+    onSettled: () => window.requestAnimationFrame(() => chooseDirectoryButtonRef.current?.focus()),
   });
   const revoke = useMutation({
     mutationFn: (scopeId: string) => window.openerx.revokeFileScope({ scopeId }),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["files"] }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["files"] });
+      setContextNotice("已撤销原始路径权限；受控副本仍保留在当前对话中。");
+    },
   });
   const fileList = files.data ?? [];
 
   return (
-    <aside className="context-dock" aria-label="当前上下文">
+    <aside
+      className="context-dock"
+      role="dialog"
+      aria-modal="true"
+      aria-label="当前上下文"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onClose();
+          return;
+        }
+        trapFocus(event);
+      }}
+    >
       <header className="context-dock-header">
         <div>
           <div className="context-title-row">
@@ -464,7 +684,13 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
           </div>
           <p>仅用于当前对话</p>
         </div>
-        <button type="button" className="icon-button" aria-label="关闭上下文" onClick={onClose}>
+        <button
+          ref={closeButtonRef}
+          type="button"
+          className="icon-button"
+          aria-label="关闭上下文"
+          onClick={onClose}
+        >
           <X size={19} weight="regular" />
         </button>
       </header>
@@ -478,17 +704,49 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
           <FileText size={26} weight="regular" />
           <strong>添加文件或受控文件夹</strong>
           <span>支持 PDF、Office、表格、图片、文本、代码与 HTML（单个 ≤50MB）</span>
+          <span>选择文件夹只授权读取所选目录；原始路径权限可随时撤销。</span>
           <div className="context-picker-actions">
-            <button type="button" onClick={() => chooseFiles.mutate()}>
-              选择文件
+            <button
+              ref={chooseFilesButtonRef}
+              type="button"
+              onClick={() => chooseFiles.mutate()}
+              disabled={chooseFiles.isPending}
+            >
+              {chooseFiles.isPending ? "正在选择…" : "选择文件"}
             </button>
-            <button type="button" onClick={() => chooseDirectory.mutate()}>
-              选择文件夹
+            <button
+              ref={chooseDirectoryButtonRef}
+              type="button"
+              onClick={() => chooseDirectory.mutate()}
+              disabled={chooseDirectory.isPending}
+            >
+              {chooseDirectory.isPending ? "正在选择…" : "选择文件夹"}
             </button>
           </div>
         </div>
+        {contextNotice && !chooseFiles.error && !chooseDirectory.error && !revoke.error ? (
+          <p className="inline-success" role="status">
+            {contextNotice}
+          </p>
+        ) : null}
         {chooseFiles.error || chooseDirectory.error ? (
-          <p className="inline-error">{(chooseFiles.error ?? chooseDirectory.error)?.message}</p>
+          <div className="context-inline-state" role="alert">
+            <p className="inline-error">
+              {userFacingError(
+                chooseFiles.error ?? chooseDirectory.error,
+                "无法完成选择，请关闭面板后重新打开再试。",
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                chooseFiles.reset();
+                chooseDirectory.reset();
+              }}
+            >
+              清除提示
+            </button>
+          </div>
         ) : null}
         <div className="context-file-list">
           {fileList.map((file) => {
@@ -532,7 +790,9 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
           {files.isPending ? <p className="muted-copy">正在读取文件…</p> : null}
           {files.error ? (
             <div className="context-inline-state">
-              <p className="inline-error">暂时无法读取文件。</p>
+              <p className="inline-error">
+                {userFacingError(files.error, "暂时无法读取当前对话的文件。")}
+              </p>
               <button type="button" onClick={() => void files.refetch()}>
                 重试
               </button>
@@ -540,6 +800,11 @@ function ContextDock({ onClose }: { onClose: () => void }): React.JSX.Element {
           ) : null}
           {!files.isPending && !files.error && fileList.length === 0 ? (
             <p className="muted-copy">还没有添加文件。上方选择的内容只会用于当前对话。</p>
+          ) : null}
+          {revoke.error ? (
+            <p className="inline-error" role="alert">
+              {userFacingError(revoke.error, "暂时无法撤销原始路径权限，请重试。")}
+            </p>
           ) : null}
         </div>
       </section>
@@ -578,6 +843,7 @@ function FilesAndArtifacts(): React.JSX.Element {
     id: string;
   } | null>(null);
   const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview");
+  const [fileNotice, setFileNotice] = useState<string | null>(null);
   const files = useQuery({ queryKey: ["files", "all"], queryFn: () => window.openerx.listFiles() });
   const artifacts = useQuery({
     queryKey: ["artifacts"],
@@ -585,11 +851,23 @@ function FilesAndArtifacts(): React.JSX.Element {
   });
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles(),
-    onSuccess: () => files.refetch(),
+    onSuccess: async (selectedFiles) => {
+      await files.refetch();
+      setFileNotice(
+        selectedFiles.length > 0 ? `已添加 ${selectedFiles.length} 个文件。` : "已取消文件选择。",
+      );
+    },
   });
   const chooseDirectory = useMutation({
     mutationFn: () => window.openerx.chooseDirectory(),
-    onSuccess: () => files.refetch(),
+    onSuccess: async (selectedFiles) => {
+      await files.refetch();
+      setFileNotice(
+        selectedFiles.length > 0
+          ? `已从所选文件夹添加 ${selectedFiles.length} 个文件。`
+          : "已取消文件夹选择。",
+      );
+    },
   });
   const preview = useQuery({
     queryKey: ["content-preview", selected?.kind, selected?.id],
@@ -613,14 +891,41 @@ function FilesAndArtifacts(): React.JSX.Element {
           <p>原始路径权限与受控副本分离；生成成果按版本保留，不静默覆盖。</p>
         </div>
         <div className="library-header-actions">
-          <button type="button" onClick={() => chooseDirectory.mutate()}>
-            <FolderSimple size={17} /> 添加文件夹
+          <button
+            type="button"
+            onClick={() => chooseDirectory.mutate()}
+            disabled={chooseDirectory.isPending}
+            title="仅授权读取你选择的目录；之后可撤销原始路径权限"
+          >
+            <FolderSimple size={17} />
+            {chooseDirectory.isPending ? "正在选择…" : "添加文件夹"}
           </button>
-          <button type="button" className="primary-action" onClick={() => chooseFiles.mutate()}>
-            <Plus size={17} /> 添加文件
+          <button
+            type="button"
+            className="primary-action"
+            onClick={() => chooseFiles.mutate()}
+            disabled={chooseFiles.isPending}
+          >
+            <Plus size={17} /> {chooseFiles.isPending ? "正在选择…" : "添加文件"}
           </button>
         </div>
       </header>
+      <p className="library-scope-note">
+        文件夹授权只覆盖你明确选择的目录；撤销原始路径权限后，已导入的受控副本仍会保留。
+      </p>
+      <div className="library-feedback" aria-live="polite">
+        {fileNotice && !chooseFiles.error && !chooseDirectory.error ? (
+          <p className="inline-success">{fileNotice}</p>
+        ) : null}
+        {files.error || chooseFiles.error || chooseDirectory.error ? (
+          <p className="inline-error">
+            {userFacingError(
+              files.error ?? chooseFiles.error ?? chooseDirectory.error,
+              "暂时无法读取或添加文件，请重试。",
+            )}
+          </p>
+        ) : null}
+      </div>
       <section className="library-section" aria-labelledby="personal-files-title">
         <div className="library-section-title">
           <h2 id="personal-files-title">个人文件</h2>
@@ -649,17 +954,15 @@ function FilesAndArtifacts(): React.JSX.Element {
           ))}
         </div>
         {!files.isPending && files.data?.length === 0 ? (
-          <div className="empty-state empty-state-compact">
+          <div className="empty-state empty-state-compact empty-state-without-action">
             <FileText size={25} />
             <div>
               <strong>还没有个人文件</strong>
               <p>
-                添加文件或受控文件夹后，可以在对话中引用内容。支持 PDF、Office、图片、文本和代码。
+                使用页面右上角添加文件或受控文件夹后，就可以在对话中引用内容。支持
+                PDF、Office、图片、文本和代码。
               </p>
             </div>
-            <button type="button" onClick={() => chooseFiles.mutate()}>
-              选择文件
-            </button>
           </div>
         ) : null}
       </section>
@@ -770,7 +1073,21 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.parts[0]?.text ?? "");
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const conversationId = message.conversationId;
+  useEffect(() => {
+    if (editing) window.requestAnimationFrame(() => editTextareaRef.current?.focus());
+  }, [editing]);
+  const copyText = async (value: string, successMessage: string): Promise<void> => {
+    try {
+      if (!navigator.clipboard) throw new Error("CLIPBOARD_UNAVAILABLE");
+      await navigator.clipboard.writeText(value);
+      setActionNotice(successMessage);
+    } catch {
+      setActionNotice("无法访问剪贴板，请手动选择并复制内容。");
+    }
+  };
   const stop = useMutation({
     mutationFn: () =>
       window.openerx.stopGeneration({ conversationId, assistantMessageId: message.id }),
@@ -782,8 +1099,10 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
         assistantMessageId: message.id,
         idempotencyKey: idempotencyKey("regenerate"),
       }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) }),
+    onSuccess: async () => {
+      setActionNotice("已在新分支中重新生成，原回复仍保留。");
+      await queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
+    },
   });
   const edit = useMutation({
     mutationFn: () =>
@@ -795,6 +1114,7 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
       }),
     onSuccess: async () => {
       setEditing(false);
+      setActionNotice("已把编辑后的消息保存为新分支，原内容仍保留。");
       await queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
     },
   });
@@ -831,16 +1151,19 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
           }}
         >
           <textarea
+            ref={editTextareaRef}
+            aria-label="编辑消息内容"
             value={editText}
             onChange={(event) => setEditText(event.target.value)}
             rows={4}
           />
+          <p className="field-help">保存会创建一个新分支，当前分支和原消息不会被覆盖。</p>
           <div>
             <button type="button" onClick={() => setEditing(false)}>
               取消
             </button>
             <button type="submit" disabled={!editText.trim() || edit.isPending}>
-              创建分支
+              {edit.isPending ? "正在创建…" : "保存并新建分支"}
             </button>
           </div>
         </form>
@@ -861,10 +1184,10 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
                       type="button"
                       onClick={(event) => {
                         const code = event.currentTarget.nextElementSibling?.textContent ?? "";
-                        void navigator.clipboard.writeText(code);
+                        void copyText(code, "代码已复制到剪贴板。");
                       }}
                     >
-                      复制代码
+                      {actionNotice === "代码已复制到剪贴板。" ? "已复制" : "复制代码"}
                     </button>
                     <pre>{children}</pre>
                   </div>
@@ -880,7 +1203,11 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
       ) : (
         <p className="user-text">{text}</p>
       )}
-      {message.errorCode ? <p className="inline-error">失败原因：{message.errorCode}</p> : null}
+      {message.errorCode ? (
+        <p className="inline-error" role="alert">
+          {messageFailureLabel(message.errorCode)}
+        </p>
+      ) : null}
       {usage.data && usage.data.records > 0 ? (
         <div className="usage-line" role="status" aria-label="消息 Token 用量">
           <span>输入 {tokenValue(usage.data.inputTokens)}</span>
@@ -900,8 +1227,8 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
       {!editing ? (
         <footer className="message-actions">
           {text ? (
-            <button type="button" onClick={() => void navigator.clipboard.writeText(text)}>
-              复制
+            <button type="button" onClick={() => void copyText(text, "消息已复制到剪贴板。")}>
+              {actionNotice === "消息已复制到剪贴板。" ? "已复制" : "复制"}
             </button>
           ) : null}
           {message.role === "user" ? (
@@ -919,12 +1246,28 @@ function MessageCard({ message }: { message: Message }): React.JSX.Element {
               type="button"
               onClick={() => regenerate.mutate()}
               disabled={regenerate.isPending}
+              title="会创建新分支，当前回复不会被覆盖"
             >
-              {message.status === "failed" ? "重试" : "重新生成"}
+              {regenerate.isPending
+                ? "正在创建分支…"
+                : message.status === "failed"
+                  ? "重试并新建分支"
+                  : "重新生成到新分支"}
             </button>
           ) : null}
         </footer>
       ) : null}
+      <div className="message-feedback" aria-live="polite">
+        {actionNotice ? <p>{actionNotice}</p> : null}
+        {regenerate.error || edit.error || stop.error ? (
+          <p className="inline-error">
+            {userFacingError(
+              regenerate.error ?? edit.error ?? stop.error,
+              "操作暂时没有完成，请重试。",
+            )}
+          </p>
+        ) : null}
+      </div>
     </article>
   );
 }
@@ -1058,6 +1401,18 @@ function ConversationToolbar({
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [nextTitle, setNextTitle] = useState(conversation.title);
+  const [selectedBranchId, setSelectedBranchId] = useState(conversation.activeBranchId);
+  const [toolbarNotice, setToolbarNotice] = useState<string | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => setSelectedBranchId(conversation.activeBranchId), [conversation.activeBranchId]);
+  useEffect(() => {
+    if (moreOpen) menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [moreOpen]);
+  useEffect(() => {
+    if (renaming) window.requestAnimationFrame(() => renameInputRef.current?.focus());
+  }, [renaming]);
   const rename = useMutation({
     mutationFn: (title: string) =>
       window.openerx.renameConversation({ conversationId: conversation.id, title }),
@@ -1068,6 +1423,7 @@ function ConversationToolbar({
       );
       await queryClient.invalidateQueries({ queryKey: ["chat", "list"] });
       setRenaming(false);
+      setToolbarNotice("对话标题已更新。");
     },
   });
   const archive = useMutation({
@@ -1082,6 +1438,7 @@ function ConversationToolbar({
         (current) => (current ? { ...current, conversation: updated } : current),
       );
       await queryClient.invalidateQueries({ queryKey: ["chat", "list"] });
+      setToolbarNotice(updated.archivedAt ? "对话已归档。" : "对话已移回活动历史。");
     },
   });
   const remove = useMutation({
@@ -1094,7 +1451,14 @@ function ConversationToolbar({
   const activate = useMutation({
     mutationFn: (branchId: string) =>
       window.openerx.activateBranch({ conversationId: conversation.id, branchId }),
-    onSuccess: (next) => queryClient.setQueryData(chatKeys.conversation(conversation.id), next),
+    onSuccess: (next) => {
+      setSelectedBranchId(next.conversation.activeBranchId);
+      queryClient.setQueryData(chatKeys.conversation(conversation.id), next);
+      setToolbarNotice(
+        `已切换到${next.branches.find(({ id }) => id === next.conversation.activeBranchId)?.label ?? "所选分支"}。`,
+      );
+    },
+    onError: () => setSelectedBranchId(conversation.activeBranchId),
   });
   const models = useQuery({
     queryKey: ["models", "catalog"],
@@ -1167,6 +1531,7 @@ function ConversationToolbar({
           <SidebarSimple size={17} weight="regular" />
         </button>
         <button
+          ref={moreButtonRef}
           type="button"
           className="toolbar-icon-button"
           aria-label="更多操作"
@@ -1179,8 +1544,13 @@ function ConversationToolbar({
           <label>
             分支
             <select
-              value={conversation.activeBranchId}
-              onChange={(event) => activate.mutate(event.target.value)}
+              aria-label="选择对话分支"
+              value={selectedBranchId}
+              onChange={(event) => {
+                setSelectedBranchId(event.target.value);
+                activate.mutate(event.target.value);
+              }}
+              disabled={activate.isPending}
             >
               {snapshot.branches.map((branch) => (
                 <option value={branch.id} key={branch.id}>
@@ -1191,7 +1561,19 @@ function ConversationToolbar({
           </label>
         ) : null}
         {moreOpen ? (
-          <div className="conversation-menu" role="menu" aria-label="对话操作">
+          <div
+            ref={menuRef}
+            className="conversation-menu"
+            role="menu"
+            aria-label="对话操作"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setMoreOpen(false);
+                window.requestAnimationFrame(() => moreButtonRef.current?.focus());
+              }
+            }}
+          >
             <button
               type="button"
               role="menuitem"
@@ -1202,7 +1584,16 @@ function ConversationToolbar({
             >
               重命名
             </button>
-            <button type="button" role="menuitem" onClick={() => archive.mutate()}>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={archive.isPending}
+              onClick={() => {
+                setMoreOpen(false);
+                archive.mutate();
+                window.requestAnimationFrame(() => moreButtonRef.current?.focus());
+              }}
+            >
               {conversation.archivedAt ? "取消归档" : "归档对话"}
             </button>
             <button
@@ -1230,6 +1621,7 @@ function ConversationToolbar({
         >
           <label htmlFor="conversation-title">对话标题</label>
           <input
+            ref={renameInputRef}
             id="conversation-title"
             value={nextTitle}
             onChange={(event) => setNextTitle(event.target.value)}
@@ -1243,19 +1635,29 @@ function ConversationToolbar({
         </form>
       ) : null}
       {confirmingDelete ? (
-        <section className="confirmation-panel" role="alertdialog" aria-labelledby="delete-title">
-          <div>
-            <strong id="delete-title">删除这个对话？</strong>
-            <span>删除后将不再出现在历史记录中。此操作无法在应用内撤销。</span>
-          </div>
-          <button type="button" onClick={() => setConfirmingDelete(false)}>
-            取消
-          </button>
-          <button type="button" className="danger-action" onClick={() => remove.mutate()}>
-            确认删除
-          </button>
-        </section>
+        <ConfirmDialog
+          title="删除这个对话？"
+          description="删除后将不再出现在历史记录中。此操作无法在应用内撤销。"
+          confirmLabel="确认删除"
+          pending={remove.isPending}
+          onCancel={() => {
+            setConfirmingDelete(false);
+            window.setTimeout(() => moreButtonRef.current?.focus(), 0);
+          }}
+          onConfirm={() => remove.mutate()}
+        />
       ) : null}
+      <div className="toolbar-feedback" aria-live="polite">
+        {toolbarNotice ? <p>{toolbarNotice}</p> : null}
+        {rename.error || archive.error || activate.error ? (
+          <p className="inline-error">
+            {userFacingError(
+              rename.error ?? archive.error ?? activate.error,
+              "对话操作暂时没有完成，请重试。",
+            )}
+          </p>
+        ) : null}
+      </div>
       {usage.data && usage.data.records > 0 ? (
         <div className="conversation-usage">
           {usage.data.records} 次模型调用 · Token {tokenValue(usage.data.totalTokens)}
@@ -1317,6 +1719,10 @@ function SearchPage(): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    window.requestAnimationFrame(() => searchInputRef.current?.focus());
+  }, []);
   const results = useQuery({
     queryKey: ["chat", "search", query, includeArchived],
     queryFn: () => window.openerx.search({ query, includeArchived }),
@@ -1335,6 +1741,7 @@ function SearchPage(): React.JSX.Element {
         }}
       >
         <input
+          ref={searchInputRef}
           id="global-search-input"
           aria-label="搜索关键词"
           placeholder="输入标题或消息内容"
@@ -1399,10 +1806,85 @@ function Placeholder({ title }: { title: string }): React.JSX.Element {
   );
 }
 
+function skillSourceKindLabel(sourceKind: string): string {
+  switch (sourceKind) {
+    case "built_in":
+      return "内置包";
+    case "local_directory":
+      return "本地目录";
+    case "archive":
+      return "本地 ZIP";
+    default:
+      return "已安装包";
+  }
+}
+
+function skillSourceLabel(skill: SkillInstallation): string {
+  return skill.sourceKind === "built_in" ? "OpenerX 内置 Skill" : skill.sourceLabel;
+}
+
+function skillPlatformLabel(platform: string): string {
+  if (platform === "darwin") return "macOS";
+  if (platform === "win32") return "Windows";
+  if (platform === "linux") return "Linux";
+  return platform;
+}
+
+function skillToolLabel(tool: string): string {
+  if (tool === "openerx_skill_script") return "Skill 脚本执行器";
+  if (tool === "openerx_skill_resource") return "Skill 资源读取器";
+  return tool.replaceAll("_", " ");
+}
+
+function skillCapabilityLabel(capability: string): string {
+  const labels: Record<string, string> = {
+    file: "文件",
+    network: "网络",
+    shell: "本地命令",
+    browser: "浏览器",
+    desktop: "桌面控制",
+    mcp: "MCP 服务",
+  };
+  return labels[capability] ?? capability;
+}
+
+function skillActionLabel(action: string): string {
+  const labels: Record<string, string> = {
+    read: "读取",
+    write: "写入",
+    execute: "执行",
+    connect: "连接",
+    control: "控制",
+  };
+  return labels[action] ?? action;
+}
+
+function skillReasonLabel(reason: string): string {
+  if (reason === "Run the bundled deterministic report outline script.") {
+    return "运行内置的确定性报告大纲脚本。";
+  }
+  if (reason === "Selected from the composer") return "在消息输入区手动选择";
+  return reason;
+}
+
+function skillInvocationLabel(value: string): string {
+  const labels: Record<string, string> = {
+    manual: "手动触发",
+    auto: "自动触发",
+    completed: "已完成",
+    failed: "失败",
+    running: "运行中",
+    blocked: "等待授权",
+  };
+  return labels[value] ?? value.replaceAll("_", " ");
+}
+
 function SkillCenter(): React.JSX.Element {
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<"personal" | "workspace">("personal");
   const [skillQuery, setSkillQuery] = useState("");
+  const [resetTarget, setResetTarget] = useState<SkillInstallation | null>(null);
+  const [skillNotice, setSkillNotice] = useState<string | null>(null);
   const skills = useQuery({
     queryKey: ["skills"],
     queryFn: () => window.openerx.listSkills(),
@@ -1420,7 +1902,10 @@ function SkillCenter(): React.JSX.Element {
         scope,
         workspaceId: scope === "workspace" ? "default" : null,
       }),
-    onSuccess: refresh,
+    onSuccess: async (installed) => {
+      await refresh();
+      setSkillNotice(installed ? `已安装 ${skillName(installed)}。` : "已取消安装。");
+    },
   });
   const enable = useMutation({
     mutationFn: ({ installationId, enabled }: { installationId: string; enabled: boolean }) =>
@@ -1443,7 +1928,11 @@ function SkillCenter(): React.JSX.Element {
   const reset = useMutation({
     mutationFn: (installationId: string) =>
       window.openerx.resetSkillPermissions({ installationId }),
-    onSuccess: refresh,
+    onSuccess: async () => {
+      await refresh();
+      setSkillNotice("已撤销权限并停用该 Skill；重新审核批准后才能再次启用。");
+      setResetTarget(null);
+    },
   });
   const update = useMutation({
     mutationFn: (installationId: string) => window.openerx.chooseAndUpdateSkill({ installationId }),
@@ -1467,6 +1956,11 @@ function SkillCenter(): React.JSX.Element {
     update.error ??
     rollback.error ??
     uninstall.error;
+  const visibleSkills = (skills.data ?? []).filter((skill) =>
+    `${skillName(skill)} ${skillDescription(skill)}`
+      .toLocaleLowerCase()
+      .includes(skillQuery.trim().toLocaleLowerCase()),
+  );
 
   return (
     <main className="skill-center-page">
@@ -1484,7 +1978,7 @@ function SkillCenter(): React.JSX.Element {
               onChange={(event) => setScope(event.target.value as typeof scope)}
             >
               <option value="personal">个人</option>
-              <option value="workspace">当前工作区</option>
+              <option value="workspace">本机默认工作区</option>
             </select>
           </label>
           <button
@@ -1497,6 +1991,10 @@ function SkillCenter(): React.JSX.Element {
           </button>
         </div>
       </header>
+      <p className="skill-scope-note" aria-live="polite">
+        安装目标：{scope === "personal" ? "当前个人账户" : "本机默认工作区（default）"}。
+        工作区安装只在这个本机工作区中可用。
+      </p>
 
       <section className="skill-summary" aria-label="Skill 概览">
         <div>
@@ -1524,164 +2022,196 @@ function SkillCenter(): React.JSX.Element {
       </div>
 
       {skills.isPending ? <p>正在读取 Skill…</p> : null}
-      {skills.error ? <p className="inline-error">{skills.error.message}</p> : null}
-      {mutationError ? <p className="inline-error">{mutationError.message}</p> : null}
+      {skills.error ? (
+        <p className="inline-error">{userFacingError(skills.error, "暂时无法读取 Skill。")}</p>
+      ) : null}
+      {mutationError ? (
+        <p className="inline-error">
+          {userFacingError(mutationError, "Skill 操作暂时没有完成，请重试。")}
+        </p>
+      ) : null}
+      {skillNotice && !mutationError ? (
+        <p className="inline-success" role="status">
+          {skillNotice}
+        </p>
+      ) : null}
+      {!skills.isPending && skills.data && visibleSkills.length === 0 ? (
+        <div className="empty-state skill-empty-state">
+          <MagnifyingGlass size={24} />
+          <strong>
+            {skillQuery.trim() ? `没有匹配“${skillQuery.trim()}”的 Skill` : "还没有 Skill"}
+          </strong>
+          <p>
+            {skillQuery.trim() ? "尝试更短的关键词，或清除搜索。" : "可从本地目录或 ZIP 安装。"}
+          </p>
+          {skillQuery.trim() ? (
+            <button type="button" onClick={() => setSkillQuery("")}>
+              清除搜索
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <section className="skill-grid" aria-label="已安装 Skill">
-        {(skills.data ?? [])
-          .filter((skill) =>
-            `${skillName(skill)} ${skillDescription(skill)}`
-              .toLocaleLowerCase()
-              .includes(skillQuery.trim().toLocaleLowerCase()),
-          )
-          .map((skill) => {
-            const approvalRequired =
-              skill.permissions.length > 0 &&
-              skill.approvedPermissionDigest !== skill.permissionDigest;
-            return (
-              <article className={`skill-card skill-state-${skill.packageState}`} key={skill.id}>
-                <header>
-                  <div>
-                    <span className={`skill-trust trust-${skill.trust}`}>
-                      {skill.trust === "bundled" ? "内置" : "已验证来源"}
-                    </span>
-                    <h2>{skillName(skill)}</h2>
-                    <p>{skillDescription(skill)}</p>
-                  </div>
-                  <span className={`skill-enabled ${skill.enabled ? "is-enabled" : ""}`}>
-                    {skill.enabled ? "已启用" : "已停用"}
+        {visibleSkills.map((skill) => {
+          const approvalRequired =
+            skill.permissions.length > 0 &&
+            skill.approvedPermissionDigest !== skill.permissionDigest;
+          return (
+            <article className={`skill-card skill-state-${skill.packageState}`} key={skill.id}>
+              <header>
+                <div>
+                  <span className={`skill-trust trust-${skill.trust}`}>
+                    {skill.trust === "bundled" ? "内置" : "已验证来源"}
                   </span>
-                </header>
-                <details className="skill-technical-details">
-                  <summary>技术信息与权限</summary>
-                  <dl className="skill-metadata">
-                    <div>
-                      <dt>范围</dt>
-                      <dd>
-                        {skill.scope === "builtin"
-                          ? "内置"
-                          : skill.scope === "personal"
-                            ? "个人"
-                            : "工作区"}
-                        {skill.workspaceId ? ` · ${skill.workspaceId}` : ""}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>版本</dt>
-                      <dd>{skill.version}</dd>
-                    </div>
-                    <div>
-                      <dt>发布者</dt>
-                      <dd>{skill.publisher}</dd>
-                    </div>
-                    <div>
-                      <dt>来源</dt>
-                      <dd>
-                        {skill.sourceKind} · {skill.sourceLabel}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>平台</dt>
-                      <dd>{skill.platforms.join(" / ")}</dd>
-                    </div>
-                    <div>
-                      <dt>校验</dt>
-                      <dd>
-                        <code>{skill.checksumSha256.slice(0, 16)}…</code>
-                      </dd>
-                    </div>
-                  </dl>
-                  <section className="skill-dependencies">
-                    <strong>依赖与权限</strong>
-                    <p>
-                      工具：{skill.declaredTools.join("、") || "无"} · MCP：
-                      {skill.declaredMcpServers.join("、") || "无"}
-                    </p>
-                    {skill.permissions.length === 0 ? (
-                      <span>不声明额外权限</span>
-                    ) : (
-                      skill.permissions.map((permission) => (
-                        <span key={`${permission.capability}-${permission.actions.join("-")}`}>
-                          {permission.capability} · {permission.actions.join("/")} ·{" "}
-                          {permission.targets.join("、") || "当前 Scope"} — {permission.reason}
-                        </span>
-                      ))
-                    )}
-                  </section>
-                </details>
-                <div className="skill-card-actions">
-                  {approvalRequired ? (
-                    <button type="button" onClick={() => approve.mutate(skill)}>
-                      审核并批准权限
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      enable.mutate({ installationId: skill.id, enabled: !skill.enabled })
-                    }
-                    disabled={skill.packageState !== "installed" || approvalRequired}
-                  >
-                    {skill.enabled ? "禁用" : "启用"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      autoInvoke.mutate({ installationId: skill.id, value: !skill.autoInvoke })
-                    }
-                    disabled={!skill.enabled}
-                  >
-                    自动触发：{skill.autoInvoke ? "开" : "关"}
-                  </button>
-                  {skill.scope !== "builtin" ? (
-                    <button type="button" onClick={() => update.mutate(skill.id)}>
-                      更新
-                    </button>
-                  ) : null}
-                  {skill.rollbackVersions.length > 0 ? (
-                    <select
-                      aria-label={`回滚 ${skillName(skill)}`}
-                      defaultValue=""
-                      onChange={(event) => {
-                        if (event.target.value)
-                          rollback.mutate({
-                            installationId: skill.id,
-                            version: event.target.value,
-                          });
-                        event.target.value = "";
-                      }}
-                    >
-                      <option value="">回滚版本…</option>
-                      {skill.rollbackVersions.map((version) => (
-                        <option value={version} key={version}>
-                          {version}
-                        </option>
-                      ))}
-                    </select>
-                  ) : null}
-                  {skill.permissions.length > 0 ? (
-                    <button type="button" onClick={() => reset.mutate(skill.id)}>
-                      重置权限
-                    </button>
-                  ) : null}
-                  {skill.scope !== "builtin" ? (
-                    <button
-                      type="button"
-                      className="danger-action"
-                      onClick={() => {
-                        if (
-                          window.confirm(`卸载 ${skillName(skill)}？本地包会移入可恢复回收目录。`)
-                        )
-                          uninstall.mutate(skill.id);
-                      }}
-                    >
-                      卸载
-                    </button>
-                  ) : null}
+                  <h2>{skillName(skill)}</h2>
+                  <p>{skillDescription(skill)}</p>
                 </div>
-              </article>
-            );
-          })}
+                <span className={`skill-enabled ${skill.enabled ? "is-enabled" : ""}`}>
+                  {skill.enabled ? "已启用" : "已停用"}
+                </span>
+              </header>
+              <details className="skill-technical-details">
+                <summary>技术信息与权限</summary>
+                <dl className="skill-metadata">
+                  <div>
+                    <dt>范围</dt>
+                    <dd>
+                      {skill.scope === "builtin"
+                        ? "内置"
+                        : skill.scope === "personal"
+                          ? "个人"
+                          : "工作区"}
+                      {skill.workspaceId ? ` · ${skill.workspaceId}` : ""}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>版本</dt>
+                    <dd>{skill.version}</dd>
+                  </div>
+                  <div>
+                    <dt>发布者</dt>
+                    <dd>{skill.publisher}</dd>
+                  </div>
+                  <div>
+                    <dt>来源</dt>
+                    <dd>
+                      {skillSourceKindLabel(skill.sourceKind)} · {skillSourceLabel(skill)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>平台</dt>
+                    <dd>{skill.platforms.map(skillPlatformLabel).join(" / ")}</dd>
+                  </div>
+                  <div>
+                    <dt>校验</dt>
+                    <dd>
+                      <code>{skill.checksumSha256.slice(0, 16)}…</code>
+                    </dd>
+                  </div>
+                </dl>
+                <section className="skill-dependencies">
+                  <strong>依赖与权限</strong>
+                  <p>
+                    工具：{skill.declaredTools.map(skillToolLabel).join("、") || "无"} · MCP：
+                    {skill.declaredMcpServers.join("、") || "无"}
+                  </p>
+                  {skill.permissions.length === 0 ? (
+                    <span>不声明额外权限</span>
+                  ) : (
+                    skill.permissions.map((permission) => (
+                      <span key={`${permission.capability}-${permission.actions.join("-")}`}>
+                        {skillCapabilityLabel(permission.capability)} ·{" "}
+                        {permission.actions.map(skillActionLabel).join("/")} ·{" "}
+                        {permission.targets.join("、") || "当前授权范围"} —{" "}
+                        {skillReasonLabel(permission.reason)}
+                      </span>
+                    ))
+                  )}
+                </section>
+              </details>
+              <div className="skill-card-actions">
+                {approvalRequired ? (
+                  <button type="button" onClick={() => approve.mutate(skill)}>
+                    审核并批准权限
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() =>
+                    enable.mutate({ installationId: skill.id, enabled: !skill.enabled })
+                  }
+                  disabled={skill.packageState !== "installed" || approvalRequired}
+                >
+                  {skill.enabled ? "禁用" : "启用"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    autoInvoke.mutate({ installationId: skill.id, value: !skill.autoInvoke })
+                  }
+                  disabled={!skill.enabled}
+                >
+                  自动触发：{skill.autoInvoke ? "开" : "关"}
+                </button>
+                {skill.scope !== "builtin" ? (
+                  <button type="button" onClick={() => update.mutate(skill.id)}>
+                    更新
+                  </button>
+                ) : null}
+                {skill.rollbackVersions.length > 0 ? (
+                  <select
+                    aria-label={`回滚 ${skillName(skill)}`}
+                    defaultValue=""
+                    onChange={(event) => {
+                      if (event.target.value)
+                        rollback.mutate({
+                          installationId: skill.id,
+                          version: event.target.value,
+                        });
+                      event.target.value = "";
+                    }}
+                  >
+                    <option value="">回滚版本…</option>
+                    {skill.rollbackVersions.map((version) => (
+                      <option value={version} key={version}>
+                        {version}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                {skill.permissions.length > 0 ? (
+                  <button type="button" onClick={() => setResetTarget(skill)}>
+                    撤销已批准权限…
+                  </button>
+                ) : null}
+                {skill.scope !== "builtin" ? (
+                  <button
+                    type="button"
+                    className="danger-action"
+                    onClick={() => {
+                      if (window.confirm(`卸载 ${skillName(skill)}？本地包会移入可恢复回收目录。`))
+                        uninstall.mutate(skill.id);
+                    }}
+                  >
+                    卸载
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
       </section>
+
+      {resetTarget ? (
+        <ConfirmDialog
+          title={`撤销 ${skillName(resetTarget)} 的权限并停用？`}
+          description="这不是恢复默认设置。已批准权限会被撤销，Skill 会立即停用；之后必须重新审核并批准权限才能启用。"
+          confirmLabel="撤销权限并停用"
+          pending={reset.isPending}
+          onCancel={() => setResetTarget(null)}
+          onConfirm={() => reset.mutate(resetTarget.id)}
+        />
+      ) : null}
 
       <section className="skill-activity" aria-label="Skill 调用记录">
         <h2>最近调用</h2>
@@ -1692,7 +2222,8 @@ function SkillCenter(): React.JSX.Element {
                 ?.displayName ?? invocation.installationId.slice(0, 8)}
             </strong>
             <span>
-              {invocation.trigger} · {invocation.status} · {invocation.reason}
+              {skillInvocationLabel(invocation.trigger)} · {skillInvocationLabel(invocation.status)}{" "}
+              · {skillReasonLabel(invocation.reason)}
             </span>
           </div>
         ))}
@@ -1749,6 +2280,17 @@ const performanceLabels = {
   desktop_interactive: "桌面可交互",
   app_service_ready: "本地服务就绪",
   idle_rss: "当前进程内存",
+} as const;
+
+const performanceUnitLabels = {
+  ms: "毫秒",
+  mib: "MiB",
+} as const;
+
+const performanceStatusLabels = {
+  pass: "达标",
+  over_budget: "超出预算",
+  pending: "等待数据",
 } as const;
 
 const releaseUpdateStatusLabels: Record<ReleaseUpdateState["status"], string> = {
@@ -1877,10 +2419,11 @@ function DiagnosticsSettings(): React.JSX.Element {
           <article key={metric.name} className={`metric-${metric.status}`}>
             <span>{performanceLabels[metric.name]}</span>
             <strong>
-              {metric.value.toLocaleString()} {metric.unit}
+              {metric.value.toLocaleString()} {performanceUnitLabels[metric.unit]}
             </strong>
             <small>
-              预算 ≤ {metric.budget.toLocaleString()} {metric.unit} · {metric.status}
+              预算 ≤ {metric.budget.toLocaleString()} {performanceUnitLabels[metric.unit]} ·{" "}
+              {performanceStatusLabels[metric.status]}
             </small>
           </article>
         ))}
@@ -2197,14 +2740,23 @@ function AccountSettings({
       <p className="eyebrow">设置</p>
       <h1>账户与设备</h1>
       <nav className="settings-section-nav" aria-label="设置分区">
-        <a href="#account-section">账户</a>
-        <a href="#appearance-section">外观</a>
-        <a href="#update-section">更新</a>
-        <a href="#diagnostics-section">诊断与数据</a>
+        <button type="button" onClick={() => focusSection("account-section")}>
+          账户
+        </button>
+        <button type="button" onClick={() => focusSection("appearance-section")}>
+          外观
+        </button>
+        <button type="button" onClick={() => focusSection("update-section")}>
+          更新
+        </button>
+        <button type="button" onClick={() => focusSection("diagnostics-section")}>
+          诊断与数据
+        </button>
       </nav>
       <section
         className="settings-card settings-account-primary"
         id="account-section"
+        tabIndex={-1}
         aria-label="账户状态"
       >
         <div>
@@ -2270,13 +2822,13 @@ function AccountSettings({
           </form>
         ) : null}
       </section>
-      <div id="appearance-section">
+      <div id="appearance-section" tabIndex={-1}>
         <ThemeSettings value={themePreference} onChange={onThemeChange} />
       </div>
-      <div id="update-section">
+      <div id="update-section" tabIndex={-1}>
         <ReleaseUpdateSettings />
       </div>
-      <details className="settings-disclosure" id="diagnostics-section">
+      <details className="settings-disclosure" id="diagnostics-section" tabIndex={-1}>
         <summary>
           <span>诊断与数据</span>
           <small>性能状态、诊断导出与个人数据导出</small>
@@ -2623,7 +3175,7 @@ function BillingSettings(): React.JSX.Element {
         <section className="settings-card settings-stack billing-signin-card">
           <h2>需要登录</h2>
           <p>登录后可以查看模型用量、余额、充值记录、消费明细和可下载的月度账单。</p>
-          <NavLink className="primary-link" to="/settings/account#account-section">
+          <NavLink className="primary-link" to="/settings/account">
             登录并查看账单
           </NavLink>
         </section>
@@ -2824,6 +3376,8 @@ function BillingSettings(): React.JSX.Element {
 
 function ToolCenter(): React.JSX.Element {
   const queryClient = useQueryClient();
+  const mcpDetailsRef = useRef<HTMLDetailsElement>(null);
+  const [mcpNotice, setMcpNotice] = useState<string | null>(null);
   const [mcpName, setMcpName] = useState("");
   const [mcpTransport, setMcpTransport] = useState<"stdio" | "streamable_http">("stdio");
   const [mcpEndpoint, setMcpEndpoint] = useState("");
@@ -2871,7 +3425,7 @@ function ToolCenter(): React.JSX.Element {
             }
           : {}),
       }),
-    onSuccess: async () => {
+    onSuccess: async (saved) => {
       setMcpName("");
       setMcpEndpoint("");
       setMcpCwd("");
@@ -2880,11 +3434,15 @@ function ToolCenter(): React.JSX.Element {
       setMcpOAuthClientSecret("");
       setMcpOAuthScope("");
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
+      setMcpNotice(`已保存 MCP 服务“${saved.name}”。`);
     },
   });
   const removeMcp = useMutation({
     mutationFn: (serverId: string) => window.openerx.removeMcpServer({ serverId }),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
+      setMcpNotice("已移除 MCP 服务及其本机凭证引用。");
+    },
   });
   return (
     <main className="tool-center-page">
@@ -2956,15 +3514,30 @@ function ToolCenter(): React.JSX.Element {
             </article>
           ))}
           {!scopes.data?.length ? <p className="muted-copy">没有有效授权。</p> : null}
-          <details className="advanced-tool-settings">
+          <details
+            ref={mcpDetailsRef}
+            className="advanced-tool-settings"
+            onToggle={(event) => {
+              if (!event.currentTarget.open) return;
+              window.requestAnimationFrame(() =>
+                mcpDetailsRef.current?.scrollIntoView?.({
+                  behavior: "smooth",
+                  block: "nearest",
+                }),
+              );
+            }}
+          >
             <summary>MCP 服务与高级连接</summary>
             {mcpServers.data?.map((server) => (
               <article className="scope-card" key={server.id}>
                 <strong>{server.name}</strong>
                 <span>{server.transport === "stdio" ? server.command : server.url}</span>
                 <small>
-                  {server.transport} · {server.enabled ? "已启用" : "已禁用"}
-                  {server.transport === "streamable_http" ? ` · ${server.auth}` : ""}
+                  {server.transport === "stdio" ? "本机 STDIO" : "Streamable HTTP"} ·{" "}
+                  {server.enabled ? "已启用" : "已禁用"}
+                  {server.transport === "streamable_http"
+                    ? ` · ${server.auth === "none" ? "无认证" : server.auth === "bearer" ? "Bearer 令牌" : "OAuth 客户端"}`
+                    : ""}
                 </small>
                 <button
                   type="button"
@@ -2975,6 +3548,11 @@ function ToolCenter(): React.JSX.Element {
                 </button>
               </article>
             ))}
+            {mcpNotice ? (
+              <p className="inline-success mcp-feedback" role="status">
+                {mcpNotice}
+              </p>
+            ) : null}
             <form
               className="mcp-config-form"
               aria-label="添加 MCP 服务"
@@ -3007,92 +3585,145 @@ function ToolCenter(): React.JSX.Element {
               }}
             >
               <strong>添加服务</strong>
-              <input
-                aria-label="MCP 名称"
-                placeholder="名称"
-                value={mcpName}
-                onChange={(event) => setMcpName(event.target.value)}
-                required
-              />
-              <select
-                aria-label="MCP 传输"
-                value={mcpTransport}
-                onChange={(event) =>
-                  setMcpTransport(event.target.value as "stdio" | "streamable_http")
-                }
-              >
-                <option value="stdio">STDIO</option>
-                <option value="streamable_http">Streamable HTTP</option>
-              </select>
-              <input
-                aria-label={mcpTransport === "stdio" ? "MCP 命令" : "MCP URL"}
-                placeholder={mcpTransport === "stdio" ? "可执行文件路径" : "https://…/mcp"}
-                value={mcpEndpoint}
-                onChange={(event) => setMcpEndpoint(event.target.value)}
-                required
-              />
-              {mcpTransport === "stdio" ? (
+              <p className="field-help">
+                MCP 会在这台设备上运行。保存前确认服务来源以及它能够访问的数据范围。
+              </p>
+              <label className="mcp-field">
+                <span>显示名称</span>
                 <input
-                  aria-label="MCP 工作目录"
-                  placeholder="工作目录"
-                  value={mcpCwd}
-                  onChange={(event) => setMcpCwd(event.target.value)}
+                  aria-label="MCP 名称"
+                  placeholder="例如：项目知识库"
+                  value={mcpName}
+                  onChange={(event) => setMcpName(event.target.value)}
                   required
                 />
+                <small>只用于本机界面识别，不会发送给 MCP 服务。</small>
+              </label>
+              <label className="mcp-field">
+                <span>连接方式</span>
+                <select
+                  aria-label="MCP 传输"
+                  value={mcpTransport}
+                  onChange={(event) =>
+                    setMcpTransport(event.target.value as "stdio" | "streamable_http")
+                  }
+                >
+                  <option value="stdio">本机进程（STDIO）</option>
+                  <option value="streamable_http">网络服务（Streamable HTTP）</option>
+                </select>
+                <small>
+                  {mcpTransport === "stdio"
+                    ? "启动本机可执行程序并通过标准输入输出通信。"
+                    : "连接 HTTPS MCP 地址；认证凭证只保存在系统凭证边界。"}
+                </small>
+              </label>
+              <label className="mcp-field">
+                <span>{mcpTransport === "stdio" ? "启动命令" : "服务地址"}</span>
+                <input
+                  aria-label={mcpTransport === "stdio" ? "MCP 命令" : "MCP URL"}
+                  placeholder={
+                    mcpTransport === "stdio"
+                      ? "例如：/usr/local/bin/my-mcp"
+                      : "https://example.com/mcp"
+                  }
+                  value={mcpEndpoint}
+                  onChange={(event) => setMcpEndpoint(event.target.value)}
+                  required
+                />
+                <small>
+                  {mcpTransport === "stdio"
+                    ? "填写可执行文件的绝对路径；参数支持将在服务保存后配置。"
+                    : "建议使用 HTTPS；地址应直接指向 Streamable HTTP MCP 端点。"}
+                </small>
+              </label>
+              {mcpTransport === "stdio" ? (
+                <label className="mcp-field">
+                  <span>工作目录</span>
+                  <input
+                    aria-label="MCP 工作目录"
+                    placeholder="例如：/Users/name/project"
+                    value={mcpCwd}
+                    onChange={(event) => setMcpCwd(event.target.value)}
+                    required
+                  />
+                  <small>服务进程从此目录启动；只填写你信任且明确授权的目录。</small>
+                </label>
               ) : (
                 <>
-                  <select
-                    aria-label="MCP 认证"
-                    value={mcpAuth}
-                    onChange={(event) => setMcpAuth(event.target.value as typeof mcpAuth)}
-                  >
-                    <option value="none">无认证</option>
-                    <option value="bearer">Bearer</option>
-                    <option value="oauth">OAuth</option>
-                  </select>
+                  <label className="mcp-field">
+                    <span>认证方式</span>
+                    <select
+                      aria-label="MCP 认证"
+                      value={mcpAuth}
+                      onChange={(event) => setMcpAuth(event.target.value as typeof mcpAuth)}
+                    >
+                      <option value="none">无认证</option>
+                      <option value="bearer">Bearer 令牌</option>
+                      <option value="oauth">OAuth 客户端凭证</option>
+                    </select>
+                    <small>令牌和客户端密钥不会写入聊天数据库或诊断导出。</small>
+                  </label>
                   {mcpAuth === "bearer" ? (
-                    <input
-                      aria-label="MCP Bearer Token"
-                      type="password"
-                      autoComplete="off"
-                      value={mcpToken}
-                      onChange={(event) => setMcpToken(event.target.value)}
-                      required
-                    />
-                  ) : mcpAuth === "oauth" ? (
-                    <>
+                    <label className="mcp-field">
+                      <span>Bearer 令牌</span>
                       <input
-                        aria-label="MCP OAuth Client ID"
-                        autoComplete="off"
-                        placeholder="Client ID"
-                        value={mcpOAuthClientId}
-                        onChange={(event) => setMcpOAuthClientId(event.target.value)}
-                        required
-                      />
-                      <input
-                        aria-label="MCP OAuth Client Secret"
+                        aria-label="MCP Bearer Token"
                         type="password"
                         autoComplete="off"
-                        placeholder="Client Secret"
-                        value={mcpOAuthClientSecret}
-                        onChange={(event) => setMcpOAuthClientSecret(event.target.value)}
+                        placeholder="粘贴服务令牌"
+                        value={mcpToken}
+                        onChange={(event) => setMcpToken(event.target.value)}
                         required
                       />
-                      <input
-                        aria-label="MCP OAuth Scope"
-                        autoComplete="off"
-                        placeholder="Scope（可选）"
-                        value={mcpOAuthScope}
-                        onChange={(event) => setMcpOAuthScope(event.target.value)}
-                      />
+                      <small>令牌保存在系统凭证存储中，界面不会再次显示明文。</small>
+                    </label>
+                  ) : mcpAuth === "oauth" ? (
+                    <>
+                      <label className="mcp-field">
+                        <span>OAuth Client ID</span>
+                        <input
+                          aria-label="MCP OAuth Client ID"
+                          autoComplete="off"
+                          placeholder="服务提供的 Client ID"
+                          value={mcpOAuthClientId}
+                          onChange={(event) => setMcpOAuthClientId(event.target.value)}
+                          required
+                        />
+                      </label>
+                      <label className="mcp-field">
+                        <span>OAuth Client Secret</span>
+                        <input
+                          aria-label="MCP OAuth Client Secret"
+                          type="password"
+                          autoComplete="off"
+                          placeholder="服务提供的 Client Secret"
+                          value={mcpOAuthClientSecret}
+                          onChange={(event) => setMcpOAuthClientSecret(event.target.value)}
+                          required
+                        />
+                      </label>
+                      <label className="mcp-field">
+                        <span>OAuth Scope（可选）</span>
+                        <input
+                          aria-label="MCP OAuth Scope"
+                          autoComplete="off"
+                          placeholder="例如：tools.read"
+                          value={mcpOAuthScope}
+                          onChange={(event) => setMcpOAuthScope(event.target.value)}
+                        />
+                      </label>
                     </>
                   ) : null}
                 </>
               )}
               <button type="submit" className="primary-action" disabled={saveMcp.isPending}>
-                保存 MCP
+                {saveMcp.isPending ? "正在保存…" : "保存 MCP"}
               </button>
-              {saveMcp.error ? <p className="inline-error">{saveMcp.error.message}</p> : null}
+              {saveMcp.error ? (
+                <p className="inline-error">
+                  {userFacingError(saveMcp.error, "无法保存 MCP 服务，请检查字段后重试。")}
+                </p>
+              ) : null}
             </form>
           </details>
         </aside>
@@ -3105,10 +3736,12 @@ function Sidebar({
   environment,
   serviceStatus,
   onCollapse,
+  backgroundInert = false,
 }: {
   environment: DesktopEnvironment | null;
   serviceStatus: string;
   onCollapse: () => void;
+  backgroundInert?: boolean;
 }): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
   const queryClient = useQueryClient();
@@ -3129,77 +3762,120 @@ function Sidebar({
   });
   const displayedStatus =
     history.isSuccess && serviceStatus === "starting" ? "ready" : serviceStatus;
+  const signedIn = account.data?.status === "signed_in";
+  const archivedCount = history.data?.filter(({ archivedAt }) => archivedAt !== null).length ?? 0;
+  const syncHeading = syncNow.isPending
+    ? "正在同步"
+    : syncNow.error
+      ? "同步失败"
+      : !signedIn
+        ? "本机模式"
+        : syncNow.data
+          ? "同步完成"
+          : displayedStatus === "ready"
+            ? "同步已就绪"
+            : "正在连接";
+  const syncDetail = syncNow.error
+    ? userFacingError(syncNow.error, "稍后重试，本机内容不会丢失。")
+    : !signedIn
+      ? "登录后同步数据"
+      : syncNow.data
+        ? `刚刚 · 待上传 ${syncNow.data.pending}`
+        : environment
+          ? `此设备 · ${environment.platform}`
+          : "正在连接桌面服务";
   return (
-    <aside className="sidebar">
-      <div className="brand-row">
-        <div className="brand">
-          <span className="brand-mark">
-            <img src="/assets/china-unicom-logo.png" alt="中国联通官方标志" />
-          </span>
-          <span>OpenerX</span>
-        </div>
-        <button
-          type="button"
-          className="icon-button sidebar-collapse"
-          aria-label="收起侧栏"
-          onClick={onCollapse}
-        >
-          <SidebarSimple size={18} weight="regular" />
-        </button>
-      </div>
-      <nav aria-label="主导航" className="main-nav">
-        <NavLink to="/chat/new" className="new-chat-link">
-          <Plus size={17} weight="bold" />
-          <span>新对话</span>
-        </NavLink>
-        <NavLink to="/search">
-          <MagnifyingGlass size={17} />
-          <span>搜索</span>
-          <kbd>⌘K</kbd>
-        </NavLink>
-        <NavLink to="/files">
-          <FolderSimple size={17} />
-          <span>个人文件</span>
-        </NavLink>
-        <NavLink to="/tasks">
-          <TerminalWindow size={17} />
-          <span>任务与工具</span>
-        </NavLink>
-        <NavLink to="/assistants">
-          <Sparkle size={17} />
-          <span>助手与 Skill</span>
-        </NavLink>
-        <NavLink to="/settings/billing">
-          <Receipt size={17} />
-          <span>费用与账单</span>
-        </NavLink>
-        <NavLink to="/settings/account">
-          <GearSix size={17} />
-          <span>设置</span>
-        </NavLink>
-      </nav>
-      <section className="history-list" aria-label="对话历史">
-        <div className="history-heading">
-          <span>历史</span>
+    <aside
+      className="sidebar"
+      inert={backgroundInert ? true : undefined}
+      aria-hidden={backgroundInert || undefined}
+    >
+      <div className="sidebar-top">
+        <div className="brand-row">
+          <div className="brand">
+            <span className="brand-mark">
+              <img src="/assets/china-unicom-logo.png" alt="中国联通官方标志" />
+            </span>
+            <span>OpenerX</span>
+          </div>
           <button
             type="button"
-            aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"}
-            onClick={() => setShowArchived((value) => !value)}
+            className="icon-button sidebar-collapse"
+            aria-label="收起侧栏"
+            onClick={onCollapse}
           >
-            <SlidersHorizontal size={15} />
+            <SidebarSimple size={18} weight="regular" />
           </button>
         </div>
-        {history.data?.map((conversation: ConversationSummary) => (
-          <NavLink to={`/chat/${conversation.id}`} key={conversation.id}>
-            <ChatCircle size={16} weight="regular" />
-            <strong>{conversation.title}</strong>
-            <span>
-              {conversation.archivedAt ? "已归档 · " : ""}
-              {formatUpdatedAt(conversation.updatedAt)} · {conversation.lastMessagePreview}
-            </span>
+        <nav aria-label="新对话" className="main-nav sidebar-primary-nav">
+          <NavLink to="/chat/new" className="new-chat-link">
+            <Plus size={17} weight="bold" />
+            <span>新对话</span>
           </NavLink>
-        ))}
-      </section>
+        </nav>
+      </div>
+      <div className="sidebar-scroll" data-testid="sidebar-scroll">
+        <nav aria-label="主导航" className="main-nav">
+          <NavLink to="/search">
+            <MagnifyingGlass size={17} />
+            <span>搜索</span>
+            <kbd>⌘K</kbd>
+          </NavLink>
+          <NavLink to="/files">
+            <FolderSimple size={17} />
+            <span>个人文件</span>
+          </NavLink>
+          <NavLink to="/tasks">
+            <TerminalWindow size={17} />
+            <span>任务与工具</span>
+          </NavLink>
+          <NavLink to="/assistants">
+            <Sparkle size={17} />
+            <span>助手与 Skill</span>
+          </NavLink>
+          <NavLink to="/settings/billing">
+            <Receipt size={17} />
+            <span>费用与账单</span>
+          </NavLink>
+          <NavLink to="/settings/account">
+            <GearSix size={17} />
+            <span>设置</span>
+          </NavLink>
+        </nav>
+        <section className="history-list" aria-label="对话历史">
+          <div className="history-heading">
+            <span>{showArchived ? "历史 · 含归档" : "历史 · 活动"}</span>
+            <button
+              type="button"
+              aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"}
+              aria-pressed={showArchived}
+              onClick={() => setShowArchived((value) => !value)}
+            >
+              <SlidersHorizontal size={15} />
+            </button>
+          </div>
+          {history.data?.map((conversation: ConversationSummary) => (
+            <NavLink to={`/chat/${conversation.id}`} key={conversation.id}>
+              <ChatCircle size={16} weight="regular" />
+              <strong>{conversation.title}</strong>
+              <span>
+                {conversation.archivedAt ? "已归档 · " : ""}
+                {formatUpdatedAt(conversation.updatedAt)} · {conversation.lastMessagePreview}
+              </span>
+            </NavLink>
+          ))}
+          {history.isSuccess && history.data.length === 0 ? (
+            <p className="history-empty">
+              {showArchived ? "还没有活动或归档对话。" : "还没有活动对话。"}
+            </p>
+          ) : null}
+          {showArchived && history.isSuccess && history.data.length > 0 && archivedCount === 0 ? (
+            <p className="history-mode-note" role="status">
+              已显示归档；目前没有归档对话。
+            </p>
+          ) : null}
+        </section>
+      </div>
       <div className={`sync-state service-${displayedStatus}`}>
         {displayedStatus === "ready" ? (
           <CheckCircle size={16} weight="fill" />
@@ -3207,17 +3883,15 @@ function Sidebar({
           <ArrowClockwise size={16} />
         )}
         <div>
-          <strong>
-            {syncNow.isPending ? "正在同步" : displayedStatus === "ready" ? "同步正常" : "正在连接"}
-          </strong>
-          <span>{environment ? `此设备 · ${environment.platform}` : "正在连接桌面服务"}</span>
+          <strong aria-live="polite">{syncHeading}</strong>
+          <span title={syncDetail}>{syncDetail}</span>
         </div>
         <button
           type="button"
           className="icon-button"
-          aria-label="立即同步"
+          aria-label={signedIn ? "立即同步" : "登录后可同步"}
           onClick={() => syncNow.mutate()}
-          disabled={syncNow.isPending}
+          disabled={syncNow.isPending || !signedIn}
         >
           <ArrowClockwise size={16} />
         </button>
@@ -3239,8 +3913,10 @@ export function App(): React.JSX.Element {
   const [contextOpen, setContextOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
+  const contextReturnFocus = useRef<HTMLElement | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
+  const contextConversationId = /^\/chat\/([^/]+)$/u.exec(location.pathname)?.[1] ?? null;
   useEffect(() => {
     if (location.pathname) setContextOpen(false);
   }, [location.pathname]);
@@ -3281,6 +3957,19 @@ export function App(): React.JSX.Element {
 
   const sequenceByConversation = useRef(new Map<string, number>());
   const queryClient = useQueryClient();
+  const toggleContext = (): void => {
+    if (!contextOpen && document.activeElement instanceof HTMLElement) {
+      contextReturnFocus.current = document.activeElement;
+    }
+    setContextOpen((current) => !current);
+  };
+  const closeContext = (): void => {
+    setContextOpen(false);
+    const returnTarget = contextReturnFocus.current;
+    window.requestAnimationFrame(() => {
+      if (returnTarget?.isConnected) returnTarget.focus();
+    });
+  };
 
   useEffect(() => {
     let active = true;
@@ -3325,13 +4014,18 @@ export function App(): React.JSX.Element {
     <div
       className={`app-shell ${sidebarOpen ? "" : "sidebar-is-collapsed"} ${contextOpen ? "context-is-open" : ""}`}
     >
-      <a className="skip-link" href="#main-content">
+      <button
+        type="button"
+        className="skip-link"
+        onClick={() => document.getElementById("main-content")?.focus()}
+      >
         跳到主要内容
-      </a>
+      </button>
       <Sidebar
         environment={environment}
         serviceStatus={serviceStatus}
         onCollapse={() => setSidebarOpen(false)}
+        backgroundInert={contextOpen}
       />
       {!sidebarOpen ? (
         <button
@@ -3343,17 +4037,18 @@ export function App(): React.JSX.Element {
           <SidebarSimple size={19} />
         </button>
       ) : null}
-      <div className="app-main" id="main-content">
+      <div
+        className="app-main"
+        id="main-content"
+        tabIndex={-1}
+        inert={contextOpen ? true : undefined}
+        aria-hidden={contextOpen || undefined}
+      >
         <Routes>
           <Route path="/chat/new" element={<NewChat />} />
           <Route
             path="/chat/:conversationId"
-            element={
-              <ChatPage
-                contextOpen={contextOpen}
-                onToggleContext={() => setContextOpen((current) => !current)}
-              />
-            }
+            element={<ChatPage contextOpen={contextOpen} onToggleContext={toggleContext} />}
           />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/files" element={<FilesAndArtifacts />} />
@@ -3373,15 +4068,16 @@ export function App(): React.JSX.Element {
           <Route path="*" element={<Navigate to="/chat/new" replace />} />
         </Routes>
       </div>
-      {contextOpen ? (
+      {contextOpen && contextConversationId ? (
         <>
           <button
             type="button"
             className="context-backdrop"
             aria-label="关闭上下文"
-            onClick={() => setContextOpen(false)}
+            tabIndex={-1}
+            onClick={closeContext}
           />
-          <ContextDock onClose={() => setContextOpen(false)} />
+          <ContextDock conversationId={contextConversationId} onClose={closeContext} />
         </>
       ) : null}
     </div>

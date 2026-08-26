@@ -80,6 +80,7 @@ const serverModelBilling = new ServerModelBilling({
 });
 const modelBilling: ModelBillingPort = {
   async authorize(request) {
+    pricing.acceptTerms(request.accountId, deepSeekBillingTerms.version);
     billing.grantQuota({
       accountId: request.accountId,
       source: "deepseek-local-development",

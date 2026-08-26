@@ -24,9 +24,14 @@ platform.stdout.on("data", (chunk) => {
   readyOutput += chunk;
   if (!desktop && readyOutput.includes("[openerx-platform] ready")) {
     clearTimeout(readyTimeout);
-    desktop = spawn("npm", ["run", "dev:v2"], {
+    desktop = spawn("npm", ["run", "dev:desktop"], {
       cwd: repositoryRoot,
-      env: { ...process.env, OPENERX_PLATFORM_URL: platformUrl },
+      env: {
+        ...process.env,
+        OPENERX_PLATFORM_URL: platformUrl,
+        OPENERX_DEV_AUTO_SIGN_IN: "1",
+        OPENERX_DEV_EMAIL: process.env.OPENERX_DEV_EMAIL ?? "desktop-dev@openerx.local",
+      },
       stdio: "inherit",
     });
     desktop.once("exit", (code) => void stop(code ?? 0));

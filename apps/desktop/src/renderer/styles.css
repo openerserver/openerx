@@ -61,6 +61,24 @@ select:focus-visible {
   background: #252824;
 }
 
+.sidebar-top,
+.sidebar-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sidebar-top {
+  flex: none;
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .brand {
   padding: 0 10px;
   font-size: 19px;
@@ -91,11 +109,8 @@ select:focus-visible {
 
 .history-list {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 4px;
-  min-height: 0;
-  overflow: auto;
 }
 .history-heading {
   display: flex;
@@ -1020,11 +1035,18 @@ body,
 
 .sidebar {
   z-index: 2;
-  gap: 18px;
+  gap: 0;
   padding: 22px 14px 16px;
   color: var(--workspace-text);
   background: var(--workspace-sidebar);
   border-right: 1px solid var(--workspace-border);
+}
+
+.sidebar-scroll {
+  gap: 18px;
+  margin: 0 -6px;
+  padding: 5px 6px 18px;
+  scrollbar-gutter: stable;
 }
 
 .brand-row {
@@ -1130,19 +1152,25 @@ body,
 }
 
 .main-nav a.new-chat-link {
-  margin-bottom: 5px;
+  font-weight: 700;
+}
+
+.main-nav a.active {
   color: var(--workspace-accent-ink);
   background: var(--workspace-accent);
   border-color: transparent;
   font-weight: 700;
 }
 
-.main-nav a.new-chat-link svg {
+.main-nav a.active svg {
   color: var(--workspace-accent-ink);
 }
 
-.main-nav a.new-chat-link:hover,
-.main-nav a.new-chat-link.active {
+.main-nav a.active kbd {
+  color: var(--workspace-accent-muted-ink);
+}
+
+.main-nav a.active:hover {
   color: var(--workspace-accent-ink);
   background: var(--workspace-accent-hover);
 }
@@ -2721,6 +2749,334 @@ h1 {
   }
 }
 
+/* Click-audit remediation: make every action target, state change and failure perceivable. */
+button:disabled {
+  opacity: 0.64;
+}
+
+.suggestion-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.suggestion-item .suggestion-card {
+  width: 100%;
+  height: 100%;
+}
+
+.suggestion-error {
+  color: #f08a85;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.composer-select {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 118px;
+  overflow: hidden;
+  cursor: pointer;
+  isolation: isolate;
+}
+
+.composer-tools .composer-select > svg,
+.composer-tools .composer-select-label {
+  pointer-events: none;
+}
+
+.composer-tools .composer-select-label {
+  max-width: 116px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-select select {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.composer-select select:focus-visible {
+  opacity: 0.01;
+}
+
+.composer-feedback:empty,
+.message-feedback:empty,
+.toolbar-feedback:empty,
+.library-feedback:empty {
+  display: none;
+}
+
+.composer-feedback p,
+.message-feedback p,
+.toolbar-feedback p,
+.library-feedback p,
+.mcp-feedback {
+  margin: 0;
+}
+
+.composer-feedback,
+.message-feedback,
+.toolbar-feedback,
+.library-feedback {
+  display: grid;
+  gap: 5px;
+}
+
+.message-feedback,
+.toolbar-feedback {
+  color: var(--workspace-muted-strong);
+  font-size: 11px;
+}
+
+.confirmation-dialog {
+  width: min(460px, calc(100vw - 40px));
+  padding: 20px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 14px;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 42%);
+}
+
+.confirmation-dialog::backdrop {
+  background: rgb(0 0 0 / 48%);
+  backdrop-filter: blur(2px);
+}
+
+.confirmation-dialog > div:first-child {
+  display: grid;
+  gap: 8px;
+}
+
+.confirmation-dialog strong {
+  font-size: 17px;
+}
+
+.confirmation-dialog p {
+  margin: 0;
+  color: var(--workspace-muted-strong);
+  line-height: 1.6;
+}
+
+.confirmation-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.confirmation-dialog-actions button {
+  min-height: 36px;
+  padding: 8px 12px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+}
+
+.confirmation-dialog-actions .danger-action {
+  color: #fff;
+  background: #a74843;
+  border-color: #a74843;
+}
+
+.context-dock[role="dialog"] {
+  outline: 0;
+}
+
+.context-dock .inline-success {
+  margin: 10px 0 0;
+  color: var(--workspace-muted-strong);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.context-dropzone > span:last-of-type {
+  color: var(--workspace-muted-strong);
+}
+
+.library-scope-note,
+.skill-scope-note {
+  margin: -8px 0 16px;
+  color: var(--workspace-muted-strong);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.library-feedback {
+  margin-bottom: 10px;
+}
+
+.empty-state-without-action {
+  grid-template-columns: 34px minmax(0, 1fr);
+}
+
+.settings-section-nav button {
+  padding: 7px 10px;
+  color: var(--workspace-muted-strong);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.settings-section-nav button:hover {
+  color: var(--workspace-text);
+  border-color: var(--workspace-border-strong);
+}
+
+#account-section:focus,
+#appearance-section:focus,
+#update-section:focus,
+#diagnostics-section:focus,
+.app-main:focus {
+  outline: 3px solid var(--workspace-accent-strong);
+  outline-offset: -3px;
+}
+
+.tool-center-grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 1fr);
+}
+
+.advanced-tool-settings[open] {
+  scroll-margin-block: 18px;
+}
+
+.mcp-config-form {
+  gap: 12px;
+}
+
+.mcp-field {
+  display: grid;
+  gap: 5px;
+  color: var(--workspace-muted-strong);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.mcp-field small {
+  color: var(--workspace-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.skill-empty-state {
+  margin-bottom: 14px;
+}
+
+.history-empty,
+.history-mode-note {
+  margin: 4px 8px 0;
+  color: var(--workspace-muted-strong);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.history-heading button[aria-pressed="true"] {
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
+}
+
+.sync-state.service-ready:has(strong:first-child) {
+  min-width: 0;
+}
+
+.skip-link {
+  border: 0;
+}
+
+.bridge-unavailable {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 100vh;
+  padding: 32px;
+  place-items: center;
+  color: var(--workspace-text, #f0f3ef);
+  background: var(--workspace-bg, #171a18);
+}
+
+.bridge-unavailable > div {
+  display: grid;
+  gap: 12px;
+  width: min(560px, 100%);
+  padding: 28px;
+  background: var(--workspace-surface, #202421);
+  border: 1px solid var(--workspace-border, #39403b);
+  border-radius: 16px;
+  box-shadow: var(--workspace-shadow, 0 20px 60px rgb(0 0 0 / 28%));
+}
+
+.bridge-unavailable h1,
+.bridge-unavailable p {
+  margin: 0;
+}
+
+.bridge-unavailable p {
+  color: var(--workspace-muted-strong, #c6cbc6);
+  line-height: 1.65;
+}
+
+.bridge-unavailable button {
+  justify-self: start;
+  min-height: 38px;
+  padding: 8px 13px;
+  color: var(--workspace-accent-ink, #173421);
+  background: var(--workspace-accent, #8bd7a7);
+  border: 0;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+.search-page {
+  padding-top: 42px;
+}
+
+.search-form button:disabled {
+  color: var(--workspace-muted-strong);
+  background: var(--workspace-surface-raised);
+  border-color: var(--workspace-border);
+  opacity: 0.72;
+}
+
+.theme-option.is-selected {
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .history-list span,
+:root[data-theme="dark"] .history-list a > svg,
+:root[data-theme="dark"] .main-nav a kbd,
+:root[data-theme="dark"] .composer-hint {
+  color: var(--workspace-muted);
+}
+
+@media (max-width: 860px) {
+  .tool-center-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .confirmation-dialog-actions,
+  .library-header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .empty-state-without-action {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Product polish pass: keep core work visible and move technical detail behind disclosure. */
 :root[data-theme="dark"] {
   --workspace-muted: #a4aba5;
@@ -3165,6 +3521,7 @@ summary:focus-visible {
   margin: 0;
   color: var(--workspace-muted);
   font-size: 12px;
+  line-height: 1.5;
 }
 
 .settings-disclosure {

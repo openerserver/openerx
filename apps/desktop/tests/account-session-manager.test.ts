@@ -7,6 +7,7 @@ import {
   type IdentityTransport,
 } from "../src/main/account-session-manager";
 import type { PersistedDeviceCredential } from "../src/main/credential-vault";
+import { initializeAccountSession } from "../src/main/development-account-bootstrap";
 
 function grant(): DeviceSessionGrant {
   const accountId = randomUUID();
@@ -72,6 +73,38 @@ function setup(persisted: PersistedDeviceCredential | null = null) {
 }
 
 describe("AccountSessionManager", () => {
+  it("bootstraps a local development account so the default model is immediately available", async () => {
+    const { manager, transport } = setup();
+    const state = await initializeAccountSession(manager, {
+      email: "Desktop-Dev@OpenerX.Local",
+      code: "123456",
+    });
+
+    expect(state.status).toBe("signed_in");
+    expect(transport.requestChallenge).toHaveBeenCalledWith("desktop-dev@openerx.local");
+    expect(transport.verifyChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "123456" }),
+    );
+  });
+
+  it("does not create a development challenge when a persisted session refreshes", async () => {
+    const initial = grant();
+    const { manager, transport } = setup({
+      version: 1,
+      account: initial.account,
+      session: initial.session,
+      refreshCredential: initial.refreshCredential,
+    });
+
+    expect(
+      await initializeAccountSession(manager, {
+        email: "desktop-dev@openerx.local",
+        code: "123456",
+      }),
+    ).toMatchObject({ status: "signed_in" });
+    expect(transport.requestChallenge).not.toHaveBeenCalled();
+  });
+
   it("keeps reusable credentials behind the vault and exposes only public state", async () => {
     const { manager, transport, nextGrant, save } = setup();
     const challenge = await manager.requestCode(nextGrant.account.email);

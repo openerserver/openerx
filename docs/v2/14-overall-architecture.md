@@ -158,8 +158,10 @@ flowchart LR
 
 M1 没有 localhost App Service、Renderer 网络业务 API、Platform Model Gateway、账户云或账单调用。
 Pi Host 已直接加载 `@earendil-works/pi-coding-agent@0.84.3`；每次生成使用 Pi
-`AgentSession` 和 Pi 原生事件。没有可用模型时明确返回 `PI_MODEL_NOT_CONFIGURED`。应用重启时
-未完成助手消息以 `APP_SERVICE_RESTARTED` 失败状态恢复，并保留已落盘的部分文本。
+`AgentSession` 和 Pi 原生事件。受支持启动路径必须先准备好真实 Platform Model Gateway 与
+默认 `platform/auto`，不能让用户进入“模型未配置”状态；宿主内部仍保留配置不变量检查，
+用于阻止错误发布或损坏的启动链路继续运行。应用重启时未完成助手消息以
+`APP_SERVICE_RESTARTED` 失败状态恢复，并保留已落盘的部分文本。
 
 确定性测试只在测试文件中注入 Pi 的 `faux` Model Provider；生产源码没有替代 harness
 或固定回答模型。

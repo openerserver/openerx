@@ -85,6 +85,7 @@ import type { z } from "zod";
 import { AccountSessionManager, HttpIdentityTransport } from "./account-session-manager";
 import { AppServiceSupervisor } from "./app-service-supervisor";
 import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
+import { initializeAccountSession } from "./development-account-bootstrap";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { PlatformAccountClient } from "./platform-account-client";
@@ -786,7 +787,14 @@ app.whenReady().then(async () => {
     transport: platformUrl ? new HttpIdentityTransport(platformUrl) : null,
     device,
   });
-  await accounts.initialize();
+  const developmentAccountBootstrap =
+    developmentLoopbackPlatform && process.env.OPENERX_DEV_AUTO_SIGN_IN === "1"
+      ? {
+          email: process.env.OPENERX_DEV_EMAIL ?? "desktop-dev@openerx.local",
+          code: process.env.OPENERX_DEV_EMAIL_CODE ?? "123456",
+        }
+      : null;
+  await initializeAccountSession(accounts, developmentAccountBootstrap);
   const piHostEntry =
     process.env.OPENERX_E2E === "1" && process.env.OPENERX_E2E_USE_PLATFORM !== "1"
       ? "pi-host-test.js"

@@ -49,7 +49,11 @@ V1 完成必须同时满足：
 | M8 Personal Beta | EXTERNAL IN PROGRESS | 诊断/性能/数据恢复本地检查点；真实 DeepSeek Usage→服务端 Charge 首个闭环 | 目标用户、真实 SSE/Stop/失败、Provider 账单对账、支付、Remote 真机、原生与签名矩阵；[实现与质量证据](evidence/m8-2026-08-26.md) |
 | M9 V1 Release | LOCAL COMPLETE | 签名发布工作流、Ed25519 更新清单、Main-only 更新、EAS/隐私清单、发布图扫描、回滚手册 | 12 组外部发布证据与明确用户批准；[实现与质量证据](evidence/m9-2026-08-26.md) |
 
-当前生产路径在未配置平台模型时明确返回 `PI_MODEL_NOT_CONFIGURED`，不以测试模型伪装可用模型。
+受支持启动路径必须在展示聊天界面前准备好真实 Platform Model Gateway 和默认
+`platform/auto` 模型，不把“模型未配置”暴露为用户状态。本地开发的 `npm run dev:v2`
+会启动真实 DeepSeek Gateway，并仅在回环开发环境中自动建立开发会话、接受本地开发条款
+和发放本地开发额度；生产包仍通过平台账户、显式条款、服务端计费和 Provider 调用，不以
+测试模型或桌面端 Provider Key 伪装可用模型。
 
 ## 4. 依赖顺序
 

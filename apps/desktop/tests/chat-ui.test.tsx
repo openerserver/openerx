@@ -333,7 +333,8 @@ describe("M1 chat renderer", () => {
     expect(
       within(panel).getByText("Token、报价、费用和账单只读取服务端记录", { exact: false }),
     ).toBeTruthy();
-    expect(within(panel).getAllByText(/pass/)).toHaveLength(3);
+    expect(within(panel).getAllByText(/达标/)).toHaveLength(3);
+    expect(within(panel).getAllByText(/MiB/)).toHaveLength(2);
     await user.click(within(panel).getByRole("button", { name: "导出脱敏诊断包" }));
     expect(await within(panel).findByText("诊断包已保存：openerx-diagnostics.json")).toBeTruthy();
     await user.click(within(panel).getByRole("button", { name: "导出个人数据" }));
@@ -390,8 +391,8 @@ describe("M1 chat renderer", () => {
     renderApp(managementBridge, "/assistants");
     expect(await screen.findByRole("heading", { name: "助手与 Skill" })).toBeTruthy();
     expect(screen.getByText("结构化报告")).toBeTruthy();
-    expect(screen.getByText(/OpenerX bundled skills/)).toBeTruthy();
-    expect(screen.getByText(/工具：openerx_skill_script/)).toBeTruthy();
+    expect(screen.getByText(/OpenerX 内置 Skill/)).toBeTruthy();
+    expect(screen.getByText(/工具：Skill 脚本执行器/)).toBeTruthy();
   });
 
   it("shows HTML source and an isolated preview without bridge privileges", async () => {
@@ -660,12 +661,42 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "收起侧栏" }));
     expect(screen.getByRole("button", { name: "展开侧栏" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "展开侧栏" }));
-    await user.click(screen.getByRole("button", { name: "立即同步" }));
-    expect(bridge.syncNow).toHaveBeenCalled();
+    const syncButton = screen.getByRole("button", { name: "登录后可同步" });
+    expect((syncButton as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("本机模式")).toBeTruthy();
+    expect(bridge.syncNow).not.toHaveBeenCalled();
 
     await user.keyboard("{Meta>}k{/Meta}");
     expect(await screen.findByRole("heading", { name: "搜索对话" })).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("搜索关键词")));
+  });
+
+  it("keeps new chat fixed while navigation and history share one scroll region", async () => {
+    cleanup();
+    renderApp(createBridge());
+
+    const scrollRegion = screen.getByTestId("sidebar-scroll");
+    expect(scrollRegion.contains(screen.getByRole("navigation", { name: "主导航" }))).toBe(true);
+    expect(scrollRegion.contains(screen.getByRole("region", { name: "对话历史" }))).toBe(true);
+    expect(scrollRegion.contains(screen.getByRole("link", { name: "新对话" }))).toBe(false);
+    expect(scrollRegion.contains(await screen.findByText("本机模式"))).toBe(false);
+    expect(scrollRegion.contains(await screen.findByRole("link", { name: /未登录/ }))).toBe(false);
+  });
+
+  it("moves the active navigation state away from new chat", async () => {
+    cleanup();
+    renderApp(createBridge());
+    const user = userEvent.setup();
+    const newChatLink = screen.getByRole("link", { name: "新对话" });
+    const searchLink = screen.getByRole("link", { name: /搜索/ });
+
+    expect(newChatLink.classList.contains("active")).toBe(true);
+    expect(searchLink.classList.contains("active")).toBe(false);
+
+    await user.click(searchLink);
+    expect(await screen.findByRole("heading", { name: "搜索对话" })).toBeTruthy();
+    expect(newChatLink.classList.contains("active")).toBe(false);
+    expect(searchLink.classList.contains("active")).toBe(true);
   });
 
   it("keeps destructive conversation actions behind an in-product confirmation", async () => {
@@ -678,9 +709,155 @@ describe("M1 chat renderer", () => {
 
     await user.click(await screen.findByRole("button", { name: "更多操作" }));
     await user.click(screen.getByRole("menuitem", { name: "删除对话…" }));
-    expect(screen.getByRole("alertdialog", { name: "删除这个对话？" })).toBeTruthy();
+    const dialog = screen.getByRole("alertdialog", { name: "删除这个对话？" });
+    expect(dialog).toBeTruthy();
     expect(nativeConfirm).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "取消" }));
+    const cancel = within(dialog).getByRole("button", { name: "取消" });
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+    await user.click(cancel);
     expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多操作" })),
+    );
+  });
+
+  it("keeps HashRouter section navigation on settings and moves focus to the target", async () => {
+    cleanup();
+    renderApp(createBridge(), "/settings/account");
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("heading", { name: "账户与设备" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "外观" }));
+    await waitFor(() => expect(document.activeElement?.id).toBe("appearance-section"));
+    expect(screen.getByRole("heading", { name: "账户与设备" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "诊断与数据" }));
+    const diagnostics = document.getElementById("diagnostics-section") as HTMLDetailsElement;
+    await waitFor(() => expect(document.activeElement).toBe(diagnostics));
+    expect(diagnostics.open).toBe(true);
+  });
+
+  it("focuses and contains the context drawer, maps raw errors, then restores focus", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.chooseFiles).mockRejectedValue(
+      new Error('[{"code":"invalid_format","format":"uuid","path":["conversationId"]}]'),
+    );
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    const trigger = await screen.findByRole("button", { name: "切换上下文" });
+    await user.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "当前上下文" });
+    const close = within(dialog).getByRole("button", { name: "关闭上下文" });
+    await waitFor(() => expect(document.activeElement).toBe(close));
+    expect(document.querySelector(".app-main")?.getAttribute("inert")).not.toBeNull();
+    expect(document.querySelector(".sidebar")?.getAttribute("aria-hidden")).toBe("true");
+    await waitFor(() => expect(bridge.listFiles).toHaveBeenCalledWith({ conversationId }));
+    expect(
+      await within(dialog).findByText("还没有添加文件。上方选择的内容只会用于当前对话。"),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText("正在读取文件…")).toBeNull();
+
+    await user.click(within(dialog).getByRole("button", { name: "选择文件" }));
+    expect(
+      await within(dialog).findByText("无法完成选择，请关闭面板后重新打开再试。"),
+    ).toBeTruthy();
+    expect(dialog.textContent).not.toContain("invalid_format");
+
+    await user.click(close);
+    expect(screen.queryByRole("dialog", { name: "当前上下文" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("announces copy, archive and branch-creating regeneration results", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.setConversationArchived).mockResolvedValue({
+      ...snapshot.conversation,
+      archivedAt: timestamp,
+    });
+    vi.mocked(bridge.regenerateMessage).mockResolvedValue({
+      conversationId,
+      branchId,
+      userMessageId,
+      assistantMessageId,
+    });
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    const copyButton = (await screen.findAllByRole("button", { name: "复制" }))[0];
+    if (!copyButton) throw new Error("Copy action missing");
+    await user.click(copyButton);
+    expect(await screen.findByText("消息已复制到剪贴板。")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "重新生成到新分支" }));
+    expect(bridge.regenerateMessage).toHaveBeenCalled();
+    expect(await screen.findByText("已在新分支中重新生成，原回复仍保留。")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "归档对话" }));
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+    expect(await screen.findByText("对话已归档。")).toBeTruthy();
+  });
+
+  it("requires explicit confirmation before revoking Skill permissions and disabling it", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const privilegedSkill: SkillInstallation = {
+      ...skillInstallation,
+      permissions: [
+        {
+          capability: "shell",
+          actions: ["execute"],
+          targets: ["scripts/render.mjs"],
+          reason: "Run the bundled deterministic report outline script.",
+        },
+      ],
+    };
+    vi.mocked(bridge.listSkills).mockResolvedValue([privilegedSkill]);
+    vi.mocked(bridge.resetSkillPermissions).mockResolvedValue({
+      ...privilegedSkill,
+      enabled: false,
+      approvedPermissionDigest: null,
+    });
+    renderApp(bridge, "/assistants");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "撤销已批准权限…" }));
+    const dialog = screen.getByRole("alertdialog", {
+      name: "撤销 结构化报告 的权限并停用？",
+    });
+    expect(dialog.textContent).toContain("这不是恢复默认设置");
+    expect(bridge.resetSkillPermissions).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "撤销权限并停用" }));
+    await waitFor(() =>
+      expect(bridge.resetSkillPermissions).toHaveBeenCalledWith({
+        installationId: privilegedSkill.id,
+      }),
+    );
+    expect(
+      await screen.findByText("已撤销权限并停用该 Skill；重新审核批准后才能再次启用。"),
+    ).toBeTruthy();
+  });
+
+  it("shows visible archive and Skill-search empty states and focuses direct search navigation", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listSkills).mockResolvedValue([skillInstallation]);
+    renderApp(bridge, "/assistants");
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByLabelText("搜索 Skill"), "不存在的能力");
+    expect(await screen.findByText("没有匹配“不存在的能力”的 Skill")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "清除搜索" }));
+    expect(screen.getByText("结构化报告")).toBeTruthy();
+
+    await user.click(screen.getByRole("link", { name: /搜索/ }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("搜索关键词")));
+    await user.click(screen.getByRole("link", { name: "新对话" }));
+    await user.click(screen.getByRole("button", { name: "显示归档对话" }));
+    expect(await screen.findByText("历史 · 含归档")).toBeTruthy();
+    expect(screen.getByText("还没有活动或归档对话。")).toBeTruthy();
   });
 });
