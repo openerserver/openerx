@@ -9,6 +9,7 @@ import type { ReleaseUpdateBridge } from "./release";
 import type { SkillBridge } from "./skill";
 import type { SyncBridge } from "./sync";
 import type { ToolBridge } from "./tool";
+import type { WorkspaceBridge } from "./workspace";
 
 export const ipcChannels = Object.freeze({
   environmentGet: "desktop:environment:get",
@@ -57,6 +58,9 @@ export const ipcChannels = Object.freeze({
   chatEvent: "chat:event",
   fileChoose: "file:choose",
   directoryChoose: "file:directory:choose",
+  workspaceChoose: "workspace:choose",
+  workspaceList: "workspace:list",
+  workspaceRevoke: "workspace:revoke",
   fileList: "file:list",
   fileSearch: "file:search",
   filePreview: "file:preview",
@@ -72,7 +76,10 @@ export const ipcChannels = Object.freeze({
   toolPermissionResolve: "tool:permission:resolve",
   toolScopesList: "tool:scopes:list",
   toolScopeRevoke: "tool:scope:revoke",
+  toolRuntimeReadiness: "tool:runtime:readiness",
   mcpServersList: "mcp:servers:list",
+  mcpServersAuthorization: "mcp:servers:authorization",
+  mcpServerAuthorize: "mcp:server:authorize",
   mcpServerSave: "mcp:server:save",
   mcpServerRemove: "mcp:server:remove",
   skillList: "skill:list",
@@ -115,6 +122,7 @@ export interface DesktopBridge
     DiagnosticsBridge,
     FileBridge,
     ToolBridge,
+    WorkspaceBridge,
     SkillBridge,
     RemoteDesktopBridge,
     ReleaseUpdateBridge {

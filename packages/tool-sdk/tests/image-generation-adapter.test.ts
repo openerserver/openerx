@@ -4,6 +4,10 @@ import { HttpPlatformImageGenerationTransport, ImageGenerationAdapter } from "..
 
 const result: NormalizedToolResult = {
   summary: "已生成 1 张图片",
+  content: [
+    { type: "text", text: "已生成 1 张图片" },
+    { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+  ],
   data: { generationId: "image-generation-1" },
   sources: [],
   artifacts: ["00000000-0000-4000-8000-000000000701"],

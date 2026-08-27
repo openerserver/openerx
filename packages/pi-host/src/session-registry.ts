@@ -10,8 +10,13 @@ import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 interface RegistryPayload {
-  version: 1;
+  version: 2;
   sessions: Record<string, string>;
+}
+
+interface UntrustedRegistryPayload {
+  version?: number;
+  sessions?: Record<string, string>;
 }
 
 export class ProductSessionRegistry {
@@ -26,41 +31,48 @@ export class ProductSessionRegistry {
     mkdirSync(this.#sessionDirectory, { recursive: true });
   }
 
-  async sessionManager(conversationId: string): Promise<SessionManager> {
+  async sessionManager(_conversationId: string, branchId: string): Promise<SessionManager> {
     const registry = await this.#load();
-    const registered = registry.sessions[conversationId];
+    const registered = registry.sessions[branchId];
     if (registered && this.#isSafeSessionPath(registered) && existsSync(registered)) {
       return SessionManager.open(registered, this.#sessionDirectory, this.#cwd);
     }
     const discovered = (await SessionManager.list(this.#cwd, this.#sessionDirectory)).find(
-      ({ id }) => id === conversationId,
+      ({ id }) => id === branchId,
     );
     if (discovered && this.#isSafeSessionPath(discovered.path)) {
-      registry.sessions[conversationId] = discovered.path;
+      registry.sessions[branchId] = discovered.path;
       this.#store(registry);
       return SessionManager.open(discovered.path, this.#sessionDirectory, this.#cwd);
     }
     const manager = SessionManager.create(this.#cwd, this.#sessionDirectory, {
-      id: conversationId,
+      id: branchId,
     });
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("PI_SESSION_FILE_MISSING");
-    registry.sessions[conversationId] = sessionFile;
+    registry.sessions[branchId] = sessionFile;
     this.#store(registry);
     return manager;
   }
 
-  async sessionFile(conversationId: string): Promise<string | null> {
+  async sessionFile(_conversationId: string, branchId: string): Promise<string | null> {
     const registry = await this.#load();
-    return registry.sessions[conversationId] ?? null;
+    return registry.sessions[branchId] ?? null;
   }
 
   async #load(): Promise<RegistryPayload> {
     if (existsSync(this.#registryPath)) {
       try {
-        const parsed = JSON.parse(readFileSync(this.#registryPath, "utf8")) as RegistryPayload;
-        if (parsed.version === 1 && parsed.sessions && typeof parsed.sessions === "object") {
-          return parsed;
+        const parsed = JSON.parse(
+          readFileSync(this.#registryPath, "utf8"),
+        ) as UntrustedRegistryPayload;
+        if (parsed.sessions && typeof parsed.sessions === "object") {
+          if (parsed.version === 2) return { version: 2, sessions: parsed.sessions };
+          if (parsed.version === 1) {
+            const migrated: RegistryPayload = { version: 2, sessions: parsed.sessions };
+            this.#store(migrated);
+            return migrated;
+          }
         }
       } catch {
         // A damaged index is recoverable from Pi's append-only session headers below.
@@ -72,7 +84,7 @@ export class ProductSessionRegistry {
         session.path,
       ]),
     );
-    const recovered: RegistryPayload = { version: 1, sessions };
+    const recovered: RegistryPayload = { version: 2, sessions };
     this.#store(recovered);
     return recovered;
   }

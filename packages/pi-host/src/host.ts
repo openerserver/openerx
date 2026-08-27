@@ -13,16 +13,22 @@ import {
   type PiToolRequestFrame,
   piFileToolResponseFrameSchema,
   piHostBootstrapSchema,
+  piHostContractVersion,
   piHostRequestFrameSchema,
   piToolResponseFrameSchema,
+  type UsageRecord,
 } from "@openerx/contracts";
 import type { MessagePortMain } from "electron";
 import { createProductPiSession, ModelRuntime } from "./agent-session";
 import { createProductCapabilityTools } from "./capability-tools";
 import { createProductFileTools } from "./file-tools";
+import { createProductMcpTools } from "./mcp-tools";
+import { createProductPlanTool, productPlanToolName } from "./plan-tool";
 import { createPlatformModelProvider, HttpPlatformModelTransport } from "./platform-provider";
 import { ProductSessionRegistry } from "./session-registry";
 import { createProductSkillTools, validateSkillMounts } from "./skill-tools";
+import { createProductToolSearch } from "./tool-search";
+import { createProductWorkspaceTools } from "./workspace-tools";
 
 interface ActiveGeneration {
   abortRequested: boolean;
@@ -31,6 +37,10 @@ interface ActiveGeneration {
   session?: AgentSession;
   terminal: boolean;
   conversationId: string;
+  branchId: string;
+  modelRound: number;
+  reasoningRound: number;
+  compactionRound: number;
 }
 
 interface PendingFileToolRequest {
@@ -119,7 +129,7 @@ export function startPiHostProcess(
       generationId: string,
       state: ActiveGeneration,
       event: Pick<PiHostEventFrame, "type"> &
-        Partial<Pick<PiHostEventFrame, "delta" | "errorCode" | "usage">>,
+        Partial<Pick<PiHostEventFrame, "delta" | "errorCode" | "usageRecords">>,
     ): void => {
       if (state.terminal) return;
       state.sequence += 1;
@@ -132,7 +142,7 @@ export function startPiHostProcess(
         type: event.type,
         ...(event.delta === undefined ? {} : { delta: event.delta }),
         ...(event.errorCode === undefined ? {} : { errorCode: event.errorCode }),
-        ...(event.usage === undefined ? {} : { usage: event.usage }),
+        ...(event.usageRecords === undefined ? {} : { usageRecords: event.usageRecords }),
       };
       if (event.type !== "delta") state.terminal = true;
       port.postMessage(frame);
@@ -145,7 +155,22 @@ export function startPiHostProcess(
         Partial<
           Pick<
             PiActivityEvent,
-            "piToolCallId" | "toolName" | "inputSummary" | "resultSummary" | "errorCode"
+            | "piItemRef"
+            | "piToolCallId"
+            | "toolName"
+            | "inputSummary"
+            | "resultSummary"
+            | "errorCode"
+            | "modelRef"
+            | "reasoningTokens"
+            | "planEntries"
+            | "explanation"
+            | "compactionReason"
+            | "tokensBefore"
+            | "tokensAfter"
+            | "attempt"
+            | "maxAttempts"
+            | "delayMs"
           >
         >,
     ): void => {
@@ -157,18 +182,29 @@ export function startPiHostProcess(
         sequence: state.activitySequence,
         occurredAt: new Date().toISOString(),
         type: event.type,
+        ...(event.piItemRef ? { piItemRef: event.piItemRef } : {}),
         ...(event.piToolCallId ? { piToolCallId: event.piToolCallId } : {}),
         ...(event.toolName ? { toolName: event.toolName } : {}),
         ...(event.inputSummary ? { inputSummary: event.inputSummary } : {}),
         ...(event.resultSummary ? { resultSummary: event.resultSummary } : {}),
         ...(event.errorCode ? { errorCode: event.errorCode } : {}),
+        ...(event.modelRef ? { modelRef: event.modelRef } : {}),
+        ...(event.reasoningTokens === undefined ? {} : { reasoningTokens: event.reasoningTokens }),
+        ...(event.planEntries ? { planEntries: event.planEntries } : {}),
+        ...(event.explanation ? { explanation: event.explanation } : {}),
+        ...(event.compactionReason ? { compactionReason: event.compactionReason } : {}),
+        ...(event.tokensBefore === undefined ? {} : { tokensBefore: event.tokensBefore }),
+        ...(event.tokensAfter === undefined ? {} : { tokensAfter: event.tokensAfter }),
+        ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
+        ...(event.maxAttempts === undefined ? {} : { maxAttempts: event.maxAttempts }),
+        ...(event.delayMs === undefined ? {} : { delayMs: event.delayMs }),
       };
       port.postMessage(frame);
     };
 
     const prompt = async (frame: PiPromptFrame): Promise<void> => {
-      const duplicateConversation = [...active.values()].some(
-        (state) => state.conversationId === frame.conversationId,
+      const duplicateBranch = [...active.values()].some(
+        (state) => state.branchId === frame.branchId,
       );
       const state: ActiveGeneration = {
         abortRequested: false,
@@ -176,18 +212,22 @@ export function startPiHostProcess(
         activitySequence: 0,
         terminal: false,
         conversationId: frame.conversationId,
+        branchId: frame.branchId,
+        modelRound: 0,
+        reasoningRound: 0,
+        compactionRound: 0,
       };
       active.set(frame.generationId, state);
-      if (duplicateConversation) {
+      if (duplicateBranch) {
         emit(frame.generationId, state, {
           type: "failed",
-          errorCode: "PI_CONVERSATION_ALREADY_ACTIVE",
+          errorCode: "PI_BRANCH_ALREADY_ACTIVE",
         });
         active.delete(frame.generationId);
         return;
       }
       let unsubscribe: (() => void) | undefined;
-      let authoritativeUsage: PiHostEventFrame["usage"];
+      const authoritativeUsageRecords: UsageRecord[] = [];
       try {
         const promptMessage = frame.history.at(-1);
         if (promptMessage?.role !== "user") {
@@ -205,7 +245,9 @@ export function startPiHostProcess(
             catalog,
             transport,
             thinkingLevel: frame.thinkingLevel ?? defaultThinkingLevel,
-            requiresImageInput: (frame.images?.length ?? 0) > 0,
+            requiresImageInput:
+              (frame.images?.length ?? 0) > 0 ||
+              frame.history.some((message) => (message.images?.length ?? 0) > 0),
             request: {
               accountId: frame.platform.accountId,
               conversationId: frame.conversationId,
@@ -215,7 +257,9 @@ export function startPiHostProcess(
               requestDedupeKey: frame.platform.requestDedupeKey,
             },
             onUsage: (usage) => {
-              authoritativeUsage = usage;
+              if (!authoritativeUsageRecords.some(({ usageId }) => usageId === usage.usageId)) {
+                authoritativeUsageRecords.push(usage);
+              }
             },
           });
           modelRuntime = await ModelRuntime.create({
@@ -228,8 +272,66 @@ export function startPiHostProcess(
         if (!modelRuntime || !model) {
           throw new PiModelNotConfiguredError("OpenerX Platform Model is not configured");
         }
-        const sessionManager = await sessionRegistry.sessionManager(frame.conversationId);
+        const activeModelRef = frame.platform?.selectedModelRef ?? model.id;
+        const sessionManager = await sessionRegistry.sessionManager(
+          frame.conversationId,
+          frame.branchId,
+        );
         const skills = validateSkillMounts(bootstrap.profileDirectory, frame.skills ?? []);
+        const capabilityTools = createProductCapabilityTools({
+          generationId: frame.generationId,
+          conversationId: frame.conversationId,
+          branchId: frame.branchId,
+          assistantMessageId: frame.assistantMessageId,
+          transport: capabilityToolTransport,
+        });
+        const workspaceTools = createProductWorkspaceTools({
+          generationId: frame.generationId,
+          conversationId: frame.conversationId,
+          branchId: frame.branchId,
+          assistantMessageId: frame.assistantMessageId,
+          transport: capabilityToolTransport,
+        });
+        const mcpTools = createProductMcpTools({
+          generationId: frame.generationId,
+          conversationId: frame.conversationId,
+          branchId: frame.branchId,
+          assistantMessageId: frame.assistantMessageId,
+          descriptors: frame.mcpTools ?? [],
+          transport: capabilityToolTransport,
+        });
+        const skillTools = createProductSkillTools({
+          generationId: frame.generationId,
+          conversationId: frame.conversationId,
+          branchId: frame.branchId,
+          assistantMessageId: frame.assistantMessageId,
+          mounts: skills,
+          transport: capabilityToolTransport,
+        });
+        const fileTools = createProductFileTools({
+          generationId: frame.generationId,
+          conversationId: frame.conversationId,
+          branchId: frame.branchId,
+          assistantMessageId: frame.assistantMessageId,
+          transport: fileToolTransport,
+        });
+        const allTools = [
+          createProductPlanTool(),
+          ...fileTools,
+          ...capabilityTools,
+          ...workspaceTools,
+          ...mcpTools,
+          ...skillTools,
+        ];
+        const available = frame.availableToolNames
+          ? new Set(frame.availableToolNames)
+          : new Set(allTools.map(({ name }) => name));
+        const searchableTools = allTools.filter(({ name }) => available.has(name));
+        let productSession: AgentSession | undefined;
+        const toolSearch = createProductToolSearch(searchableTools, {
+          active: () => productSession?.getActiveToolNames() ?? ["openerx_tool_search"],
+          activate: (toolNames) => productSession?.setActiveToolsByName(toolNames),
+        });
         const result = await createProductPiSession({
           cwd: workspaceDirectory,
           agentDir: agentDirectory,
@@ -240,34 +342,43 @@ export function startPiHostProcess(
           sessionManager,
           files: frame.files,
           skills,
-          customTools: [
-            ...createProductFileTools({
-              generationId: frame.generationId,
-              conversationId: frame.conversationId,
-              transport: fileToolTransport,
-            }),
-            ...createProductCapabilityTools({
-              generationId: frame.generationId,
-              conversationId: frame.conversationId,
-              assistantMessageId: frame.assistantMessageId,
-              transport: capabilityToolTransport,
-            }),
-            ...createProductSkillTools({
-              generationId: frame.generationId,
-              conversationId: frame.conversationId,
-              assistantMessageId: frame.assistantMessageId,
-              mounts: skills,
-              transport: capabilityToolTransport,
-            }),
-          ],
+          workspace: frame.workspace,
+          customTools: [toolSearch, ...searchableTools],
         });
         const session = result.session;
+        productSession = session;
+        if (frame.initialToolNames) {
+          session.setActiveToolsByName(
+            [...new Set(["openerx_tool_search", ...frame.initialToolNames])].filter(
+              (name) => name === "openerx_tool_search" || available.has(name),
+            ),
+          );
+        }
         state.session = session;
         if (state.abortRequested) {
           emit(frame.generationId, state, { type: "stopped" });
           return;
         }
         unsubscribe = session.subscribe((event) => {
+          if (event.type === "turn_start") {
+            state.modelRound += 1;
+            emitActivity(frame.generationId, state, {
+              type: "model.started",
+              piItemRef: `model:${state.modelRound}`,
+              modelRef: activeModelRef,
+              resultSummary: `模型轮次 ${state.modelRound} 已开始`,
+            });
+            return;
+          }
+          if (event.type === "turn_end") {
+            emitActivity(frame.generationId, state, {
+              type: "model.completed",
+              piItemRef: `model:${state.modelRound}`,
+              modelRef: activeModelRef,
+              resultSummary: `模型轮次 ${state.modelRound} 已完成`,
+            });
+            return;
+          }
           if (
             event.type === "message_update" &&
             event.assistantMessageEvent.type === "text_delta" &&
@@ -279,7 +390,61 @@ export function startPiHostProcess(
             });
             return;
           }
+          if (
+            event.type === "message_update" &&
+            event.assistantMessageEvent.type === "thinking_start"
+          ) {
+            state.reasoningRound += 1;
+            emitActivity(frame.generationId, state, {
+              type: "reasoning.started",
+              piItemRef: `reasoning:${state.modelRound}:${state.reasoningRound}`,
+              resultSummary: "模型推理已开始；Run 时间线不记录原始思维链。",
+            });
+            return;
+          }
+          if (
+            event.type === "message_update" &&
+            event.assistantMessageEvent.type === "thinking_end"
+          ) {
+            emitActivity(frame.generationId, state, {
+              type: "reasoning.completed",
+              piItemRef: `reasoning:${state.modelRound}:${state.reasoningRound}`,
+              resultSummary: "模型推理已完成；Run 时间线仅保存安全摘要。",
+            });
+            return;
+          }
           if (event.type === "tool_execution_start") {
+            if (event.toolName === productPlanToolName) {
+              const args = event.args as {
+                explanation?: unknown;
+                items?: Array<{ text?: unknown; status?: unknown }>;
+              };
+              const planEntries: Array<{
+                text: string;
+                status: "pending" | "in_progress" | "completed";
+              }> = [];
+              for (const item of args.items ?? []) {
+                if (
+                  typeof item.text === "string" &&
+                  (item.status === "pending" ||
+                    item.status === "in_progress" ||
+                    item.status === "completed")
+                ) {
+                  planEntries.push({ text: item.text, status: item.status });
+                }
+              }
+              if (planEntries.length > 0) {
+                emitActivity(frame.generationId, state, {
+                  type: "plan.updated",
+                  piItemRef: `plan:${event.toolCallId}`,
+                  planEntries,
+                  ...(typeof args.explanation === "string"
+                    ? { explanation: args.explanation }
+                    : {}),
+                });
+              }
+              return;
+            }
             emitActivity(frame.generationId, state, {
               type: "tool.requested",
               piToolCallId: event.toolCallId,
@@ -289,6 +454,7 @@ export function startPiHostProcess(
             return;
           }
           if (event.type === "tool_execution_update") {
+            if (event.toolName === productPlanToolName) return;
             emitActivity(frame.generationId, state, {
               type: "tool.progressed",
               piToolCallId: event.toolCallId,
@@ -298,6 +464,7 @@ export function startPiHostProcess(
             return;
           }
           if (event.type === "tool_execution_end") {
+            if (event.toolName === productPlanToolName) return;
             emitActivity(frame.generationId, state, {
               type: event.isError ? "tool.failed" : "tool.completed",
               piToolCallId: event.toolCallId,
@@ -308,12 +475,25 @@ export function startPiHostProcess(
             return;
           }
           if (event.type === "compaction_start") {
-            emitActivity(frame.generationId, state, { type: "run.compacting" });
+            state.compactionRound += 1;
+            emitActivity(frame.generationId, state, {
+              type: "run.compacting",
+              piItemRef: `compaction:${state.compactionRound}`,
+              compactionReason: event.reason,
+            });
             return;
           }
           if (event.type === "compaction_end") {
             emitActivity(frame.generationId, state, {
               type: "run.compacted",
+              piItemRef: `compaction:${state.compactionRound}`,
+              compactionReason: event.reason,
+              ...(event.result?.tokensBefore === undefined
+                ? {}
+                : { tokensBefore: event.result.tokensBefore }),
+              ...(event.result?.estimatedTokensAfter === undefined
+                ? {}
+                : { tokensAfter: event.result.estimatedTokensAfter }),
               ...(event.errorMessage ? { errorCode: "PI_COMPACTION_FAILED" } : {}),
             });
             return;
@@ -321,13 +501,21 @@ export function startPiHostProcess(
           if (event.type === "auto_retry_start") {
             emitActivity(frame.generationId, state, {
               type: "run.retrying",
+              piItemRef: `retry:${event.attempt}`,
               resultSummary: `attempt ${event.attempt}/${event.maxAttempts}`,
+              attempt: event.attempt,
+              maxAttempts: event.maxAttempts,
+              delayMs: event.delayMs,
             });
             return;
           }
           if (event.type === "auto_retry_end") {
             emitActivity(frame.generationId, state, {
               type: "run.retry_completed",
+              piItemRef: `retry:${event.attempt}`,
+              attempt: event.attempt,
+              maxAttempts: event.attempt,
+              delayMs: 0,
               ...(event.success ? {} : { errorCode: "PI_RETRY_FAILED" }),
             });
           }
@@ -346,32 +534,44 @@ export function startPiHostProcess(
         });
         await session.waitForIdle();
         const assistant = lastAssistantMessage(session);
-        if (
-          state.abortRequested ||
-          assistant?.stopReason === "aborted" ||
-          assistant?.stopReason === "length"
-        ) {
+        if (state.abortRequested || assistant?.stopReason === "aborted") {
           emit(frame.generationId, state, {
             type: "stopped",
-            ...(assistant?.stopReason === "length"
-              ? { errorCode: "MODEL_OUTPUT_LIMIT_REACHED" }
+            ...(authoritativeUsageRecords.length > 0
+              ? { usageRecords: authoritativeUsageRecords }
+              : {}),
+          });
+        } else if (assistant?.stopReason === "length") {
+          emit(frame.generationId, state, {
+            type: "failed",
+            errorCode: "MODEL_OUTPUT_LIMIT_REACHED",
+            ...(authoritativeUsageRecords.length > 0
+              ? { usageRecords: authoritativeUsageRecords }
               : {}),
           });
         } else if (!assistant || assistant.stopReason === "error") {
           emit(frame.generationId, state, {
             type: "failed",
             errorCode: assistant ? "PI_PROVIDER_FAILURE" : "PI_EMPTY_RESPONSE",
+            ...(authoritativeUsageRecords.length > 0
+              ? { usageRecords: authoritativeUsageRecords }
+              : {}),
           });
         } else {
           emit(frame.generationId, state, {
             type: "completed",
-            ...(authoritativeUsage ? { usage: authoritativeUsage } : {}),
+            ...(authoritativeUsageRecords.length > 0
+              ? { usageRecords: authoritativeUsageRecords }
+              : {}),
           });
         }
       } catch (error) {
         emit(frame.generationId, state, {
           type: state.abortRequested ? "stopped" : "failed",
           ...(state.abortRequested ? {} : { errorCode: errorCode(error) }),
+          ...(authoritativeUsageRecords.length > 0
+            ? { usageRecords: authoritativeUsageRecords }
+            : {}),
         });
       } finally {
         unsubscribe?.();
@@ -396,12 +596,17 @@ export function startPiHostProcess(
           errorCode: "PI_GENERATION_NOT_ACTIVE",
         };
       } else if (!state.session) {
-        result = {
-          kind: "pi.session.control-result",
-          requestId: frame.requestId,
-          ok: false,
-          errorCode: "PI_SESSION_NOT_READY",
-        };
+        if (frame.action === "abort") {
+          state.abortRequested = true;
+          result = { kind: "pi.session.control-result", requestId: frame.requestId, ok: true };
+        } else {
+          result = {
+            kind: "pi.session.control-result",
+            requestId: frame.requestId,
+            ok: false,
+            errorCode: "PI_SESSION_NOT_READY",
+          };
+        }
       } else {
         try {
           if (frame.action === "steer") await state.session.steer(frame.text ?? "");
@@ -471,7 +676,7 @@ export function startPiHostProcess(
     port.start();
     port.postMessage({
       kind: "pi-host.ready",
-      contractVersion: 1,
+      contractVersion: piHostContractVersion,
       nonce: bootstrap.nonce,
     });
   });

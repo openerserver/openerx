@@ -93,7 +93,8 @@ function responseFor(context: Context): AssistantMessage {
         { stopReason: "toolUse" },
       );
     }
-    const first = JSON.parse(contentText(toolResults[0]?.content)) as {
+    const firstResult = toolResults[0];
+    const first = (firstResult && "details" in firstResult ? firstResult.details : null) as {
       data?: { sessionId?: string; partition?: string };
     };
     const sessionId = first.data?.sessionId;
@@ -147,6 +148,19 @@ function responseFor(context: Context): AssistantMessage {
     return fauxAssistantMessage(
       `隔离浏览器工具完成；独立分区 ${first.data?.partition ?? "unknown"}。`,
     );
+  }
+  if (latestUser.includes("[PI_TEST_DESKTOP]")) {
+    if (toolResults.length === 0) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "openerx_desktop",
+          { action: "screenshot", application: "OpenerX" },
+          { id: "desktop-screenshot" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    return fauxAssistantMessage(`桌面窗口捕获完成：${contentText(toolResults.at(-1)?.content)}`);
   }
   if (latestUser.includes("法国的首都")) return fauxAssistantMessage("巴黎。");
   if (latestUser.includes("代码块") && latestUser.includes("表格")) {

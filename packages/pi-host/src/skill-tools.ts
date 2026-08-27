@@ -4,6 +4,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import type { PiSkillMount, PiToolRequestFrame, ToolOperation } from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
 import type { PiCapabilityToolTransport } from "./capability-tools";
+import { productToolResult } from "./tool-result";
 
 type SkillOperation = Extract<ToolOperation, { operation: "skill_read" | "skill_script_execute" }>;
 type SkillOperationWithoutIdempotency = SkillOperation extends infer Operation
@@ -60,6 +61,7 @@ export function validateSkillMounts(
 export function createProductSkillTools(input: {
   generationId: string;
   conversationId: string;
+  branchId: string;
   assistantMessageId: string;
   mounts: PiSkillMount[];
   transport: PiCapabilityToolTransport;
@@ -68,12 +70,13 @@ export function createProductSkillTools(input: {
     toolCallId: string,
     toolName: string,
     operation: SkillOperationWithoutIdempotency,
-  ): Promise<{ content: Array<{ type: "text"; text: string }>; details: unknown }> => {
+  ) => {
     const frame: PiToolRequestFrame = {
       kind: "pi.tool.request",
       requestId: randomUUID(),
       generationId: input.generationId,
       conversationId: input.conversationId,
+      branchId: input.branchId,
       assistantMessageId: input.assistantMessageId,
       piToolCallId: toolCallId,
       toolName,
@@ -83,7 +86,7 @@ export function createProductSkillTools(input: {
       } as SkillOperation,
     };
     const result = await input.transport.request(frame);
-    return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+    return productToolResult(result);
   };
 
   return [

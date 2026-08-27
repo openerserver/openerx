@@ -4,7 +4,13 @@ import path from "node:path";
 import type { NormalizedToolResult } from "@openerx/contracts";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BuiltinToolAdapter, CapabilityBroker, operationDigest, WebSearchAdapter } from "../src";
+import {
+  BuiltinToolAdapter,
+  CapabilityBroker,
+  capabilityRequirement,
+  operationDigest,
+  WebSearchAdapter,
+} from "../src";
 
 const directories: string[] = [];
 
@@ -21,10 +27,12 @@ function fixture() {
   const projection = repository.createProjection({
     conversationId: generation.receipt.conversationId,
     messageId: generation.receipt.assistantMessageId,
+    branchId: generation.receipt.branchId,
     title: "使用工具",
     selectedModelRef: "platform/auto",
+    thinkingLevel: generation.thinkingLevel,
     piPackageVersion: "0.84.3",
-    piHostContractVersion: 1,
+    piHostContractVersion: 2,
   });
   return {
     chat,
@@ -48,6 +56,18 @@ afterEach(() => {
 });
 
 describe("CapabilityBroker", () => {
+  it("uses a dedicated permission capability for image generation", () => {
+    expect(
+      capabilityRequirement({
+        operation: "image_generate",
+        prompt: "fixture",
+        aspectRatio: "1:1",
+        count: 1,
+        idempotencyKey: "image-capability-0001",
+      }).capability,
+    ).toBe("image.generate");
+  });
+
   it("executes deterministic L0 tools without approval and replays by idempotency key", async () => {
     const { chat, repository, projection } = fixture();
     const adapter = new BuiltinToolAdapter();
@@ -81,6 +101,7 @@ describe("CapabilityBroker", () => {
     const { chat, repository, projection } = fixture();
     const expected: NormalizedToolResult = {
       summary: "两条结果",
+      content: [{ type: "text", text: "两条结果" }],
       data: { count: 2 },
       sources: [
         {
@@ -123,11 +144,66 @@ describe("CapabilityBroker", () => {
     repository.close();
   });
 
+  it("executes a read-only MCP tool but stops a write tool before its adapter", async () => {
+    const { chat, repository, projection } = fixture();
+    const execute = vi.fn(async () => ({
+      summary: "mcp result",
+      content: [{ type: "text" as const, text: "mcp result" }],
+      data: {},
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: false,
+      durationMs: 1,
+    }));
+    const broker = new CapabilityBroker(repository, [
+      { operations: ["mcp_call"] as const, execute },
+    ]);
+    const readAnnotations = {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    };
+
+    await expect(
+      broker.execute(projection, {
+        operation: "mcp_call",
+        serverId: "00000000-0000-4000-8000-000000000601",
+        tool: "read_fixture",
+        arguments: { query: "fixture" },
+        annotations: readAnnotations,
+        descriptorDigest: "a".repeat(64),
+        idempotencyKey: "mcp-read-broker-0001",
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+
+    const write = await broker.execute(
+      { ...projection, piToolCallId: "pi-call-mcp-write", toolName: "mcp__fixture__write" },
+      {
+        operation: "mcp_call",
+        serverId: "00000000-0000-4000-8000-000000000601",
+        tool: "write_fixture",
+        arguments: { value: "fixture" },
+        annotations: { ...readAnnotations, readOnlyHint: false, idempotentHint: false },
+        descriptorDigest: "b".repeat(64),
+        idempotencyKey: "mcp-write-broker-0001",
+      },
+    );
+    expect(write).toMatchObject({
+      status: "permission_required",
+      permission: { capability: "mcp", risk: "L4", actions: ["invoke"] },
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    chat.close();
+    repository.close();
+  });
+
   it("does not reuse a remote session scope outside its approved conversation", async () => {
     const { chat, repository, projection } = fixture();
     const transport = {
       search: vi.fn(async () => ({
         summary: "result",
+        content: [{ type: "text" as const, text: "result" }],
         data: {},
         sources: [],
         artifacts: [],
@@ -159,10 +235,12 @@ describe("CapabilityBroker", () => {
     const secondProjection = repository.createProjection({
       conversationId: secondGeneration.receipt.conversationId,
       messageId: secondGeneration.receipt.assistantMessageId,
+      branchId: secondGeneration.receipt.branchId,
       title: "另一个对话",
       selectedModelRef: "platform/auto",
+      thinkingLevel: secondGeneration.thinkingLevel,
       piPackageVersion: "0.84.3",
-      piHostContractVersion: 1,
+      piHostContractVersion: 2,
     });
     const second = await broker.execute(
       {
@@ -185,6 +263,210 @@ describe("CapabilityBroker", () => {
     expect(repository.activeScopes("web.search")[0]?.conversationId).toBe(
       projection.conversationId,
     );
+    chat.close();
+    repository.close();
+  });
+
+  it("requires Browser approval again after its persistent scope is revoked", async () => {
+    const { chat, repository, projection } = fixture();
+    const execute = vi.fn(async () => ({
+      summary: "browser screenshot",
+      content: [{ type: "text" as const, text: "browser screenshot" }],
+      data: {},
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: false,
+      durationMs: 1,
+    }));
+    const broker = new CapabilityBroker(repository, [
+      { operations: ["browser"] as const, execute },
+    ]);
+    const operation = {
+      operation: "browser" as const,
+      action: "screenshot" as const,
+      sessionId: crypto.randomUUID(),
+      idempotencyKey: "browser-screenshot-approved-0001",
+    };
+    const blocked = await broker.execute(projection, operation);
+    if (blocked.status !== "permission_required") throw new Error("expected permission");
+    broker.resolvePermission({
+      permissionRequestId: blocked.permission.id,
+      decision: "persistent",
+      payloadDigest: blocked.permission.payloadDigest,
+    });
+    const browserScope = repository.activeScopes("browser")[0];
+    expect(browserScope).toMatchObject({ capability: "browser", actions: ["capture"] });
+    await expect(broker.execute(projection, operation)).resolves.toMatchObject({
+      status: "completed",
+    });
+    if (!browserScope) throw new Error("browser scope missing");
+    repository.revokeScope(browserScope.id);
+
+    const afterRevoke = await broker.execute(
+      {
+        ...projection,
+        piToolCallId: "pi-call-browser-after-revoke",
+      },
+      { ...operation, idempotencyKey: "browser-screenshot-after-revoke-0001" },
+    );
+    expect(afterRevoke).toMatchObject({
+      status: "permission_required",
+      permission: { capability: "browser", actions: ["capture"] },
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    chat.close();
+    repository.close();
+  });
+
+  it("keeps a denied Browser navigation out of the Host adapter", async () => {
+    const { chat, repository, projection } = fixture();
+    const execute = vi.fn(async () => ({
+      summary: "browser opened",
+      content: [{ type: "text" as const, text: "browser opened" }],
+      data: {},
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: true,
+      durationMs: 1,
+    }));
+    const broker = new CapabilityBroker(repository, [
+      { operations: ["browser"] as const, execute },
+    ]);
+    const operation = {
+      operation: "browser" as const,
+      action: "open" as const,
+      url: "https://example.com/denied",
+      idempotencyKey: "browser-navigation-denied-0001",
+    };
+    const blocked = await broker.execute(projection, operation);
+    if (blocked.status !== "permission_required") throw new Error("expected permission");
+    broker.resolvePermission({
+      permissionRequestId: blocked.permission.id,
+      decision: "deny",
+      payloadDigest: blocked.permission.payloadDigest,
+    });
+    await expect(broker.execute(projection, operation)).rejects.toMatchObject({
+      code: "PERMISSION_DENIED",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    chat.close();
+    repository.close();
+  });
+
+  it("requires Desktop capture approval again after its persistent scope is revoked", async () => {
+    const { chat, repository, projection } = fixture();
+    const execute = vi.fn(async () => ({
+      summary: "desktop screenshot",
+      content: [{ type: "text" as const, text: "desktop screenshot" }],
+      data: {},
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: false,
+      durationMs: 1,
+    }));
+    const broker = new CapabilityBroker(repository, [
+      { operations: ["desktop"] as const, execute },
+    ]);
+    const operation = {
+      operation: "desktop" as const,
+      action: "screenshot" as const,
+      application: "Notes",
+      idempotencyKey: "desktop-screenshot-approved-0001",
+    };
+    const blocked = await broker.execute(projection, operation);
+    if (blocked.status !== "permission_required") throw new Error("expected permission");
+    broker.resolvePermission({
+      permissionRequestId: blocked.permission.id,
+      decision: "persistent",
+      payloadDigest: blocked.permission.payloadDigest,
+    });
+    const desktopScope = repository.activeScopes("desktop")[0];
+    expect(desktopScope).toMatchObject({ capability: "desktop", actions: ["capture"] });
+    await expect(broker.execute(projection, operation)).resolves.toMatchObject({
+      status: "completed",
+    });
+    if (!desktopScope) throw new Error("desktop scope missing");
+    repository.revokeScope(desktopScope.id);
+
+    const afterRevoke = await broker.execute(
+      { ...projection, piToolCallId: "pi-call-desktop-after-revoke" },
+      { ...operation, idempotencyKey: "desktop-screenshot-after-revoke-0001" },
+    );
+    expect(afterRevoke).toMatchObject({
+      status: "permission_required",
+      permission: { capability: "desktop", actions: ["capture"] },
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    chat.close();
+    repository.close();
+  });
+
+  it("keeps a denied Desktop capture out of the Host adapter", async () => {
+    const { chat, repository, projection } = fixture();
+    const execute = vi.fn(async () => ({
+      summary: "desktop screenshot",
+      content: [{ type: "text" as const, text: "desktop screenshot" }],
+      data: {},
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: false,
+      durationMs: 1,
+    }));
+    const broker = new CapabilityBroker(repository, [
+      { operations: ["desktop"] as const, execute },
+    ]);
+    const operation = {
+      operation: "desktop" as const,
+      action: "screenshot" as const,
+      application: "Notes",
+      idempotencyKey: "desktop-screenshot-denied-0001",
+    };
+    const blocked = await broker.execute(projection, operation);
+    if (blocked.status !== "permission_required") throw new Error("expected permission");
+    broker.resolvePermission({
+      permissionRequestId: blocked.permission.id,
+      decision: "deny",
+      payloadDigest: blocked.permission.payloadDigest,
+    });
+    await expect(broker.execute(projection, operation)).rejects.toMatchObject({
+      code: "PERMISSION_DENIED",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    chat.close();
+    repository.close();
+  });
+
+  it("does not replay an external action whose outcome became unknown", async () => {
+    const { chat, repository, projection } = fixture();
+    repository.createScope({
+      capability: "browser",
+      resourceType: "domain",
+      resource: "example.com",
+      actions: ["navigate"],
+      maxRisk: "L2",
+      conversationId: projection.conversationId,
+      sessionOnly: false,
+      expiresAt: null,
+    });
+    const execute = vi.fn(async () => {
+      throw new Error("HOST_DISCONNECTED_AFTER_ACTION");
+    });
+    const broker = new CapabilityBroker(repository, [{ operations: ["browser"], execute }]);
+    const operation = {
+      operation: "browser" as const,
+      action: "open" as const,
+      url: "https://example.com/current",
+      idempotencyKey: "browser-unknown-outcome-0001",
+    };
+
+    await expect(broker.execute(projection, operation)).rejects.toThrow(
+      "HOST_DISCONNECTED_AFTER_ACTION",
+    );
+    await expect(broker.execute(projection, operation)).rejects.toMatchObject({
+      code: "SIDE_EFFECT_OUTCOME_UNKNOWN",
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(repository.sideEffectAttempt(operation.idempotencyKey)?.status).toBe("outcome_unknown");
     chat.close();
     repository.close();
   });

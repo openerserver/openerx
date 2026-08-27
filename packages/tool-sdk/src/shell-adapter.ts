@@ -2,22 +2,39 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
-import type { NormalizedToolResult, ToolOperation } from "@openerx/contracts";
-import type { ToolAdapter, ToolExecutionContext } from "./types";
+import type {
+  HostToolAvailability,
+  NormalizedToolResult,
+  ToolOperation,
+  WorkspaceGrant,
+} from "@openerx/contracts";
+import { type ToolAdapter, ToolAdapterError, type ToolExecutionContext } from "./types";
 
 const OUTPUT_LIMIT = 2_000_000;
-const BLOCKED_NETWORK_COMMANDS = new Set([
-  "curl",
-  "wget",
-  "ftp",
-  "ssh",
-  "scp",
-  "sftp",
-  "telnet",
-  "nc",
-  "ncat",
-  "ping",
-]);
+
+export interface ShellAvailabilityProbe {
+  platform?: NodeJS.Platform;
+  sandboxExecutableExists?: boolean;
+}
+
+export function shellToolAvailability(probe: ShellAvailabilityProbe = {}): HostToolAvailability {
+  const platform = probe.platform ?? process.platform;
+  const sandboxExecutableExists =
+    probe.sandboxExecutableExists ?? existsSync("/usr/bin/sandbox-exec");
+  if (platform === "darwin" && sandboxExecutableExists) {
+    return {
+      availableToolNames: ["openerx_shell", "openerx_shell_process"],
+      unavailableReasons: {},
+    };
+  }
+  return {
+    availableToolNames: [],
+    unavailableReasons: {
+      openerx_shell: "SHELL_OS_SANDBOX_UNAVAILABLE",
+      openerx_shell_process: "SHELL_OS_SANDBOX_UNAVAILABLE",
+    },
+  };
+}
 
 interface ProcessRecord {
   id: string;
@@ -37,11 +54,16 @@ function inside(root: string, target: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function shellEnvironment(): NodeJS.ProcessEnv {
-  const allowed = ["PATH", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR"];
-  return Object.fromEntries(
-    allowed.flatMap((key) => (process.env[key] ? [[key, process.env[key]]] : [])),
-  ) as NodeJS.ProcessEnv;
+function shellEnvironment(cwd: string): NodeJS.ProcessEnv {
+  const allowed = ["PATH", "LANG", "LC_ALL", "SystemRoot", "WINDIR"];
+  return {
+    ...Object.fromEntries(
+      allowed.flatMap((key) => (process.env[key] ? [[key, process.env[key]]] : [])),
+    ),
+    TMPDIR: cwd,
+    TEMP: cwd,
+    TMP: cwd,
+  } as NodeJS.ProcessEnv;
 }
 
 function appendOutput(record: ProcessRecord, chunk: Buffer): void {
@@ -53,7 +75,7 @@ function sandboxPath(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
-function executableDirectory(command: string, cwd: string): string | null {
+function executablePath(command: string, cwd: string): string | null {
   const candidates = command.includes(path.sep)
     ? [path.resolve(cwd, command)]
     : (process.env.PATH ?? "")
@@ -62,47 +84,53 @@ function executableDirectory(command: string, cwd: string): string | null {
         .map((entry) => path.join(entry, command));
   const executable = candidates.find((candidate) => existsSync(candidate));
   if (!executable) return null;
-  return path.dirname(path.dirname(realpathSync(executable)));
+  return realpathSync(executable);
 }
 
 function sandboxedCommand(
   command: string,
   args: string[],
   cwd: string,
+  workspaceRoot: string,
   allowNetwork: boolean,
-): { command: string; args: string[]; isolation: "macos-sandbox" | "policy" } {
-  if (!allowNetwork && process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec")) {
-    const readRoots = [cwd, executableDirectory(command, cwd)].filter((value): value is string =>
-      Boolean(value),
-    );
-    const readRules = readRoots.map((root) => `(subpath "${sandboxPath(root)}")`).join(" ");
-    const profile = [
-      "(version 1)",
-      "(deny default)",
-      "(allow process*)",
-      "(allow sysctl-read)",
-      "(allow mach-lookup)",
-      "(allow file-read*)",
-      '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/Network"))',
-      `(allow file-read* ${readRules})`,
-      `(allow file-write* (subpath "${sandboxPath(cwd)}"))`,
-      '(allow file-write* (subpath "/private/tmp"))',
-      "(deny network*)",
-    ].join(" ");
-    return {
-      command: "/usr/bin/sandbox-exec",
-      args: ["-p", profile, command, ...args],
-      isolation: "macos-sandbox",
-    };
+): { command: string; args: string[]; isolation: "macos-sandbox" } {
+  if (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec")) {
+    throw new Error("SHELL_OS_SANDBOX_UNAVAILABLE");
   }
-  if (!allowNetwork) {
-    const basename = path.basename(command).toLowerCase();
-    if (BLOCKED_NETWORK_COMMANDS.has(basename)) throw new Error("SHELL_NETWORK_DENIED");
-    if (["sh", "bash", "zsh", "fish", "cmd", "cmd.exe", "powershell", "pwsh"].includes(basename)) {
-      throw new Error("SHELL_INTERPRETER_DENIED_WITHOUT_OS_SANDBOX");
-    }
-  }
-  return { command, args, isolation: "policy" };
+  const executable = executablePath(command, cwd);
+  if (!executable) throw new Error("SHELL_EXECUTABLE_NOT_FOUND");
+  const systemReadRoots = [
+    "/System",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/Library",
+    "/private/etc",
+    "/private/var/db",
+    "/private/var/run",
+    "/dev",
+    "/opt/homebrew",
+  ].filter(existsSync);
+  const readRules = [workspaceRoot, ...systemReadRoots]
+    .map((root) => `(subpath "${sandboxPath(root)}")`)
+    .join(" ");
+  const profile = [
+    "(version 1)",
+    "(deny default)",
+    "(allow process*)",
+    "(allow sysctl-read)",
+    "(allow mach-lookup)",
+    "(allow file-read-metadata)",
+    '(allow file-read-data (literal "/"))',
+    `(allow file-read* ${readRules} (literal "${sandboxPath(executable)}"))`,
+    `(allow file-write* (subpath "${sandboxPath(workspaceRoot)}"))`,
+    allowNetwork ? "(allow network*)" : "(deny network*)",
+  ].join(" ");
+  return {
+    command: "/usr/bin/sandbox-exec",
+    args: ["-p", profile, executable, ...args],
+    isolation: "macos-sandbox",
+  };
 }
 
 export class ShellToolAdapter implements ToolAdapter {
@@ -110,7 +138,13 @@ export class ShellToolAdapter implements ToolAdapter {
   readonly #workspaceRoots: string[];
   readonly #processes = new Map<string, ProcessRecord>();
 
-  constructor(workspaceRoots: readonly string[]) {
+  constructor(
+    workspaceRoots: readonly string[],
+    private readonly resolveWorkspaceGrant?: (
+      workspaceGrantId: string,
+      conversationId: string,
+    ) => WorkspaceGrant,
+  ) {
     this.#workspaceRoots = workspaceRoots.map((root) => realpathSync(root));
   }
 
@@ -151,18 +185,46 @@ export class ShellToolAdapter implements ToolAdapter {
     ) {
       throw new Error("SHELL_INVALID_ARGUMENT");
     }
-    const cwd = realpathSync(operation.cwd);
-    if (!this.#workspaceRoots.some((root) => inside(root, cwd)))
-      throw new Error("SHELL_CWD_OUT_OF_SCOPE");
+    let cwd: string;
+    let workspaceRoot: string;
+    if (operation.workspaceGrantId) {
+      if (operation.cwd !== undefined) throw new Error("SHELL_AMBIGUOUS_WORKSPACE");
+      const conversationId = context.projection?.conversationId;
+      if (!conversationId || !this.resolveWorkspaceGrant)
+        throw new Error("SHELL_WORKSPACE_GRANT_REQUIRED");
+      const grant = this.resolveWorkspaceGrant(operation.workspaceGrantId, conversationId);
+      if (grant.access !== "read_write") throw new Error("SHELL_WORKSPACE_WRITE_NOT_GRANTED");
+      if (operation.allowNetwork && !grant.allowNetwork)
+        throw new Error("SHELL_NETWORK_NOT_GRANTED");
+      workspaceRoot = realpathSync(grant.rootPath);
+      const requestedRelativeCwd = operation.relativeCwd ?? ".";
+      const relative = requestedRelativeCwd.split(/[\\/]+/u);
+      if (
+        path.isAbsolute(requestedRelativeCwd) ||
+        path.win32.isAbsolute(requestedRelativeCwd) ||
+        relative.some((segment) => segment === "..")
+      ) {
+        throw new Error("SHELL_CWD_OUT_OF_SCOPE");
+      }
+      cwd = realpathSync(path.resolve(workspaceRoot, requestedRelativeCwd));
+      if (!inside(workspaceRoot, cwd)) throw new Error("SHELL_CWD_OUT_OF_SCOPE");
+    } else {
+      if (!operation.cwd) throw new Error("SHELL_WORKSPACE_GRANT_REQUIRED");
+      cwd = realpathSync(operation.cwd);
+      const approvedRoot = this.#workspaceRoots.find((root) => inside(root, cwd));
+      if (!approvedRoot) throw new Error("SHELL_CWD_OUT_OF_SCOPE");
+      workspaceRoot = approvedRoot;
+    }
     const command = sandboxedCommand(
       operation.command,
       operation.args,
       cwd,
+      workspaceRoot,
       operation.allowNetwork,
     );
     const child = spawn(command.command, command.args, {
       cwd,
-      env: shellEnvironment(),
+      env: shellEnvironment(cwd),
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
@@ -215,6 +277,7 @@ export class ShellToolAdapter implements ToolAdapter {
         .finally(() => context.signal.removeEventListener("abort", abort));
       return {
         summary: `进程已启动：${record.id}`,
+        content: [{ type: "text", text: `进程已启动：${record.id}` }],
         data: { processId: record.id, state: record.state, isolation: command.isolation },
         sources: [],
         artifacts: [],
@@ -227,12 +290,26 @@ export class ShellToolAdapter implements ToolAdapter {
     if (record.state === "timed_out") throw new Error("SHELL_TIMEOUT");
     if (record.state === "stopped") throw new Error("SHELL_STOPPED");
     if (record.state === "failed") {
-      throw new Error(
-        `SHELL_EXIT_${record.exitCode ?? "SPAWN"}:${record.output.slice(-2_000) || "no output"}`,
-      );
+      const code = `SHELL_EXIT_${record.exitCode ?? "SPAWN"}`;
+      throw new ToolAdapterError(code, {
+        summary: record.output.slice(-8_000) || code,
+        content: [{ type: "text", text: record.output || code }],
+        data: {
+          processId: record.id,
+          state: record.state,
+          exitCode: record.exitCode,
+          outputTruncated: record.output.length >= OUTPUT_LIMIT,
+          isolation: command.isolation,
+        },
+        sources: [],
+        artifacts: [],
+        sideEffectCommitted: true,
+        durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
+      });
     }
     return {
       summary: record.output || `进程退出码 ${record.exitCode}`,
+      content: [{ type: "text", text: record.output || `进程退出码 ${record.exitCode}` }],
       data: {
         processId: record.id,
         state: record.state,
@@ -251,6 +328,7 @@ export class ShellToolAdapter implements ToolAdapter {
     if (!record) throw new Error("SHELL_PROCESS_NOT_FOUND");
     return {
       summary: record.output.slice(-8_000) || record.state,
+      content: [{ type: "text", text: record.output.slice(-8_000) || record.state }],
       data: {
         processId: record.id,
         state: record.state,
@@ -270,6 +348,7 @@ export class ShellToolAdapter implements ToolAdapter {
     record.child.stdin.write(input);
     return {
       summary: "输入已发送",
+      content: [{ type: "text", text: "输入已发送" }],
       data: { processId },
       sources: [],
       artifacts: [],

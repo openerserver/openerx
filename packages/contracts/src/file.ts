@@ -136,6 +136,181 @@ export const artifactSchema = z
   })
   .strict();
 
+const officeThemeSchema = z
+  .object({
+    accentColor: z
+      .string()
+      .regex(/^#[A-Fa-f0-9]{6}$/)
+      .default("#2563EB"),
+    backgroundColor: z
+      .string()
+      .regex(/^#[A-Fa-f0-9]{6}$/)
+      .default("#FFFFFF"),
+  })
+  .strict();
+
+const officePageSchema = z
+  .object({
+    heading: z.string().trim().min(1).max(300).optional(),
+    paragraphs: z.array(z.string().trim().min(1).max(2_000)).max(30).default([]),
+    bullets: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
+    footer: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
+export const officeCellValueSchema = z.union([
+  z.string().max(2_000),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
+
+const officeFormulaSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1_000)
+  .refine(
+    (value) =>
+      !value.includes("|") &&
+      !value.includes("[") &&
+      !value.includes("]") &&
+      !Array.from(value).some((character) => character.charCodeAt(0) < 32),
+    "External workbook and DDE formula syntax is not allowed",
+  )
+  .refine(
+    (value) => !/(?:https?|ftp|file):/iu.test(value),
+    "Formula network and file URLs are not allowed",
+  )
+  .refine(
+    (value) =>
+      !/\b(?:CALL|EXEC|FILTERXML|HYPERLINK|REGISTER(?:\.ID)?|RTD|SHELL|WEBSERVICE)\s*\(/iu.test(
+        value,
+      ),
+    "Formula functions with external side effects are not allowed",
+  );
+
+export const officeCellSchema = z.union([
+  officeCellValueSchema,
+  z
+    .object({
+      value: officeCellValueSchema,
+      formula: officeFormulaSchema.optional(),
+    })
+    .strict(),
+]);
+
+const officeSheetSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(31)
+      .refine((value) => !/[:\\/?*[\]]/.test(value), "Invalid worksheet name"),
+    rows: z.array(z.array(officeCellSchema).max(20)).min(1).max(60),
+    headerRows: z.number().int().min(0).max(10).default(1),
+  })
+  .strict();
+
+const officeSlideSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300),
+    subtitle: z.string().trim().min(1).max(500).optional(),
+    body: z.string().trim().min(1).max(2_000).optional(),
+    bullets: z.array(z.string().trim().min(1).max(500)).max(12).default([]),
+  })
+  .strict();
+
+export const officeArtifactSpecSchema = z.discriminatedUnion("format", [
+  z
+    .object({
+      format: z.literal("docx"),
+      title: z.string().trim().min(1).max(300),
+      pages: z.array(officePageSchema).min(1).max(100),
+      theme: officeThemeSchema.default({
+        accentColor: "#2563EB",
+        backgroundColor: "#FFFFFF",
+      }),
+    })
+    .strict(),
+  z
+    .object({
+      format: z.literal("pdf"),
+      title: z.string().trim().min(1).max(300),
+      pages: z.array(officePageSchema).min(1).max(100),
+      theme: officeThemeSchema.default({
+        accentColor: "#2563EB",
+        backgroundColor: "#FFFFFF",
+      }),
+    })
+    .strict(),
+  z
+    .object({
+      format: z.literal("xlsx"),
+      title: z.string().trim().min(1).max(300),
+      sheets: z.array(officeSheetSchema).min(1).max(50),
+      theme: officeThemeSchema.default({
+        accentColor: "#2563EB",
+        backgroundColor: "#FFFFFF",
+      }),
+    })
+    .strict()
+    .superRefine((value, context) => {
+      const names = new Set<string>();
+      for (const [index, sheet] of value.sheets.entries()) {
+        const normalized = sheet.name.toLocaleLowerCase();
+        if (names.has(normalized)) {
+          context.addIssue({
+            code: "custom",
+            path: ["sheets", index, "name"],
+            message: "Worksheet names must be unique",
+          });
+        }
+        names.add(normalized);
+      }
+    }),
+  z
+    .object({
+      format: z.literal("pptx"),
+      title: z.string().trim().min(1).max(300),
+      slides: z.array(officeSlideSchema).min(1).max(100),
+      theme: officeThemeSchema.default({
+        accentColor: "#2563EB",
+        backgroundColor: "#FFFFFF",
+      }),
+    })
+    .strict(),
+]);
+
+export const officeArtifactWriteInputSchema = z
+  .object({
+    artifactId: entityIdSchema.optional(),
+    displayName: z.string().trim().min(1).max(240),
+    spec: officeArtifactSpecSchema,
+  })
+  .strict();
+
+export const renderedSurfaceSchema = z
+  .object({
+    kind: z.enum(["page", "sheet", "slide"]),
+    index: z.number().int().positive(),
+    label: z.string().min(1).max(200),
+    imageDataUrl: z
+      .string()
+      .max(5_000_000)
+      .refine((value) => value.startsWith("data:image/svg+xml;base64,"), {
+        message: "Expected an SVG image data URL",
+      }),
+    modelImageDataUrl: z
+      .string()
+      .max(10_000_000)
+      .refine((value) => value.startsWith("data:image/png;base64,"), {
+        message: "Expected a PNG image data URL",
+      }),
+  })
+  .strict();
+
 export const personalFileSyncPayloadSchema = personalFileSchema
   .omit({ objectRef: true, sourceScopeId: true, sourceRelativePath: true })
   .extend({
@@ -183,6 +358,7 @@ export const contentPreviewSchema = z
       )
       .nullable()
       .default(null),
+    renderedSurfaces: z.array(renderedSurfaceSchema).max(200).default([]),
     parsedText: z.string(),
     citations: z.array(fileCitationSchema),
   })
@@ -281,6 +457,11 @@ export type AttachmentSyncPayload = z.infer<typeof attachmentSyncPayloadSchema>;
 export type ArtifactSyncPayload = z.infer<typeof artifactSyncPayloadSchema>;
 export type ArtifactVersionSyncPayload = z.infer<typeof artifactVersionSyncPayloadSchema>;
 export type ArtifactExportResult = z.infer<typeof artifactExportResultSchema>;
+export type OfficeCellValue = z.infer<typeof officeCellValueSchema>;
+export type OfficeCell = z.infer<typeof officeCellSchema>;
+export type OfficeArtifactSpec = z.infer<typeof officeArtifactSpecSchema>;
+export type OfficeArtifactWriteInput = z.infer<typeof officeArtifactWriteInputSchema>;
+export type RenderedSurface = z.infer<typeof renderedSurfaceSchema>;
 
 export interface FileBridge {
   chooseFiles(input?: z.input<typeof fileChooseInputSchema>): Promise<PersonalFile[]>;

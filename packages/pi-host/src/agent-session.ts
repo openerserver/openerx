@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type {
   PiHistoryMessage,
+  PiPromptFrame,
   PiSkillMount,
   SupportedFileFormat,
   ThinkingLevel,
@@ -37,6 +38,7 @@ export interface CreateProductPiSessionOptions {
   customTools?: ToolDefinition[];
   files?: Array<{ personalFileId: string; displayName: string; format: SupportedFileFormat }>;
   skills?: PiSkillMount[];
+  workspace?: PiPromptFrame["workspace"];
 }
 
 function seedProductHistory(
@@ -63,7 +65,17 @@ function seedProductHistory(
     }
     sessionManager.appendMessage({
       role: "user",
-      content: message.text,
+      content:
+        message.images && message.images.length > 0
+          ? [
+              { type: "text", text: message.text },
+              ...message.images.map(({ data, mimeType }) => ({
+                type: "image" as const,
+                data,
+                mimeType,
+              })),
+            ]
+          : message.text,
       timestamp,
     });
   }
@@ -88,13 +100,30 @@ export async function createProductPiSession(
           ),
         ].join("\n")
       : "No files are attached to this conversation.";
+  const workspaceContext = options.workspace?.grants.length
+    ? [
+        "Authorized project workspaces (use grant ids and relative paths only):",
+        ...options.workspace.grants.map(
+          (grant) =>
+            `- ${grant.displayName} (grant ${grant.id}, ${grant.access}, network ${grant.allowNetwork ? "allowed" : "denied"})`,
+        ),
+        "Applicable project instructions already loaded for this Turn:",
+        ...(options.workspace.instructionSources.length > 0
+          ? options.workspace.instructionSources.map(
+              (source) =>
+                `[${source.kind}] ${source.relativePath} (${source.appliesTo}, digest ${source.digest})\n${source.content}`,
+            )
+          : ["- none"]),
+        "Before changing a nested path, load its applicable instructions. Every write must use openerx_workspace_apply_patch and retain its diff.",
+      ].join("\n")
+    : "No project workspace is authorized for this conversation.";
   const systemPrompt = [
     "You are OpenerX, a precise personal AI assistant.",
-    "Never use raw filesystem paths. Use only OpenerX file tools for user files and artifacts.",
-    "Use OpenerX capability tools for Web, image generation, browser, Shell, desktop, and MCP actions. Never claim an action completed before its tool result.",
-    `The approved Shell workspace root is ${options.cwd}.`,
+    "Never request or invent raw filesystem paths. Use OpenerX attachment tools or authorized workspace grant ids with relative paths.",
+    "Use OpenerX capability tools for Web, image generation, browser, Shell, desktop, and independently typed MCP actions. Never claim an action completed before its tool result.",
     "Use browser submit and desktop submit/send/delete/purchase only for an explicitly intended high-impact action; each requires user approval.",
     fileContext,
+    workspaceContext,
     ...options.history.filter(({ role }) => role === "system").map(({ text }) => text),
   ].join("\n\n");
 

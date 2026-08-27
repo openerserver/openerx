@@ -7,11 +7,15 @@ import {
   appServiceResponseFrameSchema,
   type ChatCommandEnvelope,
   type ChatEvent,
+  type HostToolAvailability,
+  mainCapabilityAvailabilityRequestFrameSchema,
   mainCapabilityCancelFrameSchema,
   mainCapabilityRequestFrameSchema,
   mainCredentialRequestFrameSchema,
+  mainOAuthRequestFrameSchema,
   type NormalizedToolResult,
   parseChatCommandResult,
+  piHostContractVersion,
   type RemoteConnectorConfigureFrame,
   remoteConnectorReadyFrameSchema,
   type ToolOperation,
@@ -33,10 +37,14 @@ interface PendingRequest {
 
 export interface MainCapabilityHost {
   execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult>;
+  availability(): Promise<HostToolAvailability>;
   close(): void;
   saveCredential(credentialRef: string, value: string): Promise<void>;
   resolveCredential(credentialRef: string): Promise<string>;
   clearCredential(credentialRef: string): Promise<void>;
+  prepareOAuthCallback(serverId: string): Promise<{ sessionId: string; redirectUrl: string }>;
+  waitForOAuthCallback(sessionId: string, authorizationUrl: string): Promise<string>;
+  cancelOAuthCallback(sessionId: string): Promise<void>;
 }
 
 export class AppServiceSupervisor {
@@ -130,6 +138,7 @@ export class AppServiceSupervisor {
   async request(
     request: ChatCommandEnvelope,
     authorization?: AppServiceAuthorization,
+    timeoutMs = 15_000,
   ): Promise<unknown> {
     await this.start();
     const port = this.#mainPort;
@@ -139,7 +148,7 @@ export class AppServiceSupervisor {
       const timeout = setTimeout(() => {
         this.#pending.delete(requestId);
         reject(new Error(`App Service request timed out: ${request.command}`));
-      }, 15_000);
+      }, timeoutMs);
       this.#pending.set(requestId, { command: request.command, resolve, reject, timeout });
       port.postMessage({
         kind: "app-service.request",
@@ -211,7 +220,7 @@ export class AppServiceSupervisor {
     this.#piHostProcess.postMessage(
       {
         kind: "pi-host.bootstrap",
-        contractVersion: 1,
+        contractVersion: piHostContractVersion,
         nonce: piHostNonce,
         profileDirectory: this.#profileDirectory,
       },
@@ -333,6 +342,39 @@ export class AppServiceSupervisor {
       this.#capabilityRequests.get(capabilityCancel.data.requestId)?.abort();
       return;
     }
+    const capabilityAvailability = mainCapabilityAvailabilityRequestFrameSchema.safeParse(data);
+    if (capabilityAvailability.success) {
+      const host = this.#capabilityHost;
+      if (!host) {
+        this.#mainPort?.postMessage({
+          kind: "main.capability.availability.response",
+          requestId: capabilityAvailability.data.requestId,
+          ok: false,
+          errorCode: "MAIN_CAPABILITY_UNAVAILABLE",
+        });
+        return;
+      }
+      void host.availability().then(
+        (data) =>
+          this.#mainPort?.postMessage({
+            kind: "main.capability.availability.response",
+            requestId: capabilityAvailability.data.requestId,
+            ok: true,
+            data,
+          }),
+        (error: unknown) =>
+          this.#mainPort?.postMessage({
+            kind: "main.capability.availability.response",
+            requestId: capabilityAvailability.data.requestId,
+            ok: false,
+            errorCode:
+              error instanceof Error
+                ? (error.message.split(":", 1)[0] ?? "MAIN_CAPABILITY_AVAILABILITY_FAILED")
+                : "MAIN_CAPABILITY_AVAILABILITY_FAILED",
+          }),
+      );
+      return;
+    }
     const credentialRequest = mainCredentialRequestFrameSchema.safeParse(data);
     if (credentialRequest.success) {
       const host = this.#capabilityHost;
@@ -348,7 +390,11 @@ export class AppServiceSupervisor {
       const operation =
         credentialRequest.data.operation === "resolve"
           ? host.resolveCredential(credentialRequest.data.credentialRef)
-          : host.clearCredential(credentialRequest.data.credentialRef).then(() => undefined);
+          : credentialRequest.data.operation === "save"
+            ? host
+                .saveCredential(credentialRequest.data.credentialRef, credentialRequest.data.value)
+                .then(() => undefined)
+            : host.clearCredential(credentialRequest.data.credentialRef).then(() => undefined);
       void operation.then(
         (value) =>
           this.#mainPort?.postMessage({
@@ -366,6 +412,51 @@ export class AppServiceSupervisor {
               error instanceof Error
                 ? (error.message.split(":", 1)[0] ?? "MAIN_CREDENTIAL_FAILED")
                 : "MAIN_CREDENTIAL_FAILED",
+          }),
+      );
+      return;
+    }
+    const oauthRequest = mainOAuthRequestFrameSchema.safeParse(data);
+    if (oauthRequest.success) {
+      const host = this.#capabilityHost;
+      if (!host) {
+        this.#mainPort?.postMessage({
+          kind: "main.oauth.response",
+          requestId: oauthRequest.data.requestId,
+          ok: false,
+          errorCode: "MAIN_CAPABILITY_UNAVAILABLE",
+        });
+        return;
+      }
+      const operation =
+        oauthRequest.data.operation === "prepare"
+          ? host.prepareOAuthCallback(oauthRequest.data.serverId)
+          : oauthRequest.data.operation === "authorize"
+            ? host
+                .waitForOAuthCallback(
+                  oauthRequest.data.sessionId,
+                  oauthRequest.data.authorizationUrl,
+                )
+                .then((callbackUrl) => ({ callbackUrl }))
+            : host.cancelOAuthCallback(oauthRequest.data.sessionId).then(() => ({}));
+      void operation.then(
+        (result) =>
+          this.#mainPort?.postMessage({
+            kind: "main.oauth.response",
+            requestId: oauthRequest.data.requestId,
+            ok: true,
+            operation: oauthRequest.data.operation,
+            ...result,
+          }),
+        (error: unknown) =>
+          this.#mainPort?.postMessage({
+            kind: "main.oauth.response",
+            requestId: oauthRequest.data.requestId,
+            ok: false,
+            errorCode:
+              error instanceof Error
+                ? (error.message.split(":", 1)[0] ?? "MAIN_OAUTH_FAILED")
+                : "MAIN_OAUTH_FAILED",
           }),
       );
       return;

@@ -562,9 +562,346 @@ const migrations: readonly Migration[] = [
         CHECK (thinking_level IN ('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'));
     `,
   },
+  {
+    version: 11,
+    checksum: "codex-p0-run-scope-journal-v11-20260826",
+    sql: `
+      ALTER TABLE messages ADD COLUMN selected_model_ref TEXT;
+      ALTER TABLE messages ADD COLUMN thinking_level TEXT
+        CHECK (thinking_level IN ('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'));
+      ALTER TABLE messages ADD COLUMN cancellation_requested_at TEXT;
+      UPDATE messages
+         SET selected_model_ref = (
+               SELECT conversations.selected_model_ref
+                 FROM conversations
+                WHERE conversations.id = messages.conversation_id
+             ),
+             thinking_level = (
+               SELECT conversations.thinking_level
+                 FROM conversations
+                WHERE conversations.id = messages.conversation_id
+             );
+
+      ALTER TABLE execution_runs ADD COLUMN branch_id TEXT;
+      ALTER TABLE execution_runs ADD COLUMN thinking_level TEXT NOT NULL DEFAULT 'medium'
+        CHECK (thinking_level IN ('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'));
+      ALTER TABLE execution_runs ADD COLUMN usage_records_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE execution_runs ADD COLUMN cancellation_requested_at TEXT;
+      ALTER TABLE tool_calls ADD COLUMN result_content_json TEXT NOT NULL DEFAULT '[]';
+      UPDATE execution_runs
+         SET branch_id = (
+               SELECT messages.branch_id
+                 FROM work_items
+                 JOIN messages ON messages.id = work_items.message_id
+                WHERE work_items.id = execution_runs.work_item_id
+             ),
+             thinking_level = COALESCE((
+               SELECT messages.thinking_level
+                 FROM work_items
+                 JOIN messages ON messages.id = work_items.message_id
+                WHERE work_items.id = execution_runs.work_item_id
+             ), 'medium');
+
+      ALTER TABLE permission_requests RENAME TO permission_requests_v10;
+      ALTER TABLE capability_scopes RENAME TO capability_scopes_v10;
+
+      CREATE TABLE capability_scopes (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        capability TEXT NOT NULL CHECK (capability IN (
+          'builtin.compute', 'builtin.structured_data', 'file', 'web.search', 'image.generate',
+          'browser', 'shell', 'desktop', 'mcp', 'skill'
+        )),
+        resource_type TEXT NOT NULL CHECK (resource_type IN (
+          'builtin', 'workspace', 'path', 'domain', 'application', 'server', 'skill'
+        )),
+        resource TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        max_risk TEXT NOT NULL CHECK (max_risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        session_only INTEGER NOT NULL CHECK (session_only IN (0, 1)),
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL,
+        conversation_id TEXT
+      ) STRICT;
+      CREATE TABLE permission_requests (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+        capability TEXT NOT NULL,
+        risk TEXT NOT NULL CHECK (risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        resource_type TEXT NOT NULL,
+        resource TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        payload_digest TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired', 'cancelled')),
+        requested_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolution TEXT CHECK (resolution IN ('once', 'session', 'persistent', 'deny')),
+        scope_id TEXT REFERENCES capability_scopes(id),
+        UNIQUE(tool_call_id, payload_digest)
+      ) STRICT;
+
+      INSERT INTO capability_scopes
+        (id, owner_profile_id, capability, resource_type, resource, actions_json, max_risk,
+         session_only, expires_at, revoked_at, created_at, conversation_id)
+        SELECT id, owner_profile_id,
+               CASE
+                 WHEN capability = 'web.search'
+                  AND resource = 'image-generation.openerx.platform'
+                 THEN 'image.generate'
+                 ELSE capability
+               END,
+               resource_type, resource, actions_json, max_risk,
+               session_only, expires_at, revoked_at, created_at, conversation_id
+          FROM capability_scopes_v10;
+      INSERT INTO permission_requests
+        (id, owner_profile_id, work_item_id, run_id, tool_call_id, capability, risk,
+         resource_type, resource, actions_json, reason, payload_digest, status, requested_at,
+         expires_at, resolved_at, resolution, scope_id)
+        SELECT id, owner_profile_id, work_item_id, run_id, tool_call_id,
+               CASE
+                 WHEN capability = 'web.search'
+                  AND resource = 'image-generation.openerx.platform'
+                 THEN 'image.generate'
+                 ELSE capability
+               END,
+               risk, resource_type, resource, actions_json, reason, payload_digest, status,
+               requested_at, expires_at, resolved_at, resolution, scope_id
+          FROM permission_requests_v10;
+
+      DROP TABLE permission_requests_v10;
+      DROP TABLE capability_scopes_v10;
+
+      CREATE INDEX capability_scopes_match_idx
+        ON capability_scopes(owner_profile_id, capability, resource_type, resource, revoked_at);
+      CREATE INDEX capability_scopes_conversation_idx
+        ON capability_scopes(owner_profile_id, conversation_id, capability, revoked_at);
+      CREATE INDEX permission_requests_pending_idx
+        ON permission_requests(owner_profile_id, status, requested_at);
+
+      CREATE TABLE tool_side_effect_attempts (
+        idempotency_key TEXT PRIMARY KEY,
+        tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK (status IN ('executing', 'committed', 'outcome_unknown')),
+        result_json TEXT,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX tool_side_effect_attempts_status_idx
+        ON tool_side_effect_attempts(status, updated_at);
+    `,
+  },
+  {
+    version: 12,
+    checksum: "codex-p1-workspace-turn-snapshot-v12-20260827",
+    sql: `
+      ALTER TABLE execution_runs ADD COLUMN fallback_reason TEXT;
+      ALTER TABLE execution_runs ADD COLUMN initial_tool_names_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE execution_runs ADD COLUMN available_tool_names_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE execution_runs ADD COLUMN skill_installation_ids_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE execution_runs ADD COLUMN instruction_sources_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE execution_runs ADD COLUMN configuration_frozen_at TEXT;
+
+      ALTER TABLE permission_requests RENAME TO permission_requests_v11;
+      ALTER TABLE capability_scopes RENAME TO capability_scopes_v11;
+
+      CREATE TABLE capability_scopes (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        capability TEXT NOT NULL CHECK (capability IN (
+          'builtin.compute', 'builtin.structured_data', 'file', 'workspace', 'web.search',
+          'image.generate', 'browser', 'shell', 'desktop', 'mcp', 'skill'
+        )),
+        resource_type TEXT NOT NULL CHECK (resource_type IN (
+          'builtin', 'workspace', 'path', 'domain', 'application', 'server', 'skill'
+        )),
+        resource TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        max_risk TEXT NOT NULL CHECK (max_risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        session_only INTEGER NOT NULL CHECK (session_only IN (0, 1)),
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL,
+        conversation_id TEXT
+      ) STRICT;
+      CREATE TABLE permission_requests (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+        capability TEXT NOT NULL,
+        risk TEXT NOT NULL CHECK (risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        resource_type TEXT NOT NULL,
+        resource TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        payload_digest TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired', 'cancelled')),
+        requested_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolution TEXT CHECK (resolution IN ('once', 'session', 'persistent', 'deny')),
+        scope_id TEXT REFERENCES capability_scopes(id),
+        UNIQUE(tool_call_id, payload_digest)
+      ) STRICT;
+      INSERT INTO capability_scopes SELECT * FROM capability_scopes_v11;
+      INSERT INTO permission_requests SELECT * FROM permission_requests_v11;
+      DROP TABLE permission_requests_v11;
+      DROP TABLE capability_scopes_v11;
+      CREATE INDEX capability_scopes_match_idx
+        ON capability_scopes(owner_profile_id, capability, resource_type, resource, revoked_at);
+      CREATE INDEX capability_scopes_conversation_idx
+        ON capability_scopes(owner_profile_id, conversation_id, capability, revoked_at);
+      CREATE INDEX permission_requests_pending_idx
+        ON permission_requests(owner_profile_id, status, requested_at);
+
+      CREATE TABLE workspace_grants (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        conversation_id TEXT,
+        display_name TEXT NOT NULL,
+        root_path TEXT NOT NULL,
+        access TEXT NOT NULL CHECK (access IN ('read_only', 'read_write')),
+        allow_network INTEGER NOT NULL CHECK (allow_network IN (0, 1)),
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX workspace_grants_active_idx
+        ON workspace_grants(owner_profile_id, conversation_id, revoked_at, expires_at);
+
+      CREATE TABLE workspace_changes (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        workspace_grant_id TEXT NOT NULL REFERENCES workspace_grants(id),
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        relative_path TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'preparing', 'applied', 'reverted', 'failed', 'outcome_unknown'
+        )),
+        before_sha256 TEXT,
+        after_sha256 TEXT NOT NULL,
+        before_text TEXT,
+        after_text TEXT NOT NULL,
+        diff TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX workspace_changes_run_idx ON workspace_changes(run_id, created_at);
+      CREATE INDEX workspace_changes_grant_idx
+        ON workspace_changes(workspace_grant_id, relative_path, created_at);
+    `,
+  },
+  {
+    version: 13,
+    checksum: "codex-p1-rich-run-items-v13-20260827",
+    sql: `
+      ALTER TABLE tool_calls ADD COLUMN input_json TEXT;
+
+      CREATE TABLE run_items (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence > 0),
+        pi_item_ref TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'queued', 'running', 'completed', 'failed', 'cancelled'
+        )),
+        content_json TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        error_code TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(run_id, pi_item_ref)
+      ) STRICT;
+      CREATE INDEX run_items_replay_idx ON run_items(run_id, sequence, created_at, id);
+
+      INSERT INTO run_items
+        (id, run_id, sequence, pi_item_ref, status, content_json, started_at,
+         completed_at, error_code, created_at, updated_at)
+        SELECT tc.id, tc.run_id, rs.sequence, 'tool:' || tc.pi_call_ref,
+               CASE
+                 WHEN tc.status = 'completed' THEN 'completed'
+                 WHEN tc.status = 'failed' THEN 'failed'
+                 WHEN tc.status = 'cancelled' THEN 'cancelled'
+                 ELSE 'running'
+               END,
+               json_object(
+                 'type', 'tool',
+                 'toolCallId', tc.id,
+                 'toolName', tc.tool_name,
+                 'input', NULL,
+                 'inputSummary', tc.input_summary,
+                 'targetSummary', tc.target_summary
+               ),
+               tc.started_at, tc.completed_at, tc.error_code,
+               COALESCE(tc.started_at, er.created_at), tc.updated_at
+          FROM tool_calls tc
+          JOIN run_steps rs ON rs.id = tc.step_id
+          JOIN execution_runs er ON er.id = tc.run_id;
+
+      INSERT INTO run_items
+        (id, run_id, sequence, pi_item_ref, status, content_json, started_at,
+         completed_at, error_code, created_at, updated_at)
+        SELECT rs.id, rs.run_id, rs.sequence, rs.pi_step_ref, rs.status,
+               CASE rs.kind
+                 WHEN 'model' THEN json_object(
+                   'type', 'model', 'modelRef', er.selected_model_ref, 'summary', rs.title
+                 )
+                 WHEN 'compaction' THEN json_object(
+                   'type', 'compaction', 'reason', 'unknown',
+                   'tokensBefore', NULL, 'tokensAfter', NULL
+                 )
+                 ELSE json_object(
+                   'type', 'retry', 'attempt', 1, 'maxAttempts', 1,
+                   'delayMs', 0, 'summary', rs.title
+                 )
+               END,
+               rs.started_at, rs.completed_at, rs.error_code,
+               COALESCE(rs.started_at, er.created_at),
+               COALESCE(rs.completed_at, rs.started_at, er.updated_at)
+          FROM run_steps rs
+          JOIN execution_runs er ON er.id = rs.run_id
+         WHERE rs.kind IN ('model', 'compaction', 'retry');
+
+      INSERT INTO run_items
+        (id, run_id, sequence, pi_item_ref, status, content_json, started_at,
+         completed_at, error_code, created_at, updated_at)
+        SELECT pr.id, pr.run_id, 1000000 + pr.rowid, 'approval:' || pr.id,
+               CASE
+                 WHEN pr.status = 'pending' THEN 'running'
+                 WHEN pr.status = 'approved' THEN 'completed'
+                 WHEN pr.status = 'denied' THEN 'failed'
+                 WHEN pr.status = 'cancelled' THEN 'cancelled'
+                 ELSE 'failed'
+               END,
+               json_object(
+                 'type', 'approval',
+                 'permissionRequestId', pr.id,
+                 'toolCallId', pr.tool_call_id,
+                 'capability', pr.capability,
+                 'risk', pr.risk,
+                 'resource', pr.resource,
+                 'reason', pr.reason
+               ),
+               pr.requested_at, pr.resolved_at,
+               CASE WHEN pr.status = 'expired' THEN 'PERMISSION_EXPIRED' ELSE NULL END,
+               pr.requested_at, COALESCE(pr.resolved_at, pr.requested_at)
+          FROM permission_requests pr;
+    `,
+  },
 ];
 
-export function migrateDatabase(database: DatabaseSync): void {
+export function migrateDatabase(
+  database: DatabaseSync,
+  options: { throughVersion?: number } = {},
+): void {
   database.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA busy_timeout = 5000;
@@ -578,10 +915,19 @@ export function migrateDatabase(database: DatabaseSync): void {
     .prepare("SELECT version, checksum FROM schema_migrations ORDER BY version")
     .all() as Array<{ version: number; checksum: string }>;
   const latestSupported = migrations.at(-1)?.version ?? 0;
+  const targetVersion = options.throughVersion ?? latestSupported;
+  if (!Number.isInteger(targetVersion) || targetVersion < 0 || targetVersion > latestSupported) {
+    throw new Error(`Unsupported database migration target ${targetVersion}`);
+  }
   const latestApplied = Number(rows.at(-1)?.version ?? 0);
   if (latestApplied > latestSupported) {
     throw new Error(
       `Database schema ${latestApplied} is newer than supported schema ${latestSupported}`,
+    );
+  }
+  if (latestApplied > targetVersion) {
+    throw new Error(
+      `Database schema ${latestApplied} is newer than requested schema ${targetVersion}`,
     );
   }
   for (const row of rows) {
@@ -591,7 +937,7 @@ export function migrateDatabase(database: DatabaseSync): void {
     }
   }
   for (const migration of migrations) {
-    if (migration.version <= latestApplied) continue;
+    if (migration.version <= latestApplied || migration.version > targetVersion) continue;
     database.exec("BEGIN IMMEDIATE");
     try {
       database.exec(migration.sql);

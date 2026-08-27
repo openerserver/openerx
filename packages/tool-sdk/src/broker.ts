@@ -1,7 +1,23 @@
-import type { NormalizedToolResult, PermissionRequest, ToolOperation } from "@openerx/contracts";
+import {
+  type NormalizedToolResult,
+  normalizedToolResultSchema,
+  type PermissionRequest,
+  type ToolOperation,
+} from "@openerx/contracts";
 import type { ToolRepository } from "@openerx/storage";
-import { capabilityRequirement, operationDigest, scopeAllows, summarizeOperation } from "./policy";
-import type { BrokerExecutionResult, ToolAdapter, ToolExecutionProjection } from "./types";
+import {
+  capabilityRequirement,
+  hasUncertainExternalSideEffect,
+  operationDigest,
+  scopeAllows,
+  summarizeOperation,
+} from "./policy";
+import {
+  type BrokerExecutionResult,
+  type ToolAdapter,
+  ToolAdapterError,
+  type ToolExecutionProjection,
+} from "./types";
 
 interface PendingApproval {
   resolve(decision: "approved" | "denied"): void;
@@ -15,6 +31,54 @@ export class ToolBrokerError extends Error {
   ) {
     super(message);
   }
+}
+
+function withoutEncodedMedia(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutEncodedMedia);
+  if (!value || typeof value !== "object") return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (/^(bytesBase64|imageDataUrl|data)$/u.test(key) && typeof entry === "string") continue;
+    output[key] = withoutEncodedMedia(entry);
+  }
+  return output;
+}
+
+function normalizedContent(result: NormalizedToolResult): NormalizedToolResult {
+  const parsed = normalizedToolResultSchema.parse(result);
+  if (parsed.content.length > 0) return parsed;
+  const data = parsed.data;
+  if (data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    if (
+      typeof record.mediaType === "string" &&
+      record.mediaType.startsWith("image/") &&
+      typeof record.bytesBase64 === "string"
+    ) {
+      return {
+        ...parsed,
+        data: withoutEncodedMedia(data),
+        content: [
+          { type: "text", text: parsed.summary },
+          { type: "image", data: record.bytesBase64, mimeType: record.mediaType },
+        ],
+      };
+    }
+  }
+  return {
+    ...parsed,
+    content: [
+      {
+        type: "text",
+        text:
+          data === undefined
+            ? parsed.summary
+            : `${parsed.summary}\n${JSON.stringify(withoutEncodedMedia(data))}`.slice(0, 1_000_000),
+      },
+      ...parsed.sources.map((source) => ({ type: "source" as const, source })),
+      ...parsed.artifacts.map((artifactId) => ({ type: "artifact" as const, artifactId })),
+    ],
+  };
 }
 
 export class CapabilityBroker {
@@ -38,6 +102,16 @@ export class CapabilityBroker {
     signal: AbortSignal = new AbortController().signal,
     update: (summary: string) => void = () => undefined,
   ): Promise<BrokerExecutionResult> {
+    const uncertainAttempt = this.#repository.sideEffectAttempt(operation.idempotencyKey);
+    if (
+      uncertainAttempt?.status === "executing" ||
+      uncertainAttempt?.status === "outcome_unknown"
+    ) {
+      throw new ToolBrokerError(
+        "SIDE_EFFECT_OUTCOME_UNKNOWN",
+        "The prior external action may have completed; reconcile it before retrying.",
+      );
+    }
     const replay = this.#repository.sideEffect(operation.idempotencyKey);
     if (replay) return { status: "completed", result: replay, replayed: true };
 
@@ -52,6 +126,7 @@ export class CapabilityBroker {
       source: operation.operation.startsWith("mcp_") ? "mcp" : "openerx",
       risk: requirement.risk,
       idempotencyKey: operation.idempotencyKey,
+      input: operation,
       inputSummary: summary.input,
       targetSummary: summary.target,
     });
@@ -87,24 +162,37 @@ export class CapabilityBroker {
     }
 
     this.#repository.markToolCall(toolCall.id, "running");
+    const uncertainSideEffect = hasUncertainExternalSideEffect(operation);
     const startedAt = Date.now();
     try {
+      if (uncertainSideEffect) {
+        this.#repository.beginSideEffectAttempt(operation.idempotencyKey, toolCall.id);
+      }
       const result = await adapter.execute(operation, {
         signal,
         toolCallId: toolCall.id,
         projection,
         update,
       });
-      const normalized = {
+      const normalized = normalizedContent({
         ...result,
         durationMs: Math.max(result.durationMs, Date.now() - startedAt),
-      };
-      this.#repository.commitSideEffect(operation.idempotencyKey, toolCall.id, normalized);
+      });
+      if (uncertainSideEffect) {
+        this.#repository.commitSideEffectAttempt(operation.idempotencyKey, toolCall.id, normalized);
+      } else {
+        this.#repository.commitSideEffect(operation.idempotencyKey, toolCall.id, normalized);
+      }
       this.#repository.markToolCall(toolCall.id, "completed", {
         resultSummary: normalized.summary,
+        resultContent: normalized.content,
+        resultData: normalized.data,
       });
       return { status: "completed", result: normalized, replayed: false };
     } catch (error) {
+      if (uncertainSideEffect) {
+        this.#repository.markSideEffectOutcomeUnknown(operation.idempotencyKey, toolCall.id);
+      }
       const code = signal.aborted
         ? "TOOL_CANCELLED"
         : error instanceof ToolBrokerError
@@ -112,7 +200,12 @@ export class CapabilityBroker {
           : error instanceof Error
             ? (error.message.split(":", 1)[0] ?? "TOOL_FAILED")
             : "TOOL_FAILED";
+      const failedResult =
+        error instanceof ToolAdapterError ? normalizedContent(error.result) : null;
       this.#repository.markToolCall(toolCall.id, signal.aborted ? "cancelled" : "failed", {
+        resultSummary: failedResult?.summary,
+        resultContent: failedResult?.content,
+        resultData: failedResult?.data,
         errorCode: code,
       });
       throw error instanceof ToolBrokerError ? error : new ToolBrokerError(code);

@@ -1,11 +1,14 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { NormalizedToolResult, ToolOperation } from "@openerx/contracts";
-import { BrowserWindow, desktopCapturer, screen } from "electron";
+import type { HostToolAvailability, NormalizedToolResult, ToolOperation } from "@openerx/contracts";
+import { BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
 import type { ToolCredentialVault } from "./credential-vault";
+import { desktopHostToolAvailability } from "./desktop-tool-availability";
+import { desktopWindowCaptureOptions, selectDesktopWindow } from "./desktop-window-target";
+import { OAuthLoopbackController } from "./oauth-loopback-controller";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,7 +25,34 @@ function navigationKey(value: string): string {
 }
 
 function result(summary: string, data: unknown, sideEffectCommitted = false): NormalizedToolResult {
-  return { summary, data, sources: [], artifacts: [], sideEffectCommitted, durationMs: 0 };
+  return {
+    summary,
+    content: [{ type: "text", text: summary }],
+    data,
+    sources: [],
+    artifacts: [],
+    sideEffectCommitted,
+    durationMs: 0,
+  };
+}
+
+function imageResult(
+  summary: string,
+  bytesBase64: string,
+  data: Record<string, unknown>,
+): NormalizedToolResult {
+  return {
+    summary,
+    content: [
+      { type: "text", text: summary },
+      { type: "image", data: bytesBase64, mimeType: "image/png" },
+    ],
+    data,
+    sources: [],
+    artifacts: [],
+    sideEffectCommitted: false,
+    durationMs: 0,
+  };
 }
 
 function escapedSelector(selector: string): string {
@@ -37,12 +67,15 @@ function inside(root: string, target: string): boolean {
 export class ElectronToolCapabilityHost {
   readonly #profileDirectory: string;
   readonly #browserSessions = new Map<string, BrowserSession>();
+  readonly #oauth: OAuthLoopbackController;
 
   constructor(
     profileDirectory: string,
     private readonly credentials: ToolCredentialVault,
+    oauth = new OAuthLoopbackController(async (url) => await shell.openExternal(url)),
   ) {
     this.#profileDirectory = profileDirectory;
+    this.#oauth = oauth;
   }
 
   async execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult> {
@@ -59,9 +92,34 @@ export class ElectronToolCapabilityHost {
     return { ...value, durationMs: Date.now() - startedAt };
   }
 
+  async availability(): Promise<HostToolAvailability> {
+    const platform = process.platform;
+    const screenCaptureStatus =
+      platform === "darwin" ? systemPreferences.getMediaAccessStatus("screen") : "unknown";
+    const accessibilityTrusted =
+      platform === "darwin" ? systemPreferences.isTrustedAccessibilityClient(false) : false;
+    const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR;
+    const automationAvailable =
+      platform === "darwin"
+        ? existsSync("/usr/bin/osascript")
+        : platform === "win32" && windowsRoot
+          ? existsSync(
+              path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+            )
+          : false;
+    return desktopHostToolAvailability({
+      platform,
+      browserAvailable: true,
+      screenCaptureStatus,
+      accessibilityTrusted,
+      automationAvailable,
+    });
+  }
+
   close(): void {
     for (const browser of this.#browserSessions.values()) browser.window.destroy();
     this.#browserSessions.clear();
+    this.#oauth.close();
   }
 
   async saveCredential(credentialRef: string, value: string): Promise<void> {
@@ -74,6 +132,20 @@ export class ElectronToolCapabilityHost {
 
   async clearCredential(credentialRef: string): Promise<void> {
     await this.credentials.clear(credentialRef);
+  }
+
+  async prepareOAuthCallback(
+    serverId: string,
+  ): Promise<{ sessionId: string; redirectUrl: string }> {
+    return await this.#oauth.prepare(serverId);
+  }
+
+  async waitForOAuthCallback(sessionId: string, authorizationUrl: string): Promise<string> {
+    return await this.#oauth.authorize(sessionId, authorizationUrl);
+  }
+
+  async cancelOAuthCallback(sessionId: string): Promise<void> {
+    await this.#oauth.cancel(sessionId);
   }
 
   async #browser(
@@ -136,10 +208,8 @@ export class ElectronToolCapabilityHost {
     }
     if (operation.action === "screenshot") {
       const image = await browser.window.webContents.capturePage();
-      return result("已捕获浏览器截图", {
+      return imageResult("已捕获浏览器截图", image.toPNG().toString("base64"), {
         sessionId: browser.id,
-        mediaType: "image/png",
-        bytesBase64: image.toPNG().toString("base64"),
         width: image.getSize().width,
         height: image.getSize().height,
       });
@@ -243,18 +313,13 @@ export class ElectronToolCapabilityHost {
     operation: Extract<ToolOperation, { operation: "desktop" }>,
   ): Promise<NormalizedToolResult> {
     if (operation.action === "screenshot") {
-      const size = screen.getPrimaryDisplay().size;
-      const sources = await desktopCapturer.getSources({
-        types: ["screen"],
-        thumbnailSize: size,
-        fetchWindowIcons: false,
-      });
-      const source = sources[0];
-      if (!source) throw new Error("DESKTOP_SCREEN_UNAVAILABLE");
-      return result("已捕获桌面截图", {
+      const sources = await desktopCapturer.getSources(desktopWindowCaptureOptions());
+      const source = selectDesktopWindow(sources, operation.application);
+      if (!source) throw new Error("DESKTOP_TARGET_WINDOW_NOT_FOUND");
+      const png = source.thumbnail.toPNG().toString("base64");
+      return imageResult("已捕获目标应用窗口", png, {
         application: operation.application,
-        mediaType: "image/png",
-        bytesBase64: source.thumbnail.toPNG().toString("base64"),
+        capturedWindow: source.name,
         width: source.thumbnail.getSize().width,
         height: source.thumbnail.getSize().height,
       });

@@ -47,6 +47,8 @@ import {
   ipcChannels,
   ledgerTransactionSchema,
   localExportResultSchema,
+  mcpServerAuthorizationStateSchema,
+  mcpServerAuthorizeInputSchema,
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
   mcpServerRemoveResultSchema,
@@ -84,6 +86,10 @@ import {
   usageQueryInputSchema,
   usageRecordSchema,
   workItemGetInputSchema,
+  workspaceChooseInputSchema,
+  workspaceGrantSchema,
+  workspaceListInputSchema,
+  workspaceRevokeInputSchema,
 } from "@openerx/contracts";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -320,6 +326,21 @@ const bridge: DesktopBridge = {
     invokeChat(ipcChannels.fileChoose, "file.import", fileChooseInputSchema.parse(input)),
   chooseDirectory: async (input = {}) =>
     invokeChat(ipcChannels.directoryChoose, "file.import", fileChooseInputSchema.parse(input)),
+  chooseWorkspace: async (input) => {
+    const value: unknown = await ipcRenderer.invoke(
+      ipcChannels.workspaceChoose,
+      workspaceChooseInputSchema.parse(input),
+    );
+    return value === null ? null : workspaceGrantSchema.parse(value);
+  },
+  listWorkspaces: async (input = {}) =>
+    invokeChat(ipcChannels.workspaceList, "workspace.list", workspaceListInputSchema.parse(input)),
+  revokeWorkspace: async (input) =>
+    invokeChat(
+      ipcChannels.workspaceRevoke,
+      "workspace.revoke",
+      workspaceRevokeInputSchema.parse(input),
+    ),
   listFiles: async (input = {}) =>
     invokeChat(ipcChannels.fileList, "file.list", fileListInputSchema.parse(input)),
   searchFiles: async (input) =>
@@ -350,6 +371,8 @@ const bridge: DesktopBridge = {
     );
     return result === null ? null : artifactExportResultSchema.parse(result);
   },
+  listToolRuntimeReadiness: async () =>
+    invokeChat(ipcChannels.toolRuntimeReadiness, "tool.runtime.readiness", {}),
   listWorkItems: async (input = {}) =>
     invokeChat(
       ipcChannels.toolWorkItemsList,
@@ -384,6 +407,17 @@ const bridge: DesktopBridge = {
   listMcpServers: async () => {
     const value: unknown = await ipcRenderer.invoke(ipcChannels.mcpServersList, {});
     return mcpServerConfigSchema.array().parse(value);
+  },
+  listMcpServerAuthorizationStates: async () => {
+    const value: unknown = await ipcRenderer.invoke(ipcChannels.mcpServersAuthorization, {});
+    return mcpServerAuthorizationStateSchema.array().parse(value);
+  },
+  authorizeMcpServer: async (input) => {
+    const value: unknown = await ipcRenderer.invoke(
+      ipcChannels.mcpServerAuthorize,
+      mcpServerAuthorizeInputSchema.parse(input),
+    );
+    return mcpServerAuthorizationStateSchema.parse(value);
   },
   saveMcpServer: async (input) => {
     const value: unknown = await ipcRenderer.invoke(

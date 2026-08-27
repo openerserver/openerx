@@ -58,7 +58,7 @@ export interface ModelGatewayServiceOptions {
   now?: () => Date;
 }
 
-const capabilityKeys = ["imageInput", "fileInput", "tools", "mcp", "imageGeneration"] as const;
+const capabilityKeys = ["imageInput", "fileInput", "functionCalling", "structuredOutput"] as const;
 
 function supportsThinkingLevel(entry: ModelCatalogEntry, thinkingLevel: ThinkingLevel): boolean {
   return (entry.thinkingLevels ?? ["off"]).includes(thinkingLevel);

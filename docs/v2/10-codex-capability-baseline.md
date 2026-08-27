@@ -5,6 +5,8 @@
 > 基线日期：2026-08-25
 >
 > 合同类型：V1 文件、工具、Skill 功能范围与发布门禁
+>
+> 实现检查点：P0、CX-101 至 CX-109、CX-110-D1 与 CX-110-D2 已完成本地验证；这不等于本合同要求的 Windows/macOS 发布级端到端完成。证据见 [P1 Codex 对齐 CX-101 至 CX-107 实现证据](evidence/p1-codex-alignment-cx101-107-2026-08-27.md)、[CX-108 Office Agent 实现证据](evidence/p1-codex-alignment-cx108-2026-08-27.md)、[CX-109 丰富 Run Item 实现证据](evidence/p1-codex-alignment-cx109-2026-08-27.md)、[CX-110-D1 桌面 MCP OAuth 实现证据](evidence/p1-codex-alignment-cx110-desktop-oauth-2026-08-27.md)和 [CX-110-D2 桌面运行时能力证据](evidence/p1-codex-alignment-cx110-desktop-runtime-2026-08-27.md)。
 
 ## 1. 合同解释
 
@@ -37,6 +39,8 @@
 
 首批解析与成果格式至少包括：PDF、DOCX、XLSX、CSV、PPTX、TXT、Markdown、常见代码/JSON/YAML、PNG、JPEG、WebP 和 HTML。加密、损坏、超大或不支持的文件必须给出可操作错误。
 
+2026-08-27 的 CX-108 本地检查点已覆盖 OpenerX 有界 Office Skill 生成/修改成果的 FILE-04、FILE-05 和 FILE-07 切片；任意第三方 Office 文件的忠实预览及 Windows/macOS 发布级矩阵仍属于未完成范围。
+
 ## 3. 工具能力基线
 
 | ID | V1 必须能力 | V1 行为合同 |
@@ -51,6 +55,8 @@
 | TOOL-08 | 工具过程 | Pi 工具调用事件投影到对话中的可折叠活动，包含状态、输入/目标摘要、结果、来源、耗时和错误；原始 Pi/工具协议不作为普通用户主界面 |
 | TOOL-09 | 取消、重试与幂等 | Pi 管理调用生命周期和把结果送回 Agent Loop；Broker 可取消实际执行，外部写操作使用幂等键，重试不得重复产生副作用 |
 | TOOL-10 | 沙箱与审批 | V2 Broker 默认只写授权工作区且 Shell/脚本无任意网络；网络、浏览器、桌面控制和外部写入按风险分级，越出 Scope 前必须请求授权 |
+
+2026-08-27 的 CX-109 本地检查点已覆盖 TOOL-05/TOOL-08 的类型化输入结果、命令输出、来源、Diff、Approval、Plan、安全 Reasoning、Compaction/Retry 与按 Run 回放。CX-110-D1 已把 TOOL-06 的桌面 OAuth 从 Client Secret/`client_credentials` 修正为 Main-owned Authorization Code + PKCE；CX-110-D2 又把静态工具目录接到真实 Host readiness，在当前 Mac 完成 Browser 全链路、Shell 沙箱负向测试和 Desktop 目标窗口捕获，并覆盖允许、拒绝与撤销。第三方实网、签名包 TCC 身份和 Windows 原生工具矩阵仍属于未完成范围。
 
 浏览器会话、系统 Shell 和桌面应用操作均属于设备能力，不能因为账户在另一台设备已经允许而自动继承授权。
 
@@ -89,10 +95,12 @@ V1 不建设组织管理员分发和审批中心；它属于 Future Enterprise�
 平台模型目录必须为每个模型声明：
 
 - 文本、图片、文件输入能力。
-- 工具调用、并行工具、MCP 和长上下文能力。
-- 是否支持图片生成等专用输出。
+- 函数调用、结构化输出和长上下文能力。
+- 模型实际支持的推理强度；不强制每个模型都能关闭推理。
 - 上下文限制、可用状态和相对速度。
 - 当前价格引用和用户可见计价摘要；收费工具同样必须进入价格目录。
+
+Web、Shell、Browser、Desktop、MCP、图片生成、工作区和 Skill 属于 Host Tool Availability，不是模型自身能力。每个 Turn 分别固化模型能力要求、初始工具集和本机可用工具集；宿主不可用不得伪装成模型不支持，模型支持函数调用也不得自动获得任何宿主权限。
 
 用户明确选择模型后，客户端只启用该模型实际支持的能力。若任务需要当前模型不支持的文件或工具，必须在执行前提示用户切换；不得静默改用另一模型。平台发生紧急降级时，消息中记录“选择模型”和“实际模型”。
 

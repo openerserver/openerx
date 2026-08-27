@@ -19,19 +19,22 @@ const supportedThinkingLevelsSchema = z
   .max(thinkingLevelValues.length)
   .refine((levels) => new Set(levels).size === levels.length, {
     message: "Thinking levels must be unique",
-  })
-  .refine((levels) => levels.includes("off"), {
-    message: "Thinking levels must include off",
   });
 
 export const modelCapabilitiesSchema = z
   .object({
-    text: z.boolean(),
+    textInput: z.boolean(),
     imageInput: z.boolean(),
     fileInput: z.boolean(),
-    tools: z.boolean(),
-    mcp: z.boolean(),
-    imageGeneration: z.boolean(),
+    functionCalling: z.boolean(),
+    structuredOutput: z.boolean(),
+  })
+  .strict();
+
+export const hostToolAvailabilitySchema = z
+  .object({
+    availableToolNames: z.array(z.string().min(1).max(200)).max(2_000),
+    unavailableReasons: z.record(z.string(), z.string().min(1).max(1_000)),
   })
   .strict();
 
@@ -101,9 +104,8 @@ export const modelRequirementSchema = z
   .object({
     imageInput: z.boolean().optional(),
     fileInput: z.boolean().optional(),
-    tools: z.boolean().optional(),
-    mcp: z.boolean().optional(),
-    imageGeneration: z.boolean().optional(),
+    functionCalling: z.boolean().optional(),
+    structuredOutput: z.boolean().optional(),
   })
   .strict();
 
@@ -126,6 +128,7 @@ export type UsageAggregate = z.infer<typeof usageAggregateSchema>;
 export type TokenAggregateField = z.infer<typeof tokenAggregateFieldSchema>;
 export type ModelRequirement = z.infer<typeof modelRequirementSchema>;
 export type ModelSelectionCheck = z.infer<typeof modelSelectionCheckSchema>;
+export type HostToolAvailability = z.infer<typeof hostToolAvailabilitySchema>;
 
 export interface ModelGatewayRequest {
   accountId: string;

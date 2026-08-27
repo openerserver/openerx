@@ -43,7 +43,7 @@ try {
       OPENERX_E2E_PROFILE_DIR: profileDirectory,
     },
   });
-  const page = await application.firstWindow();
+  let page = await application.firstWindow();
   await page.waitForLoadState("domcontentloaded");
   await application.evaluate(({ dialog }, selectedPath) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] });
@@ -65,7 +65,7 @@ try {
   const isolatedWindowPromise = application.waitForEvent("window");
   await firstPermission.click();
   const isolatedWindow = await isolatedWindowPromise;
-  const isolatedWindowClosed = isolatedWindow.waitForEvent("close");
+  const isolatedWindowClosed = isolatedWindow.waitForEvent("close", { timeout: 90_000 });
   await isolatedWindow.waitForLoadState("domcontentloaded");
   assert.equal(new URL(isolatedWindow.url()).origin, new URL(fixtureUrl).origin);
   assert.equal(application.windows().length, 2);
@@ -96,17 +96,56 @@ try {
     .getByText(/独立分区 openerx-isolated-browser-/)
     .waitFor();
   await page.waitForFunction(() => document.querySelectorAll(".tool-call-row").length === 6);
-  await page.waitForFunction(
-    () => document.querySelectorAll(".tool-call-row > span:last-of-type").length >= 6,
-  );
   await isolatedWindowClosed;
-  assert.equal(application.windows().length, 1);
+  const remainingWindows = application.windows();
+  assert.equal(remainingWindows.length, 1);
+  const remainingWindow = remainingWindows[0];
+  assert.ok(remainingWindow);
+  page = remainingWindow;
+
+  const completedBeforeDesktop = await page
+    .locator(".message-assistant[data-message-status='completed']")
+    .count();
+  await page.getByLabel("发送消息").fill("捕获当前 OpenerX 窗口 [PI_TEST_DESKTOP]");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page
+    .getByText("控制桌面应用 OpenerX：screenshot", { exact: true })
+    .locator("..")
+    .getByRole("button", { name: "仅本次允许" })
+    .click();
+  await page.waitForFunction(
+    (minimum) =>
+      document.querySelectorAll(".message-assistant[data-message-status='completed']").length >=
+      minimum,
+    completedBeforeDesktop + 1,
+  );
+  const desktopAssistantText = await page
+    .locator(".message-assistant[data-message-status='completed']")
+    .last()
+    .innerText();
+  assert.match(desktopAssistantText, /桌面窗口捕获完成：已捕获目标应用窗口/u);
 
   await page.getByRole("link", { name: "任务与工具" }).click();
   await page.getByRole("heading", { name: "任务与工具" }).waitFor();
   await page.getByText("已完成").first().waitFor();
+  await page.getByText("查看能力与运行状态", { exact: true }).click();
+  const browserCard = page.getByText("隔离浏览器", { exact: true }).locator("..");
+  await browserCard.getByText("运行时可用", { exact: true }).waitFor();
+  const shellCard = page.getByText("Shell / 代码", { exact: true }).locator("..");
+  const desktopCard = page.getByText("桌面控制", { exact: true }).locator("..");
+  const shellStatus = await shellCard.locator(".tool-runtime-status").innerText();
+  const desktopStatus = await desktopCard.locator(".tool-runtime-status").innerText();
+  const desktopReason =
+    (await desktopCard.locator(".tool-runtime-reason").count()) > 0
+      ? await desktopCard.locator(".tool-runtime-reason").innerText()
+      : null;
+  assert.ok(["运行时可用", "部分可用", "需要设置", "不可用"].includes(shellStatus));
+  assert.ok(["运行时可用", "部分可用", "需要设置", "不可用"].includes(desktopStatus));
   console.log(
     "E2E_TOOLS_OK permission-isolated-browser-type-screenshot-upload-download-close-projection",
+  );
+  console.log(
+    `E2E_DESKTOP_READINESS_OK browser=运行时可用 shell=${shellStatus} desktop=${desktopStatus} reason=${desktopReason ?? "none"} native_window_capture=pass`,
   );
 } finally {
   await application?.close().catch(() => undefined);

@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+  type HostToolAvailability,
+  type MainOAuthResponseFrame,
+  mainCapabilityAvailabilityResponseFrameSchema,
   mainCapabilityResponseFrameSchema,
   mainCredentialResponseFrameSchema,
+  mainOAuthResponseFrameSchema,
   type NormalizedToolResult,
   type ToolOperation,
 } from "@openerx/contracts";
@@ -20,6 +24,22 @@ export class MainCapabilityClient {
     string,
     {
       resolve(value: string | undefined): void;
+      reject(error: Error): void;
+      timeout: NodeJS.Timeout;
+    }
+  >();
+  readonly #pendingAvailability = new Map<
+    string,
+    {
+      resolve(value: HostToolAvailability): void;
+      reject(error: Error): void;
+      timeout: NodeJS.Timeout;
+    }
+  >();
+  readonly #pendingOAuth = new Map<
+    string,
+    {
+      resolve(value: MainOAuthResponseFrame): void;
       reject(error: Error): void;
       timeout: NodeJS.Timeout;
     }
@@ -48,11 +68,43 @@ export class MainCapabilityClient {
     });
   }
 
+  async availability(): Promise<HostToolAvailability> {
+    const requestId = randomUUID();
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.#pendingAvailability.delete(requestId);
+        reject(new Error("MAIN_CAPABILITY_AVAILABILITY_TIMEOUT"));
+      }, 15_000);
+      this.#pendingAvailability.set(requestId, { resolve, reject, timeout });
+      this.port.postMessage({ kind: "main.capability.availability.request", requestId });
+    });
+  }
+
   handleMessage(data: unknown): boolean {
     const response = mainCapabilityResponseFrameSchema.safeParse(data);
     if (!response.success) {
+      const availability = mainCapabilityAvailabilityResponseFrameSchema.safeParse(data);
+      if (availability.success) {
+        const pendingAvailability = this.#pendingAvailability.get(availability.data.requestId);
+        if (!pendingAvailability) return true;
+        clearTimeout(pendingAvailability.timeout);
+        this.#pendingAvailability.delete(availability.data.requestId);
+        if (availability.data.ok) pendingAvailability.resolve(availability.data.data);
+        else pendingAvailability.reject(new Error(availability.data.errorCode));
+        return true;
+      }
       const credential = mainCredentialResponseFrameSchema.safeParse(data);
-      if (!credential.success) return false;
+      if (!credential.success) {
+        const oauth = mainOAuthResponseFrameSchema.safeParse(data);
+        if (!oauth.success) return false;
+        const pendingOAuth = this.#pendingOAuth.get(oauth.data.requestId);
+        if (!pendingOAuth) return true;
+        clearTimeout(pendingOAuth.timeout);
+        this.#pendingOAuth.delete(oauth.data.requestId);
+        if (oauth.data.ok) pendingOAuth.resolve(oauth.data);
+        else pendingOAuth.reject(new Error(oauth.data.errorCode));
+        return true;
+      }
       const pendingCredential = this.#pendingCredentials.get(credential.data.requestId);
       if (!pendingCredential) return true;
       clearTimeout(pendingCredential.timeout);
@@ -79,6 +131,16 @@ export class MainCapabilityClient {
       pending.reject(new Error("MAIN_CREDENTIAL_HOST_STOPPED"));
       this.#pendingCredentials.delete(requestId);
     }
+    for (const [requestId, pending] of this.#pendingAvailability) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("MAIN_CAPABILITY_HOST_STOPPED"));
+      this.#pendingAvailability.delete(requestId);
+    }
+    for (const [requestId, pending] of this.#pendingOAuth) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("MAIN_OAUTH_HOST_STOPPED"));
+      this.#pendingOAuth.delete(requestId);
+    }
   }
 
   async resolve(credentialRef: string): Promise<string> {
@@ -91,6 +153,30 @@ export class MainCapabilityClient {
     await this.#credentialRequest("clear", credentialRef);
   }
 
+  async save(credentialRef: string, value: string): Promise<void> {
+    await this.#credentialRequest("save", credentialRef, value);
+  }
+
+  async prepareOAuth(serverId: string): Promise<{ sessionId: string; redirectUrl: string }> {
+    const response = await this.#oauthRequest({ operation: "prepare", serverId }, 15_000);
+    if (response.operation !== "prepare") throw new Error("MAIN_OAUTH_RESPONSE_MISMATCH");
+    return { sessionId: response.sessionId, redirectUrl: response.redirectUrl };
+  }
+
+  async waitForOAuthCallback(sessionId: string, authorizationUrl: string): Promise<string> {
+    const response = await this.#oauthRequest(
+      { operation: "authorize", sessionId, authorizationUrl },
+      5 * 60_000,
+    );
+    if (response.operation !== "authorize") throw new Error("MAIN_OAUTH_RESPONSE_MISMATCH");
+    return response.callbackUrl;
+  }
+
+  async cancelOAuth(sessionId: string): Promise<void> {
+    const response = await this.#oauthRequest({ operation: "cancel", sessionId }, 15_000);
+    if (response.operation !== "cancel") throw new Error("MAIN_OAUTH_RESPONSE_MISMATCH");
+  }
+
   #finish(requestId: string, complete: () => void): void {
     const pending = this.#pending.get(requestId);
     if (!pending) return;
@@ -101,9 +187,13 @@ export class MainCapabilityClient {
   }
 
   async #credentialRequest(
-    operation: "resolve" | "clear",
+    operation: "resolve" | "clear" | "save",
     credentialRef: string,
+    value?: string,
   ): Promise<string | undefined> {
+    if (operation === "save" && value === undefined) {
+      throw new Error("MAIN_CREDENTIAL_VALUE_REQUIRED");
+    }
     const requestId = randomUUID();
     return await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -116,7 +206,36 @@ export class MainCapabilityClient {
         requestId,
         operation,
         credentialRef,
+        ...(operation === "save" ? { value } : {}),
       });
+    });
+  }
+
+  async #oauthRequest(
+    input:
+      | { operation: "prepare"; serverId: string }
+      | { operation: "authorize"; sessionId: string; authorizationUrl: string }
+      | { operation: "cancel"; sessionId: string },
+    timeoutMs: number,
+  ): Promise<Extract<MainOAuthResponseFrame, { ok: true }>> {
+    const requestId = randomUUID();
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.#pendingOAuth.delete(requestId);
+        reject(new Error("MAIN_OAUTH_TIMEOUT"));
+      }, timeoutMs);
+      this.#pendingOAuth.set(requestId, {
+        resolve: (response) => {
+          if (!response.ok) {
+            reject(new Error(response.errorCode));
+            return;
+          }
+          resolve(response);
+        },
+        reject,
+        timeout,
+      });
+      this.port.postMessage({ kind: "main.oauth.request", requestId, ...input });
     });
   }
 }

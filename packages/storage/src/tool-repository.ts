@@ -12,14 +12,25 @@ import {
   normalizedToolResultSchema,
   type PermissionRequest,
   permissionRequestSchema,
+  type RunItem,
+  type RunItemContent,
   type RunStep,
+  runItemSchema,
   runStepSchema,
+  type ThinkingLevel,
   type ToolCall,
   type ToolCapability,
+  type ToolInput,
   type ToolRisk,
   toolCallSchema,
+  type UsageRecord,
   type WorkItem,
+  type WorkspaceChange,
+  type WorkspaceGrant,
+  type WorkspaceInstructionSource,
   workItemSchema,
+  workspaceChangeSchema,
+  workspaceGrantSchema,
 } from "@openerx/contracts";
 import { migrateDatabase } from "./migrations";
 
@@ -43,8 +54,23 @@ export interface ToolCallDraft {
   source: ToolCall["source"];
   risk: ToolRisk;
   idempotencyKey: string;
+  input?: ToolInput | null;
   inputSummary: string;
   targetSummary: string;
+}
+
+export interface SideEffectAttempt {
+  idempotencyKey: string;
+  toolCallId: string;
+  status: "executing" | "committed" | "outcome_unknown";
+  result: NormalizedToolResult | null;
+  startedAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceChangeRecord extends WorkspaceChange {
+  beforeText: string | null;
+  afterText: string;
 }
 
 export class ToolRepository {
@@ -68,11 +94,17 @@ export class ToolRepository {
   createProjection(input: {
     conversationId: string;
     messageId: string;
+    branchId: string;
     title: string;
     selectedModelRef: string;
+    thinkingLevel: ThinkingLevel;
     piPackageVersion: string;
     piHostContractVersion: number;
     piSessionRef?: string | null;
+    initialToolNames?: string[];
+    availableToolNames?: string[];
+    skillInstallationIds?: string[];
+    instructionSources?: WorkspaceInstructionSource[];
   }): ToolProjection {
     const existing = this.#database
       .prepare(
@@ -109,9 +141,13 @@ export class ToolRepository {
         .prepare(
           `INSERT INTO execution_runs
            (id, work_item_id, attempt, status, pi_package_version, pi_host_contract_version,
-            selected_model_ref, effective_model_ref, pi_session_ref, last_pi_event_sequence,
-            retry_count, compaction_count, error_code, created_at, started_at, completed_at, updated_at)
-           VALUES (?, ?, 1, 'running', ?, ?, ?, NULL, ?, 0, 0, 0, NULL, ?, ?, NULL, ?)`,
+            selected_model_ref, effective_model_ref, branch_id, thinking_level, pi_session_ref,
+            usage_records_json, cancellation_requested_at, last_pi_event_sequence,
+            retry_count, compaction_count, error_code, created_at, started_at, completed_at, updated_at,
+            fallback_reason, initial_tool_names_json, available_tool_names_json,
+            skill_installation_ids_json, instruction_sources_json)
+           VALUES (?, ?, 1, 'running', ?, ?, ?, NULL, ?, ?, ?, '[]', NULL, 0, 0, 0, NULL, ?, ?, NULL, ?,
+                   NULL, ?, ?, ?, ?)`,
         )
         .run(
           runId,
@@ -119,10 +155,16 @@ export class ToolRepository {
           input.piPackageVersion,
           input.piHostContractVersion,
           input.selectedModelRef,
+          input.branchId,
+          input.thinkingLevel,
           input.piSessionRef ?? null,
           now,
           now,
           now,
+          JSON.stringify(input.initialToolNames ?? []),
+          JSON.stringify(input.availableToolNames ?? []),
+          JSON.stringify(input.skillInstallationIds ?? []),
+          JSON.stringify(input.instructionSources ?? []),
         );
       return { workItem: this.workItem(workItemId), run: this.run(runId) };
     });
@@ -158,8 +200,9 @@ export class ToolRepository {
         .prepare(
           `INSERT INTO tool_calls
            (id, run_id, step_id, pi_call_ref, tool_name, source, status, risk, idempotency_key,
-            input_summary, target_summary, result_summary, error_code, started_at, completed_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)`,
+            input_summary, target_summary, result_summary, error_code, started_at, completed_at,
+            updated_at, input_json)
+           VALUES (?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)`,
         )
         .run(
           toolCallId,
@@ -173,15 +216,105 @@ export class ToolRepository {
           draft.inputSummary,
           draft.targetSummary,
           now,
+          draft.input ? JSON.stringify(draft.input) : null,
         );
+      this.upsertRunItem({
+        runId: draft.runId,
+        piItemRef: `tool:${draft.piCallRef}`,
+        status: "running",
+        content: {
+          type: "tool",
+          toolCallId,
+          toolName: draft.toolName,
+          input: draft.input ?? null,
+          inputSummary: draft.inputSummary,
+          targetSummary: draft.targetSummary,
+        },
+        startedAt: now,
+      });
       return { step: this.step(stepId), toolCall: this.toolCall(toolCallId) };
     });
+  }
+
+  upsertRunItem(input: {
+    runId: string;
+    piItemRef: string;
+    status: RunItem["status"];
+    content: RunItemContent;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    errorCode?: string | null;
+  }): RunItem {
+    const now = this.#now();
+    const existing = this.#database
+      .prepare("SELECT id FROM run_items WHERE run_id = ? AND pi_item_ref = ?")
+      .get(input.runId, input.piItemRef) as { id: string } | undefined;
+    const terminal = ["completed", "failed", "cancelled"].includes(input.status);
+    if (existing) {
+      this.#database
+        .prepare(
+          `UPDATE run_items
+           SET status = ?, content_json = ?,
+               started_at = COALESCE(started_at, ?),
+               completed_at = CASE WHEN ? = 1 THEN COALESCE(completed_at, ?) ELSE completed_at END,
+               error_code = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          input.status,
+          JSON.stringify(input.content),
+          input.startedAt ?? now,
+          terminal ? 1 : 0,
+          input.completedAt ?? now,
+          input.errorCode ?? null,
+          now,
+          existing.id,
+        );
+      return this.runItem(existing.id);
+    }
+    const id = this.#idFactory();
+    const sequence = Number(
+      (
+        this.#database
+          .prepare(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM run_items WHERE run_id = ?",
+          )
+          .get(input.runId) as { sequence: number }
+      ).sequence,
+    );
+    const startedAt = input.startedAt ?? now;
+    this.#database
+      .prepare(
+        `INSERT INTO run_items
+         (id, run_id, sequence, pi_item_ref, status, content_json, started_at,
+          completed_at, error_code, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.runId,
+        sequence,
+        input.piItemRef,
+        input.status,
+        JSON.stringify(input.content),
+        startedAt,
+        terminal ? (input.completedAt ?? now) : null,
+        input.errorCode ?? null,
+        now,
+        now,
+      );
+    return this.runItem(id);
   }
 
   markToolCall(
     toolCallId: string,
     status: ToolCall["status"],
-    input: { resultSummary?: string | null; errorCode?: string | null } = {},
+    input: {
+      resultSummary?: string | null;
+      resultContent?: NormalizedToolResult["content"];
+      resultData?: unknown;
+      errorCode?: string | null;
+    } = {},
   ): ToolCall {
     const now = this.#now();
     const terminal = ["completed", "failed", "cancelled"].includes(status);
@@ -189,6 +322,7 @@ export class ToolRepository {
       .prepare(
         `UPDATE tool_calls
          SET status = ?, result_summary = COALESCE(?, result_summary), error_code = ?,
+             result_content_json = COALESCE(?, result_content_json),
              started_at = CASE WHEN ? = 'running' THEN COALESCE(started_at, ?) ELSE started_at END,
              completed_at = CASE WHEN ? = 1 THEN COALESCE(completed_at, ?) ELSE completed_at END,
              updated_at = ?
@@ -198,6 +332,7 @@ export class ToolRepository {
         status,
         input.resultSummary ?? null,
         input.errorCode ?? null,
+        input.resultContent === undefined ? null : JSON.stringify(input.resultContent),
         status,
         now,
         terminal ? 1 : 0,
@@ -207,6 +342,7 @@ export class ToolRepository {
       );
     if (result.changes !== 1) throw new Error("TOOL_CALL_NOT_FOUND");
     const call = this.toolCall(toolCallId);
+    this.#updateToolRunItem(call, status, input.errorCode ?? null, now);
     if (terminal) {
       this.#database
         .prepare(`UPDATE run_steps SET status = ?, completed_at = ?, error_code = ? WHERE id = ?`)
@@ -216,14 +352,16 @@ export class ToolRepository {
           input.errorCode ?? null,
           call.stepId,
         );
+      this.#projectToolResultItems(call, input.resultContent ?? [], input.resultData, status, now);
     }
     return call;
   }
 
   completeRun(
     runId: string,
-    status: "completed" | "failed" | "cancelled",
+    status: "completed" | "failed" | "interrupted",
     errorCode?: string,
+    usageRecords: UsageRecord[] = [],
   ): void {
     const now = this.#now();
     this.#transaction(() => {
@@ -231,16 +369,78 @@ export class ToolRepository {
         .prepare("SELECT work_item_id FROM execution_runs WHERE id = ?")
         .get(runId) as { work_item_id: string } | undefined;
       if (!runRow) throw new Error("RUN_NOT_FOUND");
+      if (status === "interrupted") {
+        this.#database
+          .prepare(
+            `UPDATE execution_runs
+             SET cancellation_requested_at = COALESCE(cancellation_requested_at, ?)
+             WHERE id = ?`,
+          )
+          .run(now, runId);
+      }
+      const storedStatus = status === "interrupted" ? "cancelled" : status;
       this.#database
         .prepare(
-          `UPDATE execution_runs SET status = ?, error_code = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
+          `UPDATE execution_runs
+           SET status = ?, error_code = ?, usage_records_json = ?,
+               effective_model_ref = COALESCE(?, effective_model_ref),
+               fallback_reason = COALESCE(?, fallback_reason),
+               completed_at = ?, updated_at = ? WHERE id = ?`,
         )
-        .run(status, errorCode ?? null, now, now, runId);
+        .run(
+          storedStatus,
+          errorCode ?? null,
+          JSON.stringify(usageRecords),
+          usageRecords.at(-1)?.effectiveModelRef ?? null,
+          usageRecords.at(-1)?.fallbackReason ?? null,
+          now,
+          now,
+          runId,
+        );
+      this.#database
+        .prepare(
+          `UPDATE run_items
+           SET status = ?, completed_at = COALESCE(completed_at, ?),
+               error_code = CASE WHEN ? IS NULL THEN error_code ELSE COALESCE(error_code, ?) END,
+               updated_at = ?
+           WHERE run_id = ? AND status IN ('queued', 'running')`,
+        )
+        .run(
+          status === "completed" ? "completed" : status === "interrupted" ? "cancelled" : "failed",
+          now,
+          errorCode ?? null,
+          errorCode ?? null,
+          now,
+          runId,
+        );
       this.#database
         .prepare(
           `UPDATE work_items SET status = ?, completed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?`,
         )
-        .run(status === "cancelled" ? "cancelled" : status, now, now, runRow.work_item_id);
+        .run(storedStatus, now, now, runRow.work_item_id);
+    });
+  }
+
+  requestRunCancellation(runId: string): ExecutionRun {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const row = this.#database
+        .prepare("SELECT work_item_id FROM execution_runs WHERE id = ?")
+        .get(runId) as { work_item_id: string } | undefined;
+      if (!row) throw new Error("RUN_NOT_FOUND");
+      const result = this.#database
+        .prepare(
+          `UPDATE execution_runs
+           SET cancellation_requested_at = COALESCE(cancellation_requested_at, ?), updated_at = ?
+           WHERE id = ? AND status IN ('queued', 'running', 'waiting_for_user', 'waiting_for_permission')`,
+        )
+        .run(now, now, runId);
+      if (result.changes === 1) {
+        this.#database
+          .prepare("UPDATE work_items SET updated_at = ?, revision = revision + 1 WHERE id = ?")
+          .run(now, row.work_item_id);
+      }
+      return this.run(runId);
     });
   }
 
@@ -274,6 +474,16 @@ export class ToolRepository {
          ${counter} = ${counter} + ?, updated_at = ? WHERE id = ?`,
       )
       .run(sequence, completed ? 1 : 0, now, runId);
+  }
+
+  recordPiEventSequence(runId: string, sequence: number): void {
+    this.#database
+      .prepare(
+        `UPDATE execution_runs
+         SET last_pi_event_sequence = MAX(last_pi_event_sequence, ?), updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(sequence, this.#now(), runId);
   }
 
   createPermission(input: {
@@ -321,6 +531,21 @@ export class ToolRepository {
         expiresAt,
       );
     this.markToolCall(input.toolCallId, "waiting_for_permission");
+    this.upsertRunItem({
+      runId: input.runId,
+      piItemRef: `approval:${id}`,
+      status: "running",
+      content: {
+        type: "approval",
+        permissionRequestId: id,
+        toolCallId: input.toolCallId,
+        capability: input.capability,
+        risk: input.risk,
+        resource: input.resource,
+        reason: input.reason,
+      },
+      startedAt: requestedAt,
+    });
     this.setWaitingForPermission(input.runId, true);
     return this.permission(id);
   }
@@ -380,6 +605,23 @@ export class ToolRepository {
           scope?.id ?? null,
           request.id,
         );
+      this.upsertRunItem({
+        runId: request.runId,
+        piItemRef: `approval:${request.id}`,
+        status: input.decision === "deny" ? "failed" : "completed",
+        content: {
+          type: "approval",
+          permissionRequestId: request.id,
+          toolCallId: request.toolCallId,
+          capability: request.capability,
+          risk: request.risk,
+          resource: request.resource,
+          reason: request.reason,
+        },
+        startedAt: request.requestedAt,
+        completedAt: now,
+        errorCode: input.decision === "deny" ? "PERMISSION_DENIED" : null,
+      });
       if (input.decision === "deny") {
         this.markToolCall(request.toolCallId, "failed", { errorCode: "PERMISSION_DENIED" });
       } else {
@@ -460,11 +702,336 @@ export class ToolRepository {
     return this.scope(scopeId);
   }
 
+  grantWorkspace(input: {
+    conversationId: string | null;
+    displayName: string;
+    rootPath: string;
+    access: WorkspaceGrant["access"];
+    allowNetwork: boolean;
+    expiresAt: string | null;
+  }): WorkspaceGrant {
+    return this.#transaction(() => {
+      const id = this.#idFactory();
+      const createdAt = this.#now();
+      this.#database
+        .prepare(
+          `INSERT INTO workspace_grants
+           (id, owner_profile_id, conversation_id, display_name, root_path, access,
+            allow_network, expires_at, revoked_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+        )
+        .run(
+          id,
+          this.#ownerProfileId,
+          input.conversationId,
+          input.displayName,
+          input.rootPath,
+          input.access,
+          input.allowNetwork ? 1 : 0,
+          input.expiresAt,
+          createdAt,
+        );
+      this.createScope({
+        capability: "workspace",
+        resourceType: "workspace",
+        resource: id,
+        actions: input.access === "read_write" ? ["read", "search", "patch"] : ["read", "search"],
+        maxRisk: input.access === "read_write" ? "L3" : "L1",
+        conversationId: input.conversationId,
+        sessionOnly: false,
+        expiresAt: input.expiresAt,
+      });
+      if (input.access === "read_write") {
+        this.createScope({
+          capability: "shell",
+          resourceType: "workspace",
+          resource: id,
+          actions: input.allowNetwork ? ["execute", "external_write"] : ["execute"],
+          maxRisk: input.allowNetwork ? "L4" : "L3",
+          conversationId: input.conversationId,
+          sessionOnly: false,
+          expiresAt: input.expiresAt,
+        });
+      }
+      return this.workspaceGrant(id);
+    });
+  }
+
+  listWorkspaceGrants(conversationId?: string): WorkspaceGrant[] {
+    const now = this.#now();
+    const rows = conversationId
+      ? this.#database
+          .prepare(
+            `SELECT * FROM workspace_grants
+             WHERE owner_profile_id = ? AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > ?)
+               AND (conversation_id IS NULL OR conversation_id = ?)
+             ORDER BY created_at`,
+          )
+          .all(this.#ownerProfileId, now, conversationId)
+      : this.#database
+          .prepare(
+            `SELECT * FROM workspace_grants
+             WHERE owner_profile_id = ? AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > ?)
+             ORDER BY created_at`,
+          )
+          .all(this.#ownerProfileId, now);
+    return (rows as SqlRow[]).map((row) => this.#workspaceGrant(row));
+  }
+
+  workspaceGrant(id: string): WorkspaceGrant {
+    const row = this.#database
+      .prepare("SELECT * FROM workspace_grants WHERE id = ? AND owner_profile_id = ?")
+      .get(id, this.#ownerProfileId) as SqlRow | undefined;
+    if (!row) throw new Error("WORKSPACE_GRANT_NOT_FOUND");
+    return this.#workspaceGrant(row);
+  }
+
+  activeWorkspaceGrant(id: string, conversationId?: string): WorkspaceGrant {
+    const grant = this.workspaceGrant(id);
+    if (
+      grant.revokedAt ||
+      (grant.expiresAt && Date.parse(grant.expiresAt) <= Date.parse(this.#now()))
+    ) {
+      throw new Error("WORKSPACE_GRANT_INACTIVE");
+    }
+    if (conversationId && grant.conversationId && grant.conversationId !== conversationId) {
+      throw new Error("WORKSPACE_GRANT_CONVERSATION_MISMATCH");
+    }
+    return grant;
+  }
+
+  revokeWorkspaceGrant(id: string): WorkspaceGrant {
+    return this.#transaction(() => {
+      const now = this.#now();
+      const result = this.#database
+        .prepare(
+          `UPDATE workspace_grants SET revoked_at = COALESCE(revoked_at, ?)
+           WHERE id = ? AND owner_profile_id = ?`,
+        )
+        .run(now, id, this.#ownerProfileId);
+      if (result.changes !== 1) throw new Error("WORKSPACE_GRANT_NOT_FOUND");
+      this.#database
+        .prepare(
+          `UPDATE capability_scopes SET revoked_at = COALESCE(revoked_at, ?)
+           WHERE owner_profile_id = ? AND resource_type = 'workspace' AND resource = ?`,
+        )
+        .run(now, this.#ownerProfileId, id);
+      return this.workspaceGrant(id);
+    });
+  }
+
+  createWorkspaceChange(input: {
+    workspaceGrantId: string;
+    runId: string;
+    relativePath: string;
+    beforeSha256: string | null;
+    afterSha256: string;
+    beforeText: string | null;
+    afterText: string;
+    diff: string;
+  }): WorkspaceChangeRecord {
+    const id = this.#idFactory();
+    const now = this.#now();
+    this.#database
+      .prepare(
+        `INSERT INTO workspace_changes
+         (id, owner_profile_id, workspace_grant_id, run_id, relative_path, status,
+          before_sha256, after_sha256, before_text, after_text, diff, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'preparing', ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        this.#ownerProfileId,
+        input.workspaceGrantId,
+        input.runId,
+        input.relativePath,
+        input.beforeSha256,
+        input.afterSha256,
+        input.beforeText,
+        input.afterText,
+        input.diff,
+        now,
+        now,
+      );
+    return this.workspaceChange(id);
+  }
+
+  markWorkspaceChange(id: string, status: WorkspaceChange["status"]): WorkspaceChangeRecord {
+    const result = this.#database
+      .prepare(
+        "UPDATE workspace_changes SET status = ?, updated_at = ? WHERE id = ? AND owner_profile_id = ?",
+      )
+      .run(status, this.#now(), id, this.#ownerProfileId);
+    if (result.changes !== 1) throw new Error("WORKSPACE_CHANGE_NOT_FOUND");
+    return this.workspaceChange(id);
+  }
+
+  workspaceChange(id: string): WorkspaceChangeRecord {
+    const row = this.#database
+      .prepare("SELECT * FROM workspace_changes WHERE id = ? AND owner_profile_id = ?")
+      .get(id, this.#ownerProfileId) as SqlRow | undefined;
+    if (!row) throw new Error("WORKSPACE_CHANGE_NOT_FOUND");
+    return this.#workspaceChange(row);
+  }
+
+  listWorkspaceChanges(workspaceGrantId: string, limit = 50): WorkspaceChangeRecord[] {
+    return (
+      this.#database
+        .prepare(
+          `SELECT * FROM workspace_changes
+           WHERE owner_profile_id = ? AND workspace_grant_id = ?
+           ORDER BY updated_at DESC, id DESC LIMIT ?`,
+        )
+        .all(this.#ownerProfileId, workspaceGrantId, limit) as SqlRow[]
+    ).map((row) => this.#workspaceChange(row));
+  }
+
+  #workspaceChange(row: SqlRow): WorkspaceChangeRecord {
+    const change = workspaceChangeSchema.parse({
+      id: row.id,
+      workspaceGrantId: row.workspace_grant_id,
+      runId: row.run_id,
+      relativePath: row.relative_path,
+      status: row.status,
+      beforeSha256: row.before_sha256,
+      afterSha256: row.after_sha256,
+      diff: row.diff,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+    return {
+      ...change,
+      beforeText: row.before_text === null ? null : String(row.before_text),
+      afterText: String(row.after_text),
+    };
+  }
+
+  addRunInstructionSources(runId: string, sources: WorkspaceInstructionSource[]): ExecutionRun {
+    if (sources.length === 0) return this.run(runId);
+    const current = this.run(runId).instructionSources;
+    const merged = [...current];
+    for (const source of sources) {
+      if (
+        !merged.some(
+          (entry) => entry.digest === source.digest && entry.appliesTo === source.appliesTo,
+        )
+      ) {
+        merged.push(source);
+      }
+    }
+    this.#database
+      .prepare(
+        "UPDATE execution_runs SET instruction_sources_json = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(JSON.stringify(merged), this.#now(), runId);
+    return this.run(runId);
+  }
+
+  freezeRunConfiguration(
+    runId: string,
+    input: {
+      initialToolNames: string[];
+      availableToolNames: string[];
+      skillInstallationIds: string[];
+      instructionSources: WorkspaceInstructionSource[];
+    },
+  ): ExecutionRun {
+    const result = this.#database
+      .prepare(
+        `UPDATE execution_runs
+         SET initial_tool_names_json = ?, available_tool_names_json = ?,
+             skill_installation_ids_json = ?, instruction_sources_json = ?,
+             configuration_frozen_at = ?, updated_at = ?
+         WHERE id = ? AND configuration_frozen_at IS NULL`,
+      )
+      .run(
+        JSON.stringify(input.initialToolNames),
+        JSON.stringify(input.availableToolNames),
+        JSON.stringify(input.skillInstallationIds),
+        JSON.stringify(input.instructionSources),
+        this.#now(),
+        this.#now(),
+        runId,
+      );
+    if (result.changes !== 1) throw new Error("RUN_CONFIGURATION_ALREADY_FROZEN");
+    return this.run(runId);
+  }
+
   sideEffect(idempotencyKey: string): NormalizedToolResult | null {
     const row = this.#database
       .prepare("SELECT result_json FROM tool_side_effects WHERE idempotency_key = ?")
       .get(idempotencyKey) as { result_json: string } | undefined;
     return row ? normalizedToolResultSchema.parse(JSON.parse(row.result_json)) : null;
+  }
+
+  sideEffectAttempt(idempotencyKey: string): SideEffectAttempt | null {
+    const row = this.#database
+      .prepare("SELECT * FROM tool_side_effect_attempts WHERE idempotency_key = ?")
+      .get(idempotencyKey) as SqlRow | undefined;
+    if (!row) return null;
+    return {
+      idempotencyKey: String(row.idempotency_key),
+      toolCallId: String(row.tool_call_id),
+      status: String(row.status) as SideEffectAttempt["status"],
+      result:
+        row.result_json === null
+          ? null
+          : normalizedToolResultSchema.parse(JSON.parse(String(row.result_json))),
+      startedAt: String(row.started_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  beginSideEffectAttempt(idempotencyKey: string, toolCallId: string): void {
+    const existing = this.sideEffectAttempt(idempotencyKey);
+    if (existing) {
+      if (existing.status === "committed") return;
+      throw new Error("SIDE_EFFECT_OUTCOME_UNKNOWN");
+    }
+    const now = this.#now();
+    this.#database
+      .prepare(
+        `INSERT INTO tool_side_effect_attempts
+         (idempotency_key, tool_call_id, status, result_json, started_at, updated_at)
+         VALUES (?, ?, 'executing', NULL, ?, ?)`,
+      )
+      .run(idempotencyKey, toolCallId, now, now);
+  }
+
+  commitSideEffectAttempt(
+    idempotencyKey: string,
+    toolCallId: string,
+    result: NormalizedToolResult,
+  ): void {
+    this.#transaction(() => {
+      const now = this.#now();
+      const updated = this.#database
+        .prepare(
+          `UPDATE tool_side_effect_attempts
+           SET status = 'committed', result_json = ?, updated_at = ?
+           WHERE idempotency_key = ? AND tool_call_id = ? AND status = 'executing'`,
+        )
+        .run(JSON.stringify(result), now, idempotencyKey, toolCallId);
+      if (updated.changes !== 1) throw new Error("SIDE_EFFECT_ATTEMPT_NOT_EXECUTING");
+      this.#database
+        .prepare(
+          `INSERT OR IGNORE INTO tool_side_effects
+           (idempotency_key, tool_call_id, result_json, committed_at) VALUES (?, ?, ?, ?)`,
+        )
+        .run(idempotencyKey, toolCallId, JSON.stringify(result), now);
+    });
+  }
+
+  markSideEffectOutcomeUnknown(idempotencyKey: string, toolCallId: string): void {
+    this.#database
+      .prepare(
+        `UPDATE tool_side_effect_attempts
+         SET status = 'outcome_unknown', updated_at = ?
+         WHERE idempotency_key = ? AND tool_call_id = ? AND status = 'executing'`,
+      )
+      .run(this.#now(), idempotencyKey, toolCallId);
   }
 
   commitSideEffect(idempotencyKey: string, toolCallId: string, result: NormalizedToolResult): void {
@@ -492,10 +1059,29 @@ export class ToolRepository {
         .run(now, now).changes;
       this.#database
         .prepare(
+          `UPDATE tool_side_effect_attempts SET status = 'outcome_unknown', updated_at = ?
+           WHERE status = 'executing'`,
+        )
+        .run(now);
+      this.#database
+        .prepare(
+          `UPDATE workspace_changes SET status = 'outcome_unknown', updated_at = ?
+           WHERE status = 'preparing'`,
+        )
+        .run(now);
+      this.#database
+        .prepare(
           `UPDATE run_steps SET status = 'failed', error_code = 'TOOL_HOST_INTERRUPTED', completed_at = ?
            WHERE status IN ('queued', 'running')`,
         )
         .run(now);
+      this.#database
+        .prepare(
+          `UPDATE run_items SET status = 'failed', error_code = 'TOOL_HOST_INTERRUPTED',
+           completed_at = COALESCE(completed_at, ?), updated_at = ?
+           WHERE status IN ('queued', 'running')`,
+        )
+        .run(now, now);
       const runs = this.#database
         .prepare(
           `UPDATE execution_runs SET status = 'failed', error_code = 'TOOL_HOST_INTERRUPTED',
@@ -586,6 +1172,31 @@ export class ToolRepository {
     ).map((row) => this.#step(row));
   }
 
+  listRuns(workItemId: string): ExecutionRun[] {
+    return (
+      this.#database
+        .prepare(
+          "SELECT * FROM execution_runs WHERE work_item_id = ? ORDER BY attempt DESC, created_at DESC",
+        )
+        .all(workItemId) as SqlRow[]
+    ).map((row) => this.#run(row));
+  }
+
+  listRunItems(runId: string): RunItem[] {
+    return (
+      this.#database
+        .prepare("SELECT * FROM run_items WHERE run_id = ? ORDER BY sequence, created_at, id")
+        .all(runId) as SqlRow[]
+    ).map((row) => this.#runItem(row));
+  }
+
+  runItemByRef(runId: string, piItemRef: string): RunItem | null {
+    const row = this.#database
+      .prepare("SELECT * FROM run_items WHERE run_id = ? AND pi_item_ref = ?")
+      .get(runId, piItemRef) as SqlRow | undefined;
+    return row ? this.#runItem(row) : null;
+  }
+
   toolCallByPiRef(runId: string, piCallRef: string): ToolCall | null {
     const row = this.#database
       .prepare("SELECT * FROM tool_calls WHERE run_id = ? AND pi_call_ref = ?")
@@ -601,19 +1212,28 @@ export class ToolRepository {
     ).map((row) => this.#permission(row));
   }
 
-  workItemDetail(workItemId: string): {
+  workItemDetail(
+    workItemId: string,
+    runId?: string,
+  ): {
     workItem: WorkItem;
+    runs: ExecutionRun[];
     run: ExecutionRun;
+    items: RunItem[];
     steps: RunStep[];
     toolCalls: ToolCall[];
     permissions: PermissionRequest[];
   } {
     const workItem = this.workItem(workItemId);
     if (!workItem.activeRunId) throw new Error("RUN_NOT_FOUND");
-    const run = this.run(workItem.activeRunId);
+    const runs = this.listRuns(workItemId);
+    const run = this.run(runId ?? workItem.activeRunId);
+    if (run.workItemId !== workItem.id) throw new Error("RUN_WORK_ITEM_MISMATCH");
     return {
       workItem,
+      runs,
       run,
+      items: this.listRunItems(run.id),
       steps: this.listSteps(run.id),
       toolCalls: this.listToolCalls(run.id),
       permissions: this.listPermissionsForRun(run.id),
@@ -659,6 +1279,14 @@ export class ToolRepository {
     return this.#step(row);
   }
 
+  runItem(id: string): RunItem {
+    const row = this.#database.prepare("SELECT * FROM run_items WHERE id = ?").get(id) as
+      | SqlRow
+      | undefined;
+    if (!row) throw new Error("RUN_ITEM_NOT_FOUND");
+    return this.#runItem(row);
+  }
+
   toolCall(id: string): ToolCall {
     const row = this.#database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(id) as
       | SqlRow
@@ -684,13 +1312,25 @@ export class ToolRepository {
   }
 
   #workItem(row: SqlRow): WorkItem {
+    const runState = row.active_run_id
+      ? (this.#database
+          .prepare("SELECT status, cancellation_requested_at FROM execution_runs WHERE id = ?")
+          .get(String(row.active_run_id)) as
+          | { status: string; cancellation_requested_at: string | null }
+          | undefined)
+      : undefined;
+    const status = this.#cancellationStatus(
+      String(row.status),
+      runState?.status,
+      runState?.cancellation_requested_at,
+    );
     return workItemSchema.parse({
       id: row.id,
       ownerProfileId: row.owner_profile_id,
       conversationId: row.conversation_id,
       messageId: row.message_id,
       title: row.title,
-      status: row.status,
+      status,
       activeRunId: row.active_run_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -700,16 +1340,30 @@ export class ToolRepository {
   }
 
   #run(row: SqlRow): ExecutionRun {
+    const status = this.#cancellationStatus(
+      String(row.status),
+      String(row.status),
+      typeof row.cancellation_requested_at === "string" ? row.cancellation_requested_at : null,
+    );
     return executionRunSchema.parse({
       id: row.id,
       workItemId: row.work_item_id,
       attempt: row.attempt,
-      status: row.status,
+      status,
       piPackageVersion: row.pi_package_version,
       piHostContractVersion: row.pi_host_contract_version,
       selectedModelRef: row.selected_model_ref,
       effectiveModelRef: row.effective_model_ref,
+      branchId: row.branch_id ?? null,
+      thinkingLevel: row.thinking_level,
+      fallbackReason: row.fallback_reason ?? null,
+      initialToolNames: JSON.parse(String(row.initial_tool_names_json ?? "[]")),
+      availableToolNames: JSON.parse(String(row.available_tool_names_json ?? "[]")),
+      skillInstallationIds: JSON.parse(String(row.skill_installation_ids_json ?? "[]")),
+      instructionSources: JSON.parse(String(row.instruction_sources_json ?? "[]")),
       piSessionRef: row.pi_session_ref,
+      usageRecords: JSON.parse(String(row.usage_records_json ?? "[]")),
+      cancellationRequestedAt: row.cancellation_requested_at ?? null,
       lastPiEventSequence: row.last_pi_event_sequence,
       retryCount: row.retry_count,
       compactionCount: row.compaction_count,
@@ -736,6 +1390,137 @@ export class ToolRepository {
     });
   }
 
+  #runItem(row: SqlRow): RunItem {
+    return runItemSchema.parse({
+      id: row.id,
+      runId: row.run_id,
+      sequence: row.sequence,
+      piItemRef: row.pi_item_ref,
+      status: row.status,
+      content: JSON.parse(String(row.content_json)),
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      errorCode: row.error_code,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  #updateToolRunItem(
+    call: ToolCall,
+    status: ToolCall["status"],
+    errorCode: string | null,
+    now: string,
+  ): void {
+    this.upsertRunItem({
+      runId: call.runId,
+      piItemRef: `tool:${call.piCallRef}`,
+      status:
+        status === "completed" || status === "failed" || status === "cancelled"
+          ? status
+          : "running",
+      content: {
+        type: "tool",
+        toolCallId: call.id,
+        toolName: call.toolName,
+        input: call.input,
+        inputSummary: call.inputSummary,
+        targetSummary: call.targetSummary,
+      },
+      startedAt: call.startedAt ?? now,
+      completedAt: call.completedAt,
+      errorCode,
+    });
+  }
+
+  #projectToolResultItems(
+    call: ToolCall,
+    resultContent: NormalizedToolResult["content"],
+    resultData: unknown,
+    status: ToolCall["status"],
+    now: string,
+  ): void {
+    const itemStatus =
+      status === "completed" || status === "failed" || status === "cancelled"
+        ? status
+        : "completed";
+    for (const [index, part] of resultContent.entries()) {
+      if (part.type === "source") {
+        this.upsertRunItem({
+          runId: call.runId,
+          piItemRef: `source:${call.id}:${index}`,
+          status: itemStatus,
+          content: { type: "source", toolCallId: call.id, source: part.source },
+          startedAt: call.startedAt ?? now,
+          completedAt: now,
+          errorCode: call.errorCode,
+        });
+      }
+      if (part.type === "diff") {
+        this.upsertRunItem({
+          runId: call.runId,
+          piItemRef: `diff:${call.id}:${part.workspaceChangeId}`,
+          status: itemStatus,
+          content: {
+            type: "diff",
+            toolCallId: call.id,
+            workspaceChangeId: part.workspaceChangeId,
+            relativePath: part.relativePath,
+            patch: part.patch,
+          },
+          startedAt: call.startedAt ?? now,
+          completedAt: now,
+          errorCode: call.errorCode,
+        });
+      }
+    }
+    const operation = call.input;
+    if (!operation?.operation.startsWith("shell_")) return;
+    const data =
+      resultData && typeof resultData === "object" ? (resultData as Record<string, unknown>) : {};
+    const output = resultContent
+      .filter(
+        (part): part is Extract<(typeof resultContent)[number], { type: "text" }> =>
+          part.type === "text",
+      )
+      .map(({ text }) => text)
+      .join("\n")
+      .slice(0, 2_000_000);
+    const command =
+      operation.operation === "shell_execute" ? operation.command : operation.operation;
+    const args =
+      operation.operation === "shell_execute"
+        ? operation.args
+        : "processId" in operation
+          ? [operation.processId]
+          : [];
+    this.upsertRunItem({
+      runId: call.runId,
+      piItemRef: `command:${call.id}`,
+      status: itemStatus,
+      content: {
+        type: "command",
+        toolCallId: call.id,
+        command,
+        args,
+        cwd:
+          operation.operation === "shell_execute"
+            ? (operation.cwd ?? operation.relativeCwd ?? null)
+            : null,
+        processId: typeof data.processId === "string" ? data.processId : null,
+        exitCode:
+          typeof data.exitCode === "number" && Number.isInteger(data.exitCode)
+            ? data.exitCode
+            : null,
+        output,
+        outputTruncated: data.outputTruncated === true || output.length >= 2_000_000,
+      },
+      startedAt: call.startedAt ?? now,
+      completedAt: now,
+      errorCode: call.errorCode,
+    });
+  }
+
   #toolCall(row: SqlRow): ToolCall {
     return toolCallSchema.parse({
       id: row.id,
@@ -747,9 +1532,11 @@ export class ToolRepository {
       status: row.status,
       risk: row.risk,
       idempotencyKey: row.idempotency_key,
+      input: row.input_json === null ? null : JSON.parse(String(row.input_json)),
       inputSummary: row.input_summary,
       targetSummary: row.target_summary,
       resultSummary: row.result_summary,
+      resultContent: JSON.parse(String(row.result_content_json ?? "[]")),
       errorCode: row.error_code,
       startedAt: row.started_at,
       completedAt: row.completed_at,
@@ -797,6 +1584,21 @@ export class ToolRepository {
     });
   }
 
+  #workspaceGrant(row: SqlRow): WorkspaceGrant {
+    return workspaceGrantSchema.parse({
+      id: row.id,
+      ownerProfileId: row.owner_profile_id,
+      conversationId: row.conversation_id ?? null,
+      displayName: row.display_name,
+      rootPath: row.root_path,
+      access: row.access,
+      allowNetwork: Number(row.allow_network) === 1,
+      expiresAt: row.expires_at,
+      revokedAt: row.revoked_at,
+      createdAt: row.created_at,
+    });
+  }
+
   #transaction<T>(operation: () => T): T {
     this.#database.exec("BEGIN IMMEDIATE");
     try {
@@ -807,5 +1609,17 @@ export class ToolRepository {
       this.#database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  #cancellationStatus(
+    publicStatus: string,
+    runStatus: string | undefined,
+    cancellationRequestedAt: string | null | undefined,
+  ): string {
+    if (!cancellationRequestedAt || !runStatus) return publicStatus;
+    if (["queued", "running", "waiting_for_user", "waiting_for_permission"].includes(runStatus)) {
+      return "cancelling";
+    }
+    return runStatus === "cancelled" ? "interrupted" : publicStatus;
   }
 }

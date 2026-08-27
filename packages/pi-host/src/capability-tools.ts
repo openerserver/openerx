@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { PiToolRequestFrame, ToolOperation } from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
+import { productToolResult } from "./tool-result";
 
 export interface PiCapabilityToolTransport {
   request(frame: PiToolRequestFrame): Promise<unknown>;
@@ -20,6 +21,7 @@ function idempotencyKey(generationId: string, toolCallId: string, toolName: stri
 export function createProductCapabilityTools(input: {
   generationId: string;
   conversationId: string;
+  branchId: string;
   assistantMessageId: string;
   transport: PiCapabilityToolTransport;
 }): ToolDefinition[] {
@@ -27,12 +29,13 @@ export function createProductCapabilityTools(input: {
     toolCallId: string,
     toolName: string,
     operation: OperationWithoutIdempotency,
-  ): Promise<{ content: Array<{ type: "text"; text: string }>; details: unknown }> => {
+  ) => {
     const result = await input.transport.request({
       kind: "pi.tool.request",
       requestId: randomUUID(),
       generationId: input.generationId,
       conversationId: input.conversationId,
+      branchId: input.branchId,
       assistantMessageId: input.assistantMessageId,
       piToolCallId: toolCallId,
       toolName,
@@ -41,7 +44,7 @@ export function createProductCapabilityTools(input: {
         idempotencyKey: idempotencyKey(input.generationId, toolCallId, toolName),
       } as ToolOperation,
     });
-    return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+    return productToolResult(result);
   };
 
   return [
@@ -136,10 +139,11 @@ export function createProductCapabilityTools(input: {
       name: "openerx_shell",
       label: "Run code or command",
       description:
-        "Run one argv-based command in the approved workspace, optionally as a controllable long process.",
+        "Run one argv-based command inside an explicitly authorized read-write workspace. Paths are relative to the grant root.",
       parameters: Type.Object(
         {
-          cwd: Type.String({ minLength: 1, maxLength: 4_096 }),
+          workspaceGrantId: Type.String({ format: "uuid" }),
+          relativeCwd: Type.Optional(Type.String({ maxLength: 2_048 })),
           command: Type.String({ minLength: 1, maxLength: 500 }),
           args: Type.Array(Type.String({ maxLength: 8_000 }), { maxItems: 200 }),
           timeoutMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 1_800_000 })),
@@ -151,7 +155,8 @@ export function createProductCapabilityTools(input: {
       execute: async (toolCallId, params) =>
         await invoke(toolCallId, "openerx_shell", {
           operation: "shell_execute",
-          cwd: params.cwd,
+          workspaceGrantId: params.workspaceGrantId,
+          relativeCwd: params.relativeCwd ?? ".",
           command: params.command,
           args: params.args,
           timeoutMs: params.timeoutMs ?? 120_000,
@@ -239,47 +244,6 @@ export function createProductCapabilityTools(input: {
       ),
       execute: async (toolCallId, params) =>
         await invoke(toolCallId, "openerx_desktop", { operation: "desktop", ...params }),
-    }),
-    defineTool({
-      name: "openerx_mcp",
-      label: "Use MCP server",
-      description:
-        "Connect, list, invoke, or disconnect a configured STDIO or Streamable HTTP MCP server.",
-      parameters: Type.Object(
-        {
-          action: Type.Union([
-            Type.Literal("connect"),
-            Type.Literal("list_tools"),
-            Type.Literal("call"),
-            Type.Literal("disconnect"),
-          ]),
-          serverId: Type.String({ format: "uuid" }),
-          tool: Type.Optional(Type.String({ maxLength: 300 })),
-          argumentsJson: Type.Optional(Type.String({ maxLength: 5_000_000 })),
-          clearCredentials: Type.Optional(Type.Boolean()),
-        },
-        { additionalProperties: false },
-      ),
-      execute: async (toolCallId, params) => {
-        const operation: OperationWithoutIdempotency =
-          params.action === "connect"
-            ? { operation: "mcp_connect", serverId: params.serverId }
-            : params.action === "list_tools"
-              ? { operation: "mcp_list_tools", serverId: params.serverId }
-              : params.action === "disconnect"
-                ? {
-                    operation: "mcp_disconnect",
-                    serverId: params.serverId,
-                    clearCredentials: params.clearCredentials ?? false,
-                  }
-                : {
-                    operation: "mcp_call",
-                    serverId: params.serverId,
-                    tool: params.tool ?? "",
-                    arguments: JSON.parse(params.argumentsJson ?? "{}"),
-                  };
-        return await invoke(toolCallId, "openerx_mcp", operation);
-      },
     }),
   ];
 }

@@ -54,14 +54,15 @@ describe("Pi persistent SessionManager boundary", () => {
   it("restores the same append-only conversation session after process reconstruction", async () => {
     const { root, cwd } = directories();
     const conversationId = randomUUID();
+    const branchId = randomUUID();
     const firstRegistry = new ProductSessionRegistry(root, cwd);
-    const first = await firstRegistry.sessionManager(conversationId);
+    const first = await firstRegistry.sessionManager(conversationId, branchId);
     first.appendMessage({ role: "user", content: "before crash", timestamp: Date.now() });
     appendAssistant(first, "persisted response");
     const sessionFile = first.getSessionFile();
 
     const secondRegistry = new ProductSessionRegistry(root, cwd);
-    const restored = await secondRegistry.sessionManager(conversationId);
+    const restored = await secondRegistry.sessionManager(conversationId, branchId);
     expect(restored.getSessionFile()).toBe(sessionFile);
     expect(restored.buildSessionContext().messages).toEqual(
       expect.arrayContaining([
@@ -74,8 +75,9 @@ describe("Pi persistent SessionManager boundary", () => {
   it("recovers a damaged registry from Pi session headers and honors compaction context", async () => {
     const { root, cwd } = directories();
     const conversationId = randomUUID();
+    const branchId = randomUUID();
     const registry = new ProductSessionRegistry(root, cwd);
-    const manager = await registry.sessionManager(conversationId);
+    const manager = await registry.sessionManager(conversationId, branchId);
     const first = manager.appendMessage({ role: "user", content: "old context", timestamp: 1 });
     appendAssistant(manager, "old answer");
     const kept = manager.appendMessage({ role: "user", content: "keep this", timestamp: 2 });
@@ -83,13 +85,34 @@ describe("Pi persistent SessionManager boundary", () => {
     manager.appendCompaction("summary of old context", kept, 12_000, { source: "test" });
     writeFileSync(path.join(root, "pi-sessions", "conversation-sessions.json"), "broken-json");
 
-    const recovered = await new ProductSessionRegistry(root, cwd).sessionManager(conversationId);
+    const recovered = await new ProductSessionRegistry(root, cwd).sessionManager(
+      conversationId,
+      branchId,
+    );
     const contextEntries = recovered.buildContextEntries();
     expect(contextEntries.some((entry) => entry.type === "compaction")).toBe(true);
     expect(recovered.buildSessionContext().messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ role: "user", content: "keep this" })]),
     );
     expect(recovered.getEntry(first)).toBeDefined();
+  });
+
+  it("keeps two branches in the same conversation in separate Pi sessions", async () => {
+    const { root, cwd } = directories();
+    const registry = new ProductSessionRegistry(root, cwd);
+    const conversationId = randomUUID();
+    const redBranchId = randomUUID();
+    const blueBranchId = randomUUID();
+    const red = await registry.sessionManager(conversationId, redBranchId);
+    const blue = await registry.sessionManager(conversationId, blueBranchId);
+    red.appendMessage({ role: "user", content: "代号为红", timestamp: 1 });
+    blue.appendMessage({ role: "user", content: "代号为蓝", timestamp: 1 });
+
+    expect(red.getSessionFile()).not.toBe(blue.getSessionFile());
+    expect(JSON.stringify(red.buildSessionContext())).toContain("代号为红");
+    expect(JSON.stringify(red.buildSessionContext())).not.toContain("代号为蓝");
+    expect(JSON.stringify(blue.buildSessionContext())).toContain("代号为蓝");
+    expect(JSON.stringify(blue.buildSessionContext())).not.toContain("代号为红");
   });
 });
 
@@ -99,7 +122,15 @@ describe("Pi native Broker tools", () => {
     const request = vi.fn(async () => [{ id: randomUUID(), displayName: "brief.pdf" }]);
     const generationId = randomUUID();
     const conversationId = randomUUID();
-    const tools = createProductFileTools({ generationId, conversationId, transport: { request } });
+    const branchId = randomUUID();
+    const assistantMessageId = randomUUID();
+    const tools = createProductFileTools({
+      generationId,
+      conversationId,
+      branchId,
+      assistantMessageId,
+      transport: { request },
+    });
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     runtime.registerNativeProvider(faux.provider);
@@ -119,6 +150,7 @@ describe("Pi native Broker tools", () => {
         "openerx_file_list",
         "openerx_file_read",
         "openerx_file_search",
+        "openerx_office_artifact",
       ].sort(),
     );
     expect(session.getActiveToolNames()).not.toEqual(
@@ -130,10 +162,74 @@ describe("Pi native Broker tools", () => {
       expect.objectContaining({
         generationId,
         conversationId,
+        branchId,
+        assistantMessageId,
+        piToolCallId: "tool-call",
+        toolName: "openerx_file_list",
         request: { operation: "list", input: {} },
       }),
     );
     expect(JSON.stringify(request.mock.calls)).not.toMatch(/absolutePath|localPath/);
     session.dispose();
+  });
+
+  it("returns every generated Office review surface to Pi as typed image content", async () => {
+    const generationId = randomUUID();
+    const conversationId = randomUUID();
+    const branchId = randomUUID();
+    const assistantMessageId = randomUUID();
+    const artifactId = randomUUID();
+    const imageDataUrl = `data:image/svg+xml;base64,${Buffer.from("<svg/>").toString("base64")}`;
+    const modelImageDataUrl = `data:image/png;base64,${Buffer.from("png").toString("base64")}`;
+    const request = vi.fn(async () => ({
+      artifact: { id: artifactId, currentVersion: 1 },
+      preview: {
+        renderedSurfaces: [
+          { kind: "slide", index: 1, label: "幻灯片 1", imageDataUrl, modelImageDataUrl },
+          { kind: "slide", index: 2, label: "幻灯片 2", imageDataUrl, modelImageDataUrl },
+        ],
+      },
+    }));
+    const tools = createProductFileTools({
+      generationId,
+      conversationId,
+      branchId,
+      assistantMessageId,
+      transport: { request },
+    });
+    const office = tools.find(({ name }) => name === "openerx_office_artifact");
+    const result = await office?.execute(
+      "office-call",
+      {
+        displayName: "release-review",
+        spec: {
+          format: "pptx",
+          title: "Release review",
+          slides: [
+            { title: "Scope", bullets: [] },
+            { title: "Gate", bullets: ["Visual review"] },
+          ],
+        },
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(result?.content).toEqual([
+      expect.objectContaining({ type: "text", text: expect.stringContaining("2 visual-review") }),
+      { type: "image", mimeType: "image/png", data: expect.any(String) },
+      { type: "image", mimeType: "image/png", data: expect.any(String) },
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantMessageId,
+        piToolCallId: "office-call",
+        toolName: "openerx_office_artifact",
+        request: expect.objectContaining({ operation: "artifact.office.write" }),
+      }),
+    );
+    expect(JSON.stringify(result?.details)).not.toContain("imageDataUrl");
+    expect(JSON.stringify(result?.details)).not.toContain("modelImageDataUrl");
   });
 });

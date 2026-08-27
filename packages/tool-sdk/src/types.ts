@@ -1,6 +1,7 @@
 import type {
   CapabilityAction,
   CapabilityScope,
+  HostToolAvailability,
   NormalizedToolResult,
   PermissionRequest,
   ToolCapability,
@@ -31,6 +32,15 @@ export interface ToolAdapter {
   stopAll?(): Promise<void>;
 }
 
+export class ToolAdapterError extends Error {
+  constructor(
+    readonly code: string,
+    readonly result: NormalizedToolResult,
+  ) {
+    super(code);
+  }
+}
+
 export interface ToolExecutionProjection {
   generationId: string;
   workItemId: string;
@@ -47,6 +57,10 @@ export type BrokerExecutionResult =
 
 export interface CapabilityHost {
   execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult>;
+}
+
+export interface CapabilityAvailabilityHost {
+  availability(): Promise<HostToolAvailability>;
 }
 
 export interface WebSearchTransport {
@@ -70,4 +84,19 @@ export interface ImageGenerationTransport {
 export interface CredentialResolver {
   resolve(credentialRef: string): Promise<string>;
   clear(credentialRef: string): Promise<void>;
+}
+
+export interface CredentialStore extends CredentialResolver {
+  save(credentialRef: string, value: string): Promise<void>;
+}
+
+export interface OAuthCallbackSession {
+  sessionId: string;
+  redirectUrl: string;
+}
+
+export interface OAuthInteractionHost {
+  prepareOAuth(serverId: string): Promise<OAuthCallbackSession>;
+  waitForOAuthCallback(sessionId: string, authorizationUrl: string): Promise<string>;
+  cancelOAuth(sessionId: string): Promise<void>;
 }

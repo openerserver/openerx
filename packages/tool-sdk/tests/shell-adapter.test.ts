@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { ShellToolAdapter } from "../src";
+import { ShellToolAdapter, shellToolAvailability, ToolAdapterError } from "../src";
 
 const directories: string[] = [];
 
@@ -21,6 +22,25 @@ afterEach(() => {
 });
 
 describe("ShellToolAdapter", () => {
+  it("advertises Shell only when the macOS sandbox executable is available", () => {
+    expect(shellToolAvailability({ platform: "darwin", sandboxExecutableExists: true })).toEqual({
+      availableToolNames: ["openerx_shell", "openerx_shell_process"],
+      unavailableReasons: {},
+    });
+    for (const probe of [
+      { platform: "darwin" as const, sandboxExecutableExists: false },
+      { platform: "win32" as const, sandboxExecutableExists: true },
+    ]) {
+      expect(shellToolAvailability(probe)).toEqual({
+        availableToolNames: [],
+        unavailableReasons: {
+          openerx_shell: "SHELL_OS_SANDBOX_UNAVAILABLE",
+          openerx_shell_process: "SHELL_OS_SANDBOX_UNAVAILABLE",
+        },
+      });
+    }
+  });
+
   it("runs argv without a shell inside the approved workspace", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
     directories.push(workspace);
@@ -43,7 +63,36 @@ describe("ShellToolAdapter", () => {
     await adapter.stopAll();
   });
 
-  it("rejects cwd escape and direct network tools before spawning", async () => {
+  it("retains failed command output as a typed failure result", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-failure-"));
+    directories.push(workspace);
+    const adapter = new ShellToolAdapter([workspace]);
+    try {
+      await adapter.execute(
+        {
+          operation: "shell_execute",
+          cwd: workspace,
+          command: process.execPath,
+          args: ["-e", "process.stderr.write('failure-output'); process.exit(3)"],
+          timeoutMs: 10_000,
+          background: false,
+          allowNetwork: false,
+          idempotencyKey: "shell-command-failure-0001",
+        },
+        context(),
+      );
+      throw new Error("expected shell failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ToolAdapterError);
+      expect((error as ToolAdapterError).code).toBe("SHELL_EXIT_3");
+      expect((error as ToolAdapterError).result).toMatchObject({
+        content: [{ type: "text", text: "failure-output" }],
+        data: { exitCode: 3, state: "failed" },
+      });
+    }
+  });
+
+  it("rejects cwd escape and refuses execution when no native sandbox exists", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
     directories.push(workspace);
     const adapter = new ShellToolAdapter([workspace]);
@@ -77,35 +126,90 @@ describe("ShellToolAdapter", () => {
           },
           context(),
         ),
-      ).rejects.toThrow("SHELL_NETWORK_DENIED");
+      ).rejects.toThrow("SHELL_OS_SANDBOX_UNAVAILABLE");
     }
   });
 
-  it("denies reads outside the approved workspace on the macOS sandbox", async () => {
+  it("denies Node and Python reads outside the workspace even when network is approved", async () => {
     if (process.platform !== "darwin") return;
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-workspace-"));
+    const outside = mkdtempSync(path.join(tmpdir(), "openerx-shell-outside-"));
     directories.push(workspace);
+    directories.push(outside);
     const adapter = new ShellToolAdapter([workspace]);
+    const outsideFile = fileURLToPath(import.meta.url);
+    for (const allowNetwork of [false, true]) {
+      await expect(
+        adapter.execute(
+          {
+            operation: "shell_execute",
+            cwd: workspace,
+            command: process.execPath,
+            args: ["-e", "require('node:fs').readFileSync(process.argv[1], 'utf8')", outsideFile],
+            timeoutMs: 5_000,
+            background: false,
+            allowNetwork,
+            idempotencyKey: `shell-node-read-${allowNetwork}`,
+          },
+          context(),
+        ),
+      ).rejects.toThrow(/SHELL_EXIT_/);
+      await expect(
+        adapter.execute(
+          {
+            operation: "shell_execute",
+            cwd: workspace,
+            command: "/usr/bin/python3",
+            args: ["-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).read_text()", outsideFile],
+            timeoutMs: 5_000,
+            background: false,
+            allowNetwork,
+            idempotencyKey: `shell-python-read-${allowNetwork}`,
+          },
+          context(),
+        ),
+      ).rejects.toThrow(/SHELL_EXIT_/);
+    }
+    await adapter.stopAll();
+  });
+
+  it("keeps network policy independent from the macOS filesystem sandbox", async () => {
+    if (process.platform !== "darwin") return;
+    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-network-"));
+    directories.push(workspace);
+    const server = createServer((_request, response) => response.end("network-ok"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server address missing");
+    const url = `http://127.0.0.1:${address.port}`;
+    const adapter = new ShellToolAdapter([workspace]);
+    const operation = {
+      operation: "shell_execute" as const,
+      cwd: workspace,
+      command: process.execPath,
+      args: [
+        "-e",
+        "require('node:http').get(process.argv[1],r=>{r.pipe(process.stdout);r.on('end',()=>process.exit(0))}).on('error',e=>{throw e})",
+        url,
+      ],
+      timeoutMs: 5_000,
+      background: false,
+    };
     await expect(
       adapter.execute(
-        {
-          operation: "shell_execute",
-          cwd: workspace,
-          command: process.execPath,
-          args: [
-            "-e",
-            "require('node:fs').readFileSync(process.argv[1], 'utf8')",
-            fileURLToPath(import.meta.url),
-          ],
-          timeoutMs: 5_000,
-          background: false,
-          allowNetwork: false,
-          idempotencyKey: "shell-command-0007",
-        },
+        { ...operation, allowNetwork: false, idempotencyKey: "shell-network-denied-0001" },
         context(),
       ),
     ).rejects.toThrow(/SHELL_EXIT_/);
-    await adapter.stopAll();
+    await expect(
+      adapter.execute(
+        { ...operation, allowNetwork: true, idempotencyKey: "shell-network-allowed-0001" },
+        context(),
+      ),
+    ).resolves.toMatchObject({ summary: "network-ok" });
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   });
 
   it("starts, observes, and stops a long child process", async () => {

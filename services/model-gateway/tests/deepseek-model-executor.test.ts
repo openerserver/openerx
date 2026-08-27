@@ -146,7 +146,7 @@ describe("DeepSeekModelExecutor", () => {
       expect.objectContaining({
         modelRef: deepSeekModelRefs.vision,
         version: "official-experimental-2026-08-21",
-        capabilities: expect.objectContaining({ imageInput: true, tools: true }),
+        capabilities: expect.objectContaining({ imageInput: true, functionCalling: true }),
       }),
     );
   });
@@ -300,7 +300,7 @@ describe("DeepSeekModelExecutor", () => {
     const deltas: string[] = [];
     const result = await executor.stream(
       request({
-        requirements: { tools: true },
+        requirements: { functionCalling: true },
         context: {
           systemPrompt: "You are OpenerX.",
           messages: [{ role: "user", content: "检查项目", timestamp: Date.now() }],

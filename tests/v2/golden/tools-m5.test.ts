@@ -65,7 +65,7 @@ describe("M5 Tool Golden Tasks", () => {
         count: 1,
         idempotencyKey: "golden-image-0001",
       }),
-    ).toMatchObject({ capability: "web.search", risk: "L2" });
+    ).toMatchObject({ capability: "image.generate", risk: "L2" });
   });
 
   it("keeps M5 evidence and recognizes the later M7 Skill evidence", () => {

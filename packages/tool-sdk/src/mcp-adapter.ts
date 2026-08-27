@@ -1,13 +1,21 @@
+import { createHash } from "node:crypto";
 import {
   type AuthProvider,
   Client,
-  ClientCredentialsProvider,
   type ListToolsResult,
-  type OAuthClientProvider,
   StreamableHTTPClientTransport,
+  UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import type { McpServerConfig, NormalizedToolResult, ToolOperation } from "@openerx/contracts";
+import type {
+  McpServerAuthorizationState,
+  McpServerConfig,
+  McpToolAnnotations,
+  McpToolDescriptor,
+  NormalizedToolResult,
+  ToolOperation,
+} from "@openerx/contracts";
+import { type InteractiveMcpOAuthProvider, inspectMcpOAuthCredential } from "./mcp-oauth-provider";
 import type { CredentialResolver, ToolAdapter, ToolExecutionContext } from "./types";
 
 interface McpConnection {
@@ -18,41 +26,8 @@ interface McpConnection {
 
 export type McpOAuthProviderFactory = (
   config: Extract<McpServerConfig, { transport: "streamable_http" }>,
-) => Promise<OAuthClientProvider>;
-
-export interface McpOAuthClientCredentials {
-  grantType: "client_credentials";
-  clientId: string;
-  clientSecret: string;
-  scope?: string;
-}
-
-export function parseMcpOAuthClientCredentials(value: string): McpOAuthClientCredentials {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("MCP_OAUTH_CREDENTIAL_INVALID");
-  }
-  if (!parsed || typeof parsed !== "object") throw new Error("MCP_OAUTH_CREDENTIAL_INVALID");
-  const record = parsed as Record<string, unknown>;
-  if (
-    record.grantType !== "client_credentials" ||
-    typeof record.clientId !== "string" ||
-    !record.clientId ||
-    typeof record.clientSecret !== "string" ||
-    !record.clientSecret ||
-    (record.scope !== undefined && typeof record.scope !== "string")
-  ) {
-    throw new Error("MCP_OAUTH_CREDENTIAL_INVALID");
-  }
-  return {
-    grantType: "client_credentials",
-    clientId: record.clientId,
-    clientSecret: record.clientSecret,
-    ...(record.scope ? { scope: record.scope as string } : {}),
-  };
-}
+  options: { interactive: boolean },
+) => Promise<InteractiveMcpOAuthProvider>;
 
 function textSummary(content: unknown): string {
   if (!Array.isArray(content)) return "MCP 工具已完成";
@@ -67,6 +42,91 @@ function textSummary(content: unknown): string {
   return text || `MCP 返回 ${content.length} 个内容块`;
 }
 
+function typedMcpContent(content: unknown): NormalizedToolResult["content"] {
+  if (!Array.isArray(content)) return [{ type: "text", text: "MCP 工具已完成" }];
+  return content.flatMap((item): NormalizedToolResult["content"] => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      return [{ type: "text" as const, text: record.text.slice(0, 1_000_000) }];
+    }
+    if (
+      record.type === "image" &&
+      typeof record.data === "string" &&
+      typeof record.mimeType === "string" &&
+      record.mimeType.startsWith("image/")
+    ) {
+      return [{ type: "image" as const, data: record.data, mimeType: record.mimeType }];
+    }
+    if (record.type === "resource_link" && typeof record.uri === "string") {
+      return [{ type: "text" as const, text: `Resource: ${record.uri}` }];
+    }
+    if (record.type === "resource" && record.resource && typeof record.resource === "object") {
+      const resource = record.resource as Record<string, unknown>;
+      if (typeof resource.text === "string") {
+        return [{ type: "text" as const, text: resource.text.slice(0, 1_000_000) }];
+      }
+      return [
+        { type: "text" as const, text: `Binary resource: ${String(resource.uri ?? "unknown")}` },
+      ];
+    }
+    return [];
+  });
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function safeName(value: string, maximum: number): string {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/gu, "_")
+    .replace(/^_+|_+$/gu, "");
+  return (normalized || "tool").slice(0, maximum);
+}
+
+function descriptor(
+  config: McpServerConfig,
+  tool: ListToolsResult["tools"][number],
+): McpToolDescriptor {
+  const rawAnnotations = (tool.annotations ?? {}) as Partial<McpToolAnnotations>;
+  const annotations: McpToolAnnotations = {
+    readOnlyHint: rawAnnotations.readOnlyHint === true,
+    destructiveHint: rawAnnotations.destructiveHint ?? rawAnnotations.readOnlyHint !== true,
+    idempotentHint: rawAnnotations.idempotentHint === true,
+    openWorldHint: rawAnnotations.openWorldHint ?? true,
+  };
+  const inputSchema =
+    tool.inputSchema && typeof tool.inputSchema === "object"
+      ? (tool.inputSchema as Record<string, unknown>)
+      : { type: "object", additionalProperties: false };
+  const descriptorDigest = createHash("sha256")
+    .update(canonical({ serverId: config.id, toolName: tool.name, inputSchema, annotations }))
+    .digest("hex");
+  const prefix = `mcp__${safeName(config.name, 14)}__${safeName(tool.name, 30)}`;
+  const name = `${prefix.slice(0, 57)}_${descriptorDigest.slice(0, 6)}`;
+  return {
+    name,
+    serverId: config.id,
+    serverName: config.name,
+    toolName: tool.name,
+    title: tool.title ?? tool.name,
+    description: tool.description ?? `MCP tool ${tool.name} from ${config.name}`,
+    inputSchema,
+    annotations,
+    descriptorDigest,
+  };
+}
+
 export class McpToolAdapter implements ToolAdapter {
   readonly operations = ["mcp_connect", "mcp_list_tools", "mcp_call", "mcp_disconnect"] as const;
   readonly #configs = new Map<string, McpServerConfig>();
@@ -78,7 +138,29 @@ export class McpToolAdapter implements ToolAdapter {
   ) {}
 
   register(config: McpServerConfig): void {
+    const previous = this.#configs.get(config.id);
     this.#configs.set(config.id, config);
+    if (previous && canonical(previous) !== canonical(config)) {
+      const connection = this.#connections.get(config.id);
+      this.#connections.delete(config.id);
+      void connection?.client.close().catch(() => undefined);
+    }
+  }
+
+  async discoverEnabledTools(signal = new AbortController().signal): Promise<McpToolDescriptor[]> {
+    const discovered = await Promise.allSettled(
+      [...this.#configs.values()]
+        .filter(({ enabled }) => enabled)
+        .map(async (config) => {
+          const listed = await this.#list(config.id, signal);
+          return listed.tools
+            .filter(
+              (tool) => config.enabledTools.length === 0 || config.enabledTools.includes(tool.name),
+            )
+            .map((tool) => descriptor(config, tool));
+        }),
+    );
+    return discovered.flatMap((entry) => (entry.status === "fulfilled" ? entry.value : []));
   }
 
   async unregister(serverId: string): Promise<void> {
@@ -101,6 +183,25 @@ export class McpToolAdapter implements ToolAdapter {
       ...(config ? { transport: config.transport } : {}),
       ...(connection ? { connectedAt: connection.connectedAt } : {}),
     };
+  }
+
+  async authorizationStates(): Promise<McpServerAuthorizationState[]> {
+    return await Promise.all(
+      [...this.#configs.values()].map(async (config) => await this.#authorizationState(config)),
+    );
+  }
+
+  async authorize(serverId: string, signal: AbortSignal): Promise<McpServerAuthorizationState> {
+    if (signal.aborted) throw new Error("TOOL_CANCELLED");
+    const config = this.#config(serverId);
+    if (config.transport !== "streamable_http" || config.auth !== "oauth") {
+      throw new Error("MCP_OAUTH_NOT_CONFIGURED");
+    }
+    const existing = this.#connections.get(serverId);
+    await existing?.client.close().catch(() => undefined);
+    this.#connections.delete(serverId);
+    await this.#connect(serverId, true);
+    return await this.#authorizationState(config);
   }
 
   async execute(
@@ -126,35 +227,32 @@ export class McpToolAdapter implements ToolAdapter {
         );
       }
       case "mcp_list_tools": {
-        let connection = await this.#connected(operation.serverId);
-        let listed: ListToolsResult;
-        try {
-          listed = await connection.client.listTools(undefined, { signal: context.signal });
-        } catch {
-          await connection.client.close().catch(() => undefined);
-          this.#connections.delete(operation.serverId);
-          connection = await this.#connect(operation.serverId);
-          listed = await connection.client.listTools(undefined, { signal: context.signal });
-        }
+        const config = this.#config(operation.serverId);
+        const listed = await this.#list(operation.serverId, context.signal);
         const tools = listed.tools.map((tool) => ({
-          name: tool.name,
-          title: tool.title,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          enabled:
-            connection.config.enabledTools.length === 0 ||
-            connection.config.enabledTools.includes(tool.name),
+          ...descriptor(config, tool),
+          enabled: config.enabledTools.length === 0 || config.enabledTools.includes(tool.name),
         }));
         return this.#result(`${tools.length} 个 MCP 工具`, { tools }, false);
       }
       case "mcp_call": {
-        const connection = await this.#connected(operation.serverId);
-        if (
-          connection.config.enabledTools.length > 0 &&
-          !connection.config.enabledTools.includes(operation.tool)
-        ) {
+        const config = this.#config(operation.serverId);
+        if (!config.enabled) throw new Error("MCP_SERVER_DISABLED");
+        if (config.enabledTools.length > 0 && !config.enabledTools.includes(operation.tool)) {
           throw new Error("MCP_TOOL_DISABLED");
         }
+        const current = (await this.#list(operation.serverId, context.signal)).tools.find(
+          ({ name }) => name === operation.tool,
+        );
+        if (!current) throw new Error("MCP_TOOL_NOT_FOUND");
+        const currentDescriptor = descriptor(config, current);
+        if (
+          currentDescriptor.descriptorDigest !== operation.descriptorDigest ||
+          canonical(currentDescriptor.annotations) !== canonical(operation.annotations)
+        ) {
+          throw new Error("MCP_TOOL_DESCRIPTOR_CHANGED");
+        }
+        const connection = await this.#connected(operation.serverId);
         const result = await connection.client.callTool(
           { name: operation.tool, arguments: operation.arguments },
           { signal: context.signal },
@@ -162,10 +260,11 @@ export class McpToolAdapter implements ToolAdapter {
         if (result.isError) throw new Error("MCP_TOOL_ERROR");
         return {
           summary: textSummary(result.content),
+          content: typedMcpContent(result.content),
           data: result,
           sources: [],
           artifacts: [],
-          sideEffectCommitted: true,
+          sideEffectCommitted: !operation.annotations.readOnlyHint,
           durationMs: 0,
         };
       }
@@ -199,7 +298,19 @@ export class McpToolAdapter implements ToolAdapter {
     return await this.#connect(serverId);
   }
 
-  async #connect(serverId: string): Promise<McpConnection> {
+  async #list(serverId: string, signal: AbortSignal): Promise<ListToolsResult> {
+    let connection = await this.#connected(serverId);
+    try {
+      return await connection.client.listTools(undefined, { signal });
+    } catch {
+      await connection.client.close().catch(() => undefined);
+      this.#connections.delete(serverId);
+      connection = await this.#connect(serverId);
+      return await connection.client.listTools(undefined, { signal });
+    }
+  }
+
+  async #connect(serverId: string, interactive = false): Promise<McpConnection> {
     const existing = this.#connections.get(serverId);
     if (existing) return existing;
     const config = this.#config(serverId);
@@ -216,42 +327,85 @@ export class McpToolAdapter implements ToolAdapter {
       });
       await client.connect(transport);
     } else {
-      let authProvider: AuthProvider | OAuthClientProvider | undefined;
+      let authProvider: AuthProvider | InteractiveMcpOAuthProvider | undefined;
+      let oauthProvider: InteractiveMcpOAuthProvider | undefined;
       if (config.auth === "bearer") {
         if (!config.credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
         authProvider = {
           token: async () => await this.credentials.resolve(config.credentialRef as string),
         };
       } else if (config.auth === "oauth") {
-        if (this.oauthProviderFactory) {
-          authProvider = await this.oauthProviderFactory(config);
-        } else {
-          if (!config.credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
-          const oauth = parseMcpOAuthClientCredentials(
-            await this.credentials.resolve(config.credentialRef),
-          );
-          authProvider = new ClientCredentialsProvider({
-            clientId: oauth.clientId,
-            clientSecret: oauth.clientSecret,
-            clientName: "OpenerX",
-            ...(oauth.scope ? { scope: oauth.scope } : {}),
-          });
-        }
+        if (!config.credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
+        if (!this.oauthProviderFactory) throw new Error("MCP_OAUTH_AUTHORIZATION_CODE_UNAVAILABLE");
+        oauthProvider = await this.oauthProviderFactory(config, { interactive });
+        if (interactive) await oauthProvider.invalidateCredentials?.("tokens");
+        authProvider = oauthProvider;
       }
-      const transport = new StreamableHTTPClientTransport(new URL(config.url), {
-        ...(authProvider ? { authProvider } : {}),
-        reconnectionOptions: {
-          initialReconnectionDelay: 500,
-          maxReconnectionDelay: 10_000,
-          reconnectionDelayGrowFactor: 1.5,
-          maxRetries: 3,
-        },
-      });
-      await client.connect(transport);
+      const createTransport = () =>
+        new StreamableHTTPClientTransport(new URL(config.url), {
+          ...(authProvider ? { authProvider } : {}),
+          reconnectionOptions: {
+            initialReconnectionDelay: 500,
+            maxReconnectionDelay: 10_000,
+            reconnectionDelayGrowFactor: 1.5,
+            maxRetries: 3,
+          },
+        });
+      let activeClient = client;
+      const transport = createTransport();
+      try {
+        await activeClient.connect(transport);
+      } catch (error) {
+        if (!oauthProvider || !(error instanceof UnauthorizedError)) throw error;
+        const callback = oauthProvider.takeCallbackParams();
+        if (!callback) throw new Error("MCP_OAUTH_AUTHORIZATION_REQUIRED");
+        await transport.finishAuth(callback);
+        await activeClient.close().catch(() => undefined);
+        activeClient = new Client({ name: "openerx", version: "2.0.0-alpha.0" });
+        await activeClient.connect(createTransport());
+      } finally {
+        await oauthProvider?.close();
+      }
+      const connection = { client: activeClient, config, connectedAt: new Date().toISOString() };
+      this.#connections.set(serverId, connection);
+      return connection;
     }
     const connection = { client, config, connectedAt: new Date().toISOString() };
     this.#connections.set(serverId, connection);
     return connection;
+  }
+
+  async #authorizationState(config: McpServerConfig): Promise<McpServerAuthorizationState> {
+    const connection = this.#connections.get(config.id);
+    const base = {
+      serverId: config.id,
+      connected: Boolean(connection),
+      connectedAt: connection?.connectedAt ?? null,
+      expiresAt: null,
+      reason: null,
+    };
+    if (config.transport !== "streamable_http" || config.auth !== "oauth") {
+      return { ...base, status: "not_required" };
+    }
+    if (!config.credentialRef) {
+      return { ...base, status: "unavailable", reason: "MCP_CREDENTIAL_REQUIRED" };
+    }
+    try {
+      const inspection = await inspectMcpOAuthCredential(this.credentials, config.credentialRef);
+      return {
+        ...base,
+        status: inspection.authorized ? "authorized" : "authorization_required",
+        expiresAt: inspection.expiresAt,
+      };
+    } catch (error) {
+      const reason =
+        (error instanceof Error ? error.message.split(":", 1)[0] : undefined) ??
+        "MCP_OAUTH_UNAVAILABLE";
+      if (reason === "MCP_CREDENTIAL_NOT_FOUND") {
+        return { ...base, status: "authorization_required", reason: null };
+      }
+      return { ...base, status: "unavailable", reason };
+    }
   }
 
   #config(serverId: string): McpServerConfig {
@@ -261,6 +415,14 @@ export class McpToolAdapter implements ToolAdapter {
   }
 
   #result(summary: string, data: unknown, sideEffectCommitted: boolean): NormalizedToolResult {
-    return { summary, data, sources: [], artifacts: [], sideEffectCommitted, durationMs: 0 };
+    return {
+      summary,
+      content: [{ type: "text", text: `${summary}\n${JSON.stringify(data)}`.slice(0, 1_000_000) }],
+      data,
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted,
+      durationMs: 0,
+    };
   }
 }

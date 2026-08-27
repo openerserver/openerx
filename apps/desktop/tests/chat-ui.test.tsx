@@ -7,6 +7,8 @@ import type {
   ModelCatalogEntry,
   PersonalFile,
   SkillInstallation,
+  WorkItem,
+  WorkItemDetail,
 } from "@openerx/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
@@ -55,12 +57,11 @@ const thinkingModel: ModelCatalogEntry = {
   displayName: "默认推理模型",
   version: "2026-08-26",
   capabilities: {
-    text: true,
+    textInput: true,
     imageInput: false,
     fileInput: false,
-    tools: true,
-    mcp: true,
-    imageGeneration: false,
+    functionCalling: true,
+    structuredOutput: true,
   },
   contextWindow: 128_000,
   maxOutputTokens: 16_384,
@@ -105,6 +106,7 @@ const snapshot: ConversationSnapshot = {
       status: "completed",
       parts: [{ id: crypto.randomUUID(), type: "text", text: "生成代码块和表格" }],
       errorCode: null,
+      cancellationRequestedAt: null,
       attempt: 1,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -125,6 +127,7 @@ const snapshot: ConversationSnapshot = {
         },
       ],
       errorCode: null,
+      cancellationRequestedAt: null,
       attempt: 1,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -242,6 +245,9 @@ function createBridge(): DesktopBridge {
     getChatEvents: vi.fn().mockResolvedValue([]),
     chooseFiles: vi.fn().mockResolvedValue([]),
     chooseDirectory: vi.fn().mockResolvedValue([]),
+    chooseWorkspace: vi.fn().mockResolvedValue(null),
+    listWorkspaces: vi.fn().mockResolvedValue([]),
+    revokeWorkspace: vi.fn(),
     listFiles: vi.fn().mockResolvedValue([]),
     searchFiles: vi.fn().mockResolvedValue([]),
     previewFile: vi.fn(),
@@ -251,6 +257,7 @@ function createBridge(): DesktopBridge {
     getArtifact: vi.fn(),
     previewArtifact: vi.fn(),
     saveArtifact: vi.fn(),
+    listToolRuntimeReadiness: vi.fn().mockResolvedValue([]),
     listWorkItems: vi.fn().mockResolvedValue([]),
     getWorkItem: vi.fn(),
     listPermissionRequests: vi.fn().mockResolvedValue([]),
@@ -258,6 +265,8 @@ function createBridge(): DesktopBridge {
     listCapabilityScopes: vi.fn().mockResolvedValue([]),
     revokeCapabilityScope: vi.fn(),
     listMcpServers: vi.fn().mockResolvedValue([]),
+    listMcpServerAuthorizationStates: vi.fn().mockResolvedValue([]),
+    authorizeMcpServer: vi.fn(),
     saveMcpServer: vi.fn(),
     removeMcpServer: vi.fn(),
     listSkills: vi.fn().mockResolvedValue([]),
@@ -426,6 +435,7 @@ describe("M1 chat renderer", () => {
       format: "png",
       source: null,
       imageDataUrl: "data:image/png;base64,aW1hZ2U=",
+      renderedSurfaces: [],
       parsedText: "",
       citations: [],
     });
@@ -477,6 +487,7 @@ describe("M1 chat renderer", () => {
       format: "png",
       source: null,
       imageDataUrl: "data:image/png;base64,aW1hZ2U=",
+      renderedSurfaces: [],
       parsedText: "",
       citations: [],
     });
@@ -542,6 +553,7 @@ describe("M1 chat renderer", () => {
       format: "webp",
       source: null,
       imageDataUrl: "data:image/webp;base64,aW1hZ2U=",
+      renderedSurfaces: [],
       parsedText: "",
       citations: [],
     });
@@ -706,6 +718,7 @@ describe("M1 chat renderer", () => {
       format: "html",
       source: "<h1>isolated</h1><script>window.probe = typeof window.openerx</script>",
       imageDataUrl: null,
+      renderedSurfaces: [],
       parsedText: "isolated",
       citations: [],
     });
@@ -756,6 +769,7 @@ describe("M1 chat renderer", () => {
       format: "markdown",
       source: "# report",
       imageDataUrl: null,
+      renderedSurfaces: [],
       parsedText: "# report",
       citations: [],
     });
@@ -771,6 +785,71 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "下载 / 另存" }));
     await waitFor(() => expect(bridge.saveArtifact).toHaveBeenCalledWith({ artifactId }));
     expect(await screen.findByText("已保存 report.md")).toBeTruthy();
+  });
+
+  it("renders every Office page, sheet or slide instead of falling back to parsed text", async () => {
+    const bridge = createBridge();
+    const artifactId = crypto.randomUUID();
+    const svg = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString("base64")}`;
+    const png = `data:image/png;base64,${Buffer.from("png").toString("base64")}`;
+    vi.mocked(bridge.listArtifacts).mockResolvedValue([
+      {
+        id: artifactId,
+        ownerProfileId: "local-default",
+        displayName: "slides.pptx",
+        format: "pptx",
+        mediaType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        currentVersion: 2,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        revision: 2,
+        versions: [
+          {
+            id: crypto.randomUUID(),
+            artifactId,
+            version: 2,
+            sizeBytes: 2_048,
+            checksumSha256: "c".repeat(64),
+            objectRef: `objects/sha256/cc/${"c".repeat(64)}`,
+            sourcePersonalFileId: null,
+            createdAt: timestamp,
+          },
+        ],
+      },
+    ]);
+    vi.mocked(bridge.previewArtifact).mockResolvedValue({
+      objectKind: "artifact",
+      objectId: artifactId,
+      displayName: "slides.pptx",
+      format: "pptx",
+      source: null,
+      imageDataUrl: null,
+      renderedSurfaces: [
+        {
+          kind: "slide",
+          index: 1,
+          label: "幻灯片 1",
+          imageDataUrl: svg,
+          modelImageDataUrl: png,
+        },
+        {
+          kind: "slide",
+          index: 2,
+          label: "幻灯片 2",
+          imageDataUrl: svg,
+          modelImageDataUrl: png,
+        },
+      ],
+      parsedText: "This fallback must stay hidden",
+      citations: [],
+    });
+
+    renderApp(bridge, "/files");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /slides\.pptx/ }));
+    expect(await screen.findByRole("img", { name: "slides.pptx 幻灯片 1" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "slides.pptx 幻灯片 2" })).toBeTruthy();
+    expect(screen.queryByText("This fallback must stay hidden")).toBeNull();
   });
 
   it("exposes M2 device, sync, usage and data boundaries in account settings", async () => {
@@ -1071,6 +1150,41 @@ describe("M1 chat renderer", () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
+  it("grants a workspace with visible access, network, and expiry choices", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.chooseWorkspace).mockImplementation(async (input) => ({
+      id: "66666666-6666-4666-8666-666666666666",
+      ownerProfileId: "local-default",
+      conversationId,
+      displayName: "fixture-project",
+      rootPath: "/fixture/project",
+      access: input.access ?? "read_write",
+      allowNetwork: input.allowNetwork ?? false,
+      expiresAt: input.expiresAt ?? null,
+      revokedAt: null,
+      createdAt: timestamp,
+    }));
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "切换上下文" }));
+    const dialog = await screen.findByRole("dialog", { name: "当前上下文" });
+    await user.selectOptions(within(dialog).getByLabelText("有效期"), "24h");
+    await user.click(within(dialog).getByLabelText("允许 Shell 网络"));
+    await user.click(within(dialog).getByRole("button", { name: "授权工作区" }));
+
+    expect(bridge.chooseWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId,
+        access: "read_write",
+        allowNetwork: true,
+        expiresAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+      }),
+    );
+    expect(await within(dialog).findByText(/已授权工作区 fixture-project/u)).toBeTruthy();
+  });
+
   it("announces copy, archive and branch-creating regeneration results", async () => {
     cleanup();
     const bridge = createBridge();
@@ -1100,6 +1214,272 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("menuitem", { name: "归档对话" }));
     expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
     expect(await screen.findByText("对话已归档。")).toBeTruthy();
+  });
+
+  it("replays rich Items for the selected historical Run without exposing raw reasoning", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const workItemId = "66666666-6666-4666-8666-666666666666";
+    const currentRunId = "77777777-7777-4777-8777-777777777777";
+    const historicalRunId = "88888888-8888-4888-8888-888888888888";
+    const workItem: WorkItem = {
+      id: workItemId,
+      ownerProfileId: "local-default",
+      conversationId,
+      messageId: assistantMessageId,
+      title: "对话轮次",
+      status: "completed",
+      activeRunId: currentRunId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      completedAt: timestamp,
+      revision: 2,
+    };
+    const run = (id: string, attempt: number) => ({
+      id,
+      workItemId,
+      attempt,
+      status: "completed" as const,
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 2,
+      selectedModelRef: "platform/auto",
+      effectiveModelRef: "platform/standard",
+      branchId,
+      thinkingLevel: "high" as const,
+      fallbackReason: null,
+      initialToolNames: ["openerx_update_plan"],
+      availableToolNames: ["openerx_update_plan"],
+      skillInstallationIds: [],
+      instructionSources: [],
+      piSessionRef: `run:${id}`,
+      usageRecords: [],
+      cancellationRequestedAt: null,
+      lastPiEventSequence: 8,
+      retryCount: 1,
+      compactionCount: 1,
+      errorCode: null,
+      createdAt: timestamp,
+      startedAt: timestamp,
+      completedAt: timestamp,
+      updatedAt: timestamp,
+    });
+    const currentRun = run(currentRunId, 2);
+    const historicalRun = run(historicalRunId, 1);
+    const currentDetail: WorkItemDetail = {
+      workItem,
+      runs: [currentRun, historicalRun],
+      run: currentRun,
+      steps: [],
+      toolCalls: [],
+      permissions: [],
+      items: [
+        {
+          id: "90000000-0000-4000-8000-000000000001",
+          runId: currentRunId,
+          sequence: 1,
+          piItemRef: "reasoning:1:1",
+          status: "completed",
+          content: {
+            type: "reasoning",
+            summary: "模型推理已完成；Run 时间线仅保存安全摘要。",
+            reasoningTokens: 42,
+            contentRedacted: true,
+          },
+          startedAt: timestamp,
+          completedAt: timestamp,
+          errorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: "90000000-0000-4000-8000-000000000002",
+          runId: currentRunId,
+          sequence: 2,
+          piItemRef: "plan:1",
+          status: "completed",
+          content: {
+            type: "plan",
+            explanation: "按检查点推进",
+            entries: [
+              { text: "实现 Run Item", status: "completed" },
+              { text: "验证回放", status: "in_progress" },
+            ],
+          },
+          startedAt: timestamp,
+          completedAt: timestamp,
+          errorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: "90000000-0000-4000-8000-000000000003",
+          runId: currentRunId,
+          sequence: 3,
+          piItemRef: "diff:1",
+          status: "completed",
+          content: {
+            type: "diff",
+            toolCallId: "90000000-0000-4000-8000-000000000010",
+            workspaceChangeId: "90000000-0000-4000-8000-000000000011",
+            relativePath: "src/run.ts",
+            patch: "@@ -1 +1 @@\n-old\n+new",
+          },
+          startedAt: timestamp,
+          completedAt: timestamp,
+          errorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: "90000000-0000-4000-8000-000000000004",
+          runId: currentRunId,
+          sequence: 4,
+          piItemRef: "compaction:1",
+          status: "completed",
+          content: {
+            type: "compaction",
+            reason: "threshold",
+            tokensBefore: 10_000,
+            tokensAfter: 4_000,
+          },
+          startedAt: timestamp,
+          completedAt: timestamp,
+          errorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+    };
+    const historicalDetail: WorkItemDetail = {
+      ...currentDetail,
+      run: historicalRun,
+      items: [
+        {
+          id: "80000000-0000-4000-8000-000000000001",
+          runId: historicalRunId,
+          sequence: 1,
+          piItemRef: "model:1",
+          status: "completed",
+          content: {
+            type: "model",
+            modelRef: "platform/standard",
+            summary: "历史模型轮次已完成",
+          },
+          startedAt: timestamp,
+          completedAt: timestamp,
+          errorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+    };
+    vi.mocked(bridge.listWorkItems).mockResolvedValue([workItem]);
+    vi.mocked(bridge.getWorkItem).mockImplementation(async ({ runId }) =>
+      runId === historicalRunId ? historicalDetail : currentDetail,
+    );
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    expect(await screen.findByText("执行计划")).toBeTruthy();
+    expect(screen.getByText("文件差异 · src/run.ts")).toBeTruthy();
+    expect(screen.getByText("上下文压缩 · threshold")).toBeTruthy();
+    expect(screen.queryByText("PRIVATE_RAW_CHAIN_OF_THOUGHT")).toBeNull();
+    await user.selectOptions(screen.getByLabelText("选择要回放的 Run"), historicalRunId);
+    expect(await screen.findByText("历史模型轮次已完成")).toBeTruthy();
+    expect(bridge.getWorkItem).toHaveBeenCalledWith({
+      workItemId,
+      runId: historicalRunId,
+    });
+  });
+
+  it("shows persisted MCP OAuth status and starts authorization-code flow without a client secret", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const serverId = "66666666-6666-4666-8666-666666666699";
+    vi.mocked(bridge.listMcpServers).mockResolvedValue([
+      {
+        id: serverId,
+        name: "项目知识库",
+        transport: "streamable_http",
+        url: "https://mcp.example/mcp",
+        auth: "oauth",
+        credentialRef: `mcp:${serverId}`,
+        enabled: true,
+        enabledTools: [],
+      },
+    ]);
+    vi.mocked(bridge.listMcpServerAuthorizationStates).mockResolvedValue([
+      {
+        serverId,
+        status: "authorization_required",
+        connected: false,
+        connectedAt: null,
+        expiresAt: null,
+        reason: null,
+      },
+    ]);
+    vi.mocked(bridge.authorizeMcpServer).mockResolvedValue({
+      serverId,
+      status: "authorized",
+      connected: true,
+      connectedAt: timestamp,
+      expiresAt: null,
+      reason: null,
+    });
+    renderApp(bridge, "/tasks");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText("MCP 服务与高级连接"));
+    expect(await screen.findByText("需要浏览器授权")).toBeTruthy();
+    expect(screen.queryByLabelText("MCP OAuth Client Secret")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "在浏览器中授权" }));
+    await waitFor(() => expect(bridge.authorizeMcpServer).toHaveBeenCalledWith({ serverId }));
+    expect(await screen.findByText("OAuth 授权完成，MCP 服务已连接。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新授权" })).toBeTruthy();
+  });
+
+  it("shows runtime desktop capability status and permission reasons instead of a static catalog", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listToolRuntimeReadiness).mockResolvedValue([
+      {
+        capability: "browser",
+        status: "available",
+        reason: null,
+        availableToolNames: ["openerx_browser"],
+        checkedAt: timestamp,
+      },
+      {
+        capability: "shell",
+        status: "authorization_required",
+        reason: "WORKSPACE_WRITE_GRANT_REQUIRED",
+        availableToolNames: [],
+        checkedAt: timestamp,
+      },
+      {
+        capability: "desktop",
+        status: "degraded",
+        reason: "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
+        availableToolNames: ["openerx_desktop"],
+        checkedAt: timestamp,
+      },
+    ]);
+    renderApp(bridge, "/tasks");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText("查看能力与运行状态"));
+    const browserCard = screen.getByText("隔离浏览器").closest("article");
+    const shellCard = screen.getByText("Shell / 代码").closest("article");
+    const desktopCard = screen.getByText("桌面控制").closest("article");
+    if (!browserCard || !shellCard || !desktopCard) throw new Error("tool card missing");
+    expect(within(browserCard).getByText("运行时可用")).toBeTruthy();
+    expect(within(shellCard).getByText("需要设置")).toBeTruthy();
+    expect(within(shellCard).getByText("需先授权一个可写工作区")).toBeTruthy();
+    expect(within(desktopCard).getByText("部分可用")).toBeTruthy();
+    expect(within(desktopCard).getByText("需在系统设置中允许辅助功能")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "刷新能力状态" }));
+    await waitFor(() => expect(bridge.listToolRuntimeReadiness).toHaveBeenCalledTimes(2));
   });
 
   it("requires explicit confirmation before revoking Skill permissions and disabling it", async () => {

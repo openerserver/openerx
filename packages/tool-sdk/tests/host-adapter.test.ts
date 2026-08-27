@@ -5,6 +5,7 @@ describe("HostCapabilityAdapter", () => {
   it("resolves browser uploads from a stable file ID and ignores caller paths", async () => {
     const execute = vi.fn(async () => ({
       summary: "uploaded",
+      content: [{ type: "text" as const, text: "uploaded" }],
       data: {},
       sources: [],
       artifacts: [],
@@ -42,6 +43,7 @@ describe("HostCapabilityAdapter", () => {
   it("imports browser downloads and removes the private Main path from the Pi result", async () => {
     const execute = vi.fn(async () => ({
       summary: "downloaded",
+      content: [{ type: "text" as const, text: "downloaded" }],
       data: {
         path: "/profile/tool-downloads/private/result.csv",
         filename: "result.csv",
@@ -73,5 +75,11 @@ describe("HostCapabilityAdapter", () => {
       displayName: "result.csv",
     });
     expect(JSON.stringify(result)).not.toContain("/profile/tool-downloads");
+    expect(result.content).toContainEqual(
+      expect.objectContaining({
+        type: "file",
+        personalFileId: "00000000-0000-4000-8000-000000000803",
+      }),
+    );
   });
 });

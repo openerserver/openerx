@@ -1,33 +1,53 @@
 import { randomUUID } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
+import path from "node:path";
 import type {
   AppServiceAuthorization,
   ChatEvent,
   ExecutionRun,
+  HostToolAvailability,
+  McpServerAuthorizationState,
   McpServerConfig,
+  McpToolDescriptor,
   NormalizedToolResult,
   PermissionRequest,
   PiActivityEvent,
+  PiFileToolRequestFrame,
   PiToolRequestFrame,
   RunStep,
+  ThinkingLevel,
   ToolCall,
   ToolOperation,
+  ToolRuntimeCapability,
+  ToolRuntimeReadiness,
+  ToolRuntimeStatus,
+  UsageRecord,
   WorkItem,
+  WorkspaceGrant,
+  WorkspaceInstructionSource,
 } from "@openerx/contracts";
+import { piHostContractVersion } from "@openerx/contracts";
 import type { ToolRepository } from "@openerx/storage";
 import {
   BuiltinToolAdapter,
+  type CapabilityAvailabilityHost,
   CapabilityBroker,
   type CapabilityHost,
   type CredentialResolver,
+  type CredentialStore,
   capabilityRequirement,
+  DesktopMcpOAuthProvider,
   HostCapabilityAdapter,
   HttpPlatformImageGenerationTransport,
   HttpPlatformWebSearchTransport,
   McpToolAdapter,
+  type OAuthInteractionHost,
   ShellToolAdapter,
+  shellToolAvailability,
   summarizeOperation,
   type ToolAdapter,
   type ToolExecutionContext,
+  WorkspaceToolAdapter,
 } from "@openerx/tool-sdk";
 
 class GenerationWebSearchAdapter implements ToolAdapter {
@@ -84,20 +104,111 @@ class GenerationImageGenerationAdapter implements ToolAdapter {
   }
 }
 
+function fileOperationSummary(frame: PiFileToolRequestFrame): {
+  input: string;
+  target: string;
+  risk: "L1" | "L3";
+} {
+  switch (frame.request.operation) {
+    case "list":
+      return { input: "列出已附加文件", target: frame.conversationId, risk: "L1" };
+    case "search":
+      return { input: frame.request.input.query, target: "已附加文件", risk: "L1" };
+    case "read":
+      return {
+        input: "读取已附加文件",
+        target: frame.request.input.personalFileId,
+        risk: "L1",
+      };
+    case "artifact.write":
+      return {
+        input: `${frame.request.input.format} · ${frame.request.input.displayName}`,
+        target: frame.request.input.artifactId ?? "新成果",
+        risk: "L3",
+      };
+    case "artifact.office.write":
+      return {
+        input: `${frame.request.input.spec.format} · ${frame.request.input.displayName}`,
+        target: frame.request.input.artifactId ?? "新 Office 成果",
+        risk: "L3",
+      };
+  }
+}
+
+function withoutPreviewMedia(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutPreviewMedia);
+  if (!value || typeof value !== "object") return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (/^(bytesBase64|imageDataUrl|modelImageDataUrl)$/u.test(key)) continue;
+    output[key] = withoutPreviewMedia(entry);
+  }
+  return output;
+}
+
+function fileToolResult(
+  frame: PiFileToolRequestFrame,
+  result: unknown,
+  durationMs: number,
+): NormalizedToolResult {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : null;
+  const artifact =
+    record?.artifact && typeof record.artifact === "object"
+      ? (record.artifact as Record<string, unknown>)
+      : record;
+  const artifactId = typeof artifact?.id === "string" ? artifact.id : null;
+  const count = Array.isArray(result) ? result.length : null;
+  const summary =
+    frame.request.operation === "list"
+      ? `已列出 ${count ?? 0} 个附件`
+      : frame.request.operation === "search"
+        ? `已找到 ${count ?? 0} 条文件结果`
+        : frame.request.operation === "read"
+          ? "已读取附件内容"
+          : artifactId
+            ? `已写入成果 ${artifactId}`
+            : "文件工具已完成";
+  const serialized = JSON.stringify(withoutPreviewMedia(result));
+  return {
+    summary,
+    content: [
+      { type: "text", text: (serialized ?? summary).slice(0, 1_000_000) },
+      ...(artifactId ? [{ type: "artifact" as const, artifactId }] : []),
+    ],
+    data: withoutPreviewMedia(result),
+    sources: [],
+    artifacts: artifactId ? [artifactId] : [],
+    sideEffectCommitted:
+      frame.request.operation === "artifact.write" ||
+      frame.request.operation === "artifact.office.write",
+    durationMs,
+  };
+}
+
 export interface ToolAppServiceOptions {
   repository: ToolRepository;
   workspaceDirectory: string;
-  host: CapabilityHost & CredentialResolver;
+  host: CapabilityHost & CapabilityAvailabilityHost & CredentialResolver;
+  oauth?: CredentialStore & OAuthInteractionHost;
   resolveUploadPath(fileId: string): string;
   ingestDownload(path: string): Promise<{ fileId: string; displayName: string }>;
   selectedModelRef(assistantMessageId: string): string;
   emit(event: ChatEvent): void;
   additionalAdapters?: ToolAdapter[];
+  shellAvailability?: () => HostToolAvailability;
 }
 
 interface ActiveProjection {
   workItem: WorkItem;
   run: ExecutionRun;
+}
+
+export interface PreparedGenerationTools {
+  workspaceGrants: WorkspaceGrant[];
+  instructionSources: WorkspaceInstructionSource[];
+  mcpTools: McpToolDescriptor[];
+  initialToolNames: string[];
+  availableToolNames: string[];
 }
 
 export class ToolAppService {
@@ -109,12 +220,36 @@ export class ToolAppService {
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
   readonly #abortByGeneration = new Map<string, AbortController>();
   readonly #mcp: McpToolAdapter;
+  readonly #workspace: WorkspaceToolAdapter;
+  readonly #host: CapabilityAvailabilityHost;
+  readonly #shellAvailability: () => HostToolAvailability;
 
   constructor(options: ToolAppServiceOptions) {
     this.#repository = options.repository;
     this.#emitEvent = options.emit;
     this.#selectedModelRef = options.selectedModelRef;
-    this.#mcp = new McpToolAdapter(options.host);
+    this.#host = options.host;
+    this.#shellAvailability = options.shellAvailability ?? shellToolAvailability;
+    const oauth = options.oauth;
+    this.#mcp = new McpToolAdapter(
+      options.host,
+      oauth
+        ? async (config, { interactive }) => {
+            if (!config.credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
+            const callbackSession = interactive ? await oauth.prepareOAuth(config.id) : undefined;
+            return await DesktopMcpOAuthProvider.create({
+              credentialRef: config.credentialRef,
+              credentials: oauth,
+              interactions: oauth,
+              ...(callbackSession ? { callbackSession } : {}),
+            });
+          }
+        : undefined,
+    );
+    this.#workspace = new WorkspaceToolAdapter(
+      options.repository,
+      path.dirname(options.workspaceDirectory),
+    );
     this.#broker = new CapabilityBroker(options.repository, [
       new BuiltinToolAdapter(),
       new GenerationWebSearchAdapter((generationId) =>
@@ -123,7 +258,10 @@ export class ToolAppService {
       new GenerationImageGenerationAdapter((generationId) =>
         this.#authorizationByGeneration.get(generationId),
       ),
-      new ShellToolAdapter([options.workspaceDirectory]),
+      new ShellToolAdapter([options.workspaceDirectory], (workspaceGrantId, conversationId) =>
+        options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
+      ),
+      this.#workspace,
       new HostCapabilityAdapter(options.host, options.resolveUploadPath, options.ingestDownload),
       this.#mcp,
       ...(options.additionalAdapters ?? []),
@@ -135,14 +273,441 @@ export class ToolAppService {
     for (const config of this.#repository.listMcpServers()) this.#mcp.register(config);
   }
 
+  startGeneration(input: {
+    generationId: string;
+    conversationId: string;
+    branchId: string;
+    assistantMessageId: string;
+    selectedModelRef: string;
+    thinkingLevel: ThinkingLevel;
+    initialToolNames?: string[];
+    availableToolNames?: string[];
+    skillInstallationIds?: string[];
+    instructionSources?: WorkspaceInstructionSource[];
+  }): ActiveProjection {
+    const active = this.#projectionByGeneration.get(input.generationId);
+    if (active) return active;
+    const projection = this.#repository.createProjection({
+      conversationId: input.conversationId,
+      messageId: input.assistantMessageId,
+      branchId: input.branchId,
+      title: "对话轮次",
+      selectedModelRef: input.selectedModelRef,
+      thinkingLevel: input.thinkingLevel,
+      piPackageVersion: "0.84.3",
+      piHostContractVersion,
+      piSessionRef: `branch:${input.branchId}`,
+      initialToolNames: input.initialToolNames,
+      availableToolNames: input.availableToolNames,
+      skillInstallationIds: input.skillInstallationIds,
+      instructionSources: input.instructionSources,
+    });
+    this.#projectionByGeneration.set(input.generationId, projection);
+    this.#emit(
+      "run.started",
+      {
+        conversationId: input.conversationId,
+        assistantMessageId: input.assistantMessageId,
+      },
+      projection,
+      {},
+    );
+    return projection;
+  }
+
   repository(): ToolRepository {
     return this.#repository;
+  }
+
+  grantWorkspace(input: {
+    rootPath: string;
+    conversationId: string | null;
+    access: WorkspaceGrant["access"];
+    allowNetwork: boolean;
+    expiresAt: string | null;
+  }): WorkspaceGrant {
+    if (input.expiresAt && Date.parse(input.expiresAt) <= Date.now()) {
+      throw new Error("WORKSPACE_EXPIRY_INVALID");
+    }
+    const canonicalRoot = realpathSync(input.rootPath);
+    if (!lstatSync(canonicalRoot).isDirectory()) throw new Error("WORKSPACE_DIRECTORY_REQUIRED");
+    return this.#repository.grantWorkspace({
+      conversationId: input.conversationId,
+      displayName: path.basename(canonicalRoot),
+      rootPath: canonicalRoot,
+      access: input.access,
+      allowNetwork: input.allowNetwork,
+      expiresAt: input.expiresAt,
+    });
+  }
+
+  listWorkspaces(conversationId?: string): WorkspaceGrant[] {
+    return this.#repository.listWorkspaceGrants(conversationId);
+  }
+
+  revokeWorkspace(workspaceGrantId: string): WorkspaceGrant {
+    return this.#repository.revokeWorkspaceGrant(workspaceGrantId);
+  }
+
+  async prepareGeneration(input: {
+    conversationId: string;
+    prompt: string;
+    hasFiles: boolean;
+    skillInstallationIds: string[];
+    authenticated: boolean;
+  }): Promise<PreparedGenerationTools> {
+    const workspaceGrants = this.#repository
+      .listWorkspaceGrants(input.conversationId)
+      .filter((grant) => {
+        try {
+          return lstatSync(realpathSync(grant.rootPath)).isDirectory();
+        } catch {
+          return false;
+        }
+      });
+    const instructionSources = workspaceGrants.flatMap((grant) => {
+      try {
+        return this.#workspace.instructionSources(grant);
+      } catch {
+        return [];
+      }
+    });
+    const hostAvailability = await this.#safeHostAvailability();
+    const shellAvailability = this.#shellAvailability();
+    let mcpTools: McpToolDescriptor[] = [];
+    try {
+      mcpTools = await this.#mcp.discoverEnabledTools();
+    } catch {
+      mcpTools = [];
+    }
+    const base = [
+      "openerx_tool_search",
+      "openerx_update_plan",
+      "openerx_file_list",
+      "openerx_file_search",
+      "openerx_file_read",
+      "openerx_artifact_write",
+      "openerx_office_artifact",
+      "openerx_calculate",
+      "openerx_structured_data",
+      ...(input.authenticated ? ["openerx_web_search", "openerx_image_generate"] : []),
+      ...(hostAvailability.availableToolNames.includes("openerx_browser")
+        ? ["openerx_browser"]
+        : []),
+      ...(hostAvailability.availableToolNames.includes("openerx_desktop")
+        ? ["openerx_desktop"]
+        : []),
+      ...(workspaceGrants.length > 0
+        ? [
+            "openerx_workspace_list",
+            "openerx_workspace_search",
+            "openerx_workspace_read",
+            "openerx_workspace_instructions",
+            "openerx_workspace_apply_patch",
+            "openerx_workspace_diff",
+            "openerx_workspace_changes",
+            "openerx_workspace_undo",
+          ]
+        : []),
+      ...(workspaceGrants.some(({ access }) => access === "read_write")
+        ? shellAvailability.availableToolNames.filter(
+            (name) => name === "openerx_shell" || name === "openerx_shell_process",
+          )
+        : []),
+      ...(input.skillInstallationIds.length > 0 ? ["read", "openerx_skill_script"] : []),
+      ...mcpTools.map(({ name }) => name),
+    ];
+    const availableToolNames = [...new Set(base)];
+    const prompt = input.prompt.toLocaleLowerCase();
+    const selected = new Set<string>();
+    const add = (...names: string[]) => {
+      for (const name of names) if (availableToolNames.includes(name)) selected.add(name);
+    };
+    if (
+      /计划|步骤|继续|检查|代码|实现|修复|迁移|plan|steps|check|code|implement|fix|migrate/u.test(
+        prompt,
+      )
+    ) {
+      add("openerx_update_plan");
+    }
+    if (input.hasFiles || /附件|文档|文件|pdf|docx|xlsx|attachment|file/u.test(prompt)) {
+      add(
+        "openerx_file_list",
+        "openerx_file_search",
+        "openerx_file_read",
+        "openerx_artifact_write",
+        "openerx_office_artifact",
+      );
+    }
+    if (
+      /生成|创建|制作|修改|编辑|更新|报告|文档|表格|演示|幻灯片|word|excel|powerpoint|documents|spreadsheets|presentations|docx|xlsx|pptx|pdf|deliverable|update/u.test(
+        prompt,
+      )
+    ) {
+      add("openerx_office_artifact");
+    }
+    if (/计算|算一下|统计|表格|排序|calculate|compute|sort|json/u.test(prompt)) {
+      add("openerx_calculate", "openerx_structured_data");
+    }
+    if (/最新|新闻|搜索网络|查网页|web|search online|current/u.test(prompt))
+      add("openerx_web_search");
+    if (/生成图片|画图|image|illustration|render/u.test(prompt)) add("openerx_image_generate");
+    if (/浏览器|网页操作|browser|website/u.test(prompt)) add("openerx_browser");
+    if (/桌面|应用窗口|desktop|screenshot/u.test(prompt)) add("openerx_desktop");
+    if (
+      workspaceGrants.length > 0 &&
+      /代码|项目|仓库|修复|实现|测试|构建|code|repo|patch|build|test/u.test(prompt)
+    ) {
+      add(
+        "openerx_workspace_list",
+        "openerx_workspace_search",
+        "openerx_workspace_read",
+        "openerx_workspace_instructions",
+        "openerx_workspace_apply_patch",
+        "openerx_workspace_diff",
+        "openerx_workspace_changes",
+        "openerx_workspace_undo",
+      );
+      if (/运行|命令|测试|构建|run|command|build|test/u.test(prompt)) {
+        add("openerx_shell", "openerx_shell_process");
+      }
+    }
+    if (input.skillInstallationIds.length > 0) add("read", "openerx_skill_script");
+    for (const descriptor of mcpTools) {
+      if (
+        prompt.includes("mcp") ||
+        prompt.includes(descriptor.serverName.toLocaleLowerCase()) ||
+        prompt.includes(descriptor.toolName.toLocaleLowerCase())
+      ) {
+        add(descriptor.name);
+      }
+    }
+    return {
+      workspaceGrants,
+      instructionSources,
+      mcpTools,
+      initialToolNames: ["openerx_tool_search", ...selected],
+      availableToolNames,
+    };
+  }
+
+  async listRuntimeReadiness(input: {
+    authenticated: boolean;
+    platformConfigured: boolean;
+  }): Promise<ToolRuntimeReadiness[]> {
+    const checkedAt = new Date().toISOString();
+    const hostAvailability = await this.#safeHostAvailability();
+    const shellAvailability = this.#shellAvailability();
+    const readiness = (
+      capability: ToolRuntimeCapability,
+      status: ToolRuntimeStatus,
+      reason: string | null,
+      availableToolNames: string[],
+    ): ToolRuntimeReadiness => ({
+      capability,
+      status,
+      reason,
+      availableToolNames,
+      checkedAt,
+    });
+    const onlineStatus: ToolRuntimeStatus = !input.platformConfigured
+      ? "unavailable"
+      : input.authenticated
+        ? "available"
+        : "authorization_required";
+    const onlineReason = !input.platformConfigured
+      ? "PLATFORM_ENDPOINT_NOT_CONFIGURED"
+      : input.authenticated
+        ? null
+        : "AUTHENTICATION_REQUIRED";
+    const browserAvailable = hostAvailability.availableToolNames.includes("openerx_browser");
+    const desktopAvailable = hostAvailability.availableToolNames.includes("openerx_desktop");
+    const desktopInteractionReason =
+      hostAvailability.unavailableReasons["openerx_desktop:interact"] ?? null;
+    const desktopReason = hostAvailability.unavailableReasons.openerx_desktop ?? null;
+    const shellHostAvailable = shellAvailability.availableToolNames.includes("openerx_shell");
+    const writableWorkspaceAvailable = this.#repository.listWorkspaceGrants().some((grant) => {
+      if (grant.access !== "read_write") return false;
+      try {
+        return lstatSync(realpathSync(grant.rootPath)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    const mcp = await this.#mcpRuntimeReadiness(checkedAt);
+
+    return [
+      readiness("builtin.compute", "available", null, ["openerx_calculate"]),
+      readiness("builtin.structured_data", "available", null, ["openerx_structured_data"]),
+      readiness("file", "available", null, [
+        "openerx_file_list",
+        "openerx_file_search",
+        "openerx_file_read",
+        "openerx_artifact_write",
+        "openerx_office_artifact",
+      ]),
+      readiness(
+        "web.search",
+        onlineStatus,
+        onlineReason,
+        onlineStatus === "available" ? ["openerx_web_search"] : [],
+      ),
+      readiness(
+        "image.generate",
+        onlineStatus,
+        onlineReason,
+        onlineStatus === "available" ? ["openerx_image_generate"] : [],
+      ),
+      readiness(
+        "browser",
+        browserAvailable ? "available" : "unavailable",
+        browserAvailable
+          ? null
+          : (hostAvailability.unavailableReasons.openerx_browser ?? "MAIN_CAPABILITY_UNAVAILABLE"),
+        browserAvailable ? ["openerx_browser"] : [],
+      ),
+      readiness(
+        "shell",
+        !shellHostAvailable
+          ? "unavailable"
+          : writableWorkspaceAvailable
+            ? "available"
+            : "authorization_required",
+        !shellHostAvailable
+          ? (shellAvailability.unavailableReasons.openerx_shell ?? "SHELL_OS_SANDBOX_UNAVAILABLE")
+          : writableWorkspaceAvailable
+            ? null
+            : "WORKSPACE_WRITE_GRANT_REQUIRED",
+        shellHostAvailable && writableWorkspaceAvailable
+          ? ["openerx_shell", "openerx_shell_process"]
+          : [],
+      ),
+      readiness(
+        "desktop",
+        desktopAvailable
+          ? desktopInteractionReason
+            ? "degraded"
+            : "available"
+          : desktopReason?.includes("PERMISSION_REQUIRED")
+            ? "authorization_required"
+            : "unavailable",
+        desktopAvailable
+          ? desktopInteractionReason
+          : (desktopReason ?? "MAIN_CAPABILITY_UNAVAILABLE"),
+        desktopAvailable ? ["openerx_desktop"] : [],
+      ),
+      mcp,
+    ];
+  }
+
+  async #safeHostAvailability(): Promise<HostToolAvailability> {
+    try {
+      return await this.#host.availability();
+    } catch {
+      return {
+        availableToolNames: [],
+        unavailableReasons: {
+          openerx_browser: "MAIN_CAPABILITY_UNAVAILABLE",
+          openerx_desktop: "MAIN_CAPABILITY_UNAVAILABLE",
+        },
+      };
+    }
+  }
+
+  async #mcpRuntimeReadiness(checkedAt: string): Promise<ToolRuntimeReadiness> {
+    const enabled = this.#repository.listMcpServers().filter(({ enabled }) => enabled);
+    if (enabled.length === 0) {
+      return {
+        capability: "mcp",
+        status: "authorization_required",
+        reason: "MCP_SERVER_CONFIGURATION_REQUIRED",
+        availableToolNames: [],
+        checkedAt,
+      };
+    }
+    const [authorizationStates, descriptors] = await Promise.all([
+      this.#mcp.authorizationStates(),
+      this.#mcp.discoverEnabledTools(AbortSignal.timeout(5_000)),
+    ]);
+    const enabledIds = new Set(enabled.map(({ id }) => id));
+    const enabledAuthorization = authorizationStates.filter(({ serverId }) =>
+      enabledIds.has(serverId),
+    );
+    const connectedCount = enabled.filter(({ id }) => this.#mcp.status(id).connected).length;
+    const authorizationRequired = enabledAuthorization.find(
+      ({ status }) => status === "authorization_required",
+    );
+    const unavailable = enabledAuthorization.find(({ status }) => status === "unavailable");
+    const availableToolNames = descriptors.map(({ name }) => name);
+    if (availableToolNames.length > 0) {
+      const degraded =
+        connectedCount < enabled.length || Boolean(authorizationRequired || unavailable);
+      return {
+        capability: "mcp",
+        status: degraded ? "degraded" : "available",
+        reason: degraded
+          ? (unavailable?.reason ??
+            (authorizationRequired
+              ? "MCP_OAUTH_AUTHORIZATION_REQUIRED"
+              : "MCP_PARTIALLY_UNAVAILABLE"))
+          : null,
+        availableToolNames,
+        checkedAt,
+      };
+    }
+    if (connectedCount > 0) {
+      return {
+        capability: "mcp",
+        status: "degraded",
+        reason: "MCP_NO_ENABLED_TOOLS",
+        availableToolNames: [],
+        checkedAt,
+      };
+    }
+    if (authorizationRequired) {
+      return {
+        capability: "mcp",
+        status: "authorization_required",
+        reason: authorizationRequired.reason ?? "MCP_OAUTH_AUTHORIZATION_REQUIRED",
+        availableToolNames: [],
+        checkedAt,
+      };
+    }
+    return {
+      capability: "mcp",
+      status: "unavailable",
+      reason: unavailable?.reason ?? "MCP_SERVER_UNREACHABLE",
+      availableToolNames: [],
+      checkedAt,
+    };
+  }
+
+  freezeGenerationConfiguration(
+    generationId: string,
+    input: Pick<
+      PreparedGenerationTools,
+      "initialToolNames" | "availableToolNames" | "instructionSources"
+    > & { skillInstallationIds: string[] },
+  ): ExecutionRun {
+    const projection = this.#projectionByGeneration.get(generationId);
+    if (!projection) throw new Error("GENERATION_RUN_NOT_FOUND");
+    const run = this.#repository.freezeRunConfiguration(projection.run.id, input);
+    projection.run = run;
+    return run;
   }
 
   upsertMcpServer(config: McpServerConfig): McpServerConfig {
     const saved = this.#repository.upsertMcpServer(config);
     this.#mcp.register(saved);
     return saved;
+  }
+
+  async listMcpServerAuthorizationStates(): Promise<McpServerAuthorizationState[]> {
+    return await this.#mcp.authorizationStates();
+  }
+
+  async authorizeMcpServer(serverId: string): Promise<McpServerAuthorizationState> {
+    return await this.#mcp.authorize(serverId, new AbortController().signal);
   }
 
   async removeMcpServer(serverId: string): Promise<{ serverId: string; removed: boolean }> {
@@ -171,6 +736,7 @@ export class ToolAppService {
           : "openerx",
       risk: requirement.requirement.risk,
       idempotencyKey: frame.operation.idempotencyKey,
+      input: frame.operation,
       inputSummary: requirement.summary.input,
       targetSummary: requirement.summary.target,
     });
@@ -221,22 +787,168 @@ export class ToolAppService {
     }
   }
 
+  async handleFileRequest(
+    frame: PiFileToolRequestFrame,
+    execute: () => Promise<unknown> | unknown,
+  ): Promise<unknown> {
+    const projection = this.#projectionByGeneration.get(frame.generationId);
+    if (!projection) throw new Error("GENERATION_RUN_NOT_FOUND");
+    const summary = fileOperationSummary(frame);
+    const projected = this.#repository.createToolCall({
+      runId: projection.run.id,
+      piCallRef: frame.piToolCallId,
+      toolName: frame.toolName,
+      source: "openerx",
+      risk: summary.risk,
+      idempotencyKey: frame.requestId,
+      input: frame.request,
+      inputSummary: summary.input,
+      targetSummary: summary.target,
+    });
+    this.#emit("tool.requested", frame, projection, {
+      toolCall: projected.toolCall,
+      step: projected.step,
+    });
+    this.#repository.markToolCall(projected.toolCall.id, "running");
+    const startedAt = Date.now();
+    try {
+      const result = await execute();
+      const normalized = fileToolResult(frame, result, Date.now() - startedAt);
+      const call = this.#repository.markToolCall(projected.toolCall.id, "completed", {
+        resultSummary: normalized.summary,
+        resultContent: normalized.content,
+        resultData: normalized.data,
+      });
+      this.#emit("tool.completed", frame, projection, { toolCall: call });
+      return result;
+    } catch (error) {
+      const code =
+        error instanceof Error && /^[A-Z][A-Z0-9_]*$/u.test(error.message.split(":", 1)[0] ?? "")
+          ? (error.message.split(":", 1)[0] ?? "FILE_TOOL_FAILED")
+          : "FILE_TOOL_FAILED";
+      const call = this.#repository.markToolCall(projected.toolCall.id, "failed", {
+        errorCode: code,
+      });
+      this.#emit("tool.failed", frame, projection, { toolCall: call, reason: code });
+      throw error;
+    }
+  }
+
   handleActivity(frame: PiActivityEvent): void {
     const projection = this.#projectionByGeneration.get(frame.generationId);
     if (!projection) return;
-    if (frame.type === "run.compacted" || frame.type === "run.retry_completed") {
+    this.#repository.recordPiEventSequence(projection.run.id, frame.sequence);
+    const itemRef = frame.piItemRef ?? `${frame.type}:${frame.sequence}`;
+    let changed = false;
+    if (frame.type === "model.started" || frame.type === "model.completed") {
+      this.#repository.upsertRunItem({
+        runId: projection.run.id,
+        piItemRef: itemRef,
+        status: frame.type === "model.completed" ? "completed" : "running",
+        content: {
+          type: "model",
+          modelRef: frame.modelRef ?? projection.run.selectedModelRef,
+          summary:
+            frame.resultSummary ??
+            (frame.type === "model.completed" ? "模型轮次已完成" : "模型轮次已开始"),
+        },
+        errorCode: frame.errorCode ?? null,
+      });
+      changed = true;
+    }
+    if (frame.type === "reasoning.started" || frame.type === "reasoning.completed") {
+      this.#repository.upsertRunItem({
+        runId: projection.run.id,
+        piItemRef: itemRef,
+        status: frame.type === "reasoning.completed" ? "completed" : "running",
+        content: {
+          type: "reasoning",
+          summary:
+            frame.type === "reasoning.completed"
+              ? "模型推理已完成；Run 时间线仅保存安全摘要。"
+              : "模型推理已开始；Run 时间线不记录原始思维链。",
+          reasoningTokens: frame.reasoningTokens ?? null,
+          contentRedacted: true,
+        },
+        errorCode: frame.errorCode ?? null,
+      });
+      changed = true;
+    }
+    if (frame.type === "plan.updated" && frame.planEntries) {
+      this.#repository.upsertRunItem({
+        runId: projection.run.id,
+        piItemRef: itemRef,
+        status: "completed",
+        content: {
+          type: "plan",
+          explanation: frame.explanation ?? null,
+          entries: frame.planEntries,
+        },
+      });
+      changed = true;
+    }
+    if (frame.type === "run.compacting" || frame.type === "run.compacted") {
       this.#repository.recordPiProjection(
         projection.run.id,
         frame.sequence,
-        frame.type === "run.compacted" ? "compaction" : "retry",
-        true,
+        "compaction",
+        frame.type === "run.compacted",
       );
+      this.#repository.upsertRunItem({
+        runId: projection.run.id,
+        piItemRef: itemRef,
+        status:
+          frame.type === "run.compacting" ? "running" : frame.errorCode ? "failed" : "completed",
+        content: {
+          type: "compaction",
+          reason: frame.compactionReason ?? "unknown",
+          tokensBefore: frame.tokensBefore ?? null,
+          tokensAfter: frame.tokensAfter ?? null,
+        },
+        errorCode: frame.errorCode ?? null,
+      });
       this.#emit(
-        frame.type === "run.compacted" ? "run.compacted" : "run.retrying",
+        frame.type === "run.compacted" ? "run.compacted" : "run.progressed",
         this.#syntheticFrame(frame, projection),
         projection,
         { reason: frame.resultSummary ?? frame.errorCode },
       );
+      return;
+    }
+    if (frame.type === "run.retrying" || frame.type === "run.retry_completed") {
+      this.#repository.recordPiProjection(
+        projection.run.id,
+        frame.sequence,
+        "retry",
+        frame.type === "run.retry_completed",
+      );
+      const existing = this.#repository.runItemByRef(projection.run.id, itemRef);
+      this.#repository.upsertRunItem({
+        runId: projection.run.id,
+        piItemRef: itemRef,
+        status:
+          frame.type === "run.retrying" ? "running" : frame.errorCode ? "failed" : "completed",
+        content:
+          existing?.content.type === "retry"
+            ? existing.content
+            : {
+                type: "retry",
+                attempt: frame.attempt ?? 1,
+                maxAttempts: frame.maxAttempts ?? frame.attempt ?? 1,
+                delayMs: frame.delayMs ?? 0,
+                summary: frame.resultSummary ?? "模型请求正在重试",
+              },
+        errorCode: frame.errorCode ?? null,
+      });
+      this.#emit("run.retrying", this.#syntheticFrame(frame, projection), projection, {
+        reason: frame.resultSummary ?? frame.errorCode,
+      });
+      return;
+    }
+    if (changed) {
+      this.#emit("run.progressed", this.#syntheticFrame(frame, projection), projection, {
+        reason: frame.resultSummary,
+      });
     }
   }
 
@@ -271,12 +983,18 @@ export class ToolAppService {
 
   completeGeneration(
     generationId: string,
-    status: "completed" | "failed" | "cancelled",
+    status: "completed" | "failed" | "interrupted",
     errorCode?: string,
+    usageRecords: UsageRecord[] = [],
   ): void {
     const projection = this.#projectionByGeneration.get(generationId);
     if (projection) {
-      this.#repository.completeRun(projection.run.id, status, errorCode);
+      this.#repository.completeRun(
+        projection.run.id,
+        status,
+        errorCode,
+        usageRecords.map((usage) => ({ ...usage, runId: projection.run.id })),
+      );
       const workItem = this.#repository.workItem(projection.workItem.id);
       const run = this.#repository.run(projection.run.id);
       this.#emitEvent({
@@ -284,8 +1002,8 @@ export class ToolAppService {
         type:
           status === "completed"
             ? "run.completed"
-            : status === "cancelled"
-              ? "run.cancelled"
+            : status === "interrupted"
+              ? "run.interrupted"
               : "run.failed",
         conversationId: workItem.conversationId,
         messageId: workItem.messageId,
@@ -301,9 +1019,23 @@ export class ToolAppService {
     this.#projectionByGeneration.delete(generationId);
   }
 
-  cancelGeneration(generationId: string): void {
+  requestCancellation(generationId: string): void {
+    const projection = this.#projectionByGeneration.get(generationId);
+    if (projection) {
+      const run = this.#repository.requestRunCancellation(projection.run.id);
+      const workItem = this.#repository.workItem(projection.workItem.id);
+      this.#emitEvent({
+        eventId: randomUUID(),
+        type: "run.cancelling",
+        conversationId: workItem.conversationId,
+        messageId: workItem.messageId,
+        sequence: 0,
+        occurredAt: new Date().toISOString(),
+        payloadVersion: 1,
+        payload: { workItem, run },
+      });
+    }
     this.#abortByGeneration.get(generationId)?.abort();
-    this.completeGeneration(generationId, "cancelled", "USER_CANCELLED");
   }
 
   async close(): Promise<void> {
@@ -318,11 +1050,13 @@ export class ToolAppService {
     const projection = this.#repository.createProjection({
       conversationId: frame.conversationId,
       messageId: frame.assistantMessageId,
-      title: `工具任务 · ${frame.toolName}`,
+      branchId: frame.branchId,
+      title: "对话轮次",
       selectedModelRef: this.#selectedModelRef(frame.assistantMessageId),
+      thinkingLevel: "medium",
       piPackageVersion: "0.84.3",
-      piHostContractVersion: 1,
-      piSessionRef: `conversation:${frame.conversationId}`,
+      piHostContractVersion,
+      piSessionRef: `branch:${frame.branchId}`,
     });
     this.#projectionByGeneration.set(frame.generationId, projection);
     this.#emit("run.started", frame, projection, {});

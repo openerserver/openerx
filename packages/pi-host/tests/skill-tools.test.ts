@@ -55,6 +55,7 @@ describe("Pi native Skill alignment", () => {
     const tools = createProductSkillTools({
       generationId: randomUUID(),
       conversationId: randomUUID(),
+      branchId: randomUUID(),
       assistantMessageId: randomUUID(),
       mounts: [auto, manual],
       transport: { request },
@@ -96,10 +97,19 @@ describe("Pi native Skill alignment", () => {
 
   it("maps progressive reads and scripts to mounted installation ids and blocks path escape", async () => {
     const { root, auto } = fixture();
-    const request = vi.fn(async () => ({ ok: true }));
+    const request = vi.fn(async () => ({
+      summary: "ok",
+      content: [{ type: "text" as const, text: "ok" }],
+      data: { ok: true },
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: false,
+      durationMs: 0,
+    }));
     const tools = createProductSkillTools({
       generationId: randomUUID(),
       conversationId: randomUUID(),
+      branchId: randomUUID(),
       assistantMessageId: randomUUID(),
       mounts: [auto],
       transport: { request },

@@ -17,3 +17,4 @@ export * from "./remote";
 export * from "./skill";
 export * from "./sync";
 export * from "./tool";
+export * from "./workspace";

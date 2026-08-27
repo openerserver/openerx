@@ -6,6 +6,7 @@ import {
   timestampSchema,
 } from "./chat";
 import { errorEnvelopeSchema } from "./errors";
+import { hostToolAvailabilitySchema } from "./model";
 import { remoteConnectorConfigureFrameSchema, remoteConnectorDisableFrameSchema } from "./remote";
 import { normalizedToolResultSchema, toolOperationSchema } from "./tool";
 
@@ -110,14 +111,51 @@ export const mainCapabilityCancelFrameSchema = z
   })
   .strict();
 
-export const mainCredentialRequestFrameSchema = z
+export const mainCapabilityAvailabilityRequestFrameSchema = z
   .object({
-    kind: z.literal("main.credential.request"),
+    kind: z.literal("main.capability.availability.request"),
     requestId: z.uuid(),
-    operation: z.enum(["resolve", "clear"]),
-    credentialRef: z.string().min(1).max(500),
   })
   .strict();
+
+export const mainCapabilityAvailabilityResponseFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      kind: z.literal("main.capability.availability.response"),
+      requestId: z.uuid(),
+      ok: z.literal(true),
+      data: hostToolAvailabilitySchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("main.capability.availability.response"),
+      requestId: z.uuid(),
+      ok: z.literal(false),
+      errorCode: z.string().min(1),
+    })
+    .strict(),
+]);
+
+export const mainCredentialRequestFrameSchema = z.discriminatedUnion("operation", [
+  z
+    .object({
+      kind: z.literal("main.credential.request"),
+      requestId: z.uuid(),
+      operation: z.enum(["resolve", "clear"]),
+      credentialRef: z.string().min(1).max(500),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("main.credential.request"),
+      requestId: z.uuid(),
+      operation: z.literal("save"),
+      credentialRef: z.string().min(1).max(500),
+      value: z.string().min(1).max(1_000_000),
+    })
+    .strict(),
+]);
 
 export const mainCredentialResponseFrameSchema = z.discriminatedUnion("ok", [
   z
@@ -138,6 +176,72 @@ export const mainCredentialResponseFrameSchema = z.discriminatedUnion("ok", [
     .strict(),
 ]);
 
+export const mainOAuthRequestFrameSchema = z.discriminatedUnion("operation", [
+  z
+    .object({
+      kind: z.literal("main.oauth.request"),
+      requestId: z.uuid(),
+      operation: z.literal("prepare"),
+      serverId: entityIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("main.oauth.request"),
+      requestId: z.uuid(),
+      operation: z.literal("authorize"),
+      sessionId: z.uuid(),
+      authorizationUrl: z.url(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("main.oauth.request"),
+      requestId: z.uuid(),
+      operation: z.literal("cancel"),
+      sessionId: z.uuid(),
+    })
+    .strict(),
+]);
+
+export const mainOAuthResponseFrameSchema = z.union([
+  z
+    .object({
+      kind: z.literal("main.oauth.response"),
+      requestId: z.uuid(),
+      ok: z.literal(true),
+      operation: z.literal("prepare"),
+      sessionId: z.uuid(),
+      redirectUrl: z.url(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("main.oauth.response"),
+      requestId: z.uuid(),
+      ok: z.literal(true),
+      operation: z.literal("authorize"),
+      callbackUrl: z.url(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("main.oauth.response"),
+      requestId: z.uuid(),
+      ok: z.literal(true),
+      operation: z.literal("cancel"),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("main.oauth.response"),
+      requestId: z.uuid(),
+      ok: z.literal(false),
+      errorCode: z.string().min(1),
+    })
+    .strict(),
+]);
+
 export const appServicePortFrameSchema = z.union([
   appServiceReadyFrameSchema,
   appServiceRequestFrameSchema,
@@ -146,8 +250,12 @@ export const appServicePortFrameSchema = z.union([
   mainCapabilityRequestFrameSchema,
   mainCapabilityResponseFrameSchema,
   mainCapabilityCancelFrameSchema,
+  mainCapabilityAvailabilityRequestFrameSchema,
+  mainCapabilityAvailabilityResponseFrameSchema,
   mainCredentialRequestFrameSchema,
   mainCredentialResponseFrameSchema,
+  mainOAuthRequestFrameSchema,
+  mainOAuthResponseFrameSchema,
   remoteConnectorConfigureFrameSchema,
   remoteConnectorDisableFrameSchema,
 ]);
@@ -161,5 +269,13 @@ export type AppServiceEventFrame = z.infer<typeof appServiceEventFrameSchema>;
 export type MainCapabilityRequestFrame = z.infer<typeof mainCapabilityRequestFrameSchema>;
 export type MainCapabilityResponseFrame = z.infer<typeof mainCapabilityResponseFrameSchema>;
 export type MainCapabilityCancelFrame = z.infer<typeof mainCapabilityCancelFrameSchema>;
+export type MainCapabilityAvailabilityRequestFrame = z.infer<
+  typeof mainCapabilityAvailabilityRequestFrameSchema
+>;
+export type MainCapabilityAvailabilityResponseFrame = z.infer<
+  typeof mainCapabilityAvailabilityResponseFrameSchema
+>;
 export type MainCredentialRequestFrame = z.infer<typeof mainCredentialRequestFrameSchema>;
 export type MainCredentialResponseFrame = z.infer<typeof mainCredentialResponseFrameSchema>;
+export type MainOAuthRequestFrame = z.infer<typeof mainOAuthRequestFrameSchema>;
+export type MainOAuthResponseFrame = z.infer<typeof mainOAuthResponseFrameSchema>;

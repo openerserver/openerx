@@ -35,8 +35,23 @@ export class HostCapabilityAdapter implements ToolAdapter {
       }
       if (!this.ingestDownload) throw new Error("BROWSER_DOWNLOAD_IMPORT_UNAVAILABLE");
       const imported = await this.ingestDownload(data.path);
-      const { path: _privatePath, ...safeData } = data;
-      return { ...result, data: { ...safeData, ...imported } };
+      const record = data as Record<string, unknown>;
+      const { path: _privatePath, ...safeData } = record;
+      const mediaType =
+        typeof safeData.mediaType === "string" ? safeData.mediaType : "application/octet-stream";
+      return {
+        ...result,
+        content: [
+          ...result.content,
+          {
+            type: "file",
+            personalFileId: imported.fileId,
+            displayName: imported.displayName,
+            mediaType,
+          },
+        ],
+        data: { ...safeData, ...imported },
+      };
     }
     return result;
   }

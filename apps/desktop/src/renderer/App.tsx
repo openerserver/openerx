@@ -1,29 +1,32 @@
-import {
-  type Attachment,
-  automaticModelRef,
-  type BillingOverview,
-  type ChargeRecord,
-  type ChatEvent,
-  type ConversationSnapshot,
-  type ConversationSummary,
-  type DesktopEnvironment,
-  type DeviceSession,
-  defaultThinkingLevel,
-  type McpServerConfig,
-  type Message,
-  type ModelCatalogEntry,
-  type PersonalFile,
-  type RechargeOrder,
-  type RefundOrder,
-  type ReleaseUpdateState,
-  type SkillInstallation,
-  type SyncConflict,
-  type ThinkingLevel,
-  type TokenAggregateField,
-  type UsageRecord,
-  type WorkItem,
-  type WorkItemDetail,
+import type {
+  Attachment,
+  BillingOverview,
+  ChargeRecord,
+  ChatEvent,
+  ConversationSnapshot,
+  ConversationSummary,
+  DesktopEnvironment,
+  DeviceSession,
+  McpServerAuthorizationState,
+  McpServerConfig,
+  Message,
+  ModelCatalogEntry,
+  PersonalFile,
+  RechargeOrder,
+  RefundOrder,
+  ReleaseUpdateState,
+  SkillInstallation,
+  SyncConflict,
+  ThinkingLevel,
+  TokenAggregateField,
+  ToolRuntimeCapability,
+  ToolRuntimeReadiness,
+  ToolRuntimeStatus,
+  UsageRecord,
+  WorkItem,
+  WorkItemDetail,
 } from "@openerx/contracts";
+import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/model";
 import {
   ArrowClockwise,
   ArrowUp,
@@ -85,6 +88,8 @@ const billingKey = ["billing"] as const;
 const themeStorageKey = "openerx.theme";
 
 type ThemePreference = "system" | "dark" | "light";
+type WorkspaceAccessChoice = "read_only" | "read_write";
+type WorkspaceExpiryChoice = "never" | "1h" | "24h" | "7d";
 
 const themeOptions = [
   {
@@ -149,13 +154,25 @@ function previousMonth(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function workspaceExpiry(choice: WorkspaceExpiryChoice): string | null {
+  const durations: Record<Exclude<WorkspaceExpiryChoice, "never">, number> = {
+    "1h": 60 * 60_000,
+    "24h": 24 * 60 * 60_000,
+    "7d": 7 * 24 * 60 * 60_000,
+  };
+  return choice === "never" ? null : new Date(Date.now() + durations[choice]).toISOString();
+}
+
+function workspaceExpiryLabel(expiresAt: string | null): string {
+  return expiresAt ? `有效期至 ${new Date(expiresAt).toLocaleString()}` : "长期有效";
+}
+
 const capabilityLabels: Record<keyof ModelCatalogEntry["capabilities"], string> = {
-  text: "文本",
+  textInput: "文本输入",
   imageInput: "图片",
   fileInput: "文件",
-  tools: "工具",
-  mcp: "MCP",
-  imageGeneration: "图片生成",
+  functionCalling: "函数调用",
+  structuredOutput: "结构化输出",
 };
 
 const thinkingLevelLabels: Record<ThinkingLevel, string> = {
@@ -177,15 +194,60 @@ function preferredThinkingLevel(levels: ThinkingLevel[]): ThinkingLevel {
 }
 
 const toolCatalog = [
-  { namespace: "builtin", name: "确定性计算", detail: "无网络算术计算" },
-  { namespace: "builtin", name: "结构化数据", detail: "排序、选择与去重" },
-  { namespace: "files", name: "文件与成果", detail: "受 Scope 限制的读取、检索、转换与版本" },
-  { namespace: "platform", name: "Web 搜索", detail: "第一方检索与可打开来源" },
-  { namespace: "platform", name: "图片生成", detail: "账户鉴权的平台图片生成" },
-  { namespace: "local", name: "隔离浏览器", detail: "独立 Profile 的导航与交互" },
-  { namespace: "local", name: "Shell / 代码", detail: "授权工作区内的可停止进程" },
-  { namespace: "local", name: "桌面控制", detail: "屏幕读取与逐次确认交互" },
-  { namespace: "mcp", name: "MCP", detail: "STDIO 与 Streamable HTTP 服务" },
+  {
+    namespace: "builtin",
+    capability: "builtin.compute",
+    name: "确定性计算",
+    detail: "无网络算术计算",
+  },
+  {
+    namespace: "builtin",
+    capability: "builtin.structured_data",
+    name: "结构化数据",
+    detail: "排序、选择与去重",
+  },
+  {
+    namespace: "files",
+    capability: "file",
+    name: "文件与成果",
+    detail: "受 Scope 限制的读取、检索、转换与版本",
+  },
+  {
+    namespace: "platform",
+    capability: "web.search",
+    name: "Web 搜索",
+    detail: "第一方检索与可打开来源",
+  },
+  {
+    namespace: "platform",
+    capability: "image.generate",
+    name: "图片生成",
+    detail: "账户鉴权的平台图片生成",
+  },
+  {
+    namespace: "local",
+    capability: "browser",
+    name: "隔离浏览器",
+    detail: "独立 Profile 的导航与交互",
+  },
+  {
+    namespace: "local",
+    capability: "shell",
+    name: "Shell / 代码",
+    detail: "授权工作区内的可停止进程",
+  },
+  {
+    namespace: "local",
+    capability: "desktop",
+    name: "桌面控制",
+    detail: "屏幕读取与逐次确认交互",
+  },
+  {
+    namespace: "mcp",
+    capability: "mcp",
+    name: "MCP",
+    detail: "STDIO 与 Streamable HTTP 服务",
+  },
 ] as const;
 
 const toolNamespaceLabels: Record<(typeof toolCatalog)[number]["namespace"], string> = {
@@ -195,6 +257,55 @@ const toolNamespaceLabels: Record<(typeof toolCatalog)[number]["namespace"], str
   local: "本机",
   mcp: "外部连接",
 };
+
+const toolRuntimeStatusLabels: Record<ToolRuntimeStatus, string> = {
+  available: "运行时可用",
+  degraded: "部分可用",
+  authorization_required: "需要设置",
+  unavailable: "不可用",
+};
+
+const toolRuntimeReasonLabels: Record<string, string> = {
+  PLATFORM_ENDPOINT_NOT_CONFIGURED: "未配置平台服务地址",
+  AUTHENTICATION_REQUIRED: "登录后可使用",
+  BROWSER_HOST_UNAVAILABLE: "隔离浏览器 Host 未就绪",
+  MAIN_CAPABILITY_UNAVAILABLE: "桌面 Host 未就绪",
+  SHELL_OS_SANDBOX_UNAVAILABLE: "当前系统缺少安全 Shell 沙箱",
+  WORKSPACE_WRITE_GRANT_REQUIRED: "需先授权一个可写工作区",
+  DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED: "需在系统设置中允许屏幕录制",
+  DESKTOP_SCREEN_CAPTURE_STATUS_UNKNOWN: "无法确认屏幕录制权限",
+  DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED: "需在系统设置中允许辅助功能",
+  DESKTOP_AUTOMATION_UNAVAILABLE: "系统自动化组件不可用",
+  DESKTOP_PLATFORM_UNSUPPORTED: "当前桌面平台尚未支持",
+  MCP_SERVER_CONFIGURATION_REQUIRED: "需先添加并启用 MCP 服务",
+  MCP_OAUTH_AUTHORIZATION_REQUIRED: "至少一个 MCP 服务需要浏览器授权",
+  MCP_PARTIALLY_UNAVAILABLE: "部分 MCP 服务当前不可用",
+  MCP_NO_ENABLED_TOOLS: "已连接，但没有可调用工具",
+  MCP_SERVER_UNREACHABLE: "已配置的 MCP 服务无法连接",
+  MCP_CREDENTIAL_REQUIRED: "MCP 服务缺少本机凭证",
+};
+
+function toolRuntimeReason(reason: string | null): string | null {
+  if (!reason) return null;
+  return toolRuntimeReasonLabels[reason] ?? "运行状态暂不可确认";
+}
+
+const mcpAuthorizationLabels: Record<McpServerAuthorizationState["status"], string> = {
+  not_required: "无需 OAuth",
+  authorization_required: "需要浏览器授权",
+  authorized: "已授权",
+  unavailable: "OAuth 不可用",
+};
+
+function mcpAuthorizationReason(reason: string | null): string | null {
+  if (!reason) return null;
+  if (reason === "MCP_OAUTH_LEGACY_CLIENT_CREDENTIALS_UNSUPPORTED") {
+    return "旧版客户端凭证不再支持，请移除后重新添加并授权";
+  }
+  if (reason === "MCP_CREDENTIAL_REQUIRED") return "缺少本机 OAuth 凭证配置";
+  if (reason === "MCP_OAUTH_CREDENTIAL_INVALID") return "本机 OAuth 凭证已损坏，请重新添加";
+  return "授权状态暂不可用";
+}
 
 function modelCapabilities(model: ModelCatalogEntry): string {
   return Object.entries(model.capabilities)
@@ -212,9 +323,11 @@ function conflictPayload(payload: SyncConflict["clientPayload"]): string {
 const messageStatusLabel: Record<Message["status"], string> = {
   pending: "准备中",
   streaming: "生成中",
+  cancelling: "停止中",
   completed: "已完成",
   failed: "失败",
   stopped: "已停止",
+  interrupted: "已中断",
 };
 
 function accountStatusLabel(status: string | undefined): string {
@@ -254,13 +367,25 @@ function formatUpdatedAt(value: string): string {
 }
 
 function skillName(skill: SkillInstallation): string {
-  return skill.name === "structured-report" ? "结构化报告" : skill.displayName;
+  const names: Record<string, string> = {
+    documents: "文档",
+    pdf: "PDF",
+    presentations: "演示文稿",
+    spreadsheets: "电子表格",
+    "structured-report": "结构化报告",
+  };
+  return names[skill.name] ?? skill.displayName;
 }
 
 function skillDescription(skill: SkillInstallation): string {
-  return skill.name === "structured-report"
-    ? "把材料整理成包含摘要、关键发现、证据和下一步的简明报告。"
-    : skill.description;
+  const descriptions: Record<string, string> = {
+    documents: "创建或编辑真实 DOCX，并逐页检查视觉结果。",
+    pdf: "创建或编辑真实 PDF，并逐页检查视觉结果。",
+    presentations: "创建或编辑真实 PPTX，并逐张检查幻灯片。",
+    spreadsheets: "创建或编辑真实 XLSX，并逐张检查工作表。",
+    "structured-report": "把材料整理成包含摘要、关键发现、证据和下一步的简明报告。",
+  };
+  return descriptions[skill.name] ?? skill.description;
 }
 
 function userFacingError(error: unknown, fallback: string): string {
@@ -805,6 +930,10 @@ function ContextDock({
   const queryClient = useQueryClient();
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [contextNotice, setContextNotice] = useState<string | null>(null);
+  const [workspaceAccess, setWorkspaceAccess] = useState<WorkspaceAccessChoice>("read_write");
+  const [workspaceAllowNetwork, setWorkspaceAllowNetwork] = useState(false);
+  const [workspaceExpiryChoice, setWorkspaceExpiryChoice] =
+    useState<WorkspaceExpiryChoice>("never");
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const chooseFilesButtonRef = useRef<HTMLButtonElement>(null);
   const chooseDirectoryButtonRef = useRef<HTMLButtonElement>(null);
@@ -814,6 +943,36 @@ function ContextDock({
     queryFn: () => withUiTimeout(window.openerx.listFiles({ conversationId })),
     enabled: Boolean(conversationId),
     retry: false,
+  });
+  const workspaces = useQuery({
+    queryKey: ["workspaces", conversationId],
+    queryFn: () => withUiTimeout(window.openerx.listWorkspaces({ conversationId })),
+    enabled: Boolean(conversationId),
+    retry: false,
+  });
+  const chooseWorkspace = useMutation({
+    mutationFn: () =>
+      window.openerx.chooseWorkspace({
+        conversationId,
+        access: workspaceAccess,
+        allowNetwork: workspaceAccess === "read_write" && workspaceAllowNetwork,
+        expiresAt: workspaceExpiry(workspaceExpiryChoice),
+      }),
+    onSuccess: async (workspace) => {
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      setContextNotice(
+        workspace
+          ? `已授权工作区 ${workspace.displayName}；${workspace.access === "read_write" ? "读写" : "只读"}、网络${workspace.allowNetwork ? "允许" : "禁止"}、${workspaceExpiryLabel(workspace.expiresAt)}。`
+          : "已取消工作区选择。",
+      );
+    },
+  });
+  const revokeWorkspace = useMutation({
+    mutationFn: (workspaceGrantId: string) => window.openerx.revokeWorkspace({ workspaceGrantId }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      setContextNotice("已撤销工作区；后续 Turn 不再暴露其工具或项目指令。");
+    },
   });
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles({ conversationId }),
@@ -991,6 +1150,103 @@ function ContextDock({
           {revoke.error ? (
             <p className="inline-error" role="alert">
               {userFacingError(revoke.error, "暂时无法撤销原始路径权限，请重试。")}
+            </p>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="context-files" aria-labelledby="context-workspaces-title">
+        <div className="context-section-heading">
+          <h3 id="context-workspaces-title">项目工作区</h3>
+          <span>{workspaces.data?.length ?? 0}</span>
+        </div>
+        <div className="context-dropzone">
+          <FolderSimple size={26} weight="regular" />
+          <strong>授权可审阅、可撤销的项目目录</strong>
+          <span>模型只看到授权 ID 与相对路径；Shell 网络权限与目录权限分别授予。</span>
+          <div className="workspace-grant-controls">
+            <label>
+              <span>访问权限</span>
+              <select
+                value={workspaceAccess}
+                onChange={(event) => {
+                  const access = event.target.value as WorkspaceAccessChoice;
+                  setWorkspaceAccess(access);
+                  if (access === "read_only") setWorkspaceAllowNetwork(false);
+                }}
+              >
+                <option value="read_write">读写</option>
+                <option value="read_only">只读</option>
+              </select>
+            </label>
+            <label>
+              <span>有效期</span>
+              <select
+                value={workspaceExpiryChoice}
+                onChange={(event) =>
+                  setWorkspaceExpiryChoice(event.target.value as WorkspaceExpiryChoice)
+                }
+              >
+                <option value="never">长期有效</option>
+                <option value="1h">1 小时</option>
+                <option value="24h">24 小时</option>
+                <option value="7d">7 天</option>
+              </select>
+            </label>
+            <label className="workspace-network-choice">
+              <input
+                type="checkbox"
+                checked={workspaceAllowNetwork}
+                disabled={workspaceAccess === "read_only"}
+                onChange={(event) => setWorkspaceAllowNetwork(event.target.checked)}
+              />
+              <span>允许 Shell 网络</span>
+            </label>
+          </div>
+          <div className="context-picker-actions">
+            <button
+              type="button"
+              onClick={() => chooseWorkspace.mutate()}
+              disabled={chooseWorkspace.isPending}
+            >
+              {chooseWorkspace.isPending ? "正在选择…" : "授权工作区"}
+            </button>
+          </div>
+        </div>
+        <div className="context-file-list">
+          {workspaces.data?.map((workspace) => (
+            <article className="context-file" key={workspace.id}>
+              <div className="context-file-icon">
+                <FolderSimple size={19} weight="regular" />
+              </div>
+              <div className="context-file-copy">
+                <strong title={workspace.rootPath}>{workspace.displayName}</strong>
+                <span>
+                  {workspace.access === "read_write" ? "读写" : "只读"} · 网络
+                  {workspace.allowNetwork ? "允许" : "禁止"} ·{" "}
+                  {workspaceExpiryLabel(workspace.expiresAt)} · {workspace.rootPath}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="icon-button context-file-menu"
+                aria-label={`撤销 ${workspace.displayName} 工作区`}
+                onClick={() => revokeWorkspace.mutate(workspace.id)}
+              >
+                <X size={16} weight="bold" />
+              </button>
+            </article>
+          ))}
+          {workspaces.isPending ? <p className="muted-copy">正在读取工作区…</p> : null}
+          {!workspaces.isPending && (workspaces.data?.length ?? 0) === 0 ? (
+            <p className="muted-copy">尚未授权项目目录。</p>
+          ) : null}
+          {workspaces.error || chooseWorkspace.error || revokeWorkspace.error ? (
+            <p className="inline-error" role="alert">
+              {userFacingError(
+                workspaces.error ?? chooseWorkspace.error ?? revokeWorkspace.error,
+                "暂时无法更新工作区授权，请重试。",
+              )}
             </p>
           ) : null}
         </div>
@@ -1235,7 +1491,21 @@ function FilesAndArtifacts(): React.JSX.Element {
           {saveArtifact.data ? (
             <p className="inline-success">已保存 {saveArtifact.data.fileName}</p>
           ) : null}
-          {preview.data?.format === "html" && previewMode === "preview" && preview.data.source ? (
+          {preview.data?.renderedSurfaces.length && previewMode === "preview" ? (
+            <section className="office-preview-surfaces" aria-label="成果视觉预览">
+              {preview.data.renderedSurfaces.map((surface) => (
+                <figure key={`${surface.kind}-${surface.index}`}>
+                  <figcaption>{surface.label}</figcaption>
+                  <img
+                    src={surface.imageDataUrl}
+                    alt={`${preview.data.displayName} ${surface.label}`}
+                  />
+                </figure>
+              ))}
+            </section>
+          ) : preview.data?.format === "html" &&
+            previewMode === "preview" &&
+            preview.data.source ? (
             <iframe
               title="HTML 隔离预览"
               sandbox="allow-scripts"
@@ -1500,18 +1770,28 @@ function MessageCard({
 const workItemStatusLabel: Record<WorkItem["status"], string> = {
   queued: "排队中",
   running: "运行中",
+  cancelling: "正在停止",
   waiting_for_user: "等待输入",
   waiting_for_permission: "等待授权",
   completed: "已完成",
   failed: "失败",
+  interrupted: "已中断",
   cancelled: "已取消",
 };
 
 function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
   const queryClient = useQueryClient();
+  const [selectedRunId, setSelectedRunId] = useState(workItem.activeRunId);
+  useEffect(() => {
+    if (!selectedRunId && workItem.activeRunId) setSelectedRunId(workItem.activeRunId);
+  }, [selectedRunId, workItem.activeRunId]);
   const detail = useQuery({
-    queryKey: ["tools", "work-item", workItem.id],
-    queryFn: () => window.openerx.getWorkItem({ workItemId: workItem.id }),
+    queryKey: ["tools", "work-item", workItem.id, selectedRunId],
+    queryFn: () =>
+      window.openerx.getWorkItem({
+        workItemId: workItem.id,
+        ...(selectedRunId ? { runId: selectedRunId } : {}),
+      }),
   });
   const resolve = useMutation({
     mutationFn: ({
@@ -1528,8 +1808,62 @@ function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
     },
   });
   const value: WorkItemDetail | undefined = detail.data;
-  const pending = value?.permissions.filter(({ status }) => status === "pending") ?? [];
-  const shouldOpen = ["running", "waiting_for_permission", "failed"].includes(workItem.status);
+  const toolCalls = new Map(value?.toolCalls.map((call) => [call.id, call]) ?? []);
+  const permissions = new Map(
+    value?.permissions.map((permission) => [permission.id, permission]) ?? [],
+  );
+  const projectedSources = new Set(
+    value?.items.flatMap((item) =>
+      item.content.type === "source" ? [item.content.toolCallId] : [],
+    ) ?? [],
+  );
+  const projectedDiffs = new Set(
+    value?.items.flatMap((item) =>
+      item.content.type === "diff" ? [item.content.toolCallId] : [],
+    ) ?? [],
+  );
+  const projectedCommands = new Set(
+    value?.items.flatMap((item) =>
+      item.content.type === "command" ? [item.content.toolCallId] : [],
+    ) ?? [],
+  );
+  const usageRecords = value?.run.usageRecords ?? [];
+  const usageTotal = usageRecords.reduce(
+    (total, usage) => ({
+      inputTokens: {
+        known: total.inputTokens.known + (usage.inputTokens ?? 0),
+        unknownRecords: total.inputTokens.unknownRecords + Number(usage.inputTokens === null),
+      },
+      cachedInputTokens: {
+        known: total.cachedInputTokens.known + (usage.cachedInputTokens ?? 0),
+        unknownRecords:
+          total.cachedInputTokens.unknownRecords + Number(usage.cachedInputTokens === null),
+      },
+      outputTokens: {
+        known: total.outputTokens.known + (usage.outputTokens ?? 0),
+        unknownRecords: total.outputTokens.unknownRecords + Number(usage.outputTokens === null),
+      },
+      reasoningTokens: {
+        known: total.reasoningTokens.known + (usage.reasoningTokens ?? 0),
+        unknownRecords:
+          total.reasoningTokens.unknownRecords + Number(usage.reasoningTokens === null),
+      },
+      totalTokens: {
+        known: total.totalTokens.known + (usage.totalTokens ?? 0),
+        unknownRecords: total.totalTokens.unknownRecords + Number(usage.totalTokens === null),
+      },
+    }),
+    {
+      inputTokens: { known: 0, unknownRecords: 0 },
+      cachedInputTokens: { known: 0, unknownRecords: 0 },
+      outputTokens: { known: 0, unknownRecords: 0 },
+      reasoningTokens: { known: 0, unknownRecords: 0 },
+      totalTokens: { known: 0, unknownRecords: 0 },
+    },
+  );
+  const shouldOpen = ["running", "cancelling", "waiting_for_permission", "failed"].includes(
+    workItem.status,
+  );
   return (
     <details className="tool-activity" open={shouldOpen || undefined}>
       <summary>
@@ -1540,74 +1874,296 @@ function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
         </span>
       </summary>
       {detail.isPending ? <p className="muted-copy">正在读取工具活动…</p> : null}
-      {value?.toolCalls.map((call) => (
-        <div className="tool-call-row" key={call.id}>
-          <div>
-            <strong>{call.toolName}</strong>
-            <span>{call.inputSummary}</span>
-          </div>
-          <span>{call.status}</span>
-          {call.resultSummary ? <p>{call.resultSummary}</p> : null}
-          {call.errorCode ? <p className="inline-error">{call.errorCode}</p> : null}
+      {value ? (
+        <div className="run-replay-header">
+          <span>
+            Run #{value.run.attempt} · {value.run.selectedModelRef}
+          </span>
+          {value.runs.length > 1 ? (
+            <label>
+              历史 Run
+              <select
+                aria-label="选择要回放的 Run"
+                value={value.run.id}
+                onChange={(event) => setSelectedRunId(event.target.value)}
+              >
+                {value.runs.map((run) => (
+                  <option value={run.id} key={run.id}>
+                    #{run.attempt} · {run.status}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
-      ))}
-      {pending.map((permission) => {
-        const persistentAllowed = ["L1", "L2", "L3"].includes(permission.risk);
-        return (
-          <section className="permission-card" key={permission.id} aria-label="工具权限确认">
-            <p className="eyebrow">{permission.risk} 权限请求</p>
-            <strong>{permission.reason}</strong>
-            <span>
-              {permission.capability} · {permission.resource}
-            </span>
-            <div>
-              <button
-                type="button"
-                className="primary-action"
-                disabled={resolve.isPending}
-                onClick={() =>
-                  resolve.mutate({
-                    permissionRequestId: permission.id,
-                    decision: "once",
-                    payloadDigest: permission.payloadDigest,
-                  })
-                }
-              >
-                仅本次允许
-              </button>
-              {persistentAllowed ? (
-                <button
-                  type="button"
-                  disabled={resolve.isPending}
-                  onClick={() =>
-                    resolve.mutate({
-                      permissionRequestId: permission.id,
-                      decision: "session",
-                      payloadDigest: permission.payloadDigest,
-                    })
+      ) : null}
+      {usageRecords.length > 0 ? (
+        <div className="usage-line" role="status" aria-label="执行轮次 Token 用量">
+          <span>{usageRecords.length} 个模型轮次</span>
+          <span>输入 {tokenValue(usageTotal.inputTokens)}</span>
+          <span>缓存 {tokenValue(usageTotal.cachedInputTokens)}</span>
+          <span>输出 {tokenValue(usageTotal.outputTokens)}</span>
+          <span>推理 {tokenValue(usageTotal.reasoningTokens)}</span>
+          <strong>总计 {tokenValue(usageTotal.totalTokens)}</strong>
+        </div>
+      ) : null}
+      <div className="run-timeline">
+        {value?.items.map((item) => {
+          const content = item.content;
+          if (content.type === "tool") {
+            const call = toolCalls.get(content.toolCallId);
+            if (!call) return null;
+            const visibleParts = call.resultContent.filter(
+              (part) =>
+                !(part.type === "source" && projectedSources.has(call.id)) &&
+                !(part.type === "diff" && projectedDiffs.has(call.id)) &&
+                !(
+                  part.type === "text" &&
+                  projectedCommands.has(call.id) &&
+                  call.input?.operation.startsWith("shell_")
+                ),
+            );
+            return (
+              <section className="run-item-row tool-call-row" key={item.id}>
+                <header>
+                  <div>
+                    <strong>{call.toolName}</strong>
+                    <span>{call.inputSummary}</span>
+                  </div>
+                  <span>{call.status}</span>
+                </header>
+                {call.input ? (
+                  <details className="typed-input">
+                    <summary>类型化输入 · {call.input.operation}</summary>
+                    <pre>{JSON.stringify(call.input, null, 2)}</pre>
+                  </details>
+                ) : null}
+                {call.resultSummary ? <p>{call.resultSummary}</p> : null}
+                {visibleParts.map((part, index) => {
+                  const key = `${call.id}:${index}`;
+                  if (part.type === "image") {
+                    return (
+                      <img
+                        alt={`${call.toolName} 返回的图片`}
+                        className="tool-result-image"
+                        key={key}
+                        src={`data:${part.mimeType};base64,${part.data}`}
+                      />
+                    );
                   }
-                >
-                  本次会话允许
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="danger-action"
-                disabled={resolve.isPending}
-                onClick={() =>
-                  resolve.mutate({
-                    permissionRequestId: permission.id,
-                    decision: "deny",
-                    payloadDigest: permission.payloadDigest,
-                  })
-                }
+                  if (part.type === "text") return <pre key={key}>{part.text}</pre>;
+                  if (part.type === "file") {
+                    return (
+                      <p key={key}>
+                        文件：{part.displayName}（{part.mediaType}）
+                      </p>
+                    );
+                  }
+                  if (part.type === "artifact") return <p key={key}>成果：{part.artifactId}</p>;
+                  if (part.type === "diff") {
+                    return (
+                      <details key={key}>
+                        <summary>差异：{part.relativePath}</summary>
+                        <pre>{part.patch}</pre>
+                      </details>
+                    );
+                  }
+                  return (
+                    <a href={part.source.url} key={key} rel="noreferrer" target="_blank">
+                      {part.source.title}
+                    </a>
+                  );
+                })}
+                {call.errorCode ? <p className="inline-error">{call.errorCode}</p> : null}
+              </section>
+            );
+          }
+          if (content.type === "approval") {
+            const permission = permissions.get(content.permissionRequestId);
+            if (!permission) return null;
+            const persistentAllowed = ["L1", "L2", "L3"].includes(permission.risk);
+            return (
+              <section
+                className="run-item-row permission-card"
+                key={item.id}
+                aria-label="工具权限确认"
               >
-                拒绝
-              </button>
-            </div>
-          </section>
-        );
-      })}
+                <p className="eyebrow">
+                  {permission.risk} 权限请求 · {permission.status}
+                </p>
+                <strong>{permission.reason}</strong>
+                <span>
+                  {permission.capability} · {permission.resource}
+                </span>
+                {permission.status === "pending" ? (
+                  <div>
+                    <button
+                      type="button"
+                      className="primary-action"
+                      disabled={resolve.isPending}
+                      onClick={() =>
+                        resolve.mutate({
+                          permissionRequestId: permission.id,
+                          decision: "once",
+                          payloadDigest: permission.payloadDigest,
+                        })
+                      }
+                    >
+                      仅本次允许
+                    </button>
+                    {persistentAllowed ? (
+                      <button
+                        type="button"
+                        disabled={resolve.isPending}
+                        onClick={() =>
+                          resolve.mutate({
+                            permissionRequestId: permission.id,
+                            decision: "session",
+                            payloadDigest: permission.payloadDigest,
+                          })
+                        }
+                      >
+                        本次会话允许
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="danger-action"
+                      disabled={resolve.isPending}
+                      onClick={() =>
+                        resolve.mutate({
+                          permissionRequestId: permission.id,
+                          decision: "deny",
+                          payloadDigest: permission.payloadDigest,
+                        })
+                      }
+                    >
+                      拒绝
+                    </button>
+                  </div>
+                ) : null}
+              </section>
+            );
+          }
+          if (content.type === "plan") {
+            return (
+              <section className="run-item-row" key={item.id}>
+                <header>
+                  <strong>执行计划</strong>
+                  <span>{item.status}</span>
+                </header>
+                {content.explanation ? <p>{content.explanation}</p> : null}
+                <ol className="run-plan">
+                  {content.entries.map((entry) => (
+                    <li data-status={entry.status} key={`${item.id}:${entry.text}`}>
+                      <span>
+                        {entry.status === "completed"
+                          ? "✓"
+                          : entry.status === "in_progress"
+                            ? "●"
+                            : "○"}
+                      </span>
+                      {entry.text}
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            );
+          }
+          if (content.type === "reasoning") {
+            return (
+              <section className="run-item-row" key={item.id}>
+                <header>
+                  <strong>推理摘要</strong>
+                  <span>{item.status}</span>
+                </header>
+                <p>{content.summary}</p>
+                {content.reasoningTokens === null ? null : (
+                  <span>{content.reasoningTokens} reasoning tokens</span>
+                )}
+              </section>
+            );
+          }
+          if (content.type === "model") {
+            return (
+              <section className="run-item-row" key={item.id}>
+                <header>
+                  <strong>模型轮次 · {content.modelRef}</strong>
+                  <span>{item.status}</span>
+                </header>
+                <p>{content.summary}</p>
+              </section>
+            );
+          }
+          if (content.type === "command") {
+            return (
+              <section className="run-item-row command-item" key={item.id}>
+                <header>
+                  <strong>命令 · {[content.command, ...content.args].join(" ")}</strong>
+                  <span>{item.status}</span>
+                </header>
+                {content.cwd ? <span>目录：{content.cwd}</span> : null}
+                <pre>{content.output || "（没有命令输出）"}</pre>
+                <span>
+                  {content.processId ? `进程 ${content.processId} · ` : ""}
+                  退出码 {content.exitCode ?? "—"}
+                  {content.outputTruncated ? " · 输出已截断" : ""}
+                </span>
+              </section>
+            );
+          }
+          if (content.type === "diff") {
+            return (
+              <section className="run-item-row" key={item.id}>
+                <header>
+                  <strong>文件差异 · {content.relativePath}</strong>
+                  <span>{item.status}</span>
+                </header>
+                <pre>{content.patch}</pre>
+              </section>
+            );
+          }
+          if (content.type === "source") {
+            return (
+              <section className="run-item-row" key={item.id}>
+                <header>
+                  <strong>来源</strong>
+                  <span>{item.status}</span>
+                </header>
+                <a href={content.source.url} rel="noreferrer" target="_blank">
+                  {content.source.title}
+                </a>
+                {content.source.excerpt ? <p>{content.source.excerpt}</p> : null}
+              </section>
+            );
+          }
+          if (content.type === "compaction") {
+            return (
+              <section className="run-item-row" key={item.id}>
+                <header>
+                  <strong>上下文压缩 · {content.reason}</strong>
+                  <span>{item.status}</span>
+                </header>
+                <p>
+                  Token：{content.tokensBefore ?? "未知"} → {content.tokensAfter ?? "未知"}
+                </p>
+              </section>
+            );
+          }
+          return (
+            <section className="run-item-row" key={item.id}>
+              <header>
+                <strong>
+                  模型重试 · {content.attempt}/{content.maxAttempts}
+                </strong>
+                <span>{item.status}</span>
+              </header>
+              <p>{content.summary}</p>
+              <span>等待 {content.delayMs} ms</span>
+            </section>
+          );
+        })}
+      </div>
     </details>
   );
 }
@@ -3768,7 +4324,6 @@ function ToolCenter(): React.JSX.Element {
   const [mcpAuth, setMcpAuth] = useState<"none" | "bearer" | "oauth">("none");
   const [mcpToken, setMcpToken] = useState("");
   const [mcpOAuthClientId, setMcpOAuthClientId] = useState("");
-  const [mcpOAuthClientSecret, setMcpOAuthClientSecret] = useState("");
   const [mcpOAuthScope, setMcpOAuthScope] = useState("");
   const workItems = useQuery({
     queryKey: ["tools", "work-items"],
@@ -3782,9 +4337,17 @@ function ToolCenter(): React.JSX.Element {
     queryKey: ["tools", "permissions", "pending"],
     queryFn: () => window.openerx.listPermissionRequests({ status: "pending" }),
   });
+  const runtimeReadiness = useQuery({
+    queryKey: ["tools", "runtime-readiness"],
+    queryFn: () => window.openerx.listToolRuntimeReadiness(),
+  });
   const mcpServers = useQuery({
     queryKey: ["tools", "mcp-servers"],
     queryFn: () => window.openerx.listMcpServers(),
+  });
+  const mcpAuthorization = useQuery({
+    queryKey: ["tools", "mcp-authorization"],
+    queryFn: () => window.openerx.listMcpServerAuthorizationStates(),
   });
   const revoke = useMutation({
     mutationFn: (scopeId: string) => window.openerx.revokeCapabilityScope({ scopeId }),
@@ -3797,16 +4360,14 @@ function ToolCenter(): React.JSX.Element {
         ...(mcpTransport === "streamable_http" && mcpAuth === "bearer" && mcpToken
           ? { bearerToken: mcpToken }
           : {}),
-        ...(mcpTransport === "streamable_http" &&
-        mcpAuth === "oauth" &&
-        mcpOAuthClientId &&
-        mcpOAuthClientSecret
+        ...(mcpTransport === "streamable_http" && mcpAuth === "oauth" && mcpOAuthClientId
           ? {
               oauthClientId: mcpOAuthClientId,
-              oauthClientSecret: mcpOAuthClientSecret,
               ...(mcpOAuthScope ? { oauthScope: mcpOAuthScope } : {}),
             }
-          : {}),
+          : mcpAuth === "oauth" && mcpOAuthScope
+            ? { oauthScope: mcpOAuthScope }
+            : {}),
       }),
     onSuccess: async (saved) => {
       setMcpName("");
@@ -3814,19 +4375,39 @@ function ToolCenter(): React.JSX.Element {
       setMcpCwd("");
       setMcpToken("");
       setMcpOAuthClientId("");
-      setMcpOAuthClientSecret("");
       setMcpOAuthScope("");
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
+      await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-authorization"] });
+      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
       setMcpNotice(`已保存 MCP 服务“${saved.name}”。`);
+    },
+  });
+  const authorizeMcp = useMutation({
+    mutationFn: (serverId: string) => window.openerx.authorizeMcpServer({ serverId }),
+    onSuccess: async (state) => {
+      queryClient.setQueryData<McpServerAuthorizationState[]>(
+        ["tools", "mcp-authorization"],
+        (current = []) => [...current.filter(({ serverId }) => serverId !== state.serverId), state],
+      );
+      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
+      setMcpNotice("OAuth 授权完成，MCP 服务已连接。");
     },
   });
   const removeMcp = useMutation({
     mutationFn: (serverId: string) => window.openerx.removeMcpServer({ serverId }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
+      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
       setMcpNotice("已移除 MCP 服务及其本机凭证引用。");
     },
   });
+  const readinessByCapability = useMemo(
+    () =>
+      new Map<ToolRuntimeCapability, ToolRuntimeReadiness>(
+        runtimeReadiness.data?.map((entry) => [entry.capability, entry]) ?? [],
+      ),
+    [runtimeReadiness.data],
+  );
   return (
     <main className="tool-center-page">
       <header>
@@ -3857,15 +4438,41 @@ function ToolCenter(): React.JSX.Element {
         </div>
       ) : null}
       <details className="tool-catalog disclosure-card" aria-label="工具目录">
-        <summary>查看可用能力</summary>
+        <summary>查看能力与运行状态</summary>
+        <div className="tool-catalog-controls">
+          <span>状态来自当前桌面 Host、系统权限、账户和本机配置。</span>
+          <button
+            type="button"
+            disabled={runtimeReadiness.isFetching}
+            onClick={() => void runtimeReadiness.refetch()}
+          >
+            {runtimeReadiness.isFetching ? "检测中…" : "刷新能力状态"}
+          </button>
+        </div>
         <div className="tool-catalog-grid">
-          {toolCatalog.map((tool) => (
-            <article key={`${tool.namespace}:${tool.name}`}>
-              <small>{toolNamespaceLabels[tool.namespace]}</small>
-              <strong>{tool.name}</strong>
-              <span>{tool.detail}</span>
-            </article>
-          ))}
+          {toolCatalog.map((tool) => {
+            const readiness = readinessByCapability.get(tool.capability);
+            const reason = toolRuntimeReason(readiness?.reason ?? null);
+            return (
+              <article key={`${tool.namespace}:${tool.name}`}>
+                <div className="tool-catalog-card-heading">
+                  <small>{toolNamespaceLabels[tool.namespace]}</small>
+                  <span
+                    className={`tool-runtime-status tool-runtime-status-${readiness?.status ?? "unknown"}`}
+                  >
+                    {readiness
+                      ? toolRuntimeStatusLabels[readiness.status]
+                      : runtimeReadiness.isFetching
+                        ? "检测中"
+                        : "状态未知"}
+                  </span>
+                </div>
+                <strong>{tool.name}</strong>
+                <span>{tool.detail}</span>
+                {reason ? <span className="tool-runtime-reason">{reason}</span> : null}
+              </article>
+            );
+          })}
         </div>
       </details>
       <section className="tool-center-grid">
@@ -3911,26 +4518,63 @@ function ToolCenter(): React.JSX.Element {
             }}
           >
             <summary>MCP 服务与高级连接</summary>
-            {mcpServers.data?.map((server) => (
-              <article className="scope-card" key={server.id}>
-                <strong>{server.name}</strong>
-                <span>{server.transport === "stdio" ? server.command : server.url}</span>
-                <small>
-                  {server.transport === "stdio" ? "本机 STDIO" : "Streamable HTTP"} ·{" "}
-                  {server.enabled ? "已启用" : "已禁用"}
-                  {server.transport === "streamable_http"
-                    ? ` · ${server.auth === "none" ? "无认证" : server.auth === "bearer" ? "Bearer 令牌" : "OAuth 客户端"}`
-                    : ""}
-                </small>
-                <button
-                  type="button"
-                  className="danger-action"
-                  onClick={() => removeMcp.mutate(server.id)}
-                >
-                  移除
-                </button>
-              </article>
-            ))}
+            {mcpServers.data?.map((server) => {
+              const authorization = mcpAuthorization.data?.find(
+                ({ serverId }) => serverId === server.id,
+              );
+              const oauth = server.transport === "streamable_http" && server.auth === "oauth";
+              const authorizing = authorizeMcp.isPending && authorizeMcp.variables === server.id;
+              const authorizationReason = mcpAuthorizationReason(authorization?.reason ?? null);
+              return (
+                <article className="scope-card" key={server.id}>
+                  <strong>{server.name}</strong>
+                  <span>{server.transport === "stdio" ? server.command : server.url}</span>
+                  <small>
+                    {server.transport === "stdio" ? "本机 STDIO" : "Streamable HTTP"} ·{" "}
+                    {server.enabled ? "已启用" : "已禁用"}
+                    {server.transport === "streamable_http"
+                      ? ` · ${server.auth === "none" ? "无认证" : server.auth === "bearer" ? "Bearer 令牌" : "OAuth 授权码 + PKCE"}`
+                      : ""}
+                  </small>
+                  {oauth ? (
+                    <small role="status">
+                      {authorization
+                        ? mcpAuthorizationLabels[authorization.status]
+                        : "正在读取 OAuth 状态"}
+                      {authorization?.expiresAt
+                        ? ` · Token 到期 ${new Date(authorization.expiresAt).toLocaleString()}`
+                        : ""}
+                      {authorizationReason ? ` · ${authorizationReason}` : ""}
+                    </small>
+                  ) : null}
+                  {oauth ? (
+                    <button
+                      type="button"
+                      disabled={authorizing || !server.enabled}
+                      onClick={() => authorizeMcp.mutate(server.id)}
+                    >
+                      {authorizing
+                        ? "等待浏览器授权…"
+                        : authorization?.status === "authorized"
+                          ? "重新授权"
+                          : "在浏览器中授权"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="danger-action"
+                    onClick={() => removeMcp.mutate(server.id)}
+                  >
+                    移除
+                  </button>
+                </article>
+              );
+            })}
+            {authorizeMcp.error ? (
+              <p className="inline-error">
+                {userFacingError(authorizeMcp.error, "OAuth 授权失败，请检查服务地址后重试。")}
+              </p>
+            ) : null}
             {mcpNotice ? (
               <p className="inline-success mcp-feedback" role="status">
                 {mcpNotice}
@@ -4042,9 +4686,9 @@ function ToolCenter(): React.JSX.Element {
                     >
                       <option value="none">无认证</option>
                       <option value="bearer">Bearer 令牌</option>
-                      <option value="oauth">OAuth 客户端凭证</option>
+                      <option value="oauth">OAuth 授权码（PKCE）</option>
                     </select>
-                    <small>令牌和客户端密钥不会写入聊天数据库或诊断导出。</small>
+                    <small>令牌只进入系统加密凭证存储，不写入聊天数据库或诊断导出。</small>
                   </label>
                   {mcpAuth === "bearer" ? (
                     <label className="mcp-field">
@@ -4063,27 +4707,15 @@ function ToolCenter(): React.JSX.Element {
                   ) : mcpAuth === "oauth" ? (
                     <>
                       <label className="mcp-field">
-                        <span>OAuth Client ID</span>
+                        <span>OAuth Client ID（可选）</span>
                         <input
                           aria-label="MCP OAuth Client ID"
                           autoComplete="off"
-                          placeholder="服务提供的 Client ID"
+                          placeholder="留空则尝试动态客户端注册"
                           value={mcpOAuthClientId}
                           onChange={(event) => setMcpOAuthClientId(event.target.value)}
-                          required
                         />
-                      </label>
-                      <label className="mcp-field">
-                        <span>OAuth Client Secret</span>
-                        <input
-                          aria-label="MCP OAuth Client Secret"
-                          type="password"
-                          autoComplete="off"
-                          placeholder="服务提供的 Client Secret"
-                          value={mcpOAuthClientSecret}
-                          onChange={(event) => setMcpOAuthClientSecret(event.target.value)}
-                          required
-                        />
+                        <small>这里只接受公共客户端 ID；桌面端不收集 Client Secret。</small>
                       </label>
                       <label className="mcp-field">
                         <span>OAuth Scope（可选）</span>

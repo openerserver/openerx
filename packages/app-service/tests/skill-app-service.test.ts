@@ -91,12 +91,14 @@ describe("ChatAppService Skill lifecycle", () => {
         skillInstallationId: builtIn.id,
       },
     });
-    expect(pi.prompts[0]).toMatchObject({
-      history: [
-        expect.objectContaining({ text: expect.stringContaining("/skill:structured-report") }),
-      ],
-      skills: [expect.objectContaining({ installationId: builtIn.id, autoInvoke: true })],
-    });
+    expect(pi.prompts[0]?.history).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("/skill:structured-report") }),
+    ]);
+    expect(pi.prompts[0]?.skills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ installationId: builtIn.id, autoInvoke: true }),
+      ]),
+    );
     expect(await waitForInvocation(service)).toMatchObject({
       installationId: builtIn.id,
       trigger: "explicit",
@@ -104,7 +106,9 @@ describe("ChatAppService Skill lifecycle", () => {
       reason: "Selected from the composer",
     });
 
-    const packagePath = pi.prompts[0]?.skills?.[0]?.baseDir;
+    const packagePath = pi.prompts[0]?.skills?.find(
+      ({ installationId }) => installationId === builtIn.id,
+    )?.baseDir;
     if (!packagePath) throw new Error("Skill mount missing");
     writeFileSync(path.join(packagePath, "SKILL.md"), "damaged");
     await service.handle({
@@ -115,7 +119,10 @@ describe("ChatAppService Skill lifecycle", () => {
         idempotencyKey: "skill-isolation-0001",
       },
     });
-    expect(pi.prompts[1]?.skills).toBeUndefined();
+    expect(pi.prompts[1]?.skills).toEqual(
+      expect.not.arrayContaining([expect.objectContaining({ installationId: builtIn.id })]),
+    );
+    expect(pi.prompts[1]?.skills?.length).toBeGreaterThan(0);
     expect(
       await service.handle({ command: "skill.get", input: { installationId: builtIn.id } }),
     ).toMatchObject({

@@ -48,7 +48,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
       };
     case "image_generate":
       return {
-        capability: "web.search",
+        capability: "image.generate",
         risk: "L2",
         resourceType: "server",
         resource: "image-generation.openerx.platform",
@@ -59,12 +59,38 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
     case "shell_execute":
       return {
         capability: "shell",
-        risk: "L5",
+        risk: operation.workspaceGrantId ? (operation.allowNetwork ? "L4" : "L3") : "L5",
         resourceType: "workspace",
-        resource: operation.cwd,
+        resource: operation.workspaceGrantId ?? operation.cwd ?? "missing-workspace",
         actions: operation.allowNetwork ? ["execute", "external_write"] : ["execute"],
-        reason: `在 ${operation.cwd} 执行 ${operation.command}`,
-        forcePerCallApproval: true,
+        reason: `在 ${operation.workspaceGrantId ?? operation.cwd ?? "未知工作区"} 执行 ${operation.command}`,
+        forcePerCallApproval: !operation.workspaceGrantId,
+      };
+    case "workspace_list":
+    case "workspace_search":
+    case "workspace_read":
+    case "workspace_instructions":
+    case "workspace_diff":
+    case "workspace_changes":
+      return {
+        capability: "workspace",
+        risk: "L0",
+        resourceType: "workspace",
+        resource: operation.workspaceGrantId,
+        actions: [operation.operation === "workspace_search" ? "search" : "read"],
+        reason: `读取已授权工作区：${operation.operation}`,
+        forcePerCallApproval: false,
+      };
+    case "workspace_apply_patch":
+    case "workspace_undo":
+      return {
+        capability: "workspace",
+        risk: "L3",
+        resourceType: "workspace",
+        resource: operation.workspaceGrantId,
+        actions: ["patch"],
+        reason: `修改已授权工作区：${operation.operation}`,
+        forcePerCallApproval: false,
       };
     case "shell_status":
     case "shell_input":
@@ -150,7 +176,11 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
           operation.operation === "mcp_connect"
             ? "L5"
             : operation.operation === "mcp_call"
-              ? "L4"
+              ? operation.annotations.readOnlyHint
+                ? "L0"
+                : operation.annotations.destructiveHint
+                  ? "L5"
+                  : "L4"
               : operation.operation === "mcp_disconnect"
                 ? "L3"
                 : "L2",
@@ -165,7 +195,8 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         ],
         reason: `MCP 操作：${operation.operation}`,
         forcePerCallApproval:
-          operation.operation === "mcp_connect" || operation.operation === "mcp_call",
+          operation.operation === "mcp_connect" ||
+          (operation.operation === "mcp_call" && !operation.annotations.readOnlyHint),
       };
     case "skill_read":
       return {
@@ -187,6 +218,40 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         reason: `执行 Skill 脚本：${operation.relativePath}`,
         forcePerCallApproval: true,
       };
+  }
+}
+
+export function hasUncertainExternalSideEffect(operation: ToolOperation): boolean {
+  switch (operation.operation) {
+    case "image_generate":
+    case "shell_execute":
+    case "shell_input":
+    case "skill_script_execute":
+    case "mcp_connect":
+    case "mcp_call":
+    case "mcp_disconnect":
+      return operation.operation === "mcp_call" ? !operation.annotations.readOnlyHint : true;
+    case "browser":
+      return operation.action !== "screenshot";
+    case "desktop":
+      return operation.action !== "screenshot";
+    case "compute":
+    case "structured_data":
+    case "web_search":
+    case "shell_status":
+    case "shell_stop":
+    case "mcp_list_tools":
+    case "skill_read":
+    case "workspace_list":
+    case "workspace_search":
+    case "workspace_read":
+    case "workspace_instructions":
+    case "workspace_diff":
+    case "workspace_changes":
+      return false;
+    case "workspace_apply_patch":
+    case "workspace_undo":
+      return true;
   }
 }
 
@@ -235,8 +300,28 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
     case "shell_execute":
       return {
         input: [operation.command, ...operation.args].join(" ").slice(0, 2_000),
-        target: operation.cwd,
+        target: operation.workspaceGrantId
+          ? `${operation.workspaceGrantId}:${operation.relativeCwd ?? "."}`
+          : (operation.cwd ?? "missing-workspace"),
       };
+    case "workspace_list":
+    case "workspace_search":
+    case "workspace_read":
+    case "workspace_instructions":
+      return {
+        input: operation.operation === "workspace_search" ? operation.query : operation.operation,
+        target: `${operation.workspaceGrantId}:${operation.relativePath}`,
+      };
+    case "workspace_apply_patch":
+      return {
+        input: `${operation.replacements.length} replacements`,
+        target: `${operation.workspaceGrantId}:${operation.relativePath}`,
+      };
+    case "workspace_diff":
+    case "workspace_undo":
+      return { input: operation.operation, target: operation.workspaceChangeId };
+    case "workspace_changes":
+      return { input: `last ${operation.limit} changes`, target: operation.workspaceGrantId };
     case "shell_status":
     case "shell_input":
     case "shell_stop":

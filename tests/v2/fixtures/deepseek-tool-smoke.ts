@@ -35,7 +35,7 @@ function request(
     selectedModelRef: automaticModelRef,
     approvedFallbackModelRef: null,
     requestDedupeKey,
-    requirements: { tools: true },
+    requirements: { functionCalling: true },
     context,
   };
 }

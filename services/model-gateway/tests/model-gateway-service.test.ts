@@ -33,12 +33,11 @@ const catalog: ModelCatalogEntry[] = [
     displayName: "标准模型",
     version: "2026-08-25",
     capabilities: {
-      text: true,
+      textInput: true,
       imageInput: true,
       fileInput: false,
-      tools: false,
-      mcp: false,
-      imageGeneration: false,
+      functionCalling: false,
+      structuredOutput: false,
     },
     contextWindow: 128_000,
     maxOutputTokens: 16_384,
@@ -53,12 +52,11 @@ const catalog: ModelCatalogEntry[] = [
     displayName: "工具模型",
     version: "2026-08-25",
     capabilities: {
-      text: true,
+      textInput: true,
       imageInput: true,
       fileInput: true,
-      tools: true,
-      mcp: true,
-      imageGeneration: false,
+      functionCalling: true,
+      structuredOutput: true,
     },
     contextWindow: 128_000,
     maxOutputTokens: 16_384,
@@ -207,7 +205,7 @@ describe("ModelGatewayService", () => {
     });
 
     const result = await gateway.execute(
-      request({ selectedModelRef: "platform/tools", requirements: { tools: true } }),
+      request({ selectedModelRef: "platform/tools", requirements: { functionCalling: true } }),
     );
 
     expect(result).toMatchObject({
@@ -220,16 +218,19 @@ describe("ModelGatewayService", () => {
 
   it("blocks unsupported capabilities before execution and suggests compatible models", async () => {
     const { gateway, execute } = setup();
-    const check = gateway.checkSelection("platform/standard", { tools: true, fileInput: true });
+    const check = gateway.checkSelection("platform/standard", {
+      functionCalling: true,
+      fileInput: true,
+    });
     expect(check).toEqual({
       supported: false,
       modelRef: "platform/standard",
-      missingCapabilities: ["fileInput", "tools"],
+      missingCapabilities: ["fileInput", "functionCalling"],
       suggestedModelRefs: ["platform/tools"],
     });
-    await expect(gateway.execute(request({ requirements: { tools: true } }))).rejects.toThrow(
-      "MODEL_CAPABILITY_UNSUPPORTED",
-    );
+    await expect(
+      gateway.execute(request({ requirements: { functionCalling: true } })),
+    ).rejects.toThrow("MODEL_CAPABILITY_UNSUPPORTED");
     expect(execute).not.toHaveBeenCalled();
   });
 

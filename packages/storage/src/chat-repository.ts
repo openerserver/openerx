@@ -16,6 +16,7 @@ import {
   generationReceiptSchema,
   type Message,
   messageSchema,
+  type PiHistoryMessage,
   type SearchResult,
   type SyncConflict,
   type SyncOperation,
@@ -49,6 +50,7 @@ export interface GenerationDraft {
   receipt: GenerationReceipt;
   events: ChatEvent[];
   created: boolean;
+  selectedModelRef: string;
   thinkingLevel: ThinkingLevel;
 }
 
@@ -135,6 +137,7 @@ export class ChatRepository {
         receipt: duplicate,
         events: [],
         created: false,
+        selectedModelRef: this.selectedModelForMessage(duplicate.assistantMessageId),
         thinkingLevel: this.thinkingLevelForMessage(duplicate.assistantMessageId),
       };
     }
@@ -184,6 +187,7 @@ export class ChatRepository {
           }),
         );
       }
+      const generationThinkingLevel = input.thinkingLevel ?? conversation.thinkingLevel;
       const parentMessageId = this.#resolveBranch(branchId).at(-1)?.id ?? null;
       const userMessage = this.#insertMessage({
         conversationId: conversation.id,
@@ -192,6 +196,8 @@ export class ChatRepository {
         role: "user",
         status: "completed",
         text: input.text,
+        selectedModelRef: conversation.selectedModelRef,
+        thinkingLevel: generationThinkingLevel,
         attempt: 1,
         now,
       });
@@ -202,6 +208,8 @@ export class ChatRepository {
         role: "assistant",
         status: "pending",
         text: "",
+        selectedModelRef: conversation.selectedModelRef,
+        thinkingLevel: generationThinkingLevel,
         attempt: 1,
         now,
       });
@@ -230,7 +238,13 @@ export class ChatRepository {
         assistantMessageId: assistantMessage.id,
       });
       this.#storeIdempotentResult(input.idempotencyKey, "chat.send", receipt, now);
-      return { receipt, events, created: true, thinkingLevel: conversation.thinkingLevel };
+      return {
+        receipt,
+        events,
+        created: true,
+        selectedModelRef: conversation.selectedModelRef,
+        thinkingLevel: generationThinkingLevel,
+      };
     });
   }
 
@@ -245,6 +259,7 @@ export class ChatRepository {
         receipt: duplicate,
         events: [],
         created: false,
+        selectedModelRef: this.selectedModelForMessage(duplicate.assistantMessageId),
         thinkingLevel: this.thinkingLevelForMessage(duplicate.assistantMessageId),
       };
     }
@@ -269,6 +284,7 @@ export class ChatRepository {
         receipt: duplicate,
         events: [],
         created: false,
+        selectedModelRef: this.selectedModelForMessage(duplicate.assistantMessageId),
         thinkingLevel: this.thinkingLevelForMessage(duplicate.assistantMessageId),
       };
     }
@@ -291,22 +307,33 @@ export class ChatRepository {
           `Runtime event gap for ${assistantMessageId}: expected ${currentSequence + 1}, received ${event.sequence}`,
         );
       }
-      const currentStatus = String(row.status) as Message["status"];
+      const storedStatus = String(row.status) as Message["status"];
+      const currentStatus: Message["status"] =
+        row.cancellation_requested_at !== null &&
+        (storedStatus === "pending" || storedStatus === "streaming")
+          ? "cancelling"
+          : storedStatus;
       if (terminalMessageStatuses.has(currentStatus)) return null;
       let nextStatus = currentStatus;
+      let storedNextStatus = storedStatus;
       let eventType: ChatEvent["type"];
       let errorCode = row.error_code === null ? null : String(row.error_code);
       if (event.type === "delta") {
-        nextStatus = "streaming";
+        nextStatus = currentStatus === "cancelling" ? "cancelling" : "streaming";
+        storedNextStatus = "streaming";
         eventType = "message.delta";
       } else if (event.type === "completed") {
         nextStatus = "completed";
+        storedNextStatus = "completed";
         eventType = "message.completed";
       } else if (event.type === "stopped") {
-        nextStatus = "stopped";
-        eventType = "message.stopped";
+        nextStatus = row.cancellation_requested_at === null ? "stopped" : "interrupted";
+        storedNextStatus = "stopped";
+        eventType =
+          row.cancellation_requested_at === null ? "message.stopped" : "message.interrupted";
       } else {
         nextStatus = "failed";
+        storedNextStatus = "failed";
         errorCode = event.errorCode ?? "RUNTIME_FAILURE";
         eventType = "message.failed";
       }
@@ -323,7 +350,7 @@ export class ChatRepository {
           `UPDATE messages SET status = ?, error_code = ?, updated_at = ?, revision = revision + 1,
            runtime_sequence = ? WHERE id = ?`,
         )
-        .run(nextStatus, errorCode, event.occurredAt, event.sequence, assistantMessageId);
+        .run(storedNextStatus, errorCode, event.occurredAt, event.sequence, assistantMessageId);
       const message = this.#message(assistantMessageId);
       this.#touchConversation(message.conversationId, event.occurredAt);
       this.#queueSyncUpsert("message", message.id, message, event.occurredAt);
@@ -347,7 +374,7 @@ export class ChatRepository {
     });
   }
 
-  stopMessage(
+  requestStopMessage(
     conversationId: string,
     assistantMessageId: string,
   ): { message: Message; event: ChatEvent | null } {
@@ -356,22 +383,25 @@ export class ChatRepository {
       if (before.conversationId !== conversationId)
         throw new Error("Message does not belong to conversation");
       if (terminalMessageStatuses.has(before.status)) return { message: before, event: null };
-      assertMessageTransition(before.status, "stopped");
+      if (before.status === "cancelling") return { message: before, event: null };
+      assertMessageTransition(before.status, "cancelling");
       const now = this.#now();
       this.#database
         .prepare(
-          `UPDATE messages SET status = 'stopped', updated_at = ?, revision = revision + 1
+          `UPDATE messages SET cancellation_requested_at = COALESCE(cancellation_requested_at, ?),
+           updated_at = ?, revision = revision + 1
            WHERE id = ?`,
         )
-        .run(now, assistantMessageId);
+        .run(now, now, assistantMessageId);
       this.#touchConversation(conversationId, now);
       const message = this.#message(assistantMessageId);
       const event = this.#appendEvent({
-        type: "message.stopped",
+        type: "message.cancelling",
         conversationId,
         messageId: assistantMessageId,
-        payload: { message },
+        payload: { message, reason: "USER_CANCEL_REQUESTED" },
       });
+      this.#queueSyncUpsert("message", message.id, message, now);
       return { message, event };
     });
   }
@@ -425,7 +455,8 @@ export class ChatRepository {
   selectedModelForMessage(messageId: string): string {
     const row = this.#database
       .prepare(
-        `SELECT c.selected_model_ref FROM messages m
+        `SELECT COALESCE(m.selected_model_ref, c.selected_model_ref) AS selected_model_ref
+         FROM messages m
          JOIN conversations c ON c.id = m.conversation_id WHERE m.id = ?`,
       )
       .get(messageId) as SqlRow | undefined;
@@ -436,7 +467,8 @@ export class ChatRepository {
   thinkingLevelForMessage(messageId: string): ThinkingLevel {
     const row = this.#database
       .prepare(
-        `SELECT c.thinking_level FROM messages m
+        `SELECT COALESCE(m.thinking_level, c.thinking_level) AS thinking_level
+         FROM messages m
          JOIN conversations c ON c.id = m.conversation_id WHERE m.id = ?`,
       )
       .get(messageId) as SqlRow | undefined;
@@ -746,14 +778,25 @@ export class ChatRepository {
     return this.#eventRows(conversationId, afterSequence);
   }
 
-  piHistory(
-    assistantMessageId: string,
-  ): Array<{ role: "user" | "assistant" | "system"; text: string }> {
+  piHistory(assistantMessageId: string): PiHistoryMessage[] {
     const assistant = this.#message(assistantMessageId);
     return this.#resolveBranch(assistant.branchId)
       .filter((message) => message.id !== assistantMessageId)
       .filter((message) => message.role !== "assistant" || message.status === "completed")
-      .map((message) => ({ role: message.role, text: message.parts[0]?.text ?? "" }));
+      .map((message) => ({
+        messageId: message.id,
+        role: message.role,
+        text: message.parts[0]?.text ?? "",
+      }));
+  }
+
+  branchMessageIds(assistantMessageId: string): string[] {
+    const assistant = this.#message(assistantMessageId);
+    return this.#resolveBranch(assistant.branchId).map(({ id }) => id);
+  }
+
+  message(messageId: string): Message {
+    return this.#message(messageId);
   }
 
   #forkGeneration(input: {
@@ -803,6 +846,8 @@ export class ChatRepository {
           role: "user",
           status: "completed",
           text: input.replacementText,
+          selectedModelRef: conversation.selectedModelRef,
+          thinkingLevel: conversation.thinkingLevel,
           attempt: target.attempt + 1,
           now,
         });
@@ -817,6 +862,8 @@ export class ChatRepository {
         role: "assistant",
         status: "pending",
         text: "",
+        selectedModelRef: conversation.selectedModelRef,
+        thinkingLevel: conversation.thinkingLevel,
         attempt: target.attempt + 1,
         now,
       });
@@ -858,7 +905,13 @@ export class ChatRepository {
         assistantMessageId: assistant.id,
       });
       this.#storeIdempotentResult(input.idempotencyKey, input.command, receipt, now);
-      return { receipt, events, created: true, thinkingLevel: conversation.thinkingLevel };
+      return {
+        receipt,
+        events,
+        created: true,
+        selectedModelRef: conversation.selectedModelRef,
+        thinkingLevel: conversation.thinkingLevel,
+      };
     });
   }
 
@@ -869,6 +922,8 @@ export class ChatRepository {
     role: Message["role"];
     status: Message["status"];
     text: string;
+    selectedModelRef: string;
+    thinkingLevel: ThinkingLevel;
     attempt: number;
     now: string;
   }): Message {
@@ -882,8 +937,9 @@ export class ChatRepository {
       .prepare(
         `INSERT INTO messages
          (id, conversation_id, branch_id, parent_message_id, role, status, error_code, attempt,
-          created_at, updated_at, revision, position, runtime_sequence)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, 0)`,
+          created_at, updated_at, revision, position, runtime_sequence, selected_model_ref,
+          thinking_level)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, 0, ?, ?)`,
       )
       .run(
         id,
@@ -896,6 +952,8 @@ export class ChatRepository {
         input.now,
         input.now,
         Number(positionRow.position),
+        input.selectedModelRef,
+        input.thinkingLevel,
       );
     this.#database
       .prepare(
@@ -950,15 +1008,25 @@ export class ChatRepository {
     const parts = this.#database
       .prepare("SELECT id, type, text FROM message_parts WHERE message_id = ? ORDER BY position")
       .all(String(row.id));
+    const storedStatus = String(row.status) as Message["status"];
+    const cancellationRequestedAt = row.cancellation_requested_at ?? null;
+    const status: Message["status"] =
+      cancellationRequestedAt !== null &&
+      (storedStatus === "pending" || storedStatus === "streaming")
+        ? "cancelling"
+        : cancellationRequestedAt !== null && storedStatus === "stopped"
+          ? "interrupted"
+          : storedStatus;
     return messageSchema.parse({
       id: row.id,
       conversationId: row.conversation_id,
       branchId: row.branch_id,
       parentMessageId: row.parent_message_id,
       role: row.role,
-      status: row.status,
+      status,
       parts,
       errorCode: row.error_code,
+      cancellationRequestedAt,
       attempt: Number(row.attempt),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -1331,7 +1399,7 @@ export class ChatRepository {
     if (objectType === "message") {
       const message = messageSchema.parse(payload);
       const existing = this.#database
-        .prepare("SELECT position FROM messages WHERE id = ?")
+        .prepare("SELECT position, status FROM messages WHERE id = ?")
         .get(message.id) as SqlRow | undefined;
       const position = existing
         ? Number(existing.position)
@@ -1348,11 +1416,12 @@ export class ChatRepository {
         .prepare(
           `INSERT INTO messages
            (id, conversation_id, branch_id, parent_message_id, role, status, error_code, attempt,
-            created_at, updated_at, revision, position, runtime_sequence)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            created_at, updated_at, revision, position, runtime_sequence, cancellation_requested_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
            ON CONFLICT(id) DO UPDATE SET
              status = excluded.status,
              error_code = excluded.error_code,
+             cancellation_requested_at = excluded.cancellation_requested_at,
              updated_at = excluded.updated_at,
              revision = excluded.revision`,
         )
@@ -1362,13 +1431,18 @@ export class ChatRepository {
           message.branchId,
           message.parentMessageId,
           message.role,
-          message.status,
+          message.status === "cancelling"
+            ? String(existing?.status ?? "pending")
+            : message.status === "interrupted"
+              ? "stopped"
+              : message.status,
           message.errorCode,
           message.attempt,
           message.createdAt,
           message.updatedAt,
           message.revision,
           position,
+          message.cancellationRequestedAt,
         );
       this.#database.prepare("DELETE FROM message_parts WHERE message_id = ?").run(message.id);
       message.parts.forEach((part, index) => {

@@ -27,6 +27,7 @@ export class ChatAppService {
   readonly #generationByMessage = new Map<string, string>();
   readonly #messageByGeneration = new Map<string, string>();
   readonly #conversationByGeneration = new Map<string, string>();
+  readonly #branchByGeneration = new Map<string, string>();
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
   readonly #sync: SyncCoordinator | null;
   readonly #files: FileAppService | null;
@@ -118,7 +119,7 @@ export class ChatAppService {
         return draft.receipt;
       }
       case "chat.stop": {
-        const result = this.#repository.stopMessage(
+        const result = this.#repository.requestStopMessage(
           request.input.conversationId,
           request.input.assistantMessageId,
         );
@@ -126,9 +127,7 @@ export class ChatAppService {
         await this.#syncIfAuthorized(authorization);
         const generationId = this.#generationByMessage.get(request.input.assistantMessageId);
         if (generationId) {
-          this.#tools?.cancelGeneration(generationId);
-          this.#skills?.completeGeneration(generationId, "cancelled");
-          this.#forgetGeneration(generationId);
+          this.#tools?.requestCancellation(generationId);
           await this.#piHost.abort(generationId);
         }
         return result.message;
@@ -241,8 +240,13 @@ export class ChatAppService {
           request.input.conversationId,
           request.input.limit,
         );
+      case "tool.runtime.readiness":
+        return await this.#requiredTools().listRuntimeReadiness(request.input);
       case "tool.workItem.get":
-        return this.#requiredToolsRepository().workItemDetail(request.input.workItemId);
+        return this.#requiredToolsRepository().workItemDetail(
+          request.input.workItemId,
+          request.input.runId,
+        );
       case "tool.permissions.list":
         return this.#requiredToolsRepository().listPermissions(request.input.status);
       case "tool.permission.resolve":
@@ -251,8 +255,18 @@ export class ChatAppService {
         return this.#requiredToolsRepository().activeScopes();
       case "tool.scope.revoke":
         return this.#requiredToolsRepository().revokeScope(request.input.scopeId);
+      case "workspace.grant":
+        return this.#requiredTools().grantWorkspace(request.input);
+      case "workspace.list":
+        return this.#requiredTools().listWorkspaces(request.input.conversationId);
+      case "workspace.revoke":
+        return this.#requiredTools().revokeWorkspace(request.input.workspaceGrantId);
       case "mcp.servers.list":
         return this.#requiredToolsRepository().listMcpServers();
+      case "mcp.servers.authorization":
+        return await this.#requiredTools().listMcpServerAuthorizationStates();
+      case "mcp.server.authorize":
+        return await this.#requiredTools().authorizeMcpServer(request.input.serverId);
       case "mcp.server.upsert":
         return this.#requiredTools().upsertMcpServer(request.input.config);
       case "mcp.server.remove":
@@ -424,19 +438,17 @@ export class ChatAppService {
         if (messageId !== payload.assistantMessageId || conversationId !== command.conversationId) {
           throw new Error("REMOTE_GENERATION_SCOPE_VIOLATION");
         }
+        const stopping = this.#repository.requestStopMessage(conversationId, messageId);
+        if (stopping.event) this.#emit(stopping.event);
+        this.#tools?.requestCancellation(generationId);
         await this.#piHost.control({
           kind: "pi.session.control",
           requestId: command.commandId,
           generationId,
           action: "abort",
         });
-        const stopped = this.#repository.stopMessage(conversationId, messageId);
-        if (stopped.event) this.#emit(stopped.event);
-        this.#tools?.cancelGeneration(generationId);
-        this.#skills?.completeGeneration(generationId, "cancelled");
-        this.#forgetGeneration(generationId);
         await this.#syncIfAuthorized(authorization);
-        return stopped.message;
+        return stopping.message;
       }
       case "permission.decide": {
         if (payload.attentionRequestId !== payload.permissionRequestId) {
@@ -570,8 +582,17 @@ export class ChatAppService {
     this.#generationByMessage.set(draft.receipt.assistantMessageId, generationId);
     this.#messageByGeneration.set(generationId, draft.receipt.assistantMessageId);
     this.#conversationByGeneration.set(generationId, draft.receipt.conversationId);
+    this.#branchByGeneration.set(generationId, draft.receipt.branchId);
     if (authorization) this.#authorizationByGeneration.set(generationId, authorization);
     try {
+      this.#tools?.startGeneration({
+        generationId,
+        conversationId: draft.receipt.conversationId,
+        branchId: draft.receipt.branchId,
+        assistantMessageId: draft.receipt.assistantMessageId,
+        selectedModelRef: draft.selectedModelRef,
+        thinkingLevel: draft.thinkingLevel,
+      });
       if (personalFileIds.length > 0) {
         const userMessageId = draft.receipt.userMessageId;
         if (!userMessageId) throw new Error("CHAT_USER_MESSAGE_REQUIRED");
@@ -580,16 +601,65 @@ export class ChatAppService {
           files.attach(draft.receipt.conversationId, personalFileId, userMessageId);
         }
       }
-      const attachedFiles = this.#files?.attachedFiles(draft.receipt.conversationId);
-      const images = this.#files?.modelImages(draft.receipt.conversationId);
+      const branchMessageIds = this.#repository.branchMessageIds(draft.receipt.assistantMessageId);
+      const attachedFiles = this.#files?.attachedFilesForMessages(
+        draft.receipt.conversationId,
+        branchMessageIds,
+      );
+      const preparedTools = this.#tools
+        ? await this.#tools.prepareGeneration({
+            conversationId: draft.receipt.conversationId,
+            prompt: history.at(-1)?.text ?? "",
+            hasFiles: (attachedFiles?.length ?? 0) > 0,
+            skillInstallationIds: skillMounts.map(({ installationId }) => installationId),
+            authenticated: Boolean(authorization),
+          })
+        : undefined;
+      if (preparedTools) {
+        this.#tools?.freezeGenerationConfiguration(generationId, {
+          initialToolNames: preparedTools.initialToolNames,
+          availableToolNames: preparedTools.availableToolNames,
+          skillInstallationIds: skillMounts.map(({ installationId }) => installationId),
+          instructionSources: preparedTools.instructionSources,
+        });
+      }
+      const currentUserMessageId = draft.receipt.userMessageId ?? history.at(-1)?.messageId;
+      for (let index = 0; index < history.length - 1; index += 1) {
+        const message = history[index];
+        if (message?.role !== "user" || !message.messageId) continue;
+        const messageImages = this.#files?.modelImagesForMessage(message.messageId) ?? [];
+        if (messageImages.length > 0) history[index] = { ...message, images: messageImages };
+      }
+      const images = currentUserMessageId
+        ? this.#files?.modelImagesForMessage(currentUserMessageId)
+        : undefined;
       const frame: PiPromptFrame = {
         kind: "pi.session.prompt",
         generationId,
         conversationId: draft.receipt.conversationId,
+        branchId: draft.receipt.branchId,
         assistantMessageId: draft.receipt.assistantMessageId,
         thinkingLevel: draft.thinkingLevel,
         history,
         ...(skillMounts.length > 0 ? { skills: skillMounts } : {}),
+        ...(selectedSkillInstallationId ? { selectedSkillInstallationId } : {}),
+        ...(preparedTools
+          ? {
+              workspace: {
+                grants: preparedTools.workspaceGrants.map((grant) => ({
+                  id: grant.id,
+                  displayName: grant.displayName,
+                  access: grant.access,
+                  allowNetwork: grant.allowNetwork,
+                  expiresAt: grant.expiresAt,
+                })),
+                instructionSources: preparedTools.instructionSources,
+              },
+              mcpTools: preparedTools.mcpTools,
+              initialToolNames: preparedTools.initialToolNames,
+              availableToolNames: preparedTools.availableToolNames,
+            }
+          : {}),
         files: attachedFiles?.map((file) => ({
           personalFileId: file.id,
           displayName: file.displayName,
@@ -602,9 +672,7 @@ export class ChatAppService {
                 accountId: authorization.accountId,
                 accessToken: authorization.accessToken,
                 platformBaseUrl: authorization.platformBaseUrl,
-                selectedModelRef: this.#repository.selectedModelForMessage(
-                  draft.receipt.assistantMessageId,
-                ),
+                selectedModelRef: draft.selectedModelRef,
                 approvedFallbackModelRef: null,
                 requestDedupeKey: `model-call:${draft.receipt.assistantMessageId}:1`,
               },
@@ -627,6 +695,7 @@ export class ChatAppService {
         type: "failed",
         errorCode: launchErrorCode,
       });
+      this.#tools?.completeGeneration(generationId, "failed", launchErrorCode);
       this.#forgetGeneration(generationId);
       this.#skills?.completeGeneration(generationId, "failed", launchErrorCode);
       if (event) this.#emit(event);
@@ -651,9 +720,10 @@ export class ChatAppService {
         frame.type === "completed"
           ? "completed"
           : frame.type === "stopped"
-            ? "cancelled"
+            ? "interrupted"
             : "failed",
         frame.errorCode,
+        frame.usageRecords ?? [],
       );
       this.#skills?.completeGeneration(
         frame.generationId,
@@ -671,45 +741,62 @@ export class ChatAppService {
   }
 
   async #handleFileToolRequest(frame: PiFileToolRequestFrame): Promise<unknown> {
-    if (this.#conversationByGeneration.get(frame.generationId) !== frame.conversationId) {
+    if (
+      this.#conversationByGeneration.get(frame.generationId) !== frame.conversationId ||
+      this.#branchByGeneration.get(frame.generationId) !== frame.branchId
+    ) {
       throw new Error("GENERATION_NOT_ACTIVE");
     }
     const files = this.#requiredFiles();
-    const attached = files.attachedFiles(frame.conversationId);
-    const allowedIds = new Set(attached.map(({ id }) => id));
-    switch (frame.request.operation) {
-      case "list":
-        return attached;
-      case "search":
-        return files.search(frame.request.input.query, [...allowedIds]);
-      case "read":
-        if (!allowedIds.has(frame.request.input.personalFileId)) {
-          throw new Error("FILE_NOT_ATTACHED");
-        }
-        return files.readParsedFile(frame.request.input.personalFileId);
-      case "artifact.write": {
-        const input = frame.request.input;
-        const bytesBase64 = Buffer.from(input.content, "utf8").toString("base64");
-        return input.artifactId
-          ? files.addArtifactVersion({
-              artifactId: input.artifactId,
-              format: input.format,
-              mediaType: input.mediaType,
-              bytesBase64,
-            })
-          : files.createArtifact({
-              displayName: input.displayName,
-              format: input.format,
-              mediaType: input.mediaType,
-              bytesBase64,
-            });
-      }
+    const assistantMessageId = this.#messageByGeneration.get(frame.generationId);
+    if (!assistantMessageId || assistantMessageId !== frame.assistantMessageId) {
+      throw new Error("GENERATION_NOT_ACTIVE");
     }
+    const attached = files.attachedFilesForMessages(
+      frame.conversationId,
+      this.#repository.branchMessageIds(assistantMessageId),
+    );
+    const allowedIds = new Set(attached.map(({ id }) => id));
+    return await this.#requiredTools().handleFileRequest(frame, () => {
+      switch (frame.request.operation) {
+        case "list":
+          return attached;
+        case "search":
+          return files.search(frame.request.input.query, [...allowedIds]);
+        case "read":
+          if (!allowedIds.has(frame.request.input.personalFileId)) {
+            throw new Error("FILE_NOT_ATTACHED");
+          }
+          return files.readParsedFile(frame.request.input.personalFileId);
+        case "artifact.write": {
+          const input = frame.request.input;
+          const bytesBase64 = Buffer.from(input.content, "utf8").toString("base64");
+          return input.artifactId
+            ? files.addArtifactVersion({
+                artifactId: input.artifactId,
+                format: input.format,
+                mediaType: input.mediaType,
+                bytesBase64,
+              })
+            : files.createArtifact({
+                displayName: input.displayName,
+                format: input.format,
+                mediaType: input.mediaType,
+                bytesBase64,
+              });
+        }
+        case "artifact.office.write": {
+          const artifact = files.writeOfficeArtifact(frame.request.input);
+          return { artifact, preview: files.previewArtifact(artifact.id) };
+        }
+      }
+    });
   }
 
   async #handleToolRequest(frame: PiToolRequestFrame): Promise<unknown> {
     if (
       this.#conversationByGeneration.get(frame.generationId) !== frame.conversationId ||
+      this.#branchByGeneration.get(frame.generationId) !== frame.branchId ||
       this.#messageByGeneration.get(frame.generationId) !== frame.assistantMessageId
     ) {
       throw new Error("GENERATION_NOT_ACTIVE");
@@ -748,6 +835,7 @@ export class ChatAppService {
     const messageId = this.#messageByGeneration.get(generationId);
     this.#messageByGeneration.delete(generationId);
     this.#conversationByGeneration.delete(generationId);
+    this.#branchByGeneration.delete(generationId);
     this.#authorizationByGeneration.delete(generationId);
     if (messageId) this.#generationByMessage.delete(messageId);
   }

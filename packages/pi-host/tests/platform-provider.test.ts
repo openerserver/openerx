@@ -27,12 +27,11 @@ const model: ModelCatalogEntry = {
   displayName: "标准模型",
   version: "2026-08-25",
   capabilities: {
-    text: true,
+    textInput: true,
     imageInput: false,
     fileInput: false,
-    tools: false,
-    mcp: false,
-    imageGeneration: false,
+    functionCalling: false,
+    structuredOutput: false,
   },
   contextWindow: 128_000,
   maxOutputTokens: 16_384,
@@ -408,7 +407,7 @@ describe("Platform Model Pi Provider", () => {
     const messageId = randomUUID();
     const toolModel: ModelCatalogEntry = {
       ...model,
-      capabilities: { ...model.capabilities, tools: true },
+      capabilities: { ...model.capabilities, functionCalling: true },
     };
     const requests: ModelGatewayRequestDto[] = [];
     const execute = vi.fn(async (gatewayRequest: ModelGatewayRequestDto) => {
@@ -454,6 +453,7 @@ describe("Platform Model Pi Provider", () => {
       };
       return response;
     });
+    const onUsage = vi.fn();
     const platform = createPlatformModelProvider({
       catalog: [toolModel],
       transport: { execute },
@@ -465,12 +465,16 @@ describe("Platform Model Pi Provider", () => {
         approvedFallbackModelRef: null,
         requestDedupeKey: "model-call-tool-loop",
       },
+      onUsage,
       streamChunkSize: 1_000,
     });
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
     runtime.registerNativeProvider(platform.provider);
     const executeTool = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "package.json" }],
+      content: [
+        { type: "text" as const, text: "package.json" },
+        { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" },
+      ],
       details: { entries: ["package.json"] },
     }));
     const { session } = await createProductPiSession({
@@ -502,11 +506,13 @@ describe("Platform Model Pi Provider", () => {
     await session.waitForIdle();
 
     expect(execute).toHaveBeenCalledTimes(2);
+    expect(onUsage).toHaveBeenCalledTimes(2);
+    expect(new Set(onUsage.mock.calls.map(([usage]) => usage.usageId)).size).toBe(2);
     expect(executeTool).toHaveBeenCalledTimes(1);
     expect(toolStarts).toEqual(["inspect_project"]);
     expect(deltas.join("")).toBe("我先检查项目。检查完成，最优先处理消息协议。");
     expect(deltas.join("")).not.toContain("DSML");
-    expect(requests.every(({ requirements }) => requirements.tools === true)).toBe(true);
+    expect(requests.every(({ requirements }) => requirements.functionCalling === true)).toBe(true);
     expect(new Set(requests.map(({ requestDedupeKey }) => requestDedupeKey)).size).toBe(2);
     expect(
       requests.every(({ requestDedupeKey }) =>
@@ -514,9 +520,13 @@ describe("Platform Model Pi Provider", () => {
       ),
     ).toBe(true);
     const continuationContext = requests[1]?.context as
-      | { messages?: Array<{ role?: unknown }> }
+      | { messages?: Array<{ role?: unknown; content?: unknown }> }
       | undefined;
-    expect(continuationContext?.messages?.some(({ role }) => role === "toolResult")).toBe(true);
+    const toolResult = continuationContext?.messages?.find(({ role }) => role === "toolResult");
+    expect(toolResult?.content).toEqual([
+      { type: "text", text: "package.json" },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+    ]);
     expect(session.messages.at(-1)).toMatchObject({
       role: "assistant",
       stopReason: "stop",

@@ -41,7 +41,7 @@ describe("ChatRepository", () => {
     expect(reopened.getConversation(draft.receipt.conversationId).conversation.thinkingLevel).toBe(
       "off",
     );
-    expect(reopened.thinkingLevelForMessage(draft.receipt.assistantMessageId)).toBe("off");
+    expect(reopened.thinkingLevelForMessage(draft.receipt.assistantMessageId)).toBe("high");
     reopened.close();
   });
 

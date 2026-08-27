@@ -306,6 +306,33 @@ export class FileRepository {
     ).map(({ personal_file_id }) => personal_file_id);
   }
 
+  attachedFileIdsForMessages(conversationId: string, messageIds: string[]): string[] {
+    const uniqueMessageIds = [...new Set(messageIds)];
+    const placeholders = uniqueMessageIds.map(() => "?").join(", ");
+    const rows = this.#database
+      .prepare(
+        `SELECT DISTINCT personal_file_id FROM attachments
+         WHERE conversation_id = ?
+           AND (message_id IS NULL${
+             uniqueMessageIds.length > 0 ? ` OR message_id IN (${placeholders})` : ""
+})
+         ORDER BY personal_file_id`,
+      )
+      .all(conversationId, ...uniqueMessageIds) as Array<{ personal_file_id: string }>;
+    return rows.map(({ personal_file_id }) => personal_file_id);
+  }
+
+  attachedFileIdsForMessage(messageId: string): string[] {
+    return (
+      this.#database
+        .prepare(
+          `SELECT DISTINCT personal_file_id FROM attachments
+           WHERE message_id = ? ORDER BY personal_file_id`,
+        )
+        .all(messageId) as Array<{ personal_file_id: string }>
+    ).map(({ personal_file_id }) => personal_file_id);
+  }
+
   search(query: string, fileIds?: string[]): FileSearchResult[] {
     const normalized = query.trim().toLocaleLowerCase();
     if (!normalized) return [];

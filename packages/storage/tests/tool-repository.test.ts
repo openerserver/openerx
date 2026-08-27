@@ -33,10 +33,12 @@ describe("ToolRepository", () => {
     const projection = tools.createProjection({
       conversationId: generation.receipt.conversationId,
       messageId: generation.receipt.assistantMessageId,
+      branchId: generation.receipt.branchId,
       title: "运行 Skill",
       selectedModelRef: "platform/auto",
+      thinkingLevel: generation.thinkingLevel,
       piPackageVersion: "0.84.3",
-      piHostContractVersion: 1,
+      piHostContractVersion: 2,
     });
     const { toolCall } = tools.createToolCall({
       runId: projection.run.id,
@@ -73,10 +75,12 @@ describe("ToolRepository", () => {
     const projection = tools.createProjection({
       conversationId: generation.receipt.conversationId,
       messageId: generation.receipt.assistantMessageId,
+      branchId: generation.receipt.branchId,
       title: "运行工具",
       selectedModelRef: "platform/auto",
+      thinkingLevel: generation.thinkingLevel,
       piPackageVersion: "0.84.3",
-      piHostContractVersion: 1,
+      piHostContractVersion: 2,
       piSessionRef: "session-a",
     });
     const { toolCall } = tools.createToolCall({
@@ -126,10 +130,14 @@ describe("ToolRepository", () => {
     expect(resolved.permission.status).toBe("approved");
     expect(resolved.scope).toBeNull();
     expect(tools.activeScopes("shell")).toEqual([]);
+    expect(
+      tools.listRunItems(projection.run.id).find(({ content }) => content.type === "approval"),
+    ).toMatchObject({ status: "completed" });
 
     tools.markToolCall(toolCall.id, "running");
     const result = {
       summary: "ok",
+      content: [{ type: "text" as const, text: "ok" }],
       sources: [],
       artifacts: [],
       sideEffectCommitted: true,
@@ -145,16 +153,107 @@ describe("ToolRepository", () => {
     tools.close();
   });
 
+  it("replays typed tool input, command output, sources, diffs, and selectable Runs", () => {
+    const { chat, tools } = fixture();
+    const generation = chat.createGeneration({
+      text: "运行命令并展示结果",
+      idempotencyKey: "chat-rich-items-0001",
+    });
+    const projection = tools.createProjection({
+      conversationId: generation.receipt.conversationId,
+      messageId: generation.receipt.assistantMessageId,
+      branchId: generation.receipt.branchId,
+      title: "丰富 Item",
+      selectedModelRef: generation.selectedModelRef,
+      thinkingLevel: generation.thinkingLevel,
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 2,
+    });
+    const operation = {
+      operation: "shell_execute" as const,
+      idempotencyKey: "rich-shell-operation-0001",
+      cwd: "/workspace",
+      command: "npm",
+      args: ["test"],
+      timeoutMs: 30_000,
+      background: false,
+      allowNetwork: false,
+    };
+    const { toolCall } = tools.createToolCall({
+      runId: projection.run.id,
+      piCallRef: "pi-rich-shell",
+      toolName: "openerx_shell",
+      source: "openerx",
+      risk: "L3",
+      idempotencyKey: operation.idempotencyKey,
+      input: operation,
+      inputSummary: "npm test",
+      targetSummary: "/workspace",
+    });
+    const workspaceChangeId = crypto.randomUUID();
+    const processId = crypto.randomUUID();
+    tools.markToolCall(toolCall.id, "running");
+    tools.markToolCall(toolCall.id, "completed", {
+      resultSummary: "all tests passed",
+      resultContent: [
+        { type: "text", text: "12 tests passed" },
+        {
+          type: "source",
+          source: {
+            title: "Vitest documentation",
+            url: "https://vitest.dev/",
+            publishedAt: null,
+            retrievedAt: new Date().toISOString(),
+            excerpt: "Test runner reference",
+          },
+        },
+        {
+          type: "diff",
+          workspaceChangeId,
+          relativePath: "src/index.ts",
+          patch: "@@ -1 +1 @@\n-old\n+new",
+        },
+      ],
+      resultData: { processId, exitCode: 0, outputTruncated: false },
+    });
+
+    const detail = tools.workItemDetail(projection.workItem.id, projection.run.id);
+    expect(detail.runs.map(({ id }) => id)).toEqual([projection.run.id]);
+    expect(detail.toolCalls[0]?.input).toEqual(operation);
+    expect(detail.items.map(({ content }) => content.type)).toEqual([
+      "tool",
+      "source",
+      "diff",
+      "command",
+    ]);
+    expect(detail.items.find(({ content }) => content.type === "command")?.content).toMatchObject({
+      type: "command",
+      command: "npm",
+      args: ["test"],
+      processId,
+      exitCode: 0,
+      output: "12 tests passed",
+    });
+    expect(detail.items.find(({ content }) => content.type === "diff")?.content).toMatchObject({
+      workspaceChangeId,
+      relativePath: "src/index.ts",
+    });
+    chat.close();
+    tools.close();
+  });
+
   it("fails interrupted runs and revokes temporary grants on recovery", () => {
     const { chat, tools } = fixture();
     const generation = chat.createGeneration({ text: "长任务", idempotencyKey: "chat-tool-0002" });
     const projection = tools.createProjection({
       conversationId: generation.receipt.conversationId,
       messageId: generation.receipt.assistantMessageId,
+      branchId: generation.receipt.branchId,
       title: "长任务",
       selectedModelRef: "platform/auto",
+      thinkingLevel: generation.thinkingLevel,
       piPackageVersion: "0.84.3",
-      piHostContractVersion: 1,
+      piHostContractVersion: 2,
     });
     tools.createScope({
       capability: "browser",
@@ -192,6 +291,69 @@ describe("ToolRepository", () => {
     tools.close();
   });
 
+  it("recovers an in-flight external side effect as outcome_unknown", () => {
+    const { databasePath, chat, tools } = fixture();
+    const generation = chat.createGeneration({
+      text: "提交外部动作",
+      idempotencyKey: "chat-side-effect-crash-0001",
+    });
+    const projection = tools.createProjection({
+      conversationId: generation.receipt.conversationId,
+      messageId: generation.receipt.assistantMessageId,
+      branchId: generation.receipt.branchId,
+      title: "提交外部动作",
+      selectedModelRef: generation.selectedModelRef,
+      thinkingLevel: generation.thinkingLevel,
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 2,
+    });
+    const { toolCall } = tools.createToolCall({
+      runId: projection.run.id,
+      piCallRef: "pi-call-crash",
+      toolName: "openerx_browser",
+      source: "openerx",
+      risk: "L4",
+      idempotencyKey: "tool-side-effect-crash-0001",
+      inputSummary: "submit",
+      targetSummary: "example.com",
+    });
+    tools.beginSideEffectAttempt(toolCall.idempotencyKey, toolCall.id);
+    tools.close();
+    chat.close();
+
+    const recovered = new ToolRepository(databasePath, { ownerProfileId: "profile-a" });
+    recovered.recoverInterrupted();
+    expect(recovered.sideEffectAttempt(toolCall.idempotencyKey)?.status).toBe("outcome_unknown");
+    recovered.close();
+  });
+
+  it("projects cancellation as cancelling until the runtime confirms interruption", () => {
+    const { chat, tools } = fixture();
+    const generation = chat.createGeneration({
+      text: "停止运行",
+      idempotencyKey: "chat-run-cancellation-0001",
+    });
+    const projection = tools.createProjection({
+      conversationId: generation.receipt.conversationId,
+      messageId: generation.receipt.assistantMessageId,
+      branchId: generation.receipt.branchId,
+      title: "停止运行",
+      selectedModelRef: generation.selectedModelRef,
+      thinkingLevel: generation.thinkingLevel,
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 2,
+    });
+
+    expect(tools.requestRunCancellation(projection.run.id).status).toBe("cancelling");
+    expect(tools.workItem(projection.workItem.id).status).toBe("cancelling");
+
+    tools.completeRun(projection.run.id, "interrupted");
+    expect(tools.run(projection.run.id).status).toBe("interrupted");
+    expect(tools.workItem(projection.workItem.id).status).toBe("interrupted");
+    chat.close();
+    tools.close();
+  });
+
   it("persists only MCP configuration and credential references", () => {
     const { chat, tools } = fixture();
     const server = tools.upsertMcpServer({
@@ -207,6 +369,84 @@ describe("ToolRepository", () => {
     expect(tools.listMcpServers()).toEqual([server]);
     expect(tools.removeMcpServer(server.id)).toEqual({ serverId: server.id, removed: true });
     expect(tools.listMcpServers()).toEqual([]);
+    chat.close();
+    tools.close();
+  });
+
+  it("freezes the per-Turn model, tools, skills, and instruction snapshot", () => {
+    const { chat, tools } = fixture();
+    const generation = chat.createGeneration({
+      text: "冻结本轮配置",
+      idempotencyKey: "turn-snapshot-freeze-0001",
+      thinkingLevel: "high",
+    });
+    const projection = tools.createProjection({
+      conversationId: generation.receipt.conversationId,
+      messageId: generation.receipt.assistantMessageId,
+      branchId: generation.receipt.branchId,
+      title: "冻结本轮配置",
+      selectedModelRef: generation.selectedModelRef,
+      thinkingLevel: generation.thinkingLevel,
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 2,
+    });
+    const skillId = crypto.randomUUID();
+    const source = {
+      kind: "project" as const,
+      workspaceGrantId: crypto.randomUUID(),
+      relativePath: "AGENTS.md",
+      appliesTo: ".",
+      digest: "a".repeat(64),
+      content: "project instruction",
+    };
+    const frozen = tools.freezeRunConfiguration(projection.run.id, {
+      initialToolNames: ["openerx_tool_search"],
+      availableToolNames: ["openerx_tool_search", "openerx_workspace_read"],
+      skillInstallationIds: [skillId],
+      instructionSources: [source],
+    });
+    expect(frozen).toMatchObject({
+      selectedModelRef: generation.selectedModelRef,
+      thinkingLevel: "high",
+      initialToolNames: ["openerx_tool_search"],
+      availableToolNames: ["openerx_tool_search", "openerx_workspace_read"],
+      skillInstallationIds: [skillId],
+      instructionSources: [source],
+    });
+    chat.selectConversationModel(generation.receipt.conversationId, "platform/another");
+    chat.selectConversationThinkingLevel(generation.receipt.conversationId, "low");
+    const secondGeneration = chat.createGeneration({
+      conversationId: generation.receipt.conversationId,
+      text: "使用新的默认配置",
+      idempotencyKey: "turn-snapshot-freeze-0002",
+    });
+    const secondProjection = tools.createProjection({
+      conversationId: secondGeneration.receipt.conversationId,
+      messageId: secondGeneration.receipt.assistantMessageId,
+      branchId: secondGeneration.receipt.branchId,
+      title: "第二轮配置",
+      selectedModelRef: secondGeneration.selectedModelRef,
+      thinkingLevel: secondGeneration.thinkingLevel,
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 2,
+    });
+    expect(tools.run(projection.run.id)).toMatchObject({
+      selectedModelRef: generation.selectedModelRef,
+      thinkingLevel: "high",
+      initialToolNames: ["openerx_tool_search"],
+    });
+    expect(tools.run(secondProjection.run.id)).toMatchObject({
+      selectedModelRef: "platform/another",
+      thinkingLevel: "low",
+    });
+    expect(() =>
+      tools.freezeRunConfiguration(projection.run.id, {
+        initialToolNames: [],
+        availableToolNames: [],
+        skillInstallationIds: [],
+        instructionSources: [],
+      }),
+    ).toThrow("RUN_CONFIGURATION_ALREADY_FROZEN");
     chat.close();
     tools.close();
   });

@@ -75,6 +75,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     repository: toolRepository,
     workspaceDirectory,
     host: mainCapabilities,
+    oauth: mainCapabilities,
     resolveUploadPath: (fileId) => files.resolvePersonalFilePath(fileId),
     ingestDownload: async (downloadPath) => {
       const [file] = await files.importPaths([downloadPath]);

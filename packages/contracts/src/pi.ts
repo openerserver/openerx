@@ -4,9 +4,16 @@ import { supportedFileFormatSchema } from "./file";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { processNonceSchema } from "./process";
 import { piSkillMountSchema } from "./skill";
-import { piActivityEventSchema, piToolRequestFrameSchema, piToolResponseFrameSchema } from "./tool";
+import {
+  mcpToolDescriptorSchema,
+  piActivityEventSchema,
+  piFileToolOperationSchema,
+  piToolRequestFrameSchema,
+  piToolResponseFrameSchema,
+} from "./tool";
+import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 1 as const;
+export const piHostContractVersion = 3 as const;
 
 export const piHostBootstrapSchema = z
   .object({
@@ -27,8 +34,13 @@ export const piHostReadyFrameSchema = z
 
 export const piHistoryMessageSchema = z
   .object({
+    messageId: entityIdSchema.optional(),
     role: z.enum(["user", "assistant", "system"]),
     text: z.string(),
+    images: z
+      .array(z.lazy(() => piImageInputSchema))
+      .max(100)
+      .optional(),
   })
   .strict();
 
@@ -55,6 +67,7 @@ export const piPromptFrameSchema = z
     kind: z.literal("pi.session.prompt"),
     generationId: entityIdSchema,
     conversationId: entityIdSchema,
+    branchId: entityIdSchema,
     assistantMessageId: entityIdSchema,
     thinkingLevel: thinkingLevelSchema.optional(),
     history: z.array(piHistoryMessageSchema).min(1),
@@ -71,6 +84,29 @@ export const piPromptFrameSchema = z
       .optional(),
     images: z.array(piImageInputSchema).max(100).optional(),
     skills: z.array(piSkillMountSchema).max(500).optional(),
+    selectedSkillInstallationId: entityIdSchema.optional(),
+    workspace: z
+      .object({
+        grants: z
+          .array(
+            z
+              .object({
+                id: entityIdSchema,
+                displayName: z.string().min(1).max(240),
+                access: z.enum(["read_only", "read_write"]),
+                allowNetwork: z.boolean(),
+                expiresAt: timestampSchema.nullable(),
+              })
+              .strict(),
+          )
+          .max(100),
+        instructionSources: z.array(workspaceInstructionSourceSchema).max(500),
+      })
+      .strict()
+      .optional(),
+    mcpTools: z.array(mcpToolDescriptorSchema).max(2_000).optional(),
+    initialToolNames: z.array(z.string().min(1).max(200)).max(1_000).optional(),
+    availableToolNames: z.array(z.string().min(1).max(200)).max(2_000).optional(),
     platform: z
       .object({
         accountId: entityIdSchema,
@@ -137,42 +173,16 @@ export const piSessionControlResultFrameSchema = z.discriminatedUnion("ok", [
     .strict(),
 ]);
 
-const piFileToolOperationSchema = z.discriminatedUnion("operation", [
-  z.object({ operation: z.literal("list"), input: z.object({}).strict() }).strict(),
-  z
-    .object({
-      operation: z.literal("search"),
-      input: z.object({ query: z.string().trim().min(1).max(500) }).strict(),
-    })
-    .strict(),
-  z
-    .object({
-      operation: z.literal("read"),
-      input: z.object({ personalFileId: entityIdSchema }).strict(),
-    })
-    .strict(),
-  z
-    .object({
-      operation: z.literal("artifact.write"),
-      input: z
-        .object({
-          artifactId: entityIdSchema.optional(),
-          displayName: z.string().trim().min(1).max(240),
-          format: z.enum(["text", "markdown", "code", "json", "yaml", "csv", "html"]),
-          mediaType: z.string().min(1).max(200),
-          content: z.string().max(5_000_000),
-        })
-        .strict(),
-    })
-    .strict(),
-]);
-
 export const piFileToolRequestFrameSchema = z
   .object({
     kind: z.literal("pi.file-tool.request"),
     requestId: entityIdSchema,
     generationId: entityIdSchema,
     conversationId: entityIdSchema,
+    branchId: entityIdSchema,
+    assistantMessageId: entityIdSchema,
+    piToolCallId: z.string().min(1).max(500),
+    toolName: z.string().min(1).max(200),
     request: piFileToolOperationSchema,
   })
   .strict();
@@ -214,7 +224,7 @@ export const piHostEventFrameSchema = z
     type: z.enum(["delta", "completed", "stopped", "failed"]),
     delta: z.string().optional(),
     errorCode: z.string().min(1).optional(),
-    usage: usageRecordSchema.optional(),
+    usageRecords: z.array(usageRecordSchema).max(128).optional(),
   })
   .strict();
 

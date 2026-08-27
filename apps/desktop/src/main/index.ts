@@ -39,6 +39,7 @@ import {
   fileSearchInputSchema,
   ipcChannels,
   localExportResultSchema,
+  mcpServerAuthorizeInputSchema,
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
   permissionListInputSchema,
@@ -64,12 +65,16 @@ import {
   usageQueryInputSchema,
   usageRecordSchema,
   workItemGetInputSchema,
+  workspaceChooseInputSchema,
+  workspaceListInputSchema,
+  workspaceRevokeInputSchema,
 } from "@openerx/contracts";
 import {
   DiagnosticsService,
   PerformanceBudgetTracker,
   PersonalDataExporter,
 } from "@openerx/observability";
+import { createMcpOAuthCredentialValue } from "@openerx/tool-sdk";
 import {
   app,
   autoUpdater,
@@ -420,6 +425,19 @@ function registerIpcHandlers(
     });
   };
 
+  ipcMain.handle(ipcChannels.toolRuntimeReadiness, async (event) => {
+    assertTrustedIpcSender(event);
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "tool.runtime.readiness",
+        input: {
+          authenticated: accounts.state().status === "signed_in",
+          platformConfigured: Boolean(platformUrl),
+        },
+      }),
+    );
+  });
+
   registerChatHandler(ipcChannels.chatList, "chat.list", chatListInputSchema);
   registerChatHandler(ipcChannels.chatGet, "chat.get", chatGetInputSchema);
   registerChatHandler(ipcChannels.chatSend, "chat.send", chatSendInputSchema, true);
@@ -524,6 +542,24 @@ function registerIpcHandlers(
       }),
     );
   });
+  ipcMain.handle(ipcChannels.workspaceChoose, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = workspaceChooseInputSchema.parse(input ?? {});
+    const selection = await dialog.showOpenDialog({
+      title: "授权项目工作区",
+      properties: ["openDirectory"],
+      message: "OpenerX 只能在你明确授权的目录内读取或修改文件",
+    });
+    if (selection.canceled || !selection.filePaths[0]) return null;
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "workspace.grant",
+        input: { ...parsed, rootPath: selection.filePaths[0] },
+      }),
+    );
+  });
+  registerChatHandler(ipcChannels.workspaceList, "workspace.list", workspaceListInputSchema);
+  registerChatHandler(ipcChannels.workspaceRevoke, "workspace.revoke", workspaceRevokeInputSchema);
   registerChatHandler(ipcChannels.fileList, "file.list", fileListInputSchema);
   registerChatHandler(ipcChannels.fileSearch, "file.search", fileSearchInputSchema);
   registerChatHandler(ipcChannels.filePreview, "file.preview", filePreviewInputSchema);
@@ -547,6 +583,11 @@ function registerIpcHandlers(
   registerChatHandler(ipcChannels.toolScopesList, "tool.scopes.list", emptyInputSchema);
   registerChatHandler(ipcChannels.toolScopeRevoke, "tool.scope.revoke", toolScopeRevokeInputSchema);
   registerChatHandler(ipcChannels.mcpServersList, "mcp.servers.list", emptyInputSchema);
+  registerChatHandler(
+    ipcChannels.mcpServersAuthorization,
+    "mcp.servers.authorization",
+    emptyInputSchema,
+  );
   registerChatHandler(ipcChannels.skillList, "skill.list", skillListInputSchema);
   registerChatHandler(ipcChannels.skillGet, "skill.get", skillGetInputSchema);
   registerChatHandler(ipcChannels.skillEnable, "skill.enable", skillEnableInputSchema, true);
@@ -643,14 +684,12 @@ function registerIpcHandlers(
         credentialRef = `mcp:${config.id}`;
         await supervisor.saveCapabilityCredential(credentialRef, parsed.bearerToken);
       }
-      if (config.auth === "oauth" && parsed.oauthClientId && parsed.oauthClientSecret) {
+      if (config.auth === "oauth") {
         credentialRef = `mcp:${config.id}`;
         await supervisor.saveCapabilityCredential(
           credentialRef,
-          JSON.stringify({
-            grantType: "client_credentials",
-            clientId: parsed.oauthClientId,
-            clientSecret: parsed.oauthClientSecret,
+          createMcpOAuthCredentialValue({
+            ...(parsed.oauthClientId ? { clientId: parsed.oauthClientId } : {}),
             ...(parsed.oauthScope ? { scope: parsed.oauthScope } : {}),
           }),
         );
@@ -660,6 +699,15 @@ function registerIpcHandlers(
     }
     return await supervisor.request(
       chatCommandEnvelopeSchema.parse({ command: "mcp.server.upsert", input: { config } }),
+    );
+  });
+  ipcMain.handle(ipcChannels.mcpServerAuthorize, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = mcpServerAuthorizeInputSchema.parse(input);
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({ command: "mcp.server.authorize", input: parsed }),
+      undefined,
+      5 * 60_000,
     );
   });
   ipcMain.handle(ipcChannels.mcpServerRemove, async (event, input: unknown) => {

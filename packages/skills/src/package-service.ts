@@ -16,7 +16,7 @@ import { skillNameSchema, skillPackageManifestSchema } from "@openerx/contracts"
 import type { SkillRepository } from "@openerx/storage";
 import { unzipSync } from "fflate";
 import { parse as parseYaml } from "yaml";
-import { builtInStructuredReportSkill } from "./builtins";
+import { builtInSkills } from "./builtins";
 
 const maxFiles = 500;
 const maxPackageBytes = 20 * 1024 * 1024;
@@ -172,29 +172,33 @@ export class SkillPackageService {
   }
 
   seedBuiltIns(): SkillInstallation[] {
-    const source = path.join(this.#root, ".builtin-structured-report");
-    rmSync(source, { recursive: true, force: true });
-    for (const [relativePath, content] of Object.entries(builtInStructuredReportSkill.files)) {
-      const target = path.join(source, ...relativePath.split("/"));
-      mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-      writeFileSync(target, content, { encoding: "utf8", mode: 0o600 });
-    }
-    try {
-      return [
-        this.#installPrepared({
-          sourceRoot: source,
-          installationId: builtInStructuredReportSkill.installationId,
-          scope: "builtin",
-          workspaceId: null,
-          sourceKind: "built_in",
-          sourceLabel: "OpenerX bundled skills",
-          trust: "bundled",
-          builtIn: true,
-        }),
-      ];
-    } finally {
+    const installed: SkillInstallation[] = [];
+    for (const builtIn of builtInSkills) {
+      const source = path.join(this.#root, `.builtin-${builtIn.installationId}`);
       rmSync(source, { recursive: true, force: true });
+      for (const [relativePath, content] of Object.entries(builtIn.files)) {
+        const target = path.join(source, ...relativePath.split("/"));
+        mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+        writeFileSync(target, content, { encoding: "utf8", mode: 0o600 });
+      }
+      try {
+        installed.push(
+          this.#installPrepared({
+            sourceRoot: source,
+            installationId: builtIn.installationId,
+            scope: "builtin",
+            workspaceId: null,
+            sourceKind: "built_in",
+            sourceLabel: "OpenerX bundled skills",
+            trust: "bundled",
+            builtIn: true,
+          }),
+        );
+      } finally {
+        rmSync(source, { recursive: true, force: true });
+      }
     }
+    return installed;
   }
 
   install(input: {

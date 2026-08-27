@@ -260,7 +260,7 @@ function streamPlatform(
         requestDedupeKey: roundDedupeKey(configuration.request.requestDedupeKey, context),
         requirements: {
           ...(contextHasImages(context) ? { imageInput: true } : {}),
-          ...(context.tools && context.tools.length > 0 ? { tools: true } : {}),
+          ...(context.tools && context.tools.length > 0 ? { functionCalling: true } : {}),
         },
         context,
       };

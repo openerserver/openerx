@@ -17,7 +17,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "paths": {
-      "@openerx/contracts": ["./packages/contracts/src/index.ts"]
+      "@openerx/contracts": ["./packages/contracts/src/index.ts"],
+      "@openerx/contracts/model": ["./packages/contracts/src/model.ts"]
     }
   }
 }

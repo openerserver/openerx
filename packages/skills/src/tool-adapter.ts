@@ -18,6 +18,7 @@ export class SkillToolAdapter implements ToolAdapter {
       const resource = this.skills.readResource(operation.installationId, operation.relativePath);
       return {
         summary: `Loaded ${resource.name}/${resource.relativePath}`,
+        content: [{ type: "text", text: resource.content }],
         data: resource,
         sources: [],
         artifacts: [],

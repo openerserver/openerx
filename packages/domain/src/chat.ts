@@ -1,6 +1,13 @@
 export type MessageRole = "user" | "assistant" | "system";
 
-export type MessageStatus = "pending" | "streaming" | "completed" | "stopped" | "failed";
+export type MessageStatus =
+  | "pending"
+  | "streaming"
+  | "cancelling"
+  | "completed"
+  | "stopped"
+  | "interrupted"
+  | "failed";
 
 export interface ConversationEntity {
   id: string;
@@ -39,13 +46,20 @@ export interface MessageEntity {
   revision: number;
 }
 
-export const terminalMessageStatuses = new Set<MessageStatus>(["completed", "stopped", "failed"]);
+export const terminalMessageStatuses = new Set<MessageStatus>([
+  "completed",
+  "stopped",
+  "interrupted",
+  "failed",
+]);
 
 const allowedTransitions: Readonly<Record<MessageStatus, ReadonlySet<MessageStatus>>> = {
-  pending: new Set(["streaming", "completed", "stopped", "failed"]),
-  streaming: new Set(["completed", "stopped", "failed"]),
+  pending: new Set(["streaming", "cancelling", "completed", "stopped", "interrupted", "failed"]),
+  streaming: new Set(["cancelling", "completed", "stopped", "interrupted", "failed"]),
+  cancelling: new Set(["completed", "interrupted", "failed"]),
   completed: new Set(),
   stopped: new Set(),
+  interrupted: new Set(),
   failed: new Set(),
 };
 

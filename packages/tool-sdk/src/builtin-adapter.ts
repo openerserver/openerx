@@ -144,6 +144,7 @@ export class BuiltinToolAdapter implements ToolAdapter {
       const value = calculate(operation.expression);
       return {
         summary: String(value),
+        content: [{ type: "text", text: String(value) }],
         data: { value },
         sources: [],
         artifacts: [],
@@ -156,6 +157,12 @@ export class BuiltinToolAdapter implements ToolAdapter {
     const rows = structured(operation);
     return {
       summary: `已处理 ${rows.length} 行`,
+      content: [
+        {
+          type: "text",
+          text: `已处理 ${rows.length} 行\n${JSON.stringify(rows)}`.slice(0, 1_000_000),
+        },
+      ],
       data: { rows },
       sources: [],
       artifacts: [],

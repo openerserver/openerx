@@ -62,7 +62,8 @@ function writeSkill(
 describe("SkillPackageService", () => {
   it("seeds a bundled Skill, exposes resources, and executes its declared script adapter", async () => {
     const { repository, service } = profile();
-    const [builtIn] = service.seedBuiltIns();
+    const builtIns = service.seedBuiltIns();
+    const [builtIn] = builtIns;
     expect(builtIn).toMatchObject({
       name: "structured-report",
       scope: "builtin",
@@ -70,9 +71,22 @@ describe("SkillPackageService", () => {
       enabled: true,
       packageState: "installed",
     });
-    expect(service.mounts("default")).toEqual([
-      expect.objectContaining({ installationId: builtIn?.id, name: "structured-report" }),
+    expect(builtIns.map(({ name }) => name)).toEqual([
+      "structured-report",
+      "documents",
+      "spreadsheets",
+      "presentations",
+      "pdf",
     ]);
+    expect(service.mounts("default")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ installationId: builtIn?.id, name: "structured-report" }),
+        expect.objectContaining({ name: "documents" }),
+        expect.objectContaining({ name: "spreadsheets" }),
+        expect.objectContaining({ name: "presentations" }),
+        expect.objectContaining({ name: "pdf" }),
+      ]),
+    );
     expect(service.readResource(builtIn?.id ?? "", "references/template.md").content).toContain(
       "Executive summary",
     );

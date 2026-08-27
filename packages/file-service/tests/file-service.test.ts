@@ -6,6 +6,7 @@ import { zipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ContentStore,
+  compileOfficeArtifact,
   FileAppService,
   FileScopeBroker,
   MultiFormatParser,
@@ -62,6 +63,66 @@ describe("M4 file scope and controlled copies", () => {
       { personalFileId: file.id, messageId: null },
     ]);
     service.close();
+  });
+
+  it("keeps message images isolated across conversation branches", async () => {
+    const { root, database, profile } = fixture();
+    const imageAPath = path.join(root, "branch-a.png");
+    const imageBPath = path.join(root, "branch-b.png");
+    writeFileSync(imageAPath, Buffer.from("branch-image-a"));
+    writeFileSync(imageBPath, Buffer.from("branch-image-b"));
+    const chats = new ChatRepository(database);
+    const branchA = chats.createGeneration({
+      text: "分支 A",
+      idempotencyKey: "image-branch-a-0001",
+    });
+    chats.appendPiEvent(branchA.receipt.assistantMessageId, {
+      eventId: crypto.randomUUID(),
+      sequence: 1,
+      occurredAt: new Date().toISOString(),
+      type: "completed",
+    });
+    const branchB = chats.editGeneration({
+      conversationId: branchA.receipt.conversationId,
+      messageId: branchA.receipt.userMessageId as string,
+      text: "分支 B",
+      idempotencyKey: "image-branch-b-0001",
+    });
+    const service = new FileAppService(new FileRepository(database), profile, {
+      parser: new MultiFormatParser({ extract: async () => ({ text: "", citations: [] }) }),
+    });
+    const [imageA] = await service.importPaths([imageAPath], null);
+    const [imageB] = await service.importPaths([imageBPath], null);
+    if (!imageA || !imageB || !branchA.receipt.userMessageId || !branchB.receipt.userMessageId) {
+      throw new Error("branch image fixture missing");
+    }
+    service.attach(branchA.receipt.conversationId, imageA.id, branchA.receipt.userMessageId);
+    service.attach(branchA.receipt.conversationId, imageB.id, branchB.receipt.userMessageId);
+
+    expect(
+      service
+        .attachedFilesForMessages(
+          branchA.receipt.conversationId,
+          chats.branchMessageIds(branchA.receipt.assistantMessageId),
+        )
+        .map(({ id }) => id),
+    ).toEqual([imageA.id]);
+    expect(
+      service
+        .attachedFilesForMessages(
+          branchB.receipt.conversationId,
+          chats.branchMessageIds(branchB.receipt.assistantMessageId),
+        )
+        .map(({ id }) => id),
+    ).toEqual([imageB.id]);
+    expect(service.modelImagesForMessage(branchA.receipt.userMessageId)[0]?.data).toBe(
+      Buffer.from("branch-image-a").toString("base64"),
+    );
+    expect(service.modelImagesForMessage(branchB.receipt.userMessageId)[0]?.data).toBe(
+      Buffer.from("branch-image-b").toString("base64"),
+    );
+    service.close();
+    chats.close();
   });
 
   it("imports a folder, creates searchable stable citations and survives permission revocation", async () => {
@@ -131,6 +192,180 @@ describe("M4 file scope and controlled copies", () => {
 });
 
 describe("M4 parsers and artifacts", () => {
+  it("compiles real Office binaries and renders every requested review surface", async () => {
+    const { root } = fixture();
+    const parser = new MultiFormatParser();
+    const cases = [
+      compileOfficeArtifact({
+        format: "docx",
+        title: "季度复盘",
+        pages: [
+          { heading: "摘要", paragraphs: ["第一季度保持增长。"], bullets: [] },
+          { heading: "下一步", paragraphs: [], bullets: ["扩大试点", "复核预算"] },
+        ],
+        theme: { accentColor: "#2563EB", backgroundColor: "#FFFFFF" },
+      }),
+      compileOfficeArtifact({
+        format: "xlsx",
+        title: "预算",
+        sheets: [
+          {
+            name: "明细",
+            rows: [
+              ["项目", "金额"],
+              ["研发", 120],
+            ],
+            headerRows: 1,
+          },
+          {
+            name: "汇总",
+            rows: [
+              ["指标", "值"],
+              ["总额", { formula: "=SUM(明细!B2:B2)", value: 120 }],
+            ],
+            headerRows: 1,
+          },
+        ],
+        theme: { accentColor: "#0F766E", backgroundColor: "#FFFFFF" },
+      }),
+      compileOfficeArtifact({
+        format: "pptx",
+        title: "发布计划",
+        slides: [
+          { title: "目标", subtitle: "可靠交付", bullets: [] },
+          { title: "路径", bullets: ["小流量", "逐步扩大"] },
+        ],
+        theme: { accentColor: "#7C3AED", backgroundColor: "#FFFFFF" },
+      }),
+      compileOfficeArtifact({
+        format: "pdf",
+        title: "决策记录",
+        pages: [
+          { heading: "结论", paragraphs: ["批准第一阶段。"], bullets: [] },
+          { heading: "约束", paragraphs: [], bullets: ["预算不超过上限"] },
+        ],
+        theme: { accentColor: "#B45309", backgroundColor: "#FFFFFF" },
+      }),
+    ];
+
+    for (const compiled of cases) {
+      const output = path.join(root, `generated.${compiled.format}`);
+      writeFileSync(output, compiled.bytes);
+      const parsed = await parser.parse(output, compiled.format);
+      expect(compiled.bytes.byteLength).toBeGreaterThan(500);
+      expect(compiled.renderedSurfaces).toHaveLength(2);
+      expect(
+        compiled.renderedSurfaces.every(({ imageDataUrl }) =>
+          imageDataUrl.startsWith("data:image/svg+xml;base64,"),
+        ),
+      ).toBe(true);
+      expect(
+        compiled.renderedSurfaces.every(({ modelImageDataUrl }) => {
+          const encoded = modelImageDataUrl.split(",", 2)[1];
+          return (
+            modelImageDataUrl.startsWith("data:image/png;base64,") &&
+            encoded !== undefined &&
+            Buffer.from(encoded, "base64").subarray(0, 8).toString("hex") === "89504e470d0a1a0a"
+          );
+        }),
+      ).toBe(true);
+      expect(parsed.text.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("creates and edits a generated Office Artifact through immutable versions", () => {
+    const { database, profile } = fixture();
+    const service = new FileAppService(new FileRepository(database), profile);
+    const first = service.writeOfficeArtifact({
+      displayName: "路线图",
+      spec: {
+        format: "pptx",
+        title: "路线图",
+        slides: [{ title: "第一版", body: "初始范围", bullets: [] }],
+        theme: { accentColor: "#2563EB", backgroundColor: "#FFFFFF" },
+      },
+    });
+    const second = service.writeOfficeArtifact({
+      artifactId: first.id,
+      displayName: "ignored-name.pptx",
+      spec: {
+        format: "pptx",
+        title: "路线图",
+        slides: [
+          { title: "第二版", body: "修订范围", bullets: [] },
+          { title: "验收", bullets: ["逐页检查"] },
+        ],
+        theme: { accentColor: "#2563EB", backgroundColor: "#FFFFFF" },
+      },
+    });
+    const preview = service.previewArtifact(first.id);
+
+    expect(first.displayName).toBe("路线图.pptx");
+    expect(second).toMatchObject({ id: first.id, currentVersion: 2 });
+    expect(second.versions).toHaveLength(2);
+    expect(preview.parsedText).toContain("第二版");
+    expect(preview.renderedSurfaces.map(({ label }) => label)).toEqual(["幻灯片 1", "幻灯片 2"]);
+    service.close();
+  });
+
+  it("rejects visual overflow and ambiguous workbook structure before storing bytes", () => {
+    expect(() =>
+      compileOfficeArtifact({
+        format: "docx",
+        title: "Overflow",
+        pages: [
+          {
+            heading: "Too much content",
+            paragraphs: Array.from({ length: 30 }, () =>
+              "A paragraph that wraps across the page ".repeat(8),
+            ),
+            bullets: [],
+          },
+        ],
+        theme: { accentColor: "#2563EB", backgroundColor: "#FFFFFF" },
+      }),
+    ).toThrow("OFFICE_PAGE_OVERFLOW:1");
+    expect(() =>
+      compileOfficeArtifact({
+        format: "xlsx",
+        title: "Duplicate",
+        sheets: [
+          { name: "Data", rows: [["A"]], headerRows: 1 },
+          { name: "data", rows: [["B"]], headerRows: 1 },
+        ],
+        theme: { accentColor: "#2563EB", backgroundColor: "#FFFFFF" },
+      }),
+    ).toThrow("Worksheet names must be unique");
+    expect(() =>
+      compileOfficeArtifact({
+        format: "xlsx",
+        title: "External formula",
+        sheets: [
+          {
+            name: "Data",
+            rows: [["Result"], [{ value: "", formula: '=WEBSERVICE("https://example.test")' }]],
+            headerRows: 1,
+          },
+        ],
+        theme: { accentColor: "#2563EB", backgroundColor: "#FFFFFF" },
+      }),
+    ).toThrow("Formula network and file URLs are not allowed");
+    expect(() =>
+      compileOfficeArtifact({
+        format: "xlsx",
+        title: "DDE formula",
+        sheets: [
+          {
+            name: "Data",
+            rows: [["Result"], [{ value: "", formula: "=cmd|' /C calc'!A0" }]],
+            headerRows: 1,
+          },
+        ],
+        theme: { accentColor: "#2563EB", backgroundColor: "#FFFFFF" },
+      }),
+    ).toThrow("External workbook and DDE formula syntax is not allowed");
+  });
+
   it("parses DOCX, XLSX and PPTX containers with stable locators", async () => {
     const { root } = fixture();
     const parser = new MultiFormatParser();

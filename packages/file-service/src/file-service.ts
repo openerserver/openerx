@@ -6,6 +6,7 @@ import type {
   ContentPreview,
   FileScope,
   FileSearchResult,
+  OfficeArtifactWriteInput,
   PersonalFile,
   PiImageInput,
   SupportedFileFormat,
@@ -19,6 +20,7 @@ import { ContentStore } from "./content-store";
 import { FileServiceError, fileErrorCode } from "./errors";
 import { FileScopeBroker } from "./file-scope-broker";
 import { detectFileFormat } from "./formats";
+import { compileOfficeArtifact, renderOfficeArtifact } from "./office-artifact";
 import { MultiFormatParser } from "./parser";
 
 const defaultMaxFileBytes = 50 * 1024 * 1024;
@@ -85,9 +87,24 @@ export class FileAppService {
       .map((personalFileId) => this.#repository.personalFile(personalFileId));
   }
 
+  attachedFilesForMessages(conversationId: string, messageIds: string[]): PersonalFile[] {
+    return this.#repository
+      .attachedFileIdsForMessages(conversationId, messageIds)
+      .map((personalFileId) => this.#repository.personalFile(personalFileId));
+  }
+
   modelImages(conversationId: string): PiImageInput[] {
+    return this.#modelImages(this.#repository.attachedFileIds(conversationId));
+  }
+
+  modelImagesForMessage(messageId: string): PiImageInput[] {
+    return this.#modelImages(this.#repository.attachedFileIdsForMessage(messageId));
+  }
+
+  #modelImages(personalFileIds: string[]): PiImageInput[] {
     let totalBytes = 0;
-    return this.attachedFiles(conversationId).flatMap((file) => {
+    return personalFileIds.flatMap((personalFileId) => {
+      const file = this.#repository.personalFile(personalFileId);
       const mimeType = visionMediaTypeByFormat[file.format as keyof typeof visionMediaTypeByFormat];
       if (!mimeType) return [];
       const bytes = this.#store.read(file.objectRef);
@@ -135,6 +152,9 @@ export class FileAppService {
       format: parsed.file.format,
       source,
       imageDataUrl,
+      renderedSurfaces:
+        renderOfficeArtifact(this.#store.read(parsed.file.objectRef), parsed.file.format)
+          ?.renderedSurfaces ?? [],
       parsedText: parsed.text,
       citations: parsed.citations,
     };
@@ -190,6 +210,25 @@ export class FileAppService {
     });
   }
 
+  writeOfficeArtifact(input: OfficeArtifactWriteInput): Artifact {
+    const compiled = compileOfficeArtifact(input.spec);
+    this.#assertSize(compiled.bytes.byteLength);
+    const artifact = input.artifactId
+      ? this.addArtifactVersion({
+          artifactId: input.artifactId,
+          format: compiled.format,
+          mediaType: compiled.mediaType,
+          bytesBase64: compiled.bytes.toString("base64"),
+        })
+      : this.createArtifact({
+          displayName: ensureOfficeExtension(input.displayName, compiled.format),
+          format: compiled.format,
+          mediaType: compiled.mediaType,
+          bytesBase64: compiled.bytes.toString("base64"),
+        });
+    return artifact;
+  }
+
   listArtifacts(): Artifact[] {
     return this.#repository.listArtifacts();
   }
@@ -205,6 +244,7 @@ export class FileAppService {
     const source = isTextPreviewFormat(artifact.format)
       ? this.#store.read(version.objectRef).toString("utf8")
       : null;
+    const rendered = renderOfficeArtifact(this.#store.read(version.objectRef), artifact.format);
     return {
       objectKind: "artifact",
       objectId: artifact.id,
@@ -212,7 +252,8 @@ export class FileAppService {
       format: artifact.format,
       source,
       imageDataUrl: null,
-      parsedText: source ?? "",
+      renderedSurfaces: rendered?.renderedSurfaces ?? [],
+      parsedText: rendered?.parsedText ?? source ?? "",
       citations: [],
     };
   }
@@ -366,4 +407,13 @@ function decodeBase64(value: string): Buffer {
     throw new FileServiceError("FILE_CORRUPT", "Invalid base64 artifact payload");
   }
   return Buffer.from(normalized, "base64");
+}
+
+function ensureOfficeExtension(
+  displayName: string,
+  format: "docx" | "xlsx" | "pptx" | "pdf",
+): string {
+  return displayName.toLocaleLowerCase().endsWith(`.${format}`)
+    ? displayName
+    : `${displayName}.${format}`;
 }
