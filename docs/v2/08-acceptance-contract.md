@@ -56,7 +56,7 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 10. 在另一台支持设备登录并继续同一对话、打开同一成果。
 11. 安装并显式调用一个测试 Skill，再验证自动触发和卸载。
 12. 连接一个测试 MCP，并完成允许、拒绝和断开。
-13. 分别完成 Web 搜索、隔离浏览器和受控 Shell 操作。
+13. 分别完成 Web 搜索、系统默认浏览器/托管 Chromium Computer-Use 和受控 Shell 操作。
 14. 删除对话或清理个人数据，并核对本机与云端状态。
 15. 查看额度、积分和余额，在余额不足时完成一次充值，再核对消费与月度账单。
 16. 使用 iOS/Android Remote Companion 配对在线桌面主机，完成 Start、Steer、Queue、Stop、一次问题回复、一次审批和一次 Diff/测试/Artifact 审阅。
@@ -105,7 +105,9 @@ V1 的可用结论必须来自个人用户实际完成聊天、文件和工具�
 [10-codex-capability-baseline.md](10-codex-capability-baseline.md) 中 FILE-01 至 FILE-08、TOOL-01 至 TOOL-10、SKILL-01 至 SKILL-10 均为 V1 Release 硬门禁：
 
 - Web 搜索返回可打开来源，并记录搜索活动。
-- 隔离浏览器能打开公网网页与本地 Web 应用，完成导航、点击、输入、截图、上传和下载。
+- Browser Computer-Use 的系统默认浏览器与托管 Chromium 后端分别通过确定性语义/Canvas 夹具和
+  日期化真实站点烟测；网页位于独立操作面，标准 HTML 不依赖坐标，视觉 fallback 受 Observation
+  边界约束，账号/Profile 隔离和用户接管规则可验证。
 - 受控桌面操作在 Windows 与 macOS 均能工作，高影响动作逐次确认。
 - Shell 绑定授权工作目录，支持流式输出、输入、停止、超时、长进程和退出状态。
 - 本地 STDIO 与远程 Streamable HTTP MCP 均通过；Bearer/OAuth、禁用、重连和清除授权可验证。

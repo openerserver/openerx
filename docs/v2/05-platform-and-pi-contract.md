@@ -59,7 +59,8 @@ V1 不包含 Admin Web、组织服务和团队控制平面。
 
 选择 Electron 而不是 Tauri 的当前理由：
 
-- Electron 自带 Chromium，在 V1 的 Windows 和 macOS 目标上提供一致的渲染与浏览器能力。
+- Electron 自带 Chromium，在 V1 的 Windows 和 macOS 目标上提供一致的 UI 渲染，并作为可选的
+  托管 Chromium 安全增强后端；默认 Browser Computer-Use 仍可使用机器的系统默认浏览器。
 - Main、Preload、Renderer 和本地服务可以使用 TypeScript/JavaScript 统一开发。
 - 本地文件、窗口、托盘、快捷键、更新和 Pi Host 子进程集成路径直接。
 - Tauri 的包体通常更小，但会引入 Rust、系统 WebView 差异和外部 sidecar 的多目标构建复杂度。
@@ -99,7 +100,8 @@ V1 已确认系统矩阵：
 
 ### 4.3 React Renderer
 
-- 新对话、历史、搜索、文件、助手/技能、浏览器/终端面板、账户同步、用量/费用、充值、账单和设置。
+- 新对话、历史、搜索、文件、助手/技能、浏览器活动与证据面板、终端面板、账户同步、用量/费用、
+  充值、账单和设置。
 - 使用 React + TypeScript + Vite。
 - 只消费版本化 Bridge/API 和恢复型事件。
 - 不直接解析 Pi 私有事件。
@@ -276,7 +278,9 @@ V2 将工具定义和 Skill 上下文注册给 Pi。Pi 负责模型到工具的�
 - 内置低风险工具：计算、文本处理、成果渲染等。
 - 文件工具：读取、搜索、创建和补丁式修改，只访问已添加文件或明确授权目录。
 - 网络工具：第一方 Web 搜索显示来源并遵循搜索策略。
-- 浏览器工具：使用隔离 Profile，支持网页和本地 Web 应用的共享查看与受控交互。
+- 浏览器工具：通过独立 Browser Computer-Use Host 操作精确 surface；默认后端是用户授权的系统
+  默认浏览器，安全增强后端是隔离 Profile 的托管 Chromium；语义优先、视觉验证、坐标兜底，
+  具体合同见 [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md)。
 - 计算机工具：读取屏幕和操作桌面应用，高影响动作逐次授权。
 - Shell/代码工具：绑定工作目录，流式输出、输入、停止、超时和长进程可控。
 - MCP：支持 STDIO、Streamable HTTP、Bearer 和 OAuth；服务及单个工具均可禁用。
@@ -317,7 +321,8 @@ V1 已确定支持账户云同步；已确认架构采用账户云真值与本�
 - 使用严格 Content Security Policy。
 - 验证所有 IPC sender、channel 和参数。
 - 限制导航、新窗口和外部链接；不在主 Renderer 中加载任意远程网站。
-- 远程内容不得获得 Preload Bridge；需要内嵌时使用独立、无 Node 能力的隔离 WebContents。
+- 远程网页不得进入主 Renderer 或获得 Preload Bridge；Browser Computer-Use 只在独立系统浏览器
+  surface 或无 Node/Preload 权限的托管 Chromium 顶层窗口中运行。
 - 充值收银台只允许经服务端下发并校验的 HTTPS 域名，使用无 Preload Bridge 的隔离 WebContents 或系统浏览器；禁止把支付凭证传回 Renderer。
 - Electron、Chromium、Node 和关键依赖保持受支持版本并建立升级节奏。
 

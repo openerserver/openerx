@@ -2,7 +2,7 @@
 
 > 状态：`M9_LOCAL_RELEASE_FOUNDATION_COMPLETE / EXTERNAL_RELEASE_GATES_PENDING`
 >
-> 更新日期：2026-08-26（Asia/Shanghai）
+> 更新日期：2026-08-27（Asia/Shanghai）
 >
 > 适用范围：Windows 10 22H2+/Windows 11 x64、macOS 14+ arm64/x64 桌面执行主机与 iOS 17+/Android 11+ Remote Companion
 
@@ -267,7 +267,7 @@ Pi Host 使用维护中的 Pi `SessionManager` 保存每个 Conversation 的内�
 Pi Session 头恢复；Conversation/Message SQLite 仍是产品历史真值。Pi 不获得原始文件系统工具，
 只注册四个产品文件工具，实际读取和成果写入全部回到 App Service 与 File Scope Broker。
 
-### 2.5 M5 当前本地已实现拓扑
+### 2.5 M5 当前本地已实现拓扑（Browser 为 legacy）
 
 ```mermaid
 flowchart LR
@@ -287,7 +287,7 @@ flowchart LR
   APP --> PLATFORM[First-party Platform Tools<br/>Web search / Image generation]
   APP --> MCP[MCP Adapter<br/>STDIO / Streamable HTTP]
   APP --> MAINHOST[Main Capability Adapter]
-  MAINHOST --> BROWSER[Isolated BrowserWindow<br/>dedicated partition / no preload]
+  MAINHOST --> BROWSER[legacy_dom_v1 BrowserWindow<br/>selector / dedicated partition / no preload]
   MAINHOST --> DESKTOP[Desktop Capture / Control<br/>native OS boundary]
   MAIN --> VAULT[(safeStorage Tool Vault<br/>Bearer / OAuth client credentials)]
   MCP --> VAULT
@@ -299,6 +299,27 @@ Pi 生成工具调用并等待结果；App Service 不建立第二套步骤规�
 capability/resource/action/risk，审批绑定完整 payload digest，副作用绑定宿主派生的幂等键。
 L4/L5 操作只能逐次授权。Browser/Desktop 仅在 Main 执行，Shell 子进程由 App Service 唯一拥有，
 MCP 凭证只存在 OS 加密 Vault。启动恢复会终止中断运行、过期待批权限并撤销临时 Scope。
+
+上图如实描述 M5 现状，其中 Browser 路径已由 ADR-V2-017 部分 supersede；它不是双后端运行证据。
+BCU-001 新增严格 V2 合同；BCU-002 已在
+`apps/desktop/src/main/browser-computer-use/` 实现尚未接线的 Observation registry、精确 surface
+身份和单动作分层内核。该目录目前只由确定性测试导入，当前 Main Host 与 Pi 投影仍执行
+`legacy_dom_v1`。目标拓扑如下：
+
+```mermaid
+flowchart LR
+  PI[Pi AgentSession] --> BROKER[Capability Broker<br/>backend floor / Scope / approval]
+  BROKER --> HOST[Browser Computer-Use Host<br/>exact surface / Observation registry]
+  HOST --> SYSTEM[SystemDefaultBrowserAdapter]
+  SYSTEM --> BRIDGE[Signed Browser Bridge<br/>authorized exact tab]
+  SYSTEM --> AX[OS Accessibility<br/>dedicated window]
+  HOST --> MANAGED[ManagedChromiumAdapter<br/>isolated Profile]
+  HOST --> OBS[Semantic snapshot + optional image<br/>fresh observationId]
+```
+
+Host 按“语义动作 → 原生输入 → 视觉坐标”执行，截图用于基线、异常、坐标、高风险和最终验证。
+共用内核已通过 BCU-002，但目标拓扑仍需经 BCU-003 至 BCU-006 的真实 Adapter、Broker/Pi 接线、
+双后端与签名候选验证，不能由合同或 Fake Adapter 测试推断已可运行。
 
 ### 2.6 M6 当前本地已实现拓扑
 
@@ -578,7 +599,8 @@ App Service 进程组就绪/重启只产生白名单生命周期信号，Main �
 - `packages/file-service` 实现设备级 File Scope Broker、内容寻址副本、多格式解析器、稳定引用和
   Artifact 版本；Renderer 只通过冻结 Bridge 调用，HTML 预览使用无 `allow-same-origin` 的 sandbox。
 - `packages/tool-sdk` 实现 L0-L5 风险策略、精确 payload 授权、Scope 检查、副作用幂等，以及
-  Web、平台图片、Shell、Browser/Desktop Host 和官方 SDK MCP Adapter；高风险动作不能持久授权。
+  Web、平台图片、Shell、legacy Browser/Desktop Host 和官方 SDK MCP Adapter；高风险动作不能
+  持久授权。`packages/contracts` 已增加 `browser_computer_use_v2`，但其新 Host 尚未接通。
 - Tool Repository 把 Pi 活动投影为 WorkItem/ExecutionRun/RunStep/ToolCall/PermissionRequest；
   启动恢复回收子进程、隔离窗口和临时授权，但不接管 Pi 的工具顺序、重试或 Agent Loop。
 - Tool Center 显示按 namespace 分组的内置/平台/本地/MCP 工具、运行活动与可撤销 Scope；

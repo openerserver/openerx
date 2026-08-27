@@ -2,7 +2,7 @@
 
 > 状态：`PRODUCT_CONTRACT_APPROVED / IMPLEMENTATION_IN_PROGRESS`
 >
-> 修订日期：2026-08-26
+> 修订日期：2026-08-27
 >
 > 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation、M2
 > 至 M9 本地实现检查点已完成，M8/M9 外部 Beta 与发布证据正在补齐；新主线只在 `apps/`、
@@ -89,7 +89,7 @@
 | 对话历史、搜索、重命名和删除 | 产品/团队负责人工作台 |
 | 个人账户云同步、设备恢复和同步状态 | 组织目录、SSO、SCIM 和管理员身份治理 |
 | 文件上传、个人资料和上下文选择 | 团队知识库和权限继承 |
-| Web 搜索、隔离浏览器、Shell、桌面控制、MCP 与权限确认 | 组织级连接器、策略和审批 |
+| Web 搜索、系统默认浏览器/隔离安全浏览器、Shell、桌面控制、MCP 与权限确认 | 组织级连接器、策略和审批 |
 | 内置、个人及工作区 Skill 的安装、使用与设置 | 管理员控制台和组织级 Skill 分发 |
 | 个人成果预览、下载和再次使用 | 团队共享、评论和发布流程 |
 | 平台统一模型、显式选模、Token、个人额度/积分、充值和账单 | 组织预算中心、企业授信账期和私有模型治理 |
@@ -113,4 +113,15 @@
 
 ## 7. 实施启动入口
 
-目录骨架和旧资产保护边界记录在 [12-implementation-bootstrap.md](12-implementation-bootstrap.md)，可执行阶段计划记录在 [13-development-plan.md](13-development-plan.md)，最新整体架构图见 [14-overall-architecture.md](14-overall-architecture.md)，手机远程控制边界见 [15-remote-control-contract.md](15-remote-control-contract.md)。
+目录骨架和旧资产保护边界记录在
+[12-implementation-bootstrap.md](12-implementation-bootstrap.md)，可执行阶段计划记录在
+[13-development-plan.md](13-development-plan.md)，最新整体架构图见
+[14-overall-architecture.md](14-overall-architecture.md)，手机远程控制边界见
+[15-remote-control-contract.md](15-remote-control-contract.md)。浏览器从 DOM/selector 自动化迁移到
+“系统默认浏览器优先、托管 Chromium 安全增强，语义优先、视觉验证、坐标兜底”的独立
+computer-use 操作面方案记录在
+[17-browser-computer-use-plan.md](17-browser-computer-use-plan.md)，已接受的架构决策和分阶段测试门禁
+分别记录在 [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md) 与
+[18-browser-computer-use-contract-test-plan.md](18-browser-computer-use-contract-test-plan.md)。BCU-002
+确定性 Observation/action 内核已完成但尚未接入运行时；当前可执行 Browser 路径仍是
+`legacy_dom_v1`，系统默认浏览器和托管 Chromium 均未形成真实后端证据。

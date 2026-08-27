@@ -21,8 +21,9 @@ a superseding ADR that records migration and rollback impact.
 | [ADR-V2-014](014-pi-native-skill-packages.md) | Pi-native Skill discovery, package lifecycle, Broker execution and sync | Accepted and M7 local slice implemented |
 | [ADR-V2-015](015-personal-beta-diagnostics-and-export.md) | Personal Beta diagnostics, performance budgets and separate personal-data export | Accepted and M8 local slice implemented |
 | [ADR-V2-016](016-signed-release-and-update.md) | Signed native candidates, Ed25519 update manifests, promotion and rollback | Accepted and M9 local foundation implemented |
+| [ADR-V2-017](017-browser-computer-use-host-and-contract.md) | System-default and managed-Chromium computer-use backends with a semantic/visual V2 contract | Accepted; BCU-002 deterministic Host kernel implemented |
 
-ADR-V2-001 through ADR-V2-016 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
+ADR-V2-001 through ADR-V2-017 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
 recorded in [the checkpoint report](../evidence/m2-2026-08-25.md). ADR-V2-010 is implemented by the
 [M3 checkpoint](../evidence/m3-2026-08-25.md). ADR-V2-011 is implemented by the
 [M4 checkpoint](../evidence/m4-2026-08-26.md). ADR-V2-012 is implemented by the
@@ -34,3 +35,8 @@ ADR-V2-015 is implemented by the [M8 checkpoint](../evidence/m8-2026-08-26.md); 
 release evidence remain external gates.
 ADR-V2-016 is implemented by the [M9 checkpoint](../evidence/m9-2026-08-26.md); native credentials,
 store validation, rollback drills and explicit release approval remain external gates.
+ADR-V2-017 supersedes only ADR-V2-012's Browser DOM/selector and profile-choice decision. Its BCU-001
+contract evidence is recorded in the [BCU-001 checkpoint](../evidence/bcu-001-2026-08-27.md), and its
+unwired deterministic Observation/action kernel in the [BCU-002 checkpoint](../evidence/bcu-002-2026-08-27.md).
+Browser Bridge, Accessibility adapters, runtime projection and real-browser smoke evidence remain later
+gates.

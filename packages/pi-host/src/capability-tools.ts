@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { PiToolRequestFrame, ToolOperation } from "@openerx/contracts";
+import {
+  BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+  BROWSER_COMPUTER_USE_V2_FEATURE_FLAG,
+  type BrowserComputerUseOperationV2,
+  browserComputerUseV2Enabled,
+  type PiToolRequestFrame,
+  type ToolOperation,
+} from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
 import { productToolResult } from "./tool-result";
 
@@ -24,6 +31,7 @@ export function createProductCapabilityTools(input: {
   branchId: string;
   assistantMessageId: string;
   transport: PiCapabilityToolTransport;
+  browserComputerUseV2?: boolean;
 }): ToolDefinition[] {
   const invoke = async (
     toolCallId: string,
@@ -46,6 +54,191 @@ export function createProductCapabilityTools(input: {
     });
     return productToolResult(result);
   };
+
+  const semanticTarget = Type.Object(
+    { elementRef: Type.String({ pattern: "^el_[A-Za-z0-9_-]{16,160}$" }) },
+    { additionalProperties: false },
+  );
+  const coordinateTarget = Type.Object(
+    {
+      x: Type.Integer({ minimum: 0, maximum: 100_000 }),
+      y: Type.Integer({ minimum: 0, maximum: 100_000 }),
+      visualObservationId: Type.String({ format: "uuid" }),
+    },
+    { additionalProperties: false },
+  );
+  const browserTarget = Type.Union([semanticTarget, coordinateTarget]);
+  const observedIdentity = {
+    sessionId: Type.String({ format: "uuid" }),
+    observationId: Type.String({ format: "uuid" }),
+  };
+  const browserComputerUseParameters = Type.Union([
+    Type.Object(
+      {
+        action: Type.Literal("open"),
+        url: Type.String({ minLength: 1, maxLength: 4_096 }),
+        requestedBackend: Type.Optional(
+          Type.Union([Type.Literal("system_default"), Type.Literal("managed_chromium")]),
+        ),
+        browserContextRef: Type.Optional(
+          Type.String({ minLength: 8, maxLength: 200, pattern: "^[A-Za-z0-9][A-Za-z0-9_-]+$" }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      { action: Type.Literal("observe"), sessionId: Type.String({ format: "uuid" }) },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Union(
+          ["focus", "invoke", "click", "submit"].map((value) => Type.Literal(value)),
+        ),
+        target: browserTarget,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("setValue"),
+        target: semanticTarget,
+        text: Type.String({ maxLength: 100_000 }),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("type"),
+        target: Type.Optional(browserTarget),
+        text: Type.String({ maxLength: 100_000 }),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("select"),
+        target: semanticTarget,
+        option: Type.String({ minLength: 1, maxLength: 2_000 }),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("key"),
+        key: Type.String({ minLength: 1, maxLength: 100 }),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("scroll"),
+        target: Type.Optional(browserTarget),
+        direction: Type.Union(["up", "down", "left", "right"].map((value) => Type.Literal(value))),
+        distance: Type.Union(
+          ["small", "medium", "viewport", "edge"].map((value) => Type.Literal(value)),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("drag"),
+        from: browserTarget,
+        to: coordinateTarget,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Union(["back", "forward", "reload"].map((value) => Type.Literal(value))),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("upload"),
+        target: semanticTarget,
+        fileId: Type.String({ format: "uuid" }),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("download"),
+        target: browserTarget,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      { action: Type.Literal("detach"), sessionId: Type.String({ format: "uuid" }) },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      { ...observedIdentity, action: Type.Literal("close") },
+      { additionalProperties: false },
+    ),
+  ]);
+  const useBrowserComputerUseV2 =
+    input.browserComputerUseV2 ??
+    browserComputerUseV2Enabled(process.env[BROWSER_COMPUTER_USE_V2_FEATURE_FLAG]);
+  const browserTool = useBrowserComputerUseV2
+    ? defineTool({
+        name: "openerx_browser",
+        label: "Use system browser",
+        description:
+          "Open and control one dedicated window in the machine's default browser. Use fresh semantic elementRef values from every observation; selectors, DOM, scripts, passwords and browser profile data are unavailable.",
+        parameters: browserComputerUseParameters,
+        execute: async (toolCallId, params) =>
+          await invoke(toolCallId, "openerx_browser", {
+            operation: "browser_computer_use",
+            request: {
+              contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+              ...params,
+            } as BrowserComputerUseOperationV2,
+          }),
+      })
+    : defineTool({
+        name: "openerx_browser",
+        label: "Use legacy isolated browser",
+        description:
+          "Open and interact with the frozen legacy isolated browser profile. Use submit for actions with external effects.",
+        parameters: Type.Object(
+          {
+            action: Type.Union(
+              [
+                "open",
+                "navigate",
+                "click",
+                "type",
+                "submit",
+                "screenshot",
+                "upload",
+                "download",
+                "close",
+              ].map((value) => Type.Literal(value)),
+            ),
+            sessionId: Type.Optional(Type.String({ format: "uuid" })),
+            url: Type.Optional(Type.String({ maxLength: 4_096 })),
+            selector: Type.Optional(Type.String({ maxLength: 2_000 })),
+            text: Type.Optional(Type.String({ maxLength: 100_000 })),
+            fileId: Type.Optional(Type.String({ format: "uuid" })),
+          },
+          { additionalProperties: false },
+        ),
+        execute: async (toolCallId, params) =>
+          await invoke(toolCallId, "openerx_browser", { operation: "browser", ...params }),
+      });
 
   return [
     defineTool({
@@ -191,37 +384,7 @@ export function createProductCapabilityTools(input: {
                 },
         ),
     }),
-    defineTool({
-      name: "openerx_browser",
-      label: "Use isolated browser",
-      description:
-        "Open and interact with an isolated browser profile. Use submit for actions with external effects.",
-      parameters: Type.Object(
-        {
-          action: Type.Union(
-            [
-              "open",
-              "navigate",
-              "click",
-              "type",
-              "submit",
-              "screenshot",
-              "upload",
-              "download",
-              "close",
-            ].map((value) => Type.Literal(value)),
-          ),
-          sessionId: Type.Optional(Type.String({ format: "uuid" })),
-          url: Type.Optional(Type.String({ maxLength: 4_096 })),
-          selector: Type.Optional(Type.String({ maxLength: 2_000 })),
-          text: Type.Optional(Type.String({ maxLength: 100_000 })),
-          fileId: Type.Optional(Type.String({ format: "uuid" })),
-        },
-        { additionalProperties: false },
-      ),
-      execute: async (toolCallId, params) =>
-        await invoke(toolCallId, "openerx_browser", { operation: "browser", ...params }),
-    }),
+    browserTool,
     defineTool({
       name: "openerx_desktop",
       label: "Control desktop",

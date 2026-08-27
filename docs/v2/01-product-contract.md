@@ -22,7 +22,10 @@
 
 `已确定`：前端使用 React + TypeScript 重写，不继续复用旧 Vue 页面体系。
 
-`已确定`：使用 Electron 作为桌面壳，以统一 Chromium 渲染和 Node 桌面能力；React UI 由 Vite 构建并打包进应用。远程网页只能在隔离窗口或系统浏览器中打开，不能取得客户端本地能力。
+`已确定`：使用 Electron 作为桌面壳，以统一 Chromium 渲染和 Node 桌面能力；React UI 由 Vite
+构建并打包进应用。Browser Computer-Use 使用独立顶层操作面：默认连接用户授权的系统默认浏览器
+标签页或专用窗口，安全增强模式使用隔离 Profile 的 Electron 托管 Chromium。远程网页不嵌入主
+Renderer，也不能取得客户端本地能力。
 
 `已确定`：运行于 Windows 10 以上及较新的 macOS。`已确认系统矩阵`：Windows 10 22H2/Windows 11 x64；macOS 14 及以上，支持 Apple Silicon 与 Intel x64。Windows ARM64 暂不进入 V1。
 
@@ -113,7 +116,7 @@ iOS/Android Remote Companion 只发送经过账户、设备、配对、时效和
 
 - 一组经过验证的内置助手、工具和 Skill。
 - 支持个人/工作区 Skill 的安装、显式或自动触发、更新、禁用、权限重置和卸载。
-- 支持 Web 搜索、隔离浏览器、受控桌面操作、Shell/代码执行以及本地和远程 MCP。
+- 支持 Web 搜索、双后端 Browser Computer-Use、受控桌面操作、Shell/代码执行以及本地和远程 MCP。
 - 工具调用状态、目标、来源、结果和错误以用户可理解方式显示。
 - 敏感工具调用前请求确认；设备权限不得通过账户同步自动继承。
 - 完整范围和门禁以 [10-codex-capability-baseline.md](10-codex-capability-baseline.md) 为准。
@@ -132,7 +135,7 @@ iOS/Android Remote Companion 只发送经过账户、设备、配对、时效和
 - 消息、对话和账户累计 Token、费用与抵扣明细。
 - 个人额度、积分、充值余额、充值订单、退款和月度账单。
 - Pi Host、工具、文件和网络权限。
-- MCP 服务、Skill、隔离浏览器和 Shell Scope。
+- MCP 服务、Skill、浏览器后端/Profile、Browser Bridge 授权和 Shell Scope。
 - 历史、缓存、下载和数据清理。
 - 诊断信息导出，但不提供企业管理员控制台。
 

@@ -47,7 +47,7 @@
 | --- | --- | --- |
 | TOOL-01 | 文件读取、搜索、创建和补丁式修改 | 受当前文件/文件夹 Scope 限制，修改目标和差异可审阅 |
 | TOOL-02 | 第一方 Web 搜索 | 支持时效信息、来源列表和可打开引用；搜索活动进入工具记录 |
-| TOOL-03 | 内嵌隔离浏览器 | 支持打开网页、本地 Web 应用、导航、点击、输入、截图、上传和下载；与主 Renderer 及用户日常浏览器 Profile 隔离 |
+| TOOL-03 | 独立 Browser Computer-Use | 默认使用用户授权的系统默认浏览器精确 tab/专用窗口，可选隔离 Profile 的托管 Chromium；语义优先、视觉验证、坐标兜底，支持导航、交互、截图、接管及受控文件操作，不在主 Renderer 内嵌网页 |
 | TOOL-04 | 计算机/桌面应用操作 | 通过明确启用的工具读取屏幕并执行受控交互；登录、发送、购买、删除和提交等高影响动作逐次确认 |
 | TOOL-05 | Shell 与代码执行 | 终端绑定当前对话和授权工作目录；输出流式可见；支持输入、停止、超时、长进程和退出状态 |
 | TOOL-06 | MCP | 支持本地 STDIO 与远程 Streamable HTTP；支持 Bearer/OAuth；展示服务、工具、认证和连接状态 |
@@ -56,7 +56,15 @@
 | TOOL-09 | 取消、重试与幂等 | Pi 管理调用生命周期和把结果送回 Agent Loop；Broker 可取消实际执行，外部写操作使用幂等键，重试不得重复产生副作用 |
 | TOOL-10 | 沙箱与审批 | V2 Broker 将风险、OS 沙箱和审批策略分离：授权工作区内读取/Patch/沙箱 Shell 自动执行；网络单独授予；桌面普通交互按对话 Scope；外部写入与高影响动作逐次确认 |
 
-2026-08-27 的 CX-109 本地检查点已覆盖 TOOL-05/TOOL-08 的类型化输入结果、命令输出、来源、Diff、Approval、Plan、安全 Reasoning、Compaction/Retry 与按 Run 回放。CX-110-D1 已把 TOOL-06 的桌面 OAuth 从 Client Secret/`client_credentials` 修正为 Main-owned Authorization Code + PKCE；CX-110-D2 又把静态工具目录接到真实 Host readiness，在当前 Mac 完成 Browser 全链路、Shell 沙箱负向测试和 Desktop 目标窗口捕获，并覆盖允许、拒绝与撤销；CX-110-D3 进一步验证 Developer ID 签名 macOS arm64 包的 TCC/Accessibility、精确窗口身份、TextEdit 受控输入及安装/升级/回滚数据保持。Apple 公证/DMG/Gatekeeper、第三方实网和 Windows 原生工具矩阵仍属于未完成范围。
+2026-08-27 的 CX-109 本地检查点已覆盖 TOOL-05/TOOL-08 的类型化输入结果、命令输出、来源、Diff、
+Approval、Plan、安全 Reasoning、Compaction/Retry 与按 Run 回放。CX-110-D1 已把 TOOL-06 的桌面
+OAuth 从 Client Secret/`client_credentials` 修正为 Main-owned Authorization Code + PKCE；CX-110-D2
+在当前 Mac 完成的 Browser 全链路属于历史 `legacy_dom_v1` 隔离 BrowserWindow 证据，不能证明
+TOOL-03 的系统默认浏览器或新托管 Chromium 合同。BCU-001 已完成 ADR、V2 合同和负向测试；BCU-002
+已完成尚未接线的 Observation/action 内核与 Fake Adapter 测试。双后端 Host、运行时投影及真实烟测
+仍待 BCU-003 至 BCU-006。CX-110-D3 已验证 Developer ID 签名 macOS arm64 包的
+TCC/Accessibility、精确窗口身份、TextEdit 受控输入及安装/升级/回滚数据保持。Apple 公证/DMG/
+Gatekeeper、第三方实网和 Windows 原生工具矩阵仍属于未完成范围。
 
 浏览器会话、系统 Shell 和桌面应用操作均属于设备能力，不能因为账户在另一台设备已经允许而自动继承授权。
 
@@ -108,7 +116,7 @@ Web、Shell、Browser、Desktop、MCP、图片生成、工作区和 Skill 属于
 
 - 输入框：附件、模型和 Skill 选择。
 - 消息区：工具活动、权限卡、来源和文件成果。
-- 右侧面板：文件预览、浏览器、终端和长任务详情。
+- 右侧面板：文件预览、浏览器活动/语义与视觉证据、终端和长任务详情；真实网页保持独立窗口/标签页。
 - 文件页：个人文件、成果、版本和同步状态。
 - Skill 页：搜索、安装、启用、更新、权限和卸载。
 - 设置：模型目录、账户 Token/费用、额度、积分、充值、账单、MCP、工具权限、浏览器数据、Shell Scope 和同步状态。

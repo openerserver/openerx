@@ -152,6 +152,35 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         approval: action === "submit" || action === "upload" ? "per_call" : "automatic",
       };
     }
+    case "browser_computer_use": {
+      const request = operation.request;
+      const action = request.action;
+      const highImpact = action === "submit" || action === "upload" || action === "download";
+      const readOnly = action === "observe" || action === "detach";
+      return {
+        capability: "browser",
+        risk: highImpact ? "L4" : readOnly ? "L2" : "L3",
+        resourceType: action === "open" ? "domain" : "server",
+        resource: action === "open" ? urlResource(request.url) : request.sessionId,
+        actions: [
+          action === "open"
+            ? "navigate"
+            : action === "observe"
+              ? "capture"
+              : action === "detach" || action === "close"
+                ? "stop"
+                : action === "upload"
+                  ? "upload"
+                  : action === "download"
+                    ? "download"
+                    : action === "submit"
+                      ? "external_write"
+                      : "interact",
+        ],
+        reason: `系统浏览器 computer-use 操作：${action}`,
+        approval: highImpact ? "per_call" : readOnly ? "automatic" : "scope",
+      };
+    }
     case "desktop": {
       const highImpact = ["submit", "send", "delete", "purchase"].includes(operation.action);
       const target = operation.bundleId
@@ -241,6 +270,8 @@ export function hasUncertainExternalSideEffect(operation: ToolOperation): boolea
       return operation.operation === "mcp_call" ? !operation.annotations.readOnlyHint : true;
     case "browser":
       return operation.action !== "screenshot";
+    case "browser_computer_use":
+      return operation.request.action !== "observe" && operation.request.action !== "detach";
     case "desktop":
       return operation.action !== "screenshot";
     case "compute":
@@ -338,6 +369,12 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
       return {
         input: `${operation.action}${operation.selector ? ` ${operation.selector}` : ""}`,
         target: operation.url ?? operation.sessionId ?? "new-session",
+      };
+    case "browser_computer_use":
+      return {
+        input: `${operation.request.contractVersion}:${operation.request.action}`,
+        target:
+          operation.request.action === "open" ? operation.request.url : operation.request.sessionId,
       };
     case "desktop":
       return {

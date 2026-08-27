@@ -3,6 +3,7 @@
 - Status: Accepted and M5 local slice implemented
 - Date: 2026-08-26
 - Owners: Desktop, App Service, Pi Host and Security
+- Partially superseded by: ADR-V2-017 for browser automation and browser profile selection
 
 ## Context
 
@@ -44,6 +45,11 @@ resolves only its M4 controlled copy and Main rejects paths outside the profile 
 private path only across Main's internal port; App Service immediately imports it and returns only the
 new PersonalFile ID and display name to Pi. Desktop capture/control uses native OS mechanisms;
 submit, send, purchase and delete always require per-call approval.
+
+The paragraph above records the M5 implementation. Its Browser DOM/selector contract and isolated-browser-
+only product choice are superseded by [ADR-V2-017](017-browser-computer-use-host-and-contract.md). The M5
+runtime remains `legacy_dom_v1` during staged migration and is not evidence that the new system-default or
+managed-Chromium backends are implemented.
 
 MCP uses the official v2 TypeScript client for STDIO and Streamable HTTP. Bearer secrets and OAuth
 client credentials are referenced from Electron Main's OS-protected tool vault; Renderer, SQLite and Pi

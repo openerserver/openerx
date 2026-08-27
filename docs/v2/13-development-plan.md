@@ -44,6 +44,7 @@ V1 完成必须同时满足：
 | M3 Billing Alpha | LOCAL COMPLETE | 服务端报价/预留/结算、额度/积分/现金复式账本、支付回调/退款/对账、最终 Billing UI、CSV/PDF | 真实支付宝/微信沙箱、商户参数、属地合规与原生发布矩阵仍是发布环境门禁；[实现与质量证据](evidence/m3-2026-08-25.md) |
 | M4 File + Artifact | LOCAL COMPLETE | 设备 Scope、受控副本、多格式引用、不可变成果、云对象恢复、Pi SessionManager | 原生双平台打开/选择器与签名包仍是发布门禁；[实现与质量证据](evidence/m4-2026-08-26.md) |
 | M5 Tool Alpha | LOCAL COMPLETE | Pi-native Web/image/Browser/Shell/Desktop/MCP、Capability Broker、长任务与权限投影 | 原生双平台桌面/沙箱、实时 Provider、第三方 MCP 与签名包仍是发布门禁；[实现与质量证据](evidence/m5-2026-08-26.md) |
+| BCU Browser Computer-Use | BCU-002 KERNEL COMPLETE / BCU-003 NEXT | ADR-V2-017、双后端 V2 严格合同、Observation registry、精确 surface 身份、单动作分层和确定性 Fake Adapter 测试 | 内核尚未接入当前 Browser Host/Pi 投影，运行时仍是 `legacy_dom_v1`；系统默认浏览器、托管 Chromium 和真实站点烟测均未完成；[BCU-001 证据](evidence/bcu-001-2026-08-27.md)；[BCU-002 证据](evidence/bcu-002-2026-08-27.md) |
 | M6 Remote Control Alpha | LOCAL COMPLETE | Expo 手机控制面、同账户配对、E2EE 协议、出站 Connector、密文 Gateway、Pi 原生命令映射、远程审批和事件游标 | iOS/Android 真机、Windows/macOS 主机矩阵、APNs/FCM 生产投递、移动附件闭环与真实网络故障演练仍是发布门禁；[实现与质量证据](evidence/m6-2026-08-26.md) |
 | M7 Skill | LOCAL COMPLETE | Pi-native Skill 包、Scope、生命周期、Broker 和同步 | 签名目录、跨平台脚本运行时与原生矩阵仍是发布门禁；[实现与质量证据](evidence/m7-2026-08-26.md) |
 | M8 Personal Beta | EXTERNAL IN PROGRESS | 诊断/性能/数据恢复本地检查点；真实 DeepSeek SSE→Pi→桌面瀑布与 Usage→服务端 Charge 首个闭环 | 目标用户、真实长请求 Stop/失败、Provider 账单对账、支付、Remote 真机、原生与签名矩阵；[M8 证据](evidence/m8-2026-08-26.md)；[流式瀑布证据](evidence/streaming-waterfall-2026-08-26.md) |
@@ -152,7 +153,8 @@ PDF/DOCX/XLSX/PPTX 真实渲染检查通过；原生 Windows/macOS 双平台打�
 
 状态：`LOCAL IMPLEMENTATION COMPLETE (2026-08-26)`
 
-- Web 搜索、平台图片生成、隔离浏览器、本地 Web 预览、Shell/代码、桌面控制和 MCP。
+- Web 搜索、平台图片生成、`legacy_dom_v1` 隔离 BrowserWindow、本地 Web 预览、Shell/代码、桌面控制
+  和 MCP；Browser 项仅代表 M5 历史实现，不代表 ADR-V2-017 双后端已完成。
 - 工具通过 Pi 原生 ToolDefinition 注册；Pi 管理调用生命周期并接收结果。
 - V2 Broker 管理 Scope、审批、沙箱、网络策略、副作用幂等和审计。
 - 从 Pi 事件投影 WorkItem、ExecutionRun、RunStep、ToolCall 和 PermissionRequest。
@@ -165,6 +167,12 @@ GT-TOOL-07 至 GT-TOOL-09 是 Skill 安装/生命周期/同步任务，仍由 M7
 MCP/OAuth 授权码流和签名包证据仍是发布环境门禁。
 
 证据：[M5 checkpoint](evidence/m5-2026-08-26.md)。
+
+Browser 后续迁移按 [Browser Computer-Use 重构方案](17-browser-computer-use-plan.md) 独立推进。
+BCU-001 已完成 [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md)、版本化严格合同和
+[合同测试计划](18-browser-computer-use-contract-test-plan.md)；BCU-002 已完成尚未接线的
+`UIObservationRegistry`、动作分层和 Fake Adapter 确定性测试。下一任务是 BCU-003，但不能从
+BCU-001/002 或 M5 证据推导系统浏览器、新托管 Chromium 或真实站点运行能力。
 
 ### M6：Remote Control Alpha — 5 至 7 周
 
@@ -288,7 +296,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 | Billing | 报价、预留、账本、Webhook、退款、对账 | 支付测试环境与合规确认 |
 | File | Scope、解析、引用、版本、渲染 | 每种办公成果真实打开 |
 | Tool | Pi tool lifecycle、Broker、取消、MCP | 浏览器/Shell/桌面双平台 |
-| Codex 对齐 | P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 的合同、Run 快照、工作区 Patch/Diff、分层指令、独立 MCP、按需工具发现、Office 真实成果、丰富 Run Item、桌面 MCP Authorization Code + PKCE、fail-closed Host readiness/macOS Browser/Shell/Desktop 本机矩阵，以及 Developer ID 签名 macOS arm64 的 TCC/安装升级回滚/受控交互 | Apple 公证与分发安装、live Provider、第三方实网 OAuth、任意 Office 预览和 Windows 原生矩阵 |
+| Codex 对齐 | P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 的合同、Run 快照、工作区 Patch/Diff、分层指令、独立 MCP、按需工具发现、Office 真实成果、丰富 Run Item、桌面 MCP Authorization Code + PKCE、fail-closed Host readiness、legacy macOS Browser/Shell/Desktop 本机矩阵，以及 Developer ID 签名 macOS arm64 的 TCC/安装升级回滚/受控交互 | BCU 双后端 Browser Host、Apple 公证与分发安装、live Provider、第三方实网 OAuth、任意 Office 预览和 Windows 原生矩阵 |
 | Skill | Pi 加载、安装、更新、卸载、失败隔离 | 个人/工作区 Skill 双平台 |
 | Remote | 配对/撤销、签名/加密、命令幂等、Pi 映射、游标恢复、通知脱敏 | iOS/Android 真机 × Windows/macOS 主机；休眠、断线、丢失手机和多控制器演练 |
 | Release | 全矩阵、升级、回滚、安全扫描 | 签名包和发布批准 |

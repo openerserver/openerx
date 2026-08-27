@@ -1,5 +1,6 @@
 export * from "./account";
 export * from "./billing";
+export * from "./browser-computer-use";
 export * from "./chat";
 export * from "./common";
 export * from "./desktop";

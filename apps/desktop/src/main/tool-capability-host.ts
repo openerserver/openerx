@@ -3,8 +3,16 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { HostToolAvailability, NormalizedToolResult, ToolOperation } from "@openerx/contracts";
+import {
+  BROWSER_COMPUTER_USE_V2_FEATURE_FLAG,
+  browserComputerUseV2Enabled,
+  type HostToolAvailability,
+  type NormalizedToolResult,
+  type ToolOperation,
+} from "@openerx/contracts";
 import { BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
+import { ElectronMacSystemBrowserDriver } from "./browser-computer-use/electron-mac-system-browser-driver";
+import { SystemDefaultBrowserAdapter } from "./browser-computer-use/system-default-browser-adapter";
 import type { ToolCredentialVault } from "./credential-vault";
 import { type DesktopCaptureRecord, DesktopCaptureRegistry } from "./desktop-capture-registry";
 import { desktopHostToolAvailability } from "./desktop-tool-availability";
@@ -80,6 +88,9 @@ function inside(root: string, target: string): boolean {
 export class ElectronToolCapabilityHost {
   readonly #profileDirectory: string;
   readonly #browserSessions = new Map<string, BrowserSession>();
+  readonly #browserComputerUse = new SystemDefaultBrowserAdapter(
+    new ElectronMacSystemBrowserDriver(),
+  );
   readonly #desktopCaptures = new DesktopCaptureRegistry();
   readonly #oauth: OAuthLoopbackController;
 
@@ -98,11 +109,13 @@ export class ElectronToolCapabilityHost {
     const value =
       operation.operation === "browser"
         ? await this.#browser(operation)
-        : operation.operation === "desktop"
-          ? await this.#desktop(operation)
-          : (() => {
-              throw new Error("MAIN_CAPABILITY_NOT_SUPPORTED");
-            })();
+        : operation.operation === "browser_computer_use"
+          ? await this.#browserComputerUse.execute(operation.request, signal)
+          : operation.operation === "desktop"
+            ? await this.#desktop(operation)
+            : (() => {
+                throw new Error("MAIN_CAPABILITY_NOT_SUPPORTED");
+              })();
     return { ...value, durationMs: Date.now() - startedAt };
   }
 
@@ -121,9 +134,18 @@ export class ElectronToolCapabilityHost {
               path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
             )
           : false;
+    const browserV2Enabled = browserComputerUseV2Enabled(
+      process.env[BROWSER_COMPUTER_USE_V2_FEATURE_FLAG],
+    );
+    const browserAvailable = browserV2Enabled
+      ? platform === "darwin" &&
+        screenCaptureStatus === "granted" &&
+        accessibilityTrusted &&
+        automationAvailable
+      : true;
     return desktopHostToolAvailability({
       platform,
-      browserAvailable: true,
+      browserAvailable,
       screenCaptureStatus,
       accessibilityTrusted,
       automationAvailable,
@@ -133,6 +155,7 @@ export class ElectronToolCapabilityHost {
   close(): void {
     for (const browser of this.#browserSessions.values()) browser.window.destroy();
     this.#browserSessions.clear();
+    this.#browserComputerUse.close();
     this.#desktopCaptures.clear();
     this.#oauth.close();
   }

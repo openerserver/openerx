@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { browserComputerUseOperationV2Schema } from "./browser-computer-use";
 import { entityIdSchema, timestampSchema } from "./common";
 import { officeArtifactWriteInputSchema } from "./file";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
@@ -463,6 +464,8 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
   z
     .object({
       ...toolOperationBase,
+      // BCU-001: legacy_dom_v1 is retained for persisted calls and the current runtime only.
+      // Do not add capabilities here; browser_computer_use_v2 is the replacement contract.
       operation: z.literal("browser"),
       sessionId: entityIdSchema.optional(),
       action: z.enum([
@@ -481,6 +484,13 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
       text: z.string().max(100_000).optional(),
       fileId: entityIdSchema.optional(),
       path: z.string().max(4_096).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("browser_computer_use"),
+      request: browserComputerUseOperationV2Schema,
     })
     .strict(),
   z

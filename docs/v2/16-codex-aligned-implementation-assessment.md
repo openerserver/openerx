@@ -128,8 +128,8 @@ flowchart TD
 | CX-107 | 每 Turn 的模型/思考配置快照 | PASS——每次 send/edit/regenerate 在 Prompt 前固化 requested model、thinking、工具集、Skill 和初始指令；Usage 回填 effective model/fallback，历史 Run 不受默认值修改。 | 每个 Turn 固化 requested/effective model、思考强度、回退理由、工具集和 Skill；后续修改 Conversation 默认值不能改写历史。 |
 | CX-108 | Office 成果端到端工作流 | PASS（本地）——Documents/Spreadsheets/Presentations/PDF Skill 通过独立类型化工具创建和修改真实二进制，追加不可变版本；每页/表/幻灯片同时生成客户端 SVG 与 Pi PNG。8 个自然语言创建/修改 Turn、原生打开和逐画布视觉检查通过。live Provider、任意第三方 Office 预览和 Windows Microsoft Office 仍归 CX-110/发布矩阵。 | 通过文档/表格/演示/PDF Skill 真正生成和编辑二进制文件，渲染为页面/工作表/幻灯片进行视觉验收，客户端显示忠实预览；测试必须从 Agent 请求开始，而不是只检查预制夹具。 |
 | CX-109 | 丰富的 Item 与结果投影 | PASS（本地）——v13 `run_items` 持久化 Model/安全 Reasoning/Plan/Tool/Command/Source/Diff/Approval/Compaction/Retry；Capability 与 File/Office 工具保存类型化输入和结果引用，失败命令保留输出；UI 可选择 Run 回放。原始 `thinking_delta` 不进入产品投影。 | 持久保存有类型的工具输入输出引用、来源、计划、推理摘要、命令输出、文件差异、审批和压缩事件；UI 可按 Run 回放。 |
-| CX-110 | 真实平台和原生矩阵 | **IN PROGRESS；D1/D2/D3 PASS（桌面本地）**——D1 完成 Main-owned Authorization Code + PKCE；D2 将工具目录接到实时 Host readiness，并验证当前 Mac 的 Browser/Shell/Desktop 原生矩阵；D3 完成 Developer ID 签名 macOS arm64 的 TCC/Accessibility、精确 CGWindow 身份、TextEdit 正向与身份错配负向操作，以及隔离安装/升级/真回滚的数据保持。仍不覆盖 Apple 公证/DMG/Gatekeeper、第三方实网和 Windows 原生矩阵。 | 对真实服务、真实 OAuth 授权码流程、签名 macOS/Windows 包及原生控制分别形成日期化端到端证据；不可用时产品明确显示 unavailable。 |
-| CX-111 | Codex 式审批收敛 | PASS（本地）——风险、OS 沙箱与审批策略拆分为 `automatic / scope / per_call`；已授权工作区内 Patch/Shell、第一方 Web/图片、隔离浏览器观察和只读 MCP 不再重复弹窗；Desktop 普通交互按应用和当前对话复用 Scope；上传、提交、发送、删除、购买、MCP 写入、清凭据及 Skill 脚本仍逐次确认。 | 已有 Scope 内安全动作持续执行；越出 Scope、外部写入、破坏性/付费动作停下；Scope 不能跨对话或由 Remote/Renderer 扩大。 |
+| CX-110 | 真实平台和原生矩阵 | **IN PROGRESS；D1/D2/D3 PASS（桌面本地）**——D1 完成 Main-owned Authorization Code + PKCE；D2 将工具目录接到实时 Host readiness，并验证当前 Mac 的 legacy Browser/Shell/Desktop 原生矩阵；D3 完成 Developer ID 签名 macOS arm64 的 TCC/Accessibility、精确 CGWindow 身份、TextEdit 正向与身份错配负向操作，以及隔离安装/升级/真回滚的数据保持。D2 Browser 证据不覆盖 ADR-V2-017 双后端。仍不覆盖 Apple 公证/DMG/Gatekeeper、第三方实网和 Windows 原生矩阵。 | 对真实服务、真实 OAuth 授权码流程、签名 macOS/Windows 包及原生控制分别形成日期化端到端证据；不可用时产品明确显示 unavailable。 |
+| CX-111 | Codex 式审批收敛 | PASS（本地 legacy Browser 策略）——风险、OS 沙箱与审批策略拆分为 `automatic / scope / per_call`；已授权工作区内 Patch/Shell、第一方 Web/图片、`legacy_dom_v1` 浏览器观察和只读 MCP 不再重复弹窗；Desktop 普通交互按应用和当前对话复用 Scope；上传、提交、发送、删除、购买、MCP 写入、清凭据及 Skill 脚本仍逐次确认。V2 Browser Bridge、surface 和接管审批仍由 BCU 后续阶段验证。 | 已有 Scope 内安全动作持续执行；越出 Scope、外部写入、破坏性/付费动作停下；Scope 不能跨对话或由 Remote/Renderer 扩大。 |
 
 ## 6. 当前不应实现或不应直接开放：P2
 
@@ -208,7 +208,10 @@ P0、CX-101 至 CX-109、CX-110-D1/D2/D3 与 CX-111 已按本文形成本地实�
 - **工作区 Patch**：模型读取用户授权仓库、搜索目标、应用补丁、展示 diff；符号链接和子进程无法越界。
 - **项目指令层级**：全局、仓库和嵌套目录规则按作用域覆盖，Run 记录实际采用的指令来源。
 - **MCP 工具发现**：连接 fixture 后模型看到两个独立工具；只读工具无需写审批，写工具需要单独审批；禁用后工具从下一 Turn 消失。
-- **审批收敛**：授权工作区后 Patch/无外网 Shell 不再产生第二次 PermissionRequest；隔离浏览器观察自动，上传/提交仍逐次；Desktop Scope 不能跨 Conversation，伪造 Scope ID 必须 fail closed。
+- **审批收敛**：授权工作区后 Patch/无外网 Shell 不再产生第二次 PermissionRequest；当前
+  `legacy_dom_v1` 浏览器观察自动，上传/提交仍逐次；ADR-V2-017 双后端另按 Browser Bridge、
+  surface、接管与高影响动作门禁验证；Desktop Scope 不能跨 Conversation，伪造 Scope ID 必须
+  fail closed。
 - **每 Turn 配置**：同一 Conversation 连续使用不同模型/思考级别，历史 Run 的配置和 Usage 不随默认值修改。
 - **Office 端到端**：从自然语言请求开始生成 DOCX/XLSX/PPTX/PDF，打开真实产物、渲染全部页/表/幻灯片并完成视觉检查；不接受仅检查 zip/XML 或预制 fixture。
 - **真实服务矩阵**：Web/图片、OAuth MCP、签名 macOS/Windows 包分别记录服务地址类型、日期、结果、失败边界和证据路径。

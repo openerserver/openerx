@@ -126,7 +126,8 @@ V1 默认不做大规模旧数据迁移。
 ### Phase 5：Codex 工具与长任务，5 至 6 周
 
 - 把 V2 工具注册给 Pi；Pi 管理工具调用生命周期，V2 Capability and Permission Broker 管理沙箱、Scope、权限卡片、副作用幂等和统一工具记录。
-- 第一方 Web 搜索、隔离浏览器、本地 Web 预览。
+- 第一方 Web 搜索、独立双后端 Browser Computer-Use、本地 Web 预览；Browser 按
+  [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md) 分阶段替换 M5 legacy 路径。
 - Shell/代码执行、长进程和受控桌面应用操作。
 - STDIO/Streamable HTTP MCP、Bearer/OAuth 和连接管理。
 - 从 Pi 事件生成 WorkItem、ExecutionRun、RunStep 和 ToolCall 产品投影及持久化事件，不建立 V2 自有步骤调度器。

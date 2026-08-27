@@ -2,7 +2,7 @@ import type { NormalizedToolResult, ToolOperation } from "@openerx/contracts";
 import type { CapabilityHost, ToolAdapter } from "./types";
 
 export class HostCapabilityAdapter implements ToolAdapter {
-  readonly operations = ["browser", "desktop"] as const;
+  readonly operations = ["browser", "browser_computer_use", "desktop"] as const;
   constructor(
     private readonly host: CapabilityHost,
     private readonly resolveUploadPath?: (fileId: string) => string,
@@ -15,7 +15,11 @@ export class HostCapabilityAdapter implements ToolAdapter {
     operation: ToolOperation,
     context: { signal: AbortSignal },
   ): Promise<NormalizedToolResult> {
-    if (operation.operation !== "browser" && operation.operation !== "desktop") {
+    if (
+      operation.operation !== "browser" &&
+      operation.operation !== "browser_computer_use" &&
+      operation.operation !== "desktop"
+    ) {
       throw new Error("HOST_OPERATION_NOT_SUPPORTED");
     }
     if (operation.operation === "browser" && operation.action === "upload") {
