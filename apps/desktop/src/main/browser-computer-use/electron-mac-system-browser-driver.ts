@@ -188,13 +188,16 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
       encoding: "utf8",
       timeout: 10_000,
     });
-    let created = await this.#pollForNewWindow(browser.bundleId, before, signal, 12);
+    let created = await this.#pollForNewWindow(browser.bundleId, before, signal, 20);
     if (!created) {
       await this.#runAppleScript(macBrowserCreateWindowScript(), [browser.bundleId]);
       created = await this.#pollForNewWindow(browser.bundleId, before, signal, 40);
     }
     if (!created) throw new Error("BROWSER_SURFACE_NOT_BOUND");
-    await this.#runAppleScript(macBrowserNavigateWindowScript(), [...targetArguments(created), url]);
+    await this.#runAppleScript(macBrowserNavigateWindowScript(), [
+      ...targetArguments(created),
+      url,
+    ]);
     const raw = await this.#pollForObservation(
       browser.bundleId,
       created.processId,
@@ -489,6 +492,8 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
     signal: AbortSignal,
     attempts: number,
   ): Promise<MacBrowserWindow | null> {
+    let stableSignature: string | null = null;
+    let stableCount = 0;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       throwIfAborted(signal);
       const after = await this.#windows(bundleId);
@@ -496,7 +501,24 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
         ({ windowId }) => !before.some((window) => window.windowId === windowId),
       ).length;
       if (newCount > 1) throw new Error("BROWSER_SURFACE_NOT_BOUND");
-      if (newCount === 1) return selectNewMacBrowserWindow(before, after);
+      if (newCount === 1) {
+        const candidate = selectNewMacBrowserWindow(before, after);
+        const signature = JSON.stringify([
+          candidate.processId,
+          candidate.windowId,
+          candidate.title,
+          candidate.bounds,
+        ]);
+        if (signature === stableSignature) stableCount += 1;
+        else {
+          stableSignature = signature;
+          stableCount = 1;
+        }
+        if (stableCount >= 3) return candidate;
+      } else {
+        stableSignature = null;
+        stableCount = 0;
+      }
       await wait(100, signal);
     }
     return null;
