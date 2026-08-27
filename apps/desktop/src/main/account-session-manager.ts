@@ -115,6 +115,7 @@ export class AccountSessionManager {
   readonly #transport: IdentityTransport | null;
   readonly #device: DeviceDescriptor;
   #active: ActiveGrant | null = null;
+  #accessTokenRefresh: Promise<string> | null = null;
   #state: AccountState = accountStateSchema.parse({
     status: "signed_out",
     account: null,
@@ -187,12 +188,15 @@ export class AccountSessionManager {
     if (new Date(active.grant.accessTokenExpiresAt).getTime() - Date.now() > 30_000) {
       return active.grant.accessToken;
     }
-    const grant = await this.#requireTransport().refresh(
-      active.grant.session.sessionId,
-      active.grant.refreshCredential,
-    );
-    await this.#activate(grant);
-    return grant.accessToken;
+    if (!this.#accessTokenRefresh) {
+      this.#accessTokenRefresh = this.#refreshAccessToken(active);
+    }
+    const refresh = this.#accessTokenRefresh;
+    try {
+      return await refresh;
+    } finally {
+      if (this.#accessTokenRefresh === refresh) this.#accessTokenRefresh = null;
+    }
   }
 
   async authorization(platformBaseUrl: string): Promise<{
@@ -259,6 +263,16 @@ export class AccountSessionManager {
       session: grant.session,
       reason: null,
     });
+  }
+
+  async #refreshAccessToken(active: ActiveGrant): Promise<string> {
+    const grant = await this.#requireTransport().refresh(
+      active.grant.session.sessionId,
+      active.grant.refreshCredential,
+    );
+    if (this.#active !== active) throw new Error("AUTH_SESSION_CHANGED");
+    await this.#activate(grant);
+    return grant.accessToken;
   }
 
   async #clear(status: "signed_out" | "reauth_required", reason: string | null): Promise<void> {

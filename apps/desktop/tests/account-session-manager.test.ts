@@ -120,6 +120,45 @@ describe("AccountSessionManager", () => {
     expect(transport.verifyChallenge).toHaveBeenCalled();
   });
 
+  it("shares one refresh when concurrent requests need a new access token", async () => {
+    const { manager, transport } = setup();
+    const expired = {
+      ...grant(),
+      accessTokenExpiresAt: "2000-01-01T00:00:00.000Z",
+    };
+    const refreshed = {
+      ...expired,
+      session: { ...expired.session, sessionVersion: expired.session.sessionVersion + 1 },
+      refreshCredential: "next-refresh-session-manager-credential-123456",
+      accessToken: "next-access-session-manager-credential-12345678",
+      accessTokenExpiresAt: "2099-08-25T10:05:00.000Z",
+    };
+    let releaseRefresh: (() => void) | undefined;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    vi.mocked(transport.verifyChallenge).mockResolvedValueOnce(expired);
+    vi.mocked(transport.refresh).mockImplementationOnce(async () => {
+      await refreshGate;
+      return refreshed;
+    });
+    await manager.verifyCode(randomUUID(), "123456");
+
+    const first = manager.accessToken();
+    const second = manager.accessToken();
+    expect(transport.refresh).toHaveBeenCalledTimes(1);
+    releaseRefresh?.();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      refreshed.accessToken,
+      refreshed.accessToken,
+    ]);
+    expect(transport.refresh).toHaveBeenCalledWith(
+      expired.session.sessionId,
+      expired.refreshCredential,
+    );
+  });
+
   it("refreshes a persisted credential on startup and clears invalid sessions", async () => {
     const initial = grant();
     const persisted = {
