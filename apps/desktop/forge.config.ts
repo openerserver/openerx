@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -18,6 +19,11 @@ const macChildEntitlements = path.join(
   desktopDirectory,
   "resources",
   "entitlements.mac.inherit.plist",
+);
+const macBrowserHelperBuildScript = path.join(
+  desktopDirectory,
+  "scripts",
+  "build-macos-browser-helper.mjs",
 );
 
 const resvgNativePackages: Record<string, string> = {
@@ -108,7 +114,7 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
 
 const config: ForgeConfig = {
   packagerConfig: {
-    asar: { unpack: "**/*.node" },
+    asar: { unpack: "**/{*.node,openerx-browser-accessibility}" },
     appBundleId: "com.openerx.desktop",
     appCategoryType: "public.app-category-type.productivity",
     appCopyright: "Copyright © 2026 OpenerX",
@@ -122,6 +128,19 @@ const config: ForgeConfig = {
   },
   hooks: {
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
+      if (["darwin", "mas"].includes(platform)) {
+        execFileSync(
+          process.execPath,
+          [
+            macBrowserHelperBuildScript,
+            "--output",
+            path.join(buildPath, "native", "openerx-browser-accessibility"),
+            "--arch",
+            arch,
+          ],
+          { stdio: "inherit" },
+        );
+      }
       const resvgNativePackage = resvgNativePackages[`${platform}-${arch}`];
       if (!resvgNativePackage) {
         throw new Error(`RESVG_NATIVE_TARGET_UNSUPPORTED:${platform}-${arch}`);

@@ -122,6 +122,9 @@
 computer-use 操作面方案记录在
 [17-browser-computer-use-plan.md](17-browser-computer-use-plan.md)，已接受的架构决策和分阶段测试门禁
 分别记录在 [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md) 与
-[18-browser-computer-use-contract-test-plan.md](18-browser-computer-use-contract-test-plan.md)。BCU-002
-确定性 Observation/action 内核已完成但尚未接入运行时；当前可执行 Browser 路径仍是
-`legacy_dom_v1`，系统默认浏览器和托管 Chromium 均未形成真实后端证据。
+[18-browser-computer-use-contract-test-plan.md](18-browser-computer-use-contract-test-plan.md)。BCU-003
+已把 Observation/action 内核接入 Main Host 与 Pi ToolDefinition，并在 macOS 系统默认 Chrome 通过
+OS Accessibility 完成真实“百度搜索 phonescloud”烟测；本地实现与打包证据见
+[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。该阶段仍是局部完成：Browser Bridge、剩余动作
+矩阵、签名安装权限、托管 Chromium 和 Windows 尚无完成证据；`legacy_dom_v1` 仅作为显式 feature
+flag 回滚路径保留。

@@ -300,26 +300,27 @@ capability/resource/action/risk，审批绑定完整 payload digest，副作用�
 L4/L5 操作只能逐次授权。Browser/Desktop 仅在 Main 执行，Shell 子进程由 App Service 唯一拥有，
 MCP 凭证只存在 OS 加密 Vault。启动恢复会终止中断运行、过期待批权限并撤销临时 Scope。
 
-上图如实描述 M5 现状，其中 Browser 路径已由 ADR-V2-017 部分 supersede；它不是双后端运行证据。
-BCU-001 新增严格 V2 合同；BCU-002 已在
-`apps/desktop/src/main/browser-computer-use/` 实现尚未接线的 Observation registry、精确 surface
-身份和单动作分层内核。该目录目前只由确定性测试导入，当前 Main Host 与 Pi 投影仍执行
-`legacy_dom_v1`。目标拓扑如下：
+上图冻结的是 M5 checkpoint，其中 Browser 路径已由 ADR-V2-017 和 BCU-003 supersede，不能再用来
+描述当前默认 Browser runtime。BCU-001 新增严格 V2 合同；BCU-002 实现 Observation registry、精确
+surface 身份和单动作分层内核；BCU-003 已把内核接到 Main Host 与 Pi ToolDefinition。当前实现/目标
+拓扑如下，实线为本地已验证路径，虚线为待交付路径：
 
 ```mermaid
 flowchart LR
   PI[Pi AgentSession] --> BROKER[Capability Broker<br/>backend floor / Scope / approval]
   BROKER --> HOST[Browser Computer-Use Host<br/>exact surface / Observation registry]
   HOST --> SYSTEM[SystemDefaultBrowserAdapter]
-  SYSTEM --> BRIDGE[Signed Browser Bridge<br/>authorized exact tab]
   SYSTEM --> AX[OS Accessibility<br/>dedicated window]
-  HOST --> MANAGED[ManagedChromiumAdapter<br/>isolated Profile]
+  SYSTEM -. BCU-003 pending .-> BRIDGE[Signed Browser Bridge<br/>authorized exact tab]
+  HOST -. BCU-004 pending .-> MANAGED[ManagedChromiumAdapter<br/>isolated Profile]
   HOST --> OBS[Semantic snapshot + optional image<br/>fresh observationId]
+  HOST -. explicit flag rollback .-> LEGACY[legacy_dom_v1<br/>frozen]
 ```
 
-Host 按“语义动作 → 原生输入 → 视觉坐标”执行，截图用于基线、异常、坐标、高风险和最终验证。
-共用内核已通过 BCU-002，但目标拓扑仍需经 BCU-003 至 BCU-006 的真实 Adapter、Broker/Pi 接线、
-双后端与签名候选验证，不能由合同或 Fake Adapter 测试推断已可运行。
+当前 macOS AX 实线路径按“语义动作 → 原生输入 → 视觉坐标”执行，截图用于基线、异常、坐标、高风险
+和最终验证，不是唯一观察通道。它已经以系统默认 Chrome 完成真实“百度搜索 phonescloud”烟测；
+证据见 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。这不证明虚线 Bridge、托管 Chromium、
+剩余动作矩阵、签名安装权限或 Windows 已完成；这些仍须经 BCU-003 closure 至 BCU-006 单独验证。
 
 ### 2.6 M6 当前本地已实现拓扑
 

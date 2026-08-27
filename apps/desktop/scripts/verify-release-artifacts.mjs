@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { accessSync, constants, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractFile, listPackage } from "@electron/asar";
@@ -28,6 +28,18 @@ if (packages.length === 0) throw new Error("RELEASE_ASAR_NOT_FOUND");
 for (const archive of packages) {
   const relative = path.relative(desktopRoot, archive);
   const entries = listPackage(archive);
+  if (target.startsWith("darwin-") || target.startsWith("mas-")) {
+    const browserHelper = path.join(
+      `${archive}.unpacked`,
+      "native",
+      "openerx-browser-accessibility",
+    );
+    try {
+      accessSync(browserHelper, constants.X_OK);
+    } catch {
+      throw new Error("RELEASE_MAC_BROWSER_HELPER_MISSING");
+    }
+  }
   for (const required of [
     "/package.json",
     "/.vite/build/main.js",

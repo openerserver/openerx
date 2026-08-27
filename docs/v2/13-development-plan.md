@@ -2,7 +2,7 @@
 
 > 状态：`M0-M9 LOCAL COMPLETE / EXTERNAL BETA AND RELEASE GATES PENDING`
 >
-> 更新日期：2026-08-26（Asia/Shanghai）
+> 更新日期：2026-08-27（Asia/Shanghai）
 >
 > 适用范围：Electron + React 的 Windows/macOS 执行主机与 React Native iOS/Android Remote Companion
 
@@ -44,7 +44,7 @@ V1 完成必须同时满足：
 | M3 Billing Alpha | LOCAL COMPLETE | 服务端报价/预留/结算、额度/积分/现金复式账本、支付回调/退款/对账、最终 Billing UI、CSV/PDF | 真实支付宝/微信沙箱、商户参数、属地合规与原生发布矩阵仍是发布环境门禁；[实现与质量证据](evidence/m3-2026-08-25.md) |
 | M4 File + Artifact | LOCAL COMPLETE | 设备 Scope、受控副本、多格式引用、不可变成果、云对象恢复、Pi SessionManager | 原生双平台打开/选择器与签名包仍是发布门禁；[实现与质量证据](evidence/m4-2026-08-26.md) |
 | M5 Tool Alpha | LOCAL COMPLETE | Pi-native Web/image/Browser/Shell/Desktop/MCP、Capability Broker、长任务与权限投影 | 原生双平台桌面/沙箱、实时 Provider、第三方 MCP 与签名包仍是发布门禁；[实现与质量证据](evidence/m5-2026-08-26.md) |
-| BCU Browser Computer-Use | BCU-002 KERNEL COMPLETE / BCU-003 NEXT | ADR-V2-017、双后端 V2 严格合同、Observation registry、精确 surface 身份、单动作分层和确定性 Fake Adapter 测试 | 内核尚未接入当前 Browser Host/Pi 投影，运行时仍是 `legacy_dom_v1`；系统默认浏览器、托管 Chromium 和真实站点烟测均未完成；[BCU-001 证据](evidence/bcu-001-2026-08-27.md)；[BCU-002 证据](evidence/bcu-002-2026-08-27.md) |
+| BCU Browser Computer-Use | BCU-003 LOCAL AX SLICE / PHASE PARTIAL | ADR-V2-017、V2 严格合同与内核、Main/Pi 接线、macOS 默认浏览器精确窗口 AX Adapter、像素遮罩、真实百度烟测和本地 arm64 包内 helper | Browser Bridge、剩余动作矩阵、签名安装权限、Firefox/Windows 和托管 Chromium 尚未完成；`legacy_dom_v1` 仅保留为显式 feature flag 回滚；[BCU-001 证据](evidence/bcu-001-2026-08-27.md)；[BCU-002 证据](evidence/bcu-002-2026-08-27.md)；[BCU-003 证据](evidence/bcu-003-2026-08-27.md) |
 | M6 Remote Control Alpha | LOCAL COMPLETE | Expo 手机控制面、同账户配对、E2EE 协议、出站 Connector、密文 Gateway、Pi 原生命令映射、远程审批和事件游标 | iOS/Android 真机、Windows/macOS 主机矩阵、APNs/FCM 生产投递、移动附件闭环与真实网络故障演练仍是发布门禁；[实现与质量证据](evidence/m6-2026-08-26.md) |
 | M7 Skill | LOCAL COMPLETE | Pi-native Skill 包、Scope、生命周期、Broker 和同步 | 签名目录、跨平台脚本运行时与原生矩阵仍是发布门禁；[实现与质量证据](evidence/m7-2026-08-26.md) |
 | M8 Personal Beta | EXTERNAL IN PROGRESS | 诊断/性能/数据恢复本地检查点；真实 DeepSeek SSE→Pi→桌面瀑布与 Usage→服务端 Charge 首个闭环 | 目标用户、真实长请求 Stop/失败、Provider 账单对账、支付、Remote 真机、原生与签名矩阵；[M8 证据](evidence/m8-2026-08-26.md)；[流式瀑布证据](evidence/streaming-waterfall-2026-08-26.md) |
@@ -170,9 +170,11 @@ MCP/OAuth 授权码流和签名包证据仍是发布环境门禁。
 
 Browser 后续迁移按 [Browser Computer-Use 重构方案](17-browser-computer-use-plan.md) 独立推进。
 BCU-001 已完成 [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md)、版本化严格合同和
-[合同测试计划](18-browser-computer-use-contract-test-plan.md)；BCU-002 已完成尚未接线的
-`UIObservationRegistry`、动作分层和 Fake Adapter 确定性测试。下一任务是 BCU-003，但不能从
-BCU-001/002 或 M5 证据推导系统浏览器、新托管 Chromium 或真实站点运行能力。
+[合同测试计划](18-browser-computer-use-contract-test-plan.md)；BCU-002 内核已经由 BCU-003 接到 Main
+Host 与 Pi ToolDefinition。当前默认 V2 路径已在 macOS 默认 Chrome 以 AX 语义完成“百度搜索
+phonescloud”，并保留 `OPENERX_BROWSER_COMPUTER_USE_V2=0|false` 回滚。该证据只覆盖本地 AX
+纵向切片；Browser Bridge、剩余动作、签名安装、托管 Chromium 和 Windows 仍按后续门禁推进，见
+[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。
 
 ### M6：Remote Control Alpha — 5 至 7 周
 

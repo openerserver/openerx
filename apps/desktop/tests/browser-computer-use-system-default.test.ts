@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type {
   BrowserObservation,
   BrowserSessionDescriptor,
@@ -12,13 +13,10 @@ import type {
   BrowserCoordinateActionInput,
 } from "../src/main/browser-computer-use/browser-action-dispatcher";
 import {
-  macBrowserCloseWindowScript,
+  isolatedMacBrowserWindowBounds,
   macBrowserCreateWindowScript,
-  macBrowserNativeActionScript,
   macBrowserNavigateWindowScript,
-  macBrowserObservationScript,
   macBrowserPageRevision,
-  macBrowserSemanticActionScript,
   macBrowserWindowsScript,
   macDefaultBrowserScript,
   maskBrowserBitmap,
@@ -357,6 +355,12 @@ describe("BCU-003 macOS exact-window helpers", () => {
     expect(() =>
       selectNewMacBrowserWindow(before, [windowFixture, created, { ...created, windowId: 1003 }]),
     ).toThrow("BROWSER_SURFACE_NOT_BOUND");
+    expect(isolatedMacBrowserWindowBounds(created, before)).toEqual({
+      x: 12,
+      y: 45,
+      width: 1176,
+      height: 776,
+    });
   });
 
   it("parses filtered semantics, rejects leaked sensitive values and changes revision on page state", () => {
@@ -419,16 +423,19 @@ describe("BCU-003 macOS exact-window helpers", () => {
     const scripts = [
       macDefaultBrowserScript(),
       macBrowserWindowsScript(),
-      macBrowserObservationScript(),
-      macBrowserSemanticActionScript(),
-      macBrowserNativeActionScript(),
       macBrowserCreateWindowScript(),
       macBrowserNavigateWindowScript(),
-      macBrowserCloseWindowScript(),
     ].join("\n");
-    expect(scripts).toContain("CGWindowListCopyWindowInfo");
-    expect(scripts).toContain("AXWebArea");
-    expect(scripts).not.toMatch(
+    const nativeHelper = readFileSync(
+      new URL("../native/macos-browser-accessibility.swift", import.meta.url),
+      "utf8",
+    );
+    const activeControlCode = `${scripts}\n${nativeHelper}`;
+    expect(activeControlCode).toContain("CGWindowListCopyWindowInfo");
+    expect(activeControlCode).toContain("AXWebArea");
+    expect(activeControlCode).toContain("kAXFocusedWindowAttribute");
+    expect(macBrowserNavigateWindowScript()).not.toContain("System Events");
+    expect(activeControlCode).not.toMatch(
       /querySelector|executeJavaScript|Runtime\.evaluate|document\.cookie/u,
     );
   });

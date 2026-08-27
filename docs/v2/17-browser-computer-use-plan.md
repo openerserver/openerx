@@ -1,8 +1,9 @@
 # OpenerX Browser Computer-Use 重构方案
 
-- 状态：`ACCEPTED / BCU-002 DETERMINISTIC KERNEL IMPLEMENTED`
+- 状态：`ACCEPTED / BCU-003 LOCAL OS ACCESSIBILITY SLICE IMPLEMENTED`
 - 日期：2026-08-27（Asia/Shanghai）
-- 范围：桌面端 Browser Capability；BCU-002 只实现尚未接入运行时的共用内核，不改变当前发布状态
+- 范围：桌面端 Browser Capability；BCU-003 已接通 macOS 系统默认浏览器本地 AX 纵向切片，Bridge、
+  剩余动作矩阵、签名安装门禁和托管 Chromium 尚未完成，不改变当前发布状态
 - 最新产品决定：浏览器必须是独立可见的操作面，不嵌入聊天页面；默认优先使用机器上的系统默认
   浏览器以复用用户已有账号状态，用户可切换到 Electron 自带 Chromium 的托管浏览器以提高隔离和
   安全等级；两种后端都采用“语义优先 -> 视觉验证 -> 坐标兜底”的混合 computer-use，不向模型暴露
@@ -40,30 +41,32 @@ Capability 负责 URL 校验、浏览器后端选择、精确窗口绑定、域�
 
 ## 2. 当前实现与差距
 
-当前实现有一部分边界是正确的：
+M5 的 Electron `BrowserWindow` + selector 实现仍以 `legacy_dom_v1` 冻结保留，并可通过
+`OPENERX_BROWSER_COMPUTER_USE_V2=0|false` 显式回滚；它不再是默认 Pi Browser ToolDefinition。
 
-- `ElectronToolCapabilityHost` 创建独立顶层 `BrowserWindow`，使用
-  `openerx-isolated-browser-*` 临时 partition，并关闭 Node、Preload 和非 HTTP(S) 导航。
-- Browser 操作只在 Electron Main 执行，仍经过 Pi -> App Service -> Capability Broker -> Main。
-- 上传只接受受控 PersonalFile，下载重新导入受控文件存储；`submit` 单独审批。
+2026-08-27 已实现的默认 V2 路径包括：
 
-但它仍不是目标 computer-use 执行模型：
+- Pi -> App Service -> Capability Broker -> Electron Main 的唯一工具链保持不变；Pi 投影和 Main Host
+  已使用严格 `browser_computer_use_v2`，不向模型暴露 selector、DOM、脚本或 DevTools 命令。
+- macOS 识别系统 HTTP(S) 默认浏览器，为任务创建独立顶层窗口，并以 bundle ID、PID、原生
+  `CGWindowID` 和 bounds 精确绑定；无法唯一绑定立即 fail-closed。
+- 原生 Swift AX helper 从目标 `AXWebArea` 产生过滤语义元素，以短期 `elementRef` 执行语义动作；
+  Electron 只捕获该窗口并裁剪到 Web surface，敏感矩形在输出 PNG 前完成像素遮罩。
+- 动作仍按 semantic -> native AX hit-test -> current visual coordinate 分层，旧 observation 在动作、
+  导航、失联、取消或接管后失效。
+- 真实默认 Chrome 已完成 `setValue("phonescloud")` + 语义 `invoke("百度一下")`，最终 URL、语义元素、
+  surface 截图和 `closeState=closed` 均有日期化证据。
 
-- 只有 Electron `BrowserWindow` 后端，没有系统默认浏览器后端、连接浏览器桥、用户模式选择和后端
-  能力探测。
-- `packages/contracts/src/tool.ts` 和 Pi ToolDefinition 把 `selector` 暴露给模型。
-- 输入、点击和下载直接采用模型给出的 selector，通过 `webContents.executeJavaScript()`、
-  `document.querySelector()` 完成，没有可信 Host 生成的短期 element reference、可见性校验和结果验证。
-- 上传通过 CDP `DOM.querySelector`/`DOM.setFileInputFiles` 完成。
-- 模型在动作前只有 URL/标题或按需截图，没有与动作绑定的语义快照和视觉基线，容易猜 selector、
-  使用过期页面状态或重复创建 Session。
-- Browser readiness 目前由 Main 直接声明 `browserAvailable: true`；它没有分别验证系统默认浏览器
-  识别、专用窗口绑定、托管 Chromium 捕获、输入后端、权限和窗口身份是否真的可用。
-- 当前 E2E 使用固定 `#name`、`#upload`、`#download` 夹具，只能证明 selector 自动化链路，不能证明
-  Browser Bridge/Accessibility 语义链路、视觉验证或坐标 fallback。
+当前差距仍然明确：
 
-2026-08-27 的真实开发链路试跑已经在首次授权后打开 `https://www.baidu.com/`，但在用户终止前没有
-形成“phonescloud 搜索结果已完成”的可验证证据。本方案不把“网页已打开”误报为“搜索已完成”。
+- 尚无签名 Browser Bridge、已有标签页授权和用户后端模式 UI；系统浏览器当前只走独占窗口 AX 路径。
+- `scroll/back/forward/reload`、通用 key 的真实动作矩阵、立即用户输入监测和 signed-app 权限保持尚未
+  闭环；上传、下载、登录和浏览器权限提示仍要求用户接管，drag 明确拒绝。
+- readiness 已检查平台、Screen Recording、Accessibility 和 OS automation，但尚未在展示工具前探测
+  helper 可执行性与默认浏览器 bundle 支持；实际 open 会再次校验并 fail-closed。
+- 托管 Chromium、隔离 Profile、Firefox 和 Windows 未实现；不能从 macOS Chrome 烟测外推。
+
+本轮完成证据见 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。
 
 ## 3. 目标边界
 
@@ -375,8 +378,8 @@ surface 所有权、Profile、Bridge 和文件策略保持独立。
 ### BCU-001：冻结双后端决策和合同
 
 实现状态（2026-08-27）：ADR-V2-017、`browser_computer_use_v2` 严格合同和 BCU-C-001 至
-BCU-C-009 合同测试已经落地；当前 Pi 投影和 Browser Host 仍保持 `legacy_dom_v1`，尚未宣称任一新
-后端可运行。
+BCU-C-009 合同测试已经落地。该阶段验收时 Pi 投影和 Browser Host 仍保持 `legacy_dom_v1`；后续
+BCU-003 已把 V2 系统浏览器 AX 路径接入运行时，当前状态以本节后续阶段和日期化证据为准。
 
 - 新建 ADR-V2-017，supersede ADR-V2-012 中 Browser DOM 自动化部分；不改变 Pi/Broker 总体决策。
 - 冻结 `system_default` / `managed_chromium`、control path、用户安全下限、SessionDescriptor、
@@ -392,11 +395,10 @@ BCU-C-009 合同测试已经落地；当前 Pi 投影和 Browser Host 仍保持 
 
 实现状态（2026-08-27）：`UIObservationRegistry`、单动作 `BrowserActionDispatcher`、精确 surface
 身份、30 秒 TTL、语义快照/差异、短期引用、用户接管/断连/导航失效、敏感语义值过滤和
-semantic -> native input -> visual coordinate 分层已在 Desktop Main 的纯内核目录落地，并由
-确定性 Fake Adapter、随机化 HTML 语义元素和 Canvas 坐标 fixture 覆盖。该目录目前只由测试导入，
-尚未接入 `ElectronToolCapabilityHost`、Capability Broker 或 Pi ToolDefinition；截图输入的
-`captureScope=surface` 与 `redacted=true` 是可信 Adapter 的强制声明，真实像素遮罩仍须由 BCU-003/004
-Adapter 实现和验证。
+semantic -> native input -> visual coordinate 分层已在 Desktop Main 落地，并由确定性 Fake Adapter、
+随机化 HTML 语义元素和 Canvas 坐标 fixture 覆盖。该阶段验收时内核尚未接线；后续 BCU-003 已接入
+`ElectronToolCapabilityHost` 与 Pi ToolDefinition，并由系统浏览器 Adapter 验证目标窗口像素遮罩。
+托管 Chromium 仍须在 BCU-004 独立验证同一合同。
 
 - 抽取 `UIObservationRegistry`，统一 semanticSnapshotId、elementRef、visualObservationId 和 TTL。
 - 实现精确 tab/window 身份、过滤语义快照/差异，以及按策略返回的 surface 截图。
@@ -408,6 +410,16 @@ Adapter 实现和验证。
 HTML fixture 全程走语义 elementRef，Canvas fixture 才允许受约束坐标；无整屏回退。
 
 ### BCU-003：macOS 系统默认浏览器优先纵向切片
+
+实现状态（2026-08-27）：`LOCAL OS ACCESSIBILITY SLICE IMPLEMENTED / PHASE PARTIAL`。当前默认启用
+`browser_computer_use_v2`，可用 `OPENERX_BROWSER_COMPUTER_USE_V2=0|false` 回滚到冻结的
+`legacy_dom_v1`。macOS 已实现默认浏览器发现、OpenerX 专用顶层窗口、PID + `CGWindowID` + bounds
+精确绑定、原生 AX 语义观察/动作、精确窗口截图和敏感区域像素遮罩；Main Host 与 Pi 投影已经接通，
+真实默认 Chrome 已通过“百度搜索 phonescloud”语义烟测并只关闭专用窗口。日期化命令、结果、截图
+摘要与本地包证据见 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。
+
+本阶段尚未完成 Browser Bridge、`scroll/back/forward/reload` 与通用 key 的真实动作矩阵、签名安装后
+权限保持和 Firefox/Windows 支持，因此不能把本地 AX 切片标记为 BCU-003 全部完成。
 
 - 识别系统当前默认 HTTP(S) 浏览器和支持状态；优先连接用户授权的 Browser Bridge 并绑定精确 tabId。
 - 无 Bridge 时通过 `shell.openExternal()`/OS URL handler 打开 URL，创建或确认专用顶层窗口，并绑定
@@ -550,8 +562,8 @@ OpenerX 数据的情况下恢复旧版本。
 
 ## 11. 建议的下一任务
 
-`BCU-001` 与 `BCU-002` 已完成并有日期化证据。下一任务只启动 `BCU-003`：实现 macOS
-`SystemDefaultBrowserAdapter` 的默认浏览器探测、用户授权 Browser Bridge 精确标签页绑定和
-OS Accessibility 专用窗口 fail-closed 路径，再把已经验证的 Observation/Action 内核接到 Host。
-BCU-003 必须先通过本地确定性 fixture，随后才能执行“百度搜索 phonescloud”的真实系统浏览器烟测；
-不在该任务中接通托管 Chromium、持久化 Profile 或移除 `legacy_dom_v1`。
+`BCU-001`、`BCU-002` 已完成，BCU-003 的本地 OS Accessibility 纵向切片、Host/Pi 接线、真实
+“百度搜索 phonescloud”烟测和本地 arm64 包内 helper 验证已经完成并有日期化证据。下一任务只做
+BCU-003 closure：完成剩余原生动作矩阵与真实回归、签名 Browser Bridge 精确标签页授权，以及签名
+安装包的 Accessibility/Screen Recording 权限验证。上述边界被接受前不启动 BCU-004 托管 Chromium，
+也不删除 `legacy_dom_v1` 回滚路径。
