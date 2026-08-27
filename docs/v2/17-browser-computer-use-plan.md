@@ -1,9 +1,10 @@
 # OpenerX Browser Computer-Use 重构方案
 
-- 状态：`ACCEPTED / BCU-003 LOCAL OS ACCESSIBILITY SLICE IMPLEMENTED`
+- 状态：`ACCEPTED / BCU-003 AX + ACTION MATRIX + INPUT MONITOR + TRUSTED TAKEOVER UI IMPLEMENTED / LIVE INPUT GATE BLOCKED`
 - 日期：2026-08-27（Asia/Shanghai）
-- 范围：桌面端 Browser Capability；BCU-003 已接通 macOS 系统默认浏览器本地 AX 纵向切片，Bridge、
-  剩余动作矩阵、签名安装门禁和托管 Chromium 尚未完成，不改变当前发布状态
+- 范围：桌面端 Browser Capability；BCU-003 已接通 macOS 系统默认浏览器本地 AX 纵向切片、原生
+  动作矩阵、用户输入暂停后端和可信工具中心接管/恢复 UI；真实输入门禁及原生 UI 联调因机器锁屏
+  未通过，Bridge、签名安装门禁和托管 Chromium 尚未完成，不改变当前发布状态
 - 最新产品决定：浏览器必须是独立可见的操作面，不嵌入聊天页面；默认优先使用机器上的系统默认
   浏览器以复用用户已有账号状态，用户可切换到 Electron 自带 Chromium 的托管浏览器以提高隔离和
   安全等级；两种后端都采用“语义优先 -> 视觉验证 -> 坐标兜底”的混合 computer-use，不向模型暴露
@@ -56,12 +57,24 @@ M5 的 Electron `BrowserWindow` + selector 实现仍以 `legacy_dom_v1` 冻结�
   导航、失联、取消或接管后失效。
 - 真实默认 Chrome 已完成 `setValue("phonescloud")` + 语义 `invoke("百度一下")`，最终 URL、语义元素、
   surface 截图和 `closeState=closed` 均有日期化证据。
+- 本地回环夹具已完成代表性 `Backspace`、`scroll`、`back`、`forward`、`reload` 的真实动作矩阵；
+  每个动作均返回 fresh Observation，滚动以截图变化、刷新以服务端请求计数验证，最后只关闭专用窗口。
+- macOS 已增加只监听“是否发生输入”的一次性原生 monitor：指针/滚轮按精确顶层 `CGWindowID`
+  判断，键盘按前台 PID + 精确 AX focused window 判断；不记录键值、文本或坐标。命中后立即进入
+  `paused_for_user`，旧 Observation 失效，后续 fallback 停止；monitor 丢失则会话 fail-closed。
+- Host 内部恢复原语会重新校验相同 surface、重启 monitor 并生成 fresh baseline，只允许可信 UI
+  通过窄 IPC 调用，不把 `resume` 暴露成模型动作。确定性跨层测试已通过；真实 Computer Use 点击
+  runner 已加入，但 2026-08-27 验证时 Mac 处于锁屏，未形成 live PASS 证据。
+- 工具中心通过受信 Main/Preload IPC 按不透明 `sessionId` 列出、暂停和恢复独立会话，只显示浏览器、
+  backend、control path 和状态；不加载网页，也不接收 URL、标题、截图、语义元素或 Observation。
 
 当前差距仍然明确：
 
 - 尚无签名 Browser Bridge、已有标签页授权和用户后端模式 UI；系统浏览器当前只走独占窗口 AX 路径。
-- `scroll/back/forward/reload`、通用 key 的真实动作矩阵、立即用户输入监测和 signed-app 权限保持尚未
-  闭环；上传、下载、登录和浏览器权限提示仍要求用户接管，drag 明确拒绝。
+- 用户输入 monitor、自动暂停和可信 Renderer 接管/恢复 UI 已实现并通过确定性测试，但真实输入及
+  原生 UI-to-browser 门禁尚未闭环；signed-app 权限保持也未验证。真实通用 key 只覆盖代表性
+  `Backspace`，其余允许列表由合同/单元测试覆盖；上传、下载、登录和浏览器权限提示仍要求用户
+  接管，drag 明确拒绝。
 - readiness 已检查平台、Screen Recording、Accessibility 和 OS automation，但尚未在展示工具前探测
   helper 可执行性与默认浏览器 bundle 支持；实际 open 会再次校验并 fail-closed。
 - 托管 Chromium、隔离 Profile、Firefox 和 Windows 未实现；不能从 macOS Chrome 烟测外推。
@@ -411,15 +424,18 @@ HTML fixture 全程走语义 elementRef，Canvas fixture 才允许受约束坐�
 
 ### BCU-003：macOS 系统默认浏览器优先纵向切片
 
-实现状态（2026-08-27）：`LOCAL OS ACCESSIBILITY SLICE IMPLEMENTED / PHASE PARTIAL`。当前默认启用
+实现状态（2026-08-27）：`LOCAL AX + NATIVE ACTION MATRIX + INPUT MONITOR + TRUSTED TAKEOVER UI IMPLEMENTED / PHASE PARTIAL`。
+当前默认启用
 `browser_computer_use_v2`，可用 `OPENERX_BROWSER_COMPUTER_USE_V2=0|false` 回滚到冻结的
 `legacy_dom_v1`。macOS 已实现默认浏览器发现、OpenerX 专用顶层窗口、PID + `CGWindowID` + bounds
 精确绑定、原生 AX 语义观察/动作、精确窗口截图和敏感区域像素遮罩；Main Host 与 Pi 投影已经接通，
-真实默认 Chrome 已通过“百度搜索 phonescloud”语义烟测并只关闭专用窗口。日期化命令、结果、截图
-摘要与本地包证据见 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。
+真实默认 Chrome 已通过“百度搜索 phonescloud”语义烟测，以及 `Backspace`、滚动、前进/后退和刷新
+原生动作矩阵，并只关闭专用窗口。日期化命令、结果、截图摘要与本地包证据见
+[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。
 
-本阶段尚未完成 Browser Bridge、`scroll/back/forward/reload` 与通用 key 的真实动作矩阵、签名安装后
-权限保持和 Firefox/Windows 支持，因此不能把本地 AX 切片标记为 BCU-003 全部完成。
+本阶段尚未完成 Browser Bridge、真实输入事件与原生 Tool Center 联调门禁、签名安装后权限保持和
+Firefox/Windows 支持；真实通用 key 只验证代表性 `Backspace`，因此不能把本地 AX 切片标记为
+BCU-003 全部完成。
 
 - 识别系统当前默认 HTTP(S) 浏览器和支持状态；优先连接用户授权的 Browser Bridge 并绑定精确 tabId。
 - 无 Bridge 时通过 `shell.openExternal()`/OS URL handler 打开 URL，创建或确认专用顶层窗口，并绑定
@@ -563,7 +579,8 @@ OpenerX 数据的情况下恢复旧版本。
 ## 11. 建议的下一任务
 
 `BCU-001`、`BCU-002` 已完成，BCU-003 的本地 OS Accessibility 纵向切片、Host/Pi 接线、真实
-“百度搜索 phonescloud”烟测和本地 arm64 包内 helper 验证已经完成并有日期化证据。下一任务只做
-BCU-003 closure：完成剩余原生动作矩阵与真实回归、签名 Browser Bridge 精确标签页授权，以及签名
-安装包的 Accessibility/Screen Recording 权限验证。上述边界被接受前不启动 BCU-004 托管 Chromium，
-也不删除 `legacy_dom_v1` 回滚路径。
+“百度搜索 phonescloud”烟测、代表性原生动作矩阵和本地 arm64 包内 helper 验证已经完成并有日期化
+证据。用户输入 monitor、自动暂停和可信 Tool Center fresh-baseline 恢复已实现；下一任务仍只做
+BCU-003 closure：在解锁机器上通过真实输入 runner 和原生 Tool Center 联调，实现签名 Browser
+Bridge 精确标签页授权，以及签名安装包的 Accessibility/Screen Recording 权限验证。上述边界被
+接受前不启动 BCU-004 托管 Chromium，也不删除 `legacy_dom_v1` 回滚路径。

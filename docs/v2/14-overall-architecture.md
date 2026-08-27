@@ -307,6 +307,9 @@ surface 身份和单动作分层内核；BCU-003 已把内核接到 Main Host �
 
 ```mermaid
 flowchart LR
+  USER[User] --> UI[Trusted Tool Center<br/>session status / takeover / resume]
+  UI --> PRELOAD[Typed Preload IPC<br/>opaque sessionId only]
+  PRELOAD --> HOST
   PI[Pi AgentSession] --> BROKER[Capability Broker<br/>backend floor / Scope / approval]
   BROKER --> HOST[Browser Computer-Use Host<br/>exact surface / Observation registry]
   HOST --> SYSTEM[SystemDefaultBrowserAdapter]
@@ -318,9 +321,13 @@ flowchart LR
 ```
 
 当前 macOS AX 实线路径按“语义动作 → 原生输入 → 视觉坐标”执行，截图用于基线、异常、坐标、高风险
-和最终验证，不是唯一观察通道。它已经以系统默认 Chrome 完成真实“百度搜索 phonescloud”烟测；
-证据见 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。这不证明虚线 Bridge、托管 Chromium、
-剩余动作矩阵、签名安装权限或 Windows 已完成；这些仍须经 BCU-003 closure 至 BCU-006 单独验证。
+和最终验证，不是唯一观察通道。它已经以系统默认 Chrome 完成真实“百度搜索 phonescloud”烟测，
+并完成代表性 `Backspace`、滚动、前进/后退和刷新原生动作矩阵；精确窗口输入 monitor、自动暂停和
+可信 Tool Center fresh-baseline 恢复也已通过确定性测试，且 Renderer 不接收 URL、标题、截图、
+Observation 或网页元素，证据见
+[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。真实输入 runner 因当前机器锁屏尚未通过；这
+不证明原生 UI-to-browser 联调、虚线 Bridge、托管 Chromium、签名安装权限或 Windows 已完成，
+这些仍须经 BCU-003 closure 至 BCU-006 单独验证。
 
 ### 2.6 M6 当前本地已实现拓扑
 

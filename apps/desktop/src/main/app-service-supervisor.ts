@@ -5,6 +5,7 @@ import {
   type AppServiceAuthorization,
   appServiceEventFrameSchema,
   appServiceResponseFrameSchema,
+  type BrowserSessionDescriptor,
   type ChatCommandEnvelope,
   type ChatEvent,
   type HostToolAvailability,
@@ -38,6 +39,9 @@ interface PendingRequest {
 export interface MainCapabilityHost {
   execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult>;
   availability(): Promise<HostToolAvailability>;
+  listBrowserComputerUseSessions(): BrowserSessionDescriptor[];
+  pauseBrowserComputerUseSession(sessionId: string): BrowserSessionDescriptor;
+  resumeBrowserComputerUseSession(sessionId: string): Promise<BrowserSessionDescriptor>;
   close(): void;
   saveCredential(credentialRef: string, value: string): Promise<void>;
   resolveCredential(credentialRef: string): Promise<string>;
@@ -171,6 +175,24 @@ export class AppServiceSupervisor {
     const host = this.#capabilityHost;
     if (!host) throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
     await host.clearCredential(credentialRef);
+  }
+
+  listBrowserComputerUseSessions(): BrowserSessionDescriptor[] {
+    return this.#capabilityHost?.listBrowserComputerUseSessions() ?? [];
+  }
+
+  async pauseBrowserComputerUseSession(sessionId: string): Promise<BrowserSessionDescriptor> {
+    await this.start();
+    const host = this.#capabilityHost;
+    if (!host) throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
+    return host.pauseBrowserComputerUseSession(sessionId);
+  }
+
+  async resumeBrowserComputerUseSession(sessionId: string): Promise<BrowserSessionDescriptor> {
+    await this.start();
+    const host = this.#capabilityHost;
+    if (!host) throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
+    return await host.resumeBrowserComputerUseSession(sessionId);
   }
 
   async configureRemote(

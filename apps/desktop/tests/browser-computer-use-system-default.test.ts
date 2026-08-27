@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type {
+  BrowserComputerUseOperationV2,
   BrowserObservation,
   BrowserSessionDescriptor,
   NormalizedToolResult,
 } from "@openerx/contracts";
 import { BROWSER_COMPUTER_USE_CONTRACT_VERSION } from "@openerx/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   BrowserAdapterActionInput,
   BrowserAdapterResult,
@@ -15,11 +16,15 @@ import type {
 import {
   isolatedMacBrowserWindowBounds,
   macBrowserCreateWindowScript,
+  macBrowserNativeKey,
   macBrowserNavigateWindowScript,
+  macBrowserObservationStabilityKey,
   macBrowserPageRevision,
+  macBrowserScrollPayload,
   macBrowserWindowsScript,
   macDefaultBrowserScript,
   maskBrowserBitmap,
+  parseMacBrowserInputMonitorLine,
   parseMacBrowserObservation,
   parseMacBrowserWindows,
   parseMacDefaultBrowser,
@@ -27,7 +32,9 @@ import {
 } from "../src/main/browser-computer-use/mac-system-browser";
 import {
   type SystemBrowserBinding,
+  type SystemBrowserControlEvent,
   type SystemBrowserDriverObservation,
+  type SystemBrowserUserInputMonitor,
   SystemDefaultBrowserAdapter,
   type SystemDefaultBrowserDriver,
 } from "../src/main/browser-computer-use/system-default-browser-adapter";
@@ -68,10 +75,40 @@ class FakeSystemBrowserDriver implements SystemDefaultBrowserDriver {
   value = "";
   revision = 1;
   closeCount = 0;
+  monitorStarts = 0;
+  monitorStops = 0;
+  monitorGate: Promise<void> | null = null;
+  monitorListener: ((event: SystemBrowserControlEvent) => void) | null = null;
+  semanticError: Error | null = null;
+  semanticGate: Promise<void> | null = null;
+  semanticResult: BrowserAdapterResult = "performed";
 
   async openDedicatedWindow(url: string): Promise<SystemBrowserBinding> {
     this.calls.push(`open:${url}`);
     return this.binding;
+  }
+
+  async startUserInputMonitoring(
+    _binding: SystemBrowserBinding,
+    listener: (event: SystemBrowserControlEvent) => void,
+  ): Promise<SystemBrowserUserInputMonitor> {
+    this.monitorStarts += 1;
+    await this.monitorGate;
+    this.monitorListener = listener;
+    let active = true;
+    return {
+      close: () => {
+        if (!active) return;
+        active = false;
+        this.monitorStops += 1;
+        if (this.monitorListener === listener) this.monitorListener = null;
+      },
+    };
+  }
+
+  emitControlEvent(event: SystemBrowserControlEvent): void {
+    if (!this.monitorListener) throw new Error("monitor is not active");
+    this.monitorListener(event);
   }
 
   async observe(): Promise<SystemBrowserDriverObservation> {
@@ -130,9 +167,11 @@ class FakeSystemBrowserDriver implements SystemDefaultBrowserDriver {
     input: BrowserAdapterActionInput,
   ): Promise<BrowserAdapterResult> {
     this.calls.push(`semantic:${input.operation.action}`);
+    await this.semanticGate;
+    if (this.semanticError) throw this.semanticError;
     if (input.operation.action === "setValue") this.value = input.operation.text;
     this.revision += 1;
-    return "performed";
+    return this.semanticResult;
   }
 
   async performNativeInput(
@@ -208,6 +247,7 @@ describe("BCU-003 SystemDefaultBrowserAdapter", () => {
     expect(second.elements[0]?.value).toBe("phonescloud");
     expect(driver.calls).toEqual([
       "open:https://fixture.test/",
+      "observe",
       "observe",
       "semantic:setValue",
       "observe",
@@ -315,6 +355,7 @@ describe("BCU-003 SystemDefaultBrowserAdapter", () => {
         signal,
       ),
     ).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+    expect(driver.monitorStops).toBe(1);
     await expect(
       adapter.execute(
         {
@@ -325,6 +366,314 @@ describe("BCU-003 SystemDefaultBrowserAdapter", () => {
         signal,
       ),
     ).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+  });
+
+  it("immediately pauses on exact-window user input and only resumes with a fresh baseline", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    const signal = new AbortController().signal;
+    const first = resultObservation(
+      await adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: "https://fixture.test/",
+        },
+        signal,
+      ),
+    );
+    const observationsBeforeTakeover = driver.calls.filter((call) => call === "observe").length;
+
+    driver.emitControlEvent({ kind: "user_input" });
+    expect(adapter.descriptor(first.sessionId).state).toBe("paused_for_user");
+    expect(driver.monitorStops).toBe(1);
+    await expect(
+      adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "observe",
+          sessionId: first.sessionId,
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+    expect(driver.calls.filter((call) => call === "observe")).toHaveLength(
+      observationsBeforeTakeover,
+    );
+    await expect(
+      adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "setValue",
+          sessionId: first.sessionId,
+          observationId: first.observationId,
+          target: { elementRef: first.elements[0]?.elementRef ?? "missing" },
+          text: "blocked",
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+
+    const resumed = resultObservation(await adapter.resumeAfterUser(first.sessionId, signal));
+    expect(adapter.descriptor(first.sessionId).state).toBe("active");
+    expect(resumed.observationId).not.toBe(first.observationId);
+    expect(driver.monitorStarts).toBe(2);
+    await expect(
+      adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "setValue",
+          sessionId: first.sessionId,
+          observationId: first.observationId,
+          target: { elementRef: first.elements[0]?.elementRef ?? "missing" },
+          text: "stale",
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_OBSERVATION_EXPIRED");
+  });
+
+  it("lets the trusted desktop UI pause by opaque session id without exposing page data", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    const signal = new AbortController().signal;
+    const first = resultObservation(
+      await adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: "https://fixture.test/private-page",
+        },
+        signal,
+      ),
+    );
+
+    const listed = adapter.descriptors();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.sessionId).toBe(first.sessionId);
+    expect(JSON.stringify(listed)).not.toContain("private-page");
+
+    expect(adapter.pauseForUser(first.sessionId).state).toBe("paused_for_user");
+    expect(driver.monitorStops).toBe(1);
+    expect(adapter.pauseForUser(first.sessionId).state).toBe("paused_for_user");
+    expect(driver.monitorStops).toBe(1);
+    await expect(
+      adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "observe",
+          sessionId: first.sessionId,
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+
+    await adapter.resumeAfterUser(first.sessionId, signal);
+    expect(adapter.descriptor(first.sessionId).state).toBe("active");
+    expect(driver.monitorStarts).toBe(2);
+  });
+
+  it("keeps takeover paused when the user interrupts monitor re-arming", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    const signal = new AbortController().signal;
+    const first = resultObservation(
+      await adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: "https://fixture.test/",
+        },
+        signal,
+      ),
+    );
+    adapter.pauseForUser(first.sessionId);
+
+    let releaseMonitor = (): void => undefined;
+    driver.monitorGate = new Promise<void>((resolve) => {
+      releaseMonitor = resolve;
+    });
+    const resuming = adapter.resumeAfterUser(first.sessionId, signal);
+    await vi.waitFor(() => expect(driver.monitorStarts).toBe(2));
+
+    expect(adapter.pauseForUser(first.sessionId).state).toBe("paused_for_user");
+    releaseMonitor();
+    await expect(resuming).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+    expect(adapter.descriptor(first.sessionId).state).toBe("paused_for_user");
+    expect(driver.monitorStops).toBe(2);
+  });
+
+  it("fails closed when exact-window input monitoring is lost", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    const signal = new AbortController().signal;
+    const first = resultObservation(
+      await adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: "https://fixture.test/",
+        },
+        signal,
+      ),
+    );
+
+    driver.emitControlEvent({ kind: "monitor_lost" });
+    expect(adapter.descriptor(first.sessionId).state).toBe("failed");
+    await expect(
+      adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "observe",
+          sessionId: first.sessionId,
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_SESSION_NOT_FOUND");
+  });
+
+  it("keeps a driver-requested sensitive-field takeover paused", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    const signal = new AbortController().signal;
+    const first = resultObservation(
+      await adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: "https://fixture.test/",
+        },
+        signal,
+      ),
+    );
+    driver.semanticError = new Error("BROWSER_USER_TAKEOVER_REQUIRED");
+
+    await expect(
+      adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "setValue",
+          sessionId: first.sessionId,
+          observationId: first.observationId,
+          target: { elementRef: first.elements[0]?.elementRef ?? "missing" },
+          text: "must-not-be-applied",
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+    expect(adapter.descriptor(first.sessionId).state).toBe("paused_for_user");
+    expect(driver.monitorStops).toBe(1);
+    await expect(
+      adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "observe",
+          sessionId: first.sessionId,
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+  });
+
+  it("stops every fallback when user input arrives during an in-flight action", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    const signal = new AbortController().signal;
+    const first = resultObservation(
+      await adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: "https://fixture.test/",
+        },
+        signal,
+      ),
+    );
+    let releaseSemantic = (): void => undefined;
+    driver.semanticGate = new Promise<void>((resolve) => {
+      releaseSemantic = resolve;
+    });
+    driver.semanticResult = "unsupported";
+    const action = adapter.execute(
+      {
+        contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+        action: "setValue",
+        sessionId: first.sessionId,
+        observationId: first.observationId,
+        target: { elementRef: first.elements[0]?.elementRef ?? "missing" },
+        text: "must-not-fallback",
+      },
+      signal,
+    );
+    await vi.waitFor(() => expect(driver.calls).toContain("semantic:setValue"));
+
+    driver.emitControlEvent({ kind: "user_input" });
+    releaseSemantic();
+    await expect(action).rejects.toThrow("BROWSER_USER_TAKEOVER_REQUIRED");
+    expect(driver.calls).not.toContain("native:setValue");
+    expect(driver.calls).not.toContain("coordinate:setValue");
+    expect(adapter.descriptor(first.sessionId).state).toBe("paused_for_user");
+  });
+
+  it("routes history, reload, scroll and named keys through native input with fresh observations", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    const signal = new AbortController().signal;
+    let current = resultObservation(
+      await adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: "https://fixture.test/",
+        },
+        signal,
+      ),
+    );
+    const actions: Array<
+      | { action: "key"; key: string }
+      | {
+          action: "scroll";
+          direction: "up" | "down" | "left" | "right";
+          distance: "small" | "medium" | "viewport" | "edge";
+        }
+      | { action: "back" | "forward" | "reload" }
+    > = [
+      { action: "key", key: "Backspace" },
+      { action: "scroll", direction: "down", distance: "viewport" },
+      { action: "back" },
+      { action: "forward" },
+      { action: "reload" },
+    ];
+    for (const action of actions) {
+      const previousObservationId = current.observationId;
+      current = resultObservation(
+        await adapter.execute(
+          {
+            contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+            sessionId: current.sessionId,
+            observationId: current.observationId,
+            ...action,
+          } as BrowserComputerUseOperationV2,
+          signal,
+        ),
+      );
+      expect(current.observationId).not.toBe(previousObservationId);
+    }
+    expect(driver.calls).toEqual([
+      "open:https://fixture.test/",
+      "observe",
+      "observe",
+      "native:key",
+      "observe",
+      "native:scroll",
+      "observe",
+      "native:back",
+      "observe",
+      "native:forward",
+      "observe",
+      "native:reload",
+      "observe",
+    ]);
   });
 });
 
@@ -361,6 +710,19 @@ describe("BCU-003 macOS exact-window helpers", () => {
       width: 1176,
       height: 776,
     });
+    expect(macBrowserNativeKey("Page Down")).toBe("pagedown");
+    expect(macBrowserNativeKey("RETURN")).toBe("enter");
+    expect(macBrowserNativeKey("Tab")).toBeNull();
+    expect(macBrowserNativeKey("cmd+r")).toBeNull();
+    expect(macBrowserScrollPayload("down", "viewport")).toBe("down:viewport");
+    expect(parseMacBrowserInputMonitorLine("ready\n")).toBe("ready");
+    expect(parseMacBrowserInputMonitorLine("user_input\n")).toBe("user_input");
+    expect(() => parseMacBrowserInputMonitorLine("key:secret-canary")).toThrow(
+      "BROWSER_OBSERVATION_MISMATCH",
+    );
+    expect(macBrowserCreateWindowScript()).toContain('keystroke "n" using command down');
+    expect(macBrowserCreateWindowScript()).not.toContain("front window");
+    expect(macBrowserCreateWindowScript()).not.toContain("set size");
   });
 
   it("parses filtered semantics, rejects leaked sensitive values and changes revision on page state", () => {
@@ -395,7 +757,20 @@ describe("BCU-003 macOS exact-window helpers", () => {
       JSON.stringify({ ...raw, elements: [{ ...raw.elements[0], value: "changed" }] }),
     );
     expect(first.elements[0]?.sourceNodeId).toBe("ax_12");
+    expect(macBrowserObservationStabilityKey(first)).toBe(
+      macBrowserObservationStabilityKey(second),
+    );
     expect(macBrowserPageRevision(first)).not.toBe(macBrowserPageRevision(second));
+    expect(
+      macBrowserObservationStabilityKey(
+        parseMacBrowserObservation(
+          JSON.stringify({
+            ...raw,
+            webAreaBounds: { ...raw.webAreaBounds, height: raw.webAreaBounds.height - 68 },
+          }),
+        ),
+      ),
+    ).not.toBe(macBrowserObservationStabilityKey(first));
     expect(() =>
       parseMacBrowserObservation(
         JSON.stringify({
@@ -434,7 +809,19 @@ describe("BCU-003 macOS exact-window helpers", () => {
     expect(activeControlCode).toContain("CGWindowListCopyWindowInfo");
     expect(activeControlCode).toContain("AXWebArea");
     expect(activeControlCode).toContain("kAXFocusedWindowAttribute");
+    expect(activeControlCode).toContain("kAXVerticalScrollBarAttribute");
+    expect(activeControlCode).toContain("kAXMenuItemCmdCharAttribute");
+    expect(activeControlCode).toContain("kAXSelectedTextRangeAttribute");
+    expect(activeControlCode).toContain('command == "create-window"');
+    expect(activeControlCode).toContain('performMenuShortcut(app, character: "n", virtualKey: 45)');
+    expect(activeControlCode).toContain("CGEvent.tapCreate");
+    expect(activeControlCode).toContain("options: .listenOnly");
+    expect(activeControlCode).toContain("topmostWindow(at: event.location)");
+    expect(activeControlCode).toContain("exactWindowHasKeyboardFocus");
+    expect(activeControlCode).toContain('Data("user_input\\n".utf8)');
+    expect(nativeHelper).toContain("let (_, window) = try exactWindow(native)");
     expect(macBrowserNavigateWindowScript()).not.toContain("System Events");
+    expect(activeControlCode).not.toContain("CGEventPost");
     expect(activeControlCode).not.toMatch(
       /querySelector|executeJavaScript|Runtime\.evaluate|document\.cookie/u,
     );

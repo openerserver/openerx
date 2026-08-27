@@ -43,6 +43,14 @@ export interface MacBrowserRawObservation {
   elements: MacBrowserRawElement[];
 }
 
+export type MacBrowserInputMonitorMessage = "ready" | "user_input";
+
+export function parseMacBrowserInputMonitorLine(value: string): MacBrowserInputMonitorMessage {
+  const normalized = value.trim();
+  if (normalized === "ready" || normalized === "user_input") return normalized;
+  throw new Error("BROWSER_OBSERVATION_MISMATCH");
+}
+
 export function macSystemBrowserBundleSupported(bundleId: string): boolean {
   return [
     "com.apple.Safari",
@@ -54,6 +62,34 @@ export function macSystemBrowserBundleSupported(bundleId: string): boolean {
     "com.microsoft.edgemac",
     "org.chromium.Chromium",
   ].includes(bundleId);
+}
+
+const macBrowserNativeKeys = new Set([
+  "backspace",
+  "delete",
+  "down",
+  "end",
+  "enter",
+  "home",
+  "left",
+  "pagedown",
+  "pageup",
+  "right",
+  "space",
+  "up",
+]);
+
+export function macBrowserNativeKey(value: string): string | null {
+  const normalized = value.toLocaleLowerCase().replaceAll(/[-_ ]/gu, "");
+  const canonical = normalized === "return" ? "enter" : normalized;
+  return macBrowserNativeKeys.has(canonical) ? canonical : null;
+}
+
+export function macBrowserScrollPayload(
+  direction: "up" | "down" | "left" | "right",
+  distance: "small" | "medium" | "viewport" | "edge",
+): string {
+  return `${direction}:${distance}`;
 }
 
 function parsedRecord(output: string, errorCode: string): Record<string, unknown> {
@@ -287,6 +323,16 @@ export function macBrowserPageRevision(observation: MacBrowserRawObservation): s
     .digest("hex");
 }
 
+export function macBrowserObservationStabilityKey(observation: MacBrowserRawObservation): string {
+  return JSON.stringify([
+    observation.target.processId,
+    observation.target.windowId,
+    observation.target.bounds,
+    observation.url,
+    observation.webAreaBounds,
+  ]);
+}
+
 export function maskBrowserBitmap(
   input: Buffer,
   width: number,
@@ -369,6 +415,7 @@ export function macBrowserCreateWindowScript(): string {
     'if (count of matches) is not 1 then error "BROWSER_TARGET_PROCESS_AMBIGUOUS"',
     "set targetProcess to item 1 of matches",
     "set frontmost of targetProcess to true",
+    "delay 0.25",
     'keystroke "n" using command down',
     "end tell",
     'return "created"',

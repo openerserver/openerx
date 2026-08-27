@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { AccountBridge } from "./account";
 import type { BillingBridge } from "./billing";
+import type {
+  BrowserComputerUseSessionControlInput,
+  BrowserSessionDescriptor,
+} from "./browser-computer-use";
 import type { RemoteDesktopBridge } from "./desktop-remote";
 import type { DiagnosticsBridge } from "./diagnostics";
 import type { FileBridge } from "./file";
@@ -78,6 +82,9 @@ export const ipcChannels = Object.freeze({
   toolScopeRevoke: "tool:scope:revoke",
   toolRuntimeReadiness: "tool:runtime:readiness",
   desktopNativePermissionRequest: "desktop:native-permission:request",
+  browserComputerUseSessions: "browser-computer-use:sessions:list",
+  browserComputerUsePause: "browser-computer-use:session:pause",
+  browserComputerUseResume: "browser-computer-use:session:resume",
   mcpServersList: "mcp:servers:list",
   mcpServersAuthorization: "mcp:servers:authorization",
   mcpServerAuthorize: "mcp:server:authorize",
@@ -151,6 +158,13 @@ export interface DesktopBridge
   requestDesktopNativePermission(
     input: DesktopNativePermissionRequest,
   ): Promise<DesktopNativePermissionResult>;
+  listBrowserComputerUseSessions(): Promise<BrowserSessionDescriptor[]>;
+  pauseBrowserComputerUseSession(
+    input: BrowserComputerUseSessionControlInput,
+  ): Promise<BrowserSessionDescriptor>;
+  resumeBrowserComputerUseSession(
+    input: BrowserComputerUseSessionControlInput,
+  ): Promise<BrowserSessionDescriptor>;
 }
 
 import type { ChatBridge } from "./chat";

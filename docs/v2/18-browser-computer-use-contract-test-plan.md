@@ -1,6 +1,7 @@
 # Browser Computer-Use Contract Test Plan
 
-- Status: BCU-001 contract and BCU-002 deterministic kernel suites implemented; real adapters pending
+- Status: BCU-001/002 implemented; BCU-003 local AX/action, deterministic input-monitor and trusted
+  Tool Center suites implemented, with live input/UI gate blocked by a locked validation machine
 - Date: 2026-08-27 (Asia/Shanghai)
 - Normative decision: [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md)
 - Implementation plan: [17-browser-computer-use-plan.md](17-browser-computer-use-plan.md)
@@ -9,8 +10,9 @@
 
 This plan turns the browser decision into staged, repeatable gates. BCU-001 proves that the versioned
 contract is strict and internally consistent. BCU-002 proves the in-memory Observation and action-ordering
-kernel against deterministic fakes. Neither stage proves that the current Host can control the system
-browser, that a Browser Bridge exists, or that either backend passes a real website smoke test.
+kernel against deterministic fakes. BCU-003 separately proves the current local macOS AX Adapter, native
+action matrix, deterministic takeover lifecycle and trusted Renderer control path; it does not prove a
+Browser Bridge, a signed installed build, managed Chromium or the still-blocked live input-event/UI runner.
 
 ## 2. BCU-001 contract matrix
 
@@ -25,6 +27,7 @@ browser, that a Browser Bridge exists, or that either backend passes a real webs
 | BCU-C-007 | Pair screenshots with a reason and require an image for visual fallback | Observation refinement tests |
 | BCU-C-008 | Redact password, payment and authentication element values | Sensitive-element negative test |
 | BCU-C-009 | Keep `legacy_dom_v1` readable but frozen and separate from V2 | Source marker plus version rejection test |
+| BCU-C-010 | Keep pause/resume on a strict trusted-UI input and reject model `resume` | Session-control strictness and operation-union negative tests |
 
 BCU-001 command:
 
@@ -70,6 +73,22 @@ A randomized standard HTML fixture changes DOM IDs/classes on every run. Search,
 navigation must complete with semantic `elementRef` actions and no coordinates. A separate Canvas fixture
 must require visual fallback and prove viewport, scale and TTL enforcement. Neither fixture may expose
 Cookie, password-store, extension, history, full-DOM or local-path data.
+
+The OS Accessibility fixture additionally requires a one-shot input monitor that emits no key, text or
+coordinate payload. Tests must prove exact-window pointer filtering, exact focused-window keyboard
+filtering, immediate `paused_for_user`, no post-takeover fallback, no Observation returned while paused,
+same-surface trusted resume with a fresh baseline, and fail-closed monitor loss. The repository runner is:
+
+```bash
+npm run test:e2e:browser:takeover:macos --workspace @openerx/desktop
+```
+
+A locked desktop or unavailable Computer Use session is an environment block, never a pass.
+
+The trusted Renderer fixture must list only session metadata, invoke pause/resume with an opaque session ID,
+render no iframe/page content, and keep these controls out of the Pi operation contract. Deterministic UI
+coverage lives in `apps/desktop/tests/chat-ui.test.tsx`; native UI-to-browser proof remains part of the
+unlocked-machine gate.
 
 ## 5. BCU-004 managed-Chromium fixtures
 

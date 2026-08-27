@@ -8,6 +8,7 @@ import { browserComputerUseOperationV2Schema } from "@openerx/contracts";
 import {
   type BrowserActionAdapter,
   BrowserActionDispatcher,
+  type BrowserActionExecutionResult,
   type BrowserAdapterActionInput,
   type BrowserAdapterResult,
   type BrowserCoordinateActionInput,
@@ -24,6 +25,12 @@ export interface SystemBrowserBinding {
   descriptor: BrowserSessionDescriptor;
 }
 
+export type SystemBrowserControlEvent = { kind: "user_input" } | { kind: "monitor_lost" };
+
+export interface SystemBrowserUserInputMonitor {
+  close(): void;
+}
+
 export interface SystemBrowserDriverObservation {
   surface: BrowserSurfaceState;
   title: string;
@@ -33,6 +40,10 @@ export interface SystemBrowserDriverObservation {
 
 export interface SystemDefaultBrowserDriver {
   openDedicatedWindow(url: string, signal: AbortSignal): Promise<SystemBrowserBinding>;
+  startUserInputMonitoring(
+    binding: SystemBrowserBinding,
+    listener: (event: SystemBrowserControlEvent) => void,
+  ): Promise<SystemBrowserUserInputMonitor>;
   observe(
     binding: SystemBrowserBinding,
     signal: AbortSignal,
@@ -61,6 +72,8 @@ export interface SystemDefaultBrowserDriver {
 interface SystemBrowserSession {
   binding: SystemBrowserBinding;
   surface: BrowserSurfaceState;
+  monitor: SystemBrowserUserInputMonitor | null;
+  stateEpoch: number;
 }
 
 function throwIfAborted(signal: AbortSignal): void {
@@ -144,7 +157,7 @@ export class SystemDefaultBrowserAdapter {
       return observationResult("已观察系统浏览器专用窗口", observation, false);
     }
     if (operation.action === "upload" || operation.action === "download") {
-      this.#observations.invalidateSession(operation.sessionId, "user_takeover");
+      this.#pauseForUser(session);
       throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
     }
     if (operation.action === "drag") {
@@ -168,12 +181,18 @@ export class SystemDefaultBrowserAdapter {
       performCoordinate: async (action, actionSignal) =>
         await this.driver.performCoordinate(session.binding, session.surface, action, actionSignal),
     };
-    const executed = await this.#dispatcher.execute(
-      operation,
-      session.surface,
-      actionAdapter,
-      signal,
-    );
+    let executed: BrowserActionExecutionResult;
+    try {
+      executed = await this.#dispatcher.execute(operation, session.surface, actionAdapter, signal);
+    } catch (error) {
+      if (
+        error instanceof BrowserObservationError &&
+        error.code === "BROWSER_USER_TAKEOVER_REQUIRED"
+      ) {
+        this.#pauseForUser(session);
+      }
+      throw error;
+    }
     const observation = await this.#recordObservation(session, "final", executed.path, signal);
     return observationResult(`系统浏览器操作已执行：${operation.action}`, observation, true, {
       actionPath: executed.path,
@@ -182,7 +201,8 @@ export class SystemDefaultBrowserAdapter {
   }
 
   close(): void {
-    for (const sessionId of this.#sessions.keys()) {
+    for (const [sessionId, session] of this.#sessions) {
+      session.monitor?.close();
       this.#observations.endSession(sessionId, "detached");
     }
     this.#sessions.clear();
@@ -191,6 +211,50 @@ export class SystemDefaultBrowserAdapter {
 
   auditTrail(sessionId: string) {
     return this.#dispatcher.auditTrail(sessionId);
+  }
+
+  descriptor(sessionId: string): BrowserSessionDescriptor {
+    this.#requiredSession(sessionId);
+    return this.#observations.descriptor(sessionId);
+  }
+
+  descriptors(): BrowserSessionDescriptor[] {
+    return [...this.#sessions.keys()].map((sessionId) => this.#observations.descriptor(sessionId));
+  }
+
+  pauseForUser(sessionId: string): BrowserSessionDescriptor {
+    return this.#pauseForUser(this.#requiredSession(sessionId));
+  }
+
+  async resumeAfterUser(sessionId: string, signal: AbortSignal): Promise<NormalizedToolResult> {
+    throwIfAborted(signal);
+    const session = this.#requiredSession(sessionId);
+    if (this.#observations.descriptor(sessionId).state !== "paused_for_user") {
+      throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
+    }
+    this.#stopUserInputMonitor(session);
+    const epoch = await this.#armUserInputMonitor(session);
+    try {
+      const snapshot = await this.driver.observe(session.binding, signal);
+      throwIfAborted(signal);
+      if (session.stateEpoch !== epoch) {
+        throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
+      }
+      this.#observations.resumeAfterUser(sessionId, snapshot.surface.identity);
+      session.surface = snapshot.surface;
+      const observation = this.#saveObservation(session, snapshot, "baseline", null);
+      return observationResult("用户已确认恢复系统浏览器自动操作", observation, false, {
+        session: this.#observations.descriptor(sessionId),
+      });
+    } catch (error) {
+      session.stateEpoch += 1;
+      this.#stopUserInputMonitor(session);
+      const state = this.#observations.descriptor(sessionId).state;
+      if (state === "active" || state === "opening") {
+        this.#observations.invalidateSession(sessionId, "host_disconnected");
+      }
+      throw error;
+    }
   }
 
   async #open(
@@ -233,14 +297,30 @@ export class SystemDefaultBrowserAdapter {
         viewport: { width: 1, height: 1, scaleFactor: 1 },
         surfaceBounds: { x: 0, y: 0, width: 1, height: 1 },
       },
+      monitor: null,
+      stateEpoch: 0,
     };
     this.#sessions.set(binding.descriptor.sessionId, session);
     try {
+      await this.#recordObservation(session, "baseline", null, signal);
+      const epoch = await this.#armUserInputMonitor(session);
+      this.#observations.invalidateSession(binding.descriptor.sessionId, "layout_change");
       const observation = await this.#recordObservation(session, "baseline", null, signal);
+      if (session.stateEpoch !== epoch) {
+        throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
+      }
       return observationResult("已在系统默认浏览器中打开专用窗口", observation, true, {
-        session: binding.descriptor,
+        session: this.#observations.descriptor(binding.descriptor.sessionId),
       });
     } catch (error) {
+      if (this.#observations.descriptor(binding.descriptor.sessionId).state === "paused_for_user") {
+        return lifecycleResult(
+          "用户已接管系统浏览器专用窗口，自动操作已暂停",
+          this.#observations.descriptor(binding.descriptor.sessionId),
+          true,
+        );
+      }
+      session.monitor?.close();
       this.#sessions.delete(binding.descriptor.sessionId);
       this.#observations.endSession(binding.descriptor.sessionId, "closed");
       await this.driver.closeOwnedWindow(binding, signal).catch(() => undefined);
@@ -249,7 +329,8 @@ export class SystemDefaultBrowserAdapter {
   }
 
   #detach(sessionId: string): NormalizedToolResult {
-    this.#requiredSession(sessionId);
+    const session = this.#requiredSession(sessionId);
+    session.monitor?.close();
     const descriptor = this.#observations.endSession(sessionId, "detached");
     this.#sessions.delete(sessionId);
     return lifecycleResult("已解除系统浏览器控制，窗口和浏览器资料保持不变", descriptor, false);
@@ -272,6 +353,7 @@ export class SystemDefaultBrowserAdapter {
       surface: session.surface,
     });
     await this.driver.closeOwnedWindow(session.binding, signal);
+    session.monitor?.close();
     const descriptor = this.#observations.endSession(operation.sessionId, "closed");
     this.#sessions.delete(operation.sessionId);
     return lifecycleResult("已关闭 OpenerX 创建的系统浏览器专用窗口", descriptor, true);
@@ -284,9 +366,20 @@ export class SystemDefaultBrowserAdapter {
     signal: AbortSignal,
   ): Promise<BrowserObservation> {
     throwIfAborted(signal);
+    this.#assertAutomationActive(session);
     const snapshot = await this.driver.observe(session.binding, signal);
     throwIfAborted(signal);
+    this.#assertAutomationActive(session);
     session.surface = snapshot.surface;
+    return this.#saveObservation(session, snapshot, imageReason, actionPath);
+  }
+
+  #saveObservation(
+    session: SystemBrowserSession,
+    snapshot: SystemBrowserDriverObservation,
+    imageReason: "baseline" | "final",
+    actionPath: BrowserObservation["actionPath"],
+  ): BrowserObservation {
     return this.#observations.record({
       sessionId: session.binding.descriptor.sessionId,
       surface: snapshot.surface,
@@ -296,6 +389,66 @@ export class SystemDefaultBrowserAdapter {
       imageReason,
       actionPath,
     });
+  }
+
+  async #armUserInputMonitor(session: SystemBrowserSession): Promise<number> {
+    this.#stopUserInputMonitor(session);
+    const epoch = session.stateEpoch;
+    const monitor = await this.driver.startUserInputMonitoring(session.binding, (event) => {
+      if (this.#sessions.get(session.binding.descriptor.sessionId) !== session) return;
+      session.stateEpoch += 1;
+      session.monitor?.close();
+      session.monitor = null;
+      this.#observations.invalidateSession(
+        session.binding.descriptor.sessionId,
+        event.kind === "user_input" ? "user_takeover" : "host_disconnected",
+      );
+    });
+    const attached = this.#sessions.get(session.binding.descriptor.sessionId) === session;
+    if (!attached || session.stateEpoch !== epoch) {
+      monitor.close();
+      if (!attached) throw new BrowserObservationError("BROWSER_SESSION_NOT_FOUND");
+      const state = this.#observations.descriptor(session.binding.descriptor.sessionId).state;
+      throw new BrowserObservationError(
+        state === "paused_for_user"
+          ? "BROWSER_USER_TAKEOVER_REQUIRED"
+          : "BROWSER_SESSION_NOT_FOUND",
+      );
+    }
+    session.monitor = monitor;
+    return epoch;
+  }
+
+  #pauseForUser(session: SystemBrowserSession): BrowserSessionDescriptor {
+    const sessionId = session.binding.descriptor.sessionId;
+    const descriptor = this.#observations.descriptor(sessionId);
+    if (descriptor.state === "paused_for_user") {
+      session.stateEpoch += 1;
+      this.#stopUserInputMonitor(session);
+      return descriptor;
+    }
+    if (descriptor.state !== "active" && descriptor.state !== "opening") {
+      throw new BrowserObservationError("BROWSER_SESSION_NOT_FOUND");
+    }
+    session.stateEpoch += 1;
+    this.#stopUserInputMonitor(session);
+    this.#observations.invalidateSession(sessionId, "user_takeover");
+    return this.#observations.descriptor(sessionId);
+  }
+
+  #stopUserInputMonitor(session: SystemBrowserSession): void {
+    session.monitor?.close();
+    session.monitor = null;
+  }
+
+  #assertAutomationActive(session: SystemBrowserSession): void {
+    const state = this.#observations.descriptor(session.binding.descriptor.sessionId).state;
+    if (state === "paused_for_user") {
+      throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
+    }
+    if (state !== "active" && state !== "opening") {
+      throw new BrowserObservationError("BROWSER_SESSION_NOT_FOUND");
+    }
   }
 
   #requiredSession(sessionId: string): SystemBrowserSession {

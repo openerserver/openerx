@@ -1,6 +1,7 @@
 import type {
   Attachment,
   BillingOverview,
+  BrowserSessionDescriptor,
   ChargeRecord,
   ChatEvent,
   ConversationSnapshot,
@@ -289,6 +290,41 @@ const toolRuntimeReasonLabels: Record<string, string> = {
 function toolRuntimeReason(reason: string | null): string | null {
   if (!reason) return null;
   return toolRuntimeReasonLabels[reason] ?? "运行状态暂不可确认";
+}
+
+const browserSessionStateLabels: Record<BrowserSessionDescriptor["state"], string> = {
+  opening: "正在打开",
+  active: "自动操作中",
+  paused_for_user: "用户接管中",
+  detached: "已解除控制",
+  closing: "正在关闭",
+  closed: "已关闭",
+  failed: "连接已中断",
+};
+
+function browserApplicationLabel(applicationId: string): string {
+  const labels: Record<string, string> = {
+    "com.apple.Safari": "Safari",
+    "com.apple.SafariTechnologyPreview": "Safari Technology Preview",
+    "com.brave.Browser": "Brave",
+    "com.google.Chrome": "Google Chrome",
+    "com.google.Chrome.beta": "Google Chrome Beta",
+    "com.google.Chrome.canary": "Google Chrome Canary",
+    "com.microsoft.edgemac": "Microsoft Edge",
+    "org.mozilla.firefox": "Firefox",
+    "org.chromium.Chromium": "Chromium",
+  };
+  return labels[applicationId] ?? "系统默认浏览器";
+}
+
+function browserBackendLabel(session: BrowserSessionDescriptor): string {
+  return session.backend === "system_default" ? "机器默认浏览器" : "Electron 安全 Chromium";
+}
+
+function browserControlPathLabel(session: BrowserSessionDescriptor): string {
+  if (session.controlPath === "os_accessibility") return "独立窗口 · 系统辅助功能";
+  if (session.controlPath === "connected_browser_bridge") return "独立标签页 · 浏览器桥接";
+  return "独立窗口 · Chromium 语义控制";
 }
 
 const mcpAuthorizationLabels: Record<McpServerAuthorizationState["status"], string> = {
@@ -4345,6 +4381,36 @@ function ToolCenter(): React.JSX.Element {
     queryKey: ["tools", "runtime-readiness"],
     queryFn: () => window.openerx.listToolRuntimeReadiness(),
   });
+  const browserSessions = useQuery({
+    queryKey: ["tools", "browser-computer-use", "sessions"],
+    queryFn: () => window.openerx.listBrowserComputerUseSessions(),
+    refetchInterval: 1_000,
+  });
+  const pauseBrowserSession = useMutation({
+    mutationFn: (sessionId: string) => window.openerx.pauseBrowserComputerUseSession({ sessionId }),
+    onSuccess: (session) => {
+      queryClient.setQueryData<BrowserSessionDescriptor[]>(
+        ["tools", "browser-computer-use", "sessions"],
+        (current = []) => [
+          ...current.filter(({ sessionId }) => sessionId !== session.sessionId),
+          session,
+        ],
+      );
+    },
+  });
+  const resumeBrowserSession = useMutation({
+    mutationFn: (sessionId: string) =>
+      window.openerx.resumeBrowserComputerUseSession({ sessionId }),
+    onSuccess: (session) => {
+      queryClient.setQueryData<BrowserSessionDescriptor[]>(
+        ["tools", "browser-computer-use", "sessions"],
+        (current = []) => [
+          ...current.filter(({ sessionId }) => sessionId !== session.sessionId),
+          session,
+        ],
+      );
+    },
+  });
   const requestNativePermission = useMutation({
     mutationFn: (permission: "screen_capture" | "accessibility") =>
       window.openerx.requestDesktopNativePermission({ permission }),
@@ -4447,7 +4513,70 @@ function ToolCenter(): React.JSX.Element {
           <span>有效授权</span>
         </div>
       </section>
-      {!workItems.data?.length && !permissions.data?.length ? (
+      <section className="browser-session-panel" aria-label="独立浏览器会话">
+        <div className="browser-session-heading">
+          <div>
+            <h2>独立浏览器操作</h2>
+            <p>浏览器始终在独立窗口中运行；这里不会嵌入或显示网页内容。</p>
+          </div>
+          <span>{browserSessions.data?.length ?? 0} 个会话</span>
+        </div>
+        {browserSessions.data?.length ? (
+          <div className="browser-session-list">
+            {browserSessions.data.map((session) => {
+              const pausing =
+                pauseBrowserSession.isPending &&
+                pauseBrowserSession.variables === session.sessionId;
+              const resuming =
+                resumeBrowserSession.isPending &&
+                resumeBrowserSession.variables === session.sessionId;
+              return (
+                <article className="browser-session-card" key={session.sessionId}>
+                  <div className="browser-session-card-heading">
+                    <div>
+                      <strong>{browserApplicationLabel(session.applicationId)}</strong>
+                      <span>{browserBackendLabel(session)}</span>
+                    </div>
+                    <span className={`browser-session-state is-${session.state}`}>
+                      {browserSessionStateLabels[session.state]}
+                    </span>
+                  </div>
+                  <p>{browserControlPathLabel(session)}</p>
+                  {session.state === "active" || session.state === "opening" ? (
+                    <button
+                      type="button"
+                      disabled={pausing || resumeBrowserSession.isPending}
+                      onClick={() => pauseBrowserSession.mutate(session.sessionId)}
+                    >
+                      {pausing ? "正在暂停…" : "我来接管"}
+                    </button>
+                  ) : session.state === "paused_for_user" ? (
+                    <button
+                      type="button"
+                      className="primary-action"
+                      disabled={resuming || pauseBrowserSession.isPending}
+                      onClick={() => resumeBrowserSession.mutate(session.sessionId)}
+                    >
+                      {resuming ? "正在核验窗口…" : "恢复自动操作"}
+                    </button>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="muted-copy">当前没有由 OpenerX 控制的独立浏览器窗口。</p>
+        )}
+        {browserSessions.error || pauseBrowserSession.error || resumeBrowserSession.error ? (
+          <p className="inline-error" role="alert">
+            {userFacingError(
+              browserSessions.error ?? pauseBrowserSession.error ?? resumeBrowserSession.error,
+              "浏览器会话状态暂时不可用，请稍后重试。",
+            )}
+          </p>
+        ) : null}
+      </section>
+      {!workItems.data?.length && !permissions.data?.length && !browserSessions.data?.length ? (
         <div className="empty-state tool-empty-state">
           <TerminalWindow size={26} />
           <strong>当前没有运行中的任务</strong>

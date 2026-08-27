@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
@@ -21,12 +21,16 @@ import {
   type MacBrowserRawObservation,
   type MacBrowserWindow,
   macBrowserCreateWindowScript,
+  macBrowserNativeKey,
   macBrowserNavigateWindowScript,
+  macBrowserObservationStabilityKey,
   macBrowserPageRevision,
+  macBrowserScrollPayload,
   macBrowserWindowsScript,
   macDefaultBrowserScript,
   macSystemBrowserBundleSupported,
   maskBrowserBitmap,
+  parseMacBrowserInputMonitorLine,
   parseMacBrowserObservation,
   parseMacBrowserWindows,
   parseMacDefaultBrowser,
@@ -34,18 +38,37 @@ import {
 } from "./mac-system-browser";
 import type {
   SystemBrowserBinding,
+  SystemBrowserControlEvent,
   SystemBrowserDriverObservation,
+  SystemBrowserUserInputMonitor,
   SystemDefaultBrowserDriver,
 } from "./system-default-browser-adapter";
 import type { BrowserSurfaceState } from "./ui-observation-registry";
 
 const execFileAsync = promisify(execFile);
+const initialObservationStableSamples = 8;
 
-function browserError(error: unknown): Error {
+function browserDebug(stage: string, details: Record<string, unknown> = {}): void {
+  if (process.env.OPENERX_BCU_DEBUG !== "1") return;
+  console.error(`[bcu-system-browser] ${stage} ${JSON.stringify(details)}`);
+}
+
+function browserErrorDetails(error: unknown): string {
   const candidate = error as { message?: unknown; stderr?: unknown; stdout?: unknown };
-  const details = [candidate.message, candidate.stderr, candidate.stdout]
+  return [candidate.message, candidate.stderr, candidate.stdout]
     .filter((value): value is string => typeof value === "string")
     .join("\n");
+}
+
+function browserCommandOutput(error: unknown): string {
+  const candidate = error as { message?: unknown; stderr?: unknown; stdout?: unknown };
+  return [candidate.stderr, candidate.stdout, candidate.message]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
+}
+
+function browserError(error: unknown): Error {
+  const details = browserErrorDetails(error);
   const code = /\bBROWSER_[A-Z0-9_]{2,80}\b/u.exec(details)?.[0];
   return new Error(code ?? "BROWSER_BACKEND_UNAVAILABLE");
 }
@@ -133,36 +156,25 @@ function actionPoint(input: BrowserAdapterActionInput): { x: number; y: number }
 
 function nativeActionPayload(input: BrowserAdapterActionInput): string {
   if (input.operation.action === "key") {
-    const normalized = input.operation.key.toLocaleLowerCase().replaceAll(/[-_ ]/gu, "");
-    const keyCodes: Readonly<Record<string, number>> = {
-      backspace: 51,
-      delete: 117,
-      down: 125,
-      end: 119,
-      enter: 36,
-      escape: 53,
-      home: 115,
-      left: 123,
-      pagedown: 121,
-      pageup: 116,
-      return: 36,
-      right: 124,
-      space: 49,
-      tab: 48,
-      up: 126,
-    };
-    const code = keyCodes[normalized];
-    if (code === undefined) return "";
-    return String(code);
+    return macBrowserNativeKey(input.operation.key) ?? "";
   }
   if (input.operation.action === "scroll") {
-    return String({ up: 116, down: 121, left: 123, right: 124 }[input.operation.direction]);
+    return macBrowserScrollPayload(input.operation.direction, input.operation.distance);
   }
   return actionPayload(input);
 }
 
 function encodedPayload(value: string): string {
   return Buffer.from(value, "utf8").toString("base64");
+}
+
+function boundsMatch(left: MacBrowserBounds, right: MacBrowserBounds): boolean {
+  return (
+    Math.abs(left.x - right.x) <= 2 &&
+    Math.abs(left.y - right.y) <= 2 &&
+    Math.abs(left.width - right.width) <= 2 &&
+    Math.abs(left.height - right.height) <= 2
+  );
 }
 
 function defaultAccessibilityHelperPath(): string {
@@ -195,29 +207,77 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
       throw new Error("BROWSER_BACKEND_UNAVAILABLE");
     }
     const before = await this.#windows(browser.bundleId);
+    browserDebug("open.before", { windowCount: before.length });
     let created: MacBrowserWindow | null = null;
     let raw: MacBrowserRawObservation;
+    let stage = "activate-default-browser";
     try {
-      await execFileAsync("/usr/bin/open", ["-b", browser.bundleId], {
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      created = await this.#pollForNewWindow(browser.bundleId, before, signal, 20);
-      if (!created) {
-        await this.#runAppleScript(macBrowserCreateWindowScript(), [browser.bundleId]);
+      if (before.length === 0) {
+        await execFileAsync("/usr/bin/open", ["-b", browser.bundleId], {
+          encoding: "utf8",
+          timeout: 10_000,
+        });
+        stage = "poll-open-created-window";
         created = await this.#pollForNewWindow(browser.bundleId, before, signal, 40);
+        browserDebug("open.after-default-handler", { createdWindowId: created?.windowId ?? null });
+      }
+      if (!created) {
+        for (const anchor of before) {
+          stage = "create-dedicated-window-native-menu";
+          let createResult = "unsupported";
+          try {
+            createResult = (
+              await this.#runAccessibilityHelper([
+                "create-window",
+                String(anchor.processId),
+                String(anchor.windowId),
+              ])
+            ).trim();
+          } catch (error) {
+            const code = browserError(error).message;
+            if (code === "BROWSER_BRIDGE_AUTHORIZATION_REQUIRED") throw error;
+            browserDebug("open.native-menu-anchor-skipped", {
+              anchorWindowId: anchor.windowId,
+              code,
+            });
+          }
+          if (createResult === "performed") {
+            stage = "poll-native-menu-created-window";
+            created = await this.#pollForNewWindow(browser.bundleId, before, signal, 40);
+            browserDebug("open.after-native-menu", {
+              createdWindowId: created?.windowId ?? null,
+            });
+            break;
+          }
+        }
+      }
+      if (!created) {
+        stage = "create-dedicated-window-shortcut-fallback";
+        const createResult = (
+          await this.#runAppleScript(macBrowserCreateWindowScript(), [browser.bundleId])
+        ).trim();
+        if (createResult !== "created") throw new Error("BROWSER_SURFACE_NOT_BOUND");
+        stage = "poll-command-n-created-window";
+        created = await this.#pollForNewWindow(browser.bundleId, before, signal, 40);
+        browserDebug("open.after-command-n", { createdWindowId: created?.windowId ?? null });
       }
       if (!created) throw new Error("BROWSER_SURFACE_NOT_BOUND");
-      const isolatedBounds = isolatedMacBrowserWindowBounds(created, before);
-      await this.#runAccessibilityHelper([
-        "isolate",
-        String(created.processId),
-        String(created.windowId),
-        String(isolatedBounds.x),
-        String(isolatedBounds.y),
-        String(isolatedBounds.width),
-        String(isolatedBounds.height),
-      ]);
+      const originalBounds = created.bounds;
+      let isolatedBounds = originalBounds;
+      if (before.some((window) => boundsMatch(window.bounds, originalBounds))) {
+        isolatedBounds = isolatedMacBrowserWindowBounds(created, before);
+        stage = "isolate-created-window";
+        await this.#runAccessibilityHelper([
+          "isolate",
+          String(created.processId),
+          String(created.windowId),
+          String(isolatedBounds.x),
+          String(isolatedBounds.y),
+          String(isolatedBounds.width),
+          String(isolatedBounds.height),
+        ]);
+      }
+      stage = "poll-isolated-bounds";
       created = await this.#pollForWindowBounds(
         browser.bundleId,
         created.processId,
@@ -225,11 +285,13 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
         isolatedBounds,
         signal,
       );
+      stage = "verify-created-window";
       await this.#runAccessibilityHelper([
         "verify",
         String(created.processId),
         String(created.windowId),
       ]);
+      stage = "navigate-created-window";
       await this.#runJxa(macBrowserNavigateWindowScript(), [
         browser.bundleId,
         String(created.processId),
@@ -240,8 +302,23 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
         String(created.bounds.height),
         url,
       ]);
+      stage = "observe-created-window";
       raw = await this.#pollForObservation(created.processId, created.windowId, signal);
+      browserDebug("open.bound", { createdWindowId: created.windowId });
     } catch (error) {
+      if (!created) {
+        const after = await this.#windows(browser.bundleId).catch(() => []);
+        const candidates = after.filter(
+          ({ windowId }) => !before.some((window) => window.windowId === windowId),
+        );
+        if (candidates.length === 1) created = candidates[0] as MacBrowserWindow;
+      }
+      browserDebug("open.failed", {
+        stage,
+        createdWindowId: created?.windowId ?? null,
+        code: browserError(error).message,
+        raw: browserErrorDetails(error).slice(0, 1_000),
+      });
       if (created) {
         await this.#runAccessibilityHelper([
           "close",
@@ -284,6 +361,128 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
       throw new Error("BROWSER_SURFACE_MISMATCH");
     }
     return { descriptor };
+  }
+
+  async startUserInputMonitoring(
+    binding: SystemBrowserBinding,
+    listener: (event: SystemBrowserControlEvent) => void,
+  ): Promise<SystemBrowserUserInputMonitor> {
+    if (process.platform !== "darwin") throw new Error("BROWSER_BACKEND_UNAVAILABLE");
+    await this.#assertAccessibilityHelper();
+    await this.#currentWindow(binding);
+    const descriptor = binding.descriptor;
+    const child = spawn(
+      this.#accessibilityHelperPath,
+      [
+        "monitor-user-input",
+        String(descriptor.nativeProcessId),
+        String(nativeWindowId(descriptor)),
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+
+    return await new Promise<SystemBrowserUserInputMonitor>((resolve, reject) => {
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
+      let ready = false;
+      let terminal = false;
+      let intentionallyClosed = false;
+      const monitor: SystemBrowserUserInputMonitor = {
+        close: () => {
+          intentionallyClosed = true;
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+        },
+      };
+      const notify = (event: SystemBrowserControlEvent): void => {
+        try {
+          listener(event);
+        } catch (error) {
+          browserDebug("input-monitor.listener-failed", {
+            code: browserError(error).message,
+          });
+        }
+      };
+      const fail = (error: unknown): void => {
+        if (terminal || intentionallyClosed) return;
+        terminal = true;
+        clearTimeout(timeout);
+        if (!ready) {
+          intentionallyClosed = true;
+          monitor.close();
+          reject(browserError(error));
+          return;
+        }
+        notify({ kind: "monitor_lost" });
+        monitor.close();
+      };
+      const input = (): void => {
+        if (terminal || intentionallyClosed) return;
+        terminal = true;
+        clearTimeout(timeout);
+        notify({ kind: "user_input" });
+      };
+      const consumeLine = (line: string): void => {
+        let message: ReturnType<typeof parseMacBrowserInputMonitorLine>;
+        try {
+          message = parseMacBrowserInputMonitorLine(line);
+        } catch (error) {
+          fail(error);
+          return;
+        }
+        if (message === "ready") {
+          if (ready) {
+            fail(new Error("BROWSER_OBSERVATION_MISMATCH"));
+            return;
+          }
+          ready = true;
+          clearTimeout(timeout);
+          browserDebug("input-monitor.ready", {
+            nativeProcessId: descriptor.nativeProcessId,
+            nativeWindowId: descriptor.nativeWindowId,
+          });
+          resolve(monitor);
+          return;
+        }
+        if (!ready) {
+          fail(new Error("BROWSER_OBSERVATION_MISMATCH"));
+          return;
+        }
+        input();
+      };
+      const timeout = setTimeout(
+        () => fail(new Error("BROWSER_BRIDGE_AUTHORIZATION_REQUIRED")),
+        5_000,
+      );
+
+      child.stdout.on("data", (chunk: string) => {
+        if (terminal || intentionallyClosed) return;
+        stdoutBuffer += chunk;
+        if (stdoutBuffer.length > 4_096) {
+          fail(new Error("BROWSER_OBSERVATION_MISMATCH"));
+          return;
+        }
+        const lines = stdoutBuffer.split(/\r?\n/u);
+        stdoutBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.trim()) consumeLine(line);
+        }
+      });
+      child.stderr.on("data", (chunk: string) => {
+        stderrBuffer = `${stderrBuffer}${chunk}`.slice(-4_096);
+      });
+      child.once("error", fail);
+      child.once("exit", (code, signal) => {
+        clearTimeout(timeout);
+        if (terminal || intentionallyClosed) return;
+        fail(
+          new Error(
+            `${stderrBuffer}\nmonitor exited code=${String(code)} signal=${String(signal)}`,
+          ),
+        );
+      });
+    });
   }
 
   async observe(
@@ -419,7 +618,7 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
       expectedSurface,
       input.observation,
       signal,
-      "visual",
+      input.target.kind === "none" ? "state" : "visual",
     );
     const point = actionPoint(input);
     const globalPoint = point
@@ -485,12 +684,18 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
 
   async closeOwnedWindow(binding: SystemBrowserBinding, signal: AbortSignal): Promise<void> {
     throwIfAborted(signal);
-    await this.#currentWindow(binding);
+    const target = await this.#currentWindow(binding);
     await this.#runAccessibilityHelper([
       "close",
       String(binding.descriptor.nativeProcessId),
       String(nativeWindowId(binding.descriptor)),
     ]);
+    await this.#pollForClosedWindow(
+      binding.descriptor.applicationId,
+      target.processId,
+      target.windowId,
+      signal,
+    );
   }
 
   async #assertCurrent(
@@ -498,7 +703,7 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
     expectedSurface: BrowserSurfaceState,
     expected: BrowserObservation,
     signal: AbortSignal,
-    validation: "semantic" | "visual",
+    validation: "semantic" | "state" | "visual",
   ): Promise<SystemBrowserDriverObservation> {
     const current = await this.observe(binding, signal);
     const currentScreenshotDigest = createHash("sha256")
@@ -508,16 +713,29 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
       current.surface.url !== expected.url ||
       (validation === "visual" && currentScreenshotDigest !== expected.screenshotDigest)
     ) {
+      browserDebug("assert-current.observation-mismatch", {
+        validation,
+        urlMatches: current.surface.url === expected.url,
+        screenshotMatches: currentScreenshotDigest === expected.screenshotDigest,
+      });
       throw new Error("BROWSER_OBSERVATION_MISMATCH");
     }
     if (
       current.surface.viewport.height !== expected.viewport.height ||
-      (validation === "visual" && current.surface.pageRevision !== expectedSurface.pageRevision) ||
+      (validation !== "semantic" &&
+        current.surface.pageRevision !== expectedSurface.pageRevision) ||
       current.surface.surfaceBounds.x !== expectedSurface.surfaceBounds.x ||
       current.surface.surfaceBounds.y !== expectedSurface.surfaceBounds.y ||
       current.surface.surfaceBounds.width !== expectedSurface.surfaceBounds.width ||
       current.surface.surfaceBounds.height !== expectedSurface.surfaceBounds.height
     ) {
+      browserDebug("assert-current.surface-mismatch", {
+        validation,
+        currentViewport: current.surface.viewport,
+        expectedViewport: expected.viewport,
+        currentBounds: current.surface.surfaceBounds,
+        expectedBounds: expectedSurface.surfaceBounds,
+      });
       throw new Error("BROWSER_SURFACE_MISMATCH");
     }
     return current;
@@ -623,22 +841,54 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
     throw new Error("BROWSER_SURFACE_NOT_BOUND");
   }
 
+  async #pollForClosedWindow(
+    bundleId: string,
+    processId: number,
+    windowId: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let missingCount = 0;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      throwIfAborted(signal);
+      const exists = (await this.#windows(bundleId)).some(
+        (window) => window.processId === processId && window.windowId === windowId,
+      );
+      if (exists) missingCount = 0;
+      else missingCount += 1;
+      if (missingCount >= 3) return;
+      await wait(100, signal);
+    }
+    throw new Error("BROWSER_SURFACE_NOT_BOUND");
+  }
+
   async #pollForObservation(
     processId: number,
     windowId: number,
     signal: AbortSignal,
   ): Promise<MacBrowserRawObservation> {
     let lastError: unknown;
+    let stableSignature: string | null = null;
+    let stableCount = 0;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       throwIfAborted(signal);
       try {
-        return parseMacBrowserObservation(
+        const candidate = parseMacBrowserObservation(
           await this.#runAccessibilityHelper(["observe", String(processId), String(windowId)]),
         );
+        const signature = macBrowserObservationStabilityKey(candidate);
+        if (signature === stableSignature) stableCount += 1;
+        else {
+          stableSignature = signature;
+          stableCount = 1;
+        }
+        if (stableCount >= initialObservationStableSamples) return candidate;
+        lastError = new Error("BROWSER_OBSERVATION_MISMATCH");
       } catch (error) {
         lastError = error;
-        await wait(100, signal);
+        stableSignature = null;
+        stableCount = 0;
       }
+      await wait(100, signal);
     }
     throw browserError(lastError);
   }
@@ -649,6 +899,10 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
   ): Promise<BrowserAdapterResult> {
     throwIfAborted(signal);
     const value = (await this.#runAccessibilityHelper(args)).trim();
+    browserDebug("action.result", {
+      action: args[0] === "semantic" ? (args[4] ?? null) : (args[3] ?? null),
+      result: value,
+    });
     if (value !== "performed" && value !== "unsupported") {
       throw new Error("BROWSER_OBSERVATION_MISMATCH");
     }
@@ -698,6 +952,7 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
       });
       return stdout;
     } catch (error) {
+      browserDebug("applescript.failed", { raw: browserCommandOutput(error).slice(0, 1_000) });
       throw browserError(error);
     }
   }

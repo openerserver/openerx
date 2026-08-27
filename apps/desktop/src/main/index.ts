@@ -11,6 +11,8 @@ import {
   artifactPreviewInputSchema,
   artifactSchema,
   billingStatementRequestSchema,
+  browserComputerUseSessionControlInputSchema,
+  browserSessionDescriptorSchema,
   chatActivateBranchInputSchema,
   chatArchiveInputSchema,
   chatCommandEnvelopeSchema,
@@ -227,6 +229,26 @@ function registerIpcHandlers(
       reason: trusted ? null : "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
       settingsOpened: !trusted,
     });
+  });
+  ipcMain.handle(ipcChannels.browserComputerUseSessions, (event) => {
+    assertTrustedIpcSender(event);
+    return browserSessionDescriptorSchema
+      .array()
+      .parse(supervisor.listBrowserComputerUseSessions());
+  });
+  ipcMain.handle(ipcChannels.browserComputerUsePause, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    const input = browserComputerUseSessionControlInputSchema.parse(raw);
+    return browserSessionDescriptorSchema.parse(
+      await supervisor.pauseBrowserComputerUseSession(input.sessionId),
+    );
+  });
+  ipcMain.handle(ipcChannels.browserComputerUseResume, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    const input = browserComputerUseSessionControlInputSchema.parse(raw);
+    return browserSessionDescriptorSchema.parse(
+      await supervisor.resumeBrowserComputerUseSession(input.sessionId),
+    );
   });
   ipcMain.handle(ipcChannels.releaseUpdateState, (event) => {
     assertTrustedIpcSender(event);

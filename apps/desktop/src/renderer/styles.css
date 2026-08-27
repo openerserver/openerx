@@ -2256,6 +2256,99 @@ h1 {
   color: var(--workspace-muted);
 }
 
+.browser-session-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 24px;
+  padding: 16px;
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+}
+
+.browser-session-heading,
+.browser-session-card-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.browser-session-heading h2,
+.browser-session-heading p,
+.browser-session-card p {
+  margin: 0;
+}
+
+.browser-session-heading h2 {
+  font-size: 14px;
+}
+
+.browser-session-heading p,
+.browser-session-heading > span,
+.browser-session-card p,
+.browser-session-card-heading div > span {
+  color: var(--workspace-muted);
+  font-size: 10px;
+}
+
+.browser-session-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.browser-session-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 12px;
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 9px;
+}
+
+.browser-session-card-heading div {
+  display: grid;
+  gap: 2px;
+}
+
+.browser-session-state {
+  padding: 2px 6px;
+  color: var(--workspace-muted-strong);
+  font-size: 9px;
+  white-space: nowrap;
+  background: var(--workspace-bg);
+  border: 1px solid var(--workspace-border);
+  border-radius: 999px;
+}
+
+.browser-session-state.is-active {
+  color: var(--workspace-text);
+  background: var(--workspace-success-surface);
+  border-color: var(--workspace-success-border);
+}
+
+.browser-session-state.is-paused_for_user {
+  color: var(--workspace-warning);
+  background: var(--workspace-status-surface);
+}
+
+.browser-session-card > button {
+  justify-self: start;
+  padding: 7px 10px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 7px;
+}
+
+.browser-session-card > .primary-action {
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
+  border-color: var(--workspace-accent);
+}
+
 .tool-catalog {
   margin-bottom: 24px;
 }

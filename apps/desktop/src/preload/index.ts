@@ -12,6 +12,8 @@ import {
   billingStatementRequestSchema,
   billingTermsAcceptanceSchema,
   billingTermsStateSchema,
+  browserComputerUseSessionControlInputSchema,
+  browserSessionDescriptorSchema,
   type ChatCommandEnvelope,
   type ChatCommandResultMap,
   chargeRecordSchema,
@@ -115,6 +117,24 @@ const bridge: DesktopBridge = {
       desktopNativePermissionRequestSchema.parse(input),
     );
     return desktopNativePermissionResultSchema.parse(result);
+  },
+  listBrowserComputerUseSessions: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.browserComputerUseSessions);
+    return browserSessionDescriptorSchema.array().parse(result);
+  },
+  pauseBrowserComputerUseSession: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.browserComputerUsePause,
+      browserComputerUseSessionControlInputSchema.parse(input),
+    );
+    return browserSessionDescriptorSchema.parse(result);
+  },
+  resumeBrowserComputerUseSession: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.browserComputerUseResume,
+      browserComputerUseSessionControlInputSchema.parse(input),
+    );
+    return browserSessionDescriptorSchema.parse(result);
   },
   getReleaseUpdateState: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.releaseUpdateState);

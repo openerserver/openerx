@@ -125,6 +125,9 @@ computer-use 操作面方案记录在
 [18-browser-computer-use-contract-test-plan.md](18-browser-computer-use-contract-test-plan.md)。BCU-003
 已把 Observation/action 内核接入 Main Host 与 Pi ToolDefinition，并在 macOS 系统默认 Chrome 通过
 OS Accessibility 完成真实“百度搜索 phonescloud”烟测；本地实现与打包证据见
-[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。该阶段仍是局部完成：Browser Bridge、剩余动作
-矩阵、签名安装权限、托管 Chromium 和 Windows 尚无完成证据；`legacy_dom_v1` 仅作为显式 feature
-flag 回滚路径保留。
+[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)，并已补齐代表性 `Backspace`、滚动、前进/
+后退和刷新原生动作矩阵，并实现只报告事件存在性的精确窗口输入 monitor、自动暂停、受信
+fresh-baseline 恢复，以及不嵌网页的可信 Tool Center 接管/恢复 UI。真实输入与原生 UI runner 因
+当前机器锁屏尚无 PASS 证据；该阶段仍是局部完成：Browser Bridge、签名安装权限、托管 Chromium
+和 Windows 尚无完成证据；
+`legacy_dom_v1` 仅作为显式 feature flag 回滚路径保留。

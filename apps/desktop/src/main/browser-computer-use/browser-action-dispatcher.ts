@@ -241,7 +241,13 @@ export class BrowserActionDispatcher {
       ) {
         throw error;
       }
-      if (resolution) this.observations.invalidateSession(operation.sessionId, "action_completed");
+      const failureCode = errorCode(error);
+      if (resolution) {
+        this.observations.invalidateSession(
+          operation.sessionId,
+          failureCode === "BROWSER_USER_TAKEOVER_REQUIRED" ? "user_takeover" : "action_completed",
+        );
+      }
       if (!terminalAuditRecorded) {
         this.#recordAudit({
           operation,
@@ -251,13 +257,13 @@ export class BrowserActionDispatcher {
           attemptedPaths,
           selectedPath: null,
           status: "failed",
-          errorCode: errorCode(error),
+          errorCode: failureCode,
         });
         terminalAuditRecorded = true;
       }
       throw error instanceof BrowserObservationError
         ? error
-        : new BrowserObservationError(errorCode(error));
+        : new BrowserObservationError(failureCode);
     }
   }
 

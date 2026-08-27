@@ -5,6 +5,7 @@ import {
   BROWSER_OBSERVATION_MAX_TTL_MS,
   browserBackendSelectionSchema,
   browserComputerUseOperationV2Schema,
+  browserComputerUseSessionControlInputSchema,
   browserComputerUseV2Enabled,
   browserObservationSchema,
   browserSessionDescriptorSchema,
@@ -140,6 +141,21 @@ describe("BCU-001 browser computer-use V2 contract", () => {
         text: "phonescloud",
       }),
     ).toMatchObject({ action: "setValue", observationId, target: { elementRef } });
+  });
+
+  it("keeps user pause and resume on a strict trusted-UI-only input contract", () => {
+    const sessionId = randomUUID();
+    expect(browserComputerUseSessionControlInputSchema.parse({ sessionId })).toEqual({ sessionId });
+    expect(() =>
+      browserComputerUseSessionControlInputSchema.parse({ sessionId, observationId: randomUUID() }),
+    ).toThrow();
+    expect(() =>
+      browserComputerUseOperationV2Schema.parse({
+        contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+        action: "resume",
+        sessionId,
+      }),
+    ).toThrow();
   });
 
   it("rejects legacy versions, non-HTTP URLs and model-provided browser internals", () => {

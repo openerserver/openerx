@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import {
   BROWSER_COMPUTER_USE_V2_FEATURE_FLAG,
+  type BrowserSessionDescriptor,
   browserComputerUseV2Enabled,
   type HostToolAvailability,
   type NormalizedToolResult,
@@ -150,6 +151,19 @@ export class ElectronToolCapabilityHost {
       accessibilityTrusted,
       automationAvailable,
     });
+  }
+
+  listBrowserComputerUseSessions(): BrowserSessionDescriptor[] {
+    return this.#browserComputerUse.descriptors();
+  }
+
+  pauseBrowserComputerUseSession(sessionId: string): BrowserSessionDescriptor {
+    return this.#browserComputerUse.pauseForUser(sessionId);
+  }
+
+  async resumeBrowserComputerUseSession(sessionId: string): Promise<BrowserSessionDescriptor> {
+    await this.#browserComputerUse.resumeAfterUser(sessionId, new AbortController().signal);
+    return this.#browserComputerUse.descriptor(sessionId);
   }
 
   close(): void {

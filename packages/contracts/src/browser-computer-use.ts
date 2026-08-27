@@ -337,6 +337,10 @@ export const browserSessionDescriptorSchema = z
   .strict()
   .superRefine(validateBrowserSessionDescriptor);
 
+export const browserComputerUseSessionControlInputSchema = z
+  .object({ sessionId: entityIdSchema })
+  .strict();
+
 export const browserSemanticActionSchema = z.enum([
   "focus",
   "setValue",
@@ -484,6 +488,9 @@ export type BrowserProfilePersistence = z.infer<typeof browserProfilePersistence
 export type BrowserComputerUseOperationV2 = z.infer<typeof browserComputerUseOperationV2Schema>;
 export type BrowserBackendSelection = z.infer<typeof browserBackendSelectionSchema>;
 export type BrowserSessionDescriptor = z.infer<typeof browserSessionDescriptorSchema>;
+export type BrowserComputerUseSessionControlInput = z.infer<
+  typeof browserComputerUseSessionControlInputSchema
+>;
 export type BrowserSemanticElement = z.infer<typeof browserSemanticElementSchema>;
 export type BrowserObservation = z.infer<typeof browserObservationSchema>;
 export type BrowserComputerUseErrorCode = z.infer<typeof browserComputerUseErrorCodeSchema>;

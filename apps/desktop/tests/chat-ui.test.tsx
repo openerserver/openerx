@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type {
+  BrowserSessionDescriptor,
   ChatEvent,
   ConversationSnapshot,
   DesktopBridge,
@@ -150,6 +151,9 @@ function createBridge(): DesktopBridge {
       reason: "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
       settingsOpened: true,
     }),
+    listBrowserComputerUseSessions: vi.fn().mockResolvedValue([]),
+    pauseBrowserComputerUseSession: vi.fn(),
+    resumeBrowserComputerUseSession: vi.fn(),
     getReleaseUpdateState: vi.fn().mockResolvedValue({
       status: "disabled",
       channel: "internal",
@@ -1493,6 +1497,65 @@ describe("M1 chat renderer", () => {
 
     await user.click(screen.getByRole("button", { name: "刷新能力状态" }));
     await waitFor(() => expect(bridge.listToolRuntimeReadiness).toHaveBeenCalledTimes(3));
+  });
+
+  it("keeps browser takeover controls in the trusted tool center without embedding page data", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const sessionId = "77777777-7777-4777-8777-777777777777";
+    let session: BrowserSessionDescriptor = {
+      contractVersion: "browser_computer_use_v2",
+      sessionId,
+      backend: "system_default",
+      controlPath: "os_accessibility",
+      applicationId: "com.google.Chrome",
+      nativeProcessId: 42,
+      nativeWindowId: "mac_window_fixture_42",
+      surfaceKind: "window",
+      surfaceId: "mac_surface_fixture_42",
+      ownership: "external_openerx",
+      profilePersistence: "browser_owned",
+      state: "active",
+      capabilities: {
+        semanticObserve: true,
+        semanticAction: true,
+        visualCapture: true,
+        coordinateFallback: true,
+        controlledUpload: false,
+        controlledDownload: false,
+        clearProfileData: false,
+        closeOwnedWindow: true,
+      },
+    };
+    vi.mocked(bridge.listBrowserComputerUseSessions).mockImplementation(async () => [session]);
+    vi.mocked(bridge.pauseBrowserComputerUseSession).mockImplementation(async () => {
+      session = { ...session, state: "paused_for_user" };
+      return session;
+    });
+    vi.mocked(bridge.resumeBrowserComputerUseSession).mockImplementation(async () => {
+      session = { ...session, state: "active" };
+      return session;
+    });
+    renderApp(bridge, "/tasks");
+    const user = userEvent.setup();
+
+    expect(await screen.findByText("Google Chrome")).toBeTruthy();
+    expect(screen.getByText("机器默认浏览器")).toBeTruthy();
+    expect(screen.getByText("独立窗口 · 系统辅助功能")).toBeTruthy();
+    expect(screen.queryByText("com.google.Chrome")).toBeNull();
+    expect(document.querySelector("iframe")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "我来接管" }));
+    await waitFor(() =>
+      expect(bridge.pauseBrowserComputerUseSession).toHaveBeenCalledWith({ sessionId }),
+    );
+    expect(await screen.findByText("用户接管中")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "恢复自动操作" }));
+    await waitFor(() =>
+      expect(bridge.resumeBrowserComputerUseSession).toHaveBeenCalledWith({ sessionId }),
+    );
+    expect(await screen.findByText("自动操作中")).toBeTruthy();
   });
 
   it("requires explicit confirmation before revoking Skill permissions and disabling it", async () => {

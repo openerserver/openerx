@@ -92,6 +92,20 @@ func axBool(_ element: AXUIElement, _ attribute: String) -> Bool? {
   return nil
 }
 
+func axDouble(_ element: AXUIElement, _ attribute: String) -> Double? {
+  if let value = axValue(element, attribute) as? NSNumber { return value.doubleValue }
+  return nil
+}
+
+func axRange(_ element: AXUIElement, _ attribute: String) -> CFRange? {
+  guard let value = axValue(element, attribute), CFGetTypeID(value) == AXValueGetTypeID() else {
+    return nil
+  }
+  var range = CFRange()
+  guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return nil }
+  return range
+}
+
 func axElements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
   guard let value = axValue(element, attribute), CFGetTypeID(value) == CFArrayGetTypeID() else {
     return []
@@ -231,6 +245,120 @@ func activate(_ native: NativeWindow, _ window: AXUIElement) throws {
   guard NSWorkspace.shared.frontmostApplication?.processIdentifier == native.processId else {
     try fail("BROWSER_SURFACE_NOT_BOUND")
   }
+}
+
+final class BrowserInputMonitorContext {
+  let processId: pid_t
+  let windowId: CGWindowID
+  let runLoop: CFRunLoop
+  var eventTap: CFMachPort?
+  var reported = false
+
+  init(processId: pid_t, windowId: CGWindowID, runLoop: CFRunLoop) {
+    self.processId = processId
+    self.windowId = windowId
+    self.runLoop = runLoop
+  }
+}
+
+func topmostWindow(at point: CGPoint) -> (pid_t, CGWindowID)? {
+  guard
+    let rows = CGWindowListCopyWindowInfo(
+      [.optionOnScreenOnly, .excludeDesktopElements],
+      kCGNullWindowID
+    ) as? [[String: Any]]
+  else { return nil }
+  for row in rows {
+    guard (row[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+      ((row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1) > 0,
+      let processId = (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+      let windowId = (row[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+      let rawBounds = row[kCGWindowBounds as String],
+      let bounds = CGRect(dictionaryRepresentation: rawBounds as! CFDictionary),
+      bounds.contains(point)
+    else { continue }
+    return (processId, windowId)
+  }
+  return nil
+}
+
+func exactWindowHasKeyboardFocus(processId: pid_t, windowId: CGWindowID) -> Bool {
+  guard NSWorkspace.shared.frontmostApplication?.processIdentifier == processId,
+    let native = try? nativeWindow(processId: processId, windowId: windowId),
+    let (app, targetWindow) = try? exactWindow(native),
+    let focusedWindow = axElement(app, kAXFocusedWindowAttribute)
+  else { return false }
+  return CFEqual(focusedWindow, targetWindow)
+}
+
+func browserInputEventCallback(
+  proxy _: CGEventTapProxy,
+  type: CGEventType,
+  event: CGEvent,
+  userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+  guard let userInfo else { return Unmanaged.passUnretained(event) }
+  let context = Unmanaged<BrowserInputMonitorContext>
+    .fromOpaque(userInfo).takeUnretainedValue()
+  if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+    if let eventTap = context.eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+    return Unmanaged.passUnretained(event)
+  }
+  if context.reported { return Unmanaged.passUnretained(event) }
+
+  let belongsToTarget: Bool
+  switch type {
+  case .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel:
+    let target = topmostWindow(at: event.location)
+    belongsToTarget = target?.0 == context.processId && target?.1 == context.windowId
+  case .keyDown, .flagsChanged:
+    belongsToTarget = exactWindowHasKeyboardFocus(
+      processId: context.processId,
+      windowId: context.windowId
+    )
+  default:
+    belongsToTarget = false
+  }
+  if belongsToTarget {
+    context.reported = true
+    FileHandle.standardOutput.write(Data("user_input\n".utf8))
+    CFRunLoopStop(context.runLoop)
+  }
+  return Unmanaged.passUnretained(event)
+}
+
+func monitorUserInput(_ native: NativeWindow) throws {
+  _ = try exactWindow(native)
+  let eventTypes: [CGEventType] = [
+    .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown, .flagsChanged,
+  ]
+  let mask = eventTypes.reduce(CGEventMask(0)) {
+    $0 | (CGEventMask(1) << $1.rawValue)
+  }
+  guard let runLoop = CFRunLoopGetCurrent() else {
+    try fail("BROWSER_BACKEND_UNAVAILABLE")
+  }
+  let context = BrowserInputMonitorContext(
+    processId: native.processId,
+    windowId: native.windowId,
+    runLoop: runLoop
+  )
+  guard let eventTap = CGEvent.tapCreate(
+    tap: .cgSessionEventTap,
+    place: .headInsertEventTap,
+    options: .listenOnly,
+    eventsOfInterest: mask,
+    callback: browserInputEventCallback,
+    userInfo: Unmanaged.passUnretained(context).toOpaque()
+  ), let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+  else { try fail("BROWSER_BRIDGE_AUTHORIZATION_REQUIRED") }
+  context.eventTap = eventTap
+  CFRunLoopAddSource(runLoop, source, .commonModes)
+  CGEvent.tapEnable(tap: eventTap, enable: true)
+  FileHandle.standardOutput.write(Data("ready\n".utf8))
+  CFRunLoopRun()
+  CFRunLoopRemoveSource(runLoop, source, .commonModes)
+  if !context.reported { try fail("BROWSER_BACKEND_UNAVAILABLE") }
 }
 
 func elementAtPosition(_ app: AXUIElement, x: Int, y: Int) -> AXUIElement? {
@@ -424,6 +552,280 @@ func setAttribute(_ element: AXUIElement, _ name: String, _ value: CFTypeRef) ->
   AXUIElementSetAttributeValue(element, name as CFString, value) == .success
 }
 
+func setRange(_ element: AXUIElement, _ name: String, _ range: CFRange) -> Bool {
+  var mutableRange = range
+  guard let value = AXValueCreate(.cfRange, &mutableRange) else { return false }
+  return setAttribute(element, name, value)
+}
+
+func primaryWebArea(_ contents: [AXUIElement], matching expected: Bounds) -> AXUIElement? {
+  let matches = contents.filter {
+    axString($0, kAXRoleAttribute) == "AXWebArea"
+      && axBounds($0)?.matches(expected, tolerance: 3) == true
+  }
+  return matches.count == 1 ? matches.first : nil
+}
+
+func focusedElementInside(_ app: AXUIElement, webBounds: Bounds) -> AXUIElement? {
+  guard let focused = axElement(app, kAXFocusedUIElementAttribute),
+    let bounds = axBounds(focused), webBounds.contains(bounds)
+  else { return nil }
+  return focused
+}
+
+func focusedEditableElement(_ app: AXUIElement, webBounds: Bounds) throws -> AXUIElement? {
+  guard let focused = focusedElementInside(app, webBounds: webBounds) else { return nil }
+  let role = axString(focused, kAXRoleAttribute) ?? ""
+  let subrole = axString(focused, kAXSubroleAttribute) ?? ""
+  let editable = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole, "AXSecureTextField"]
+    .contains(role) || subrole == "AXSearchField"
+  guard editable else { return nil }
+  let name = semanticName(focused, mappedRole: roleName(role, subrole) ?? "")
+  guard sensitivity(role: role, subrole: subrole, name: name) == "none" else {
+    try fail("BROWSER_USER_TAKEOVER_REQUIRED")
+  }
+  return focused
+}
+
+func performTextKey(_ element: AXUIElement, key: String) -> Bool {
+  guard let value = textValue(axValue(element, kAXValueAttribute)) else { return false }
+  let text = value as NSString
+  let selected = axRange(element, kAXSelectedTextRangeAttribute)
+    ?? CFRange(location: text.length, length: 0)
+  guard selected.location >= 0, selected.length >= 0,
+    selected.location + selected.length <= text.length
+  else { return false }
+
+  if ["left", "right", "home", "end"].contains(key) {
+    let location: Int
+    switch key {
+    case "home":
+      location = 0
+    case "end":
+      location = text.length
+    case "left":
+      if selected.length > 0 {
+        location = selected.location
+      } else if selected.location > 0 {
+        location = text.rangeOfComposedCharacterSequence(at: selected.location - 1).location
+      } else {
+        location = 0
+      }
+    default:
+      if selected.length > 0 {
+        location = selected.location + selected.length
+      } else if selected.location < text.length {
+        let range = text.rangeOfComposedCharacterSequence(at: selected.location)
+        location = range.location + range.length
+      } else {
+        location = text.length
+      }
+    }
+    return setRange(element, kAXSelectedTextRangeAttribute, CFRange(location: location, length: 0))
+  }
+
+  let replacement: String
+  let replacedRange: NSRange
+  switch key {
+  case "space":
+    replacement = " "
+    replacedRange = NSRange(location: selected.location, length: selected.length)
+  case "backspace":
+    replacement = ""
+    if selected.length > 0 {
+      replacedRange = NSRange(location: selected.location, length: selected.length)
+    } else if selected.location > 0 {
+      replacedRange = text.rangeOfComposedCharacterSequence(at: selected.location - 1)
+    } else {
+      return true
+    }
+  case "delete":
+    replacement = ""
+    if selected.length > 0 {
+      replacedRange = NSRange(location: selected.location, length: selected.length)
+    } else if selected.location < text.length {
+      replacedRange = text.rangeOfComposedCharacterSequence(at: selected.location)
+    } else {
+      return true
+    }
+  default:
+    return false
+  }
+  let updated = text.replacingCharacters(in: replacedRange, with: replacement)
+  guard setAttribute(element, kAXValueAttribute, updated as CFString) else { return false }
+  let location = replacedRange.location + (replacement as NSString).length
+  _ = setRange(element, kAXSelectedTextRangeAttribute, CFRange(location: location, length: 0))
+  return true
+}
+
+func mainScrollBar(
+  contents: [AXUIElement],
+  webArea: AXUIElement,
+  direction: String
+) -> AXUIElement? {
+  let attribute = ["up", "down"].contains(direction)
+    ? kAXVerticalScrollBarAttribute : kAXHorizontalScrollBarAttribute
+  var ancestor: AXUIElement? = webArea
+  for _ in 0..<12 {
+    guard let candidate = ancestor else { break }
+    if let scrollBar = axElement(candidate, attribute) { return scrollBar }
+    ancestor = axElement(candidate, kAXParentAttribute)
+  }
+  let orientation = ["up", "down"].contains(direction)
+    ? kAXVerticalOrientationValue : kAXHorizontalOrientationValue
+  let matches = contents.filter {
+    axString($0, kAXRoleAttribute) == kAXScrollBarRole
+      && axString($0, kAXOrientationAttribute) == orientation
+  }
+  return matches.count == 1 ? matches.first : nil
+}
+
+func performScrollToVisible(
+  contents: [AXUIElement],
+  webArea: AXUIElement,
+  direction: String
+) -> Bool {
+  guard let webBounds = axBounds(webArea) else { return false }
+  let vertical = ["up", "down"].contains(direction)
+  let increasing = ["down", "right"].contains(direction)
+  let candidates = contents.enumerated().compactMap { index, element -> (Int, AXUIElement, Bounds, Bool)? in
+    guard element !== webArea, actionNames(element).contains("AXScrollToVisible"),
+      let bounds = axBounds(element)
+    else { return nil }
+    let clipped: Bool
+    let atEdge: Bool
+    if vertical {
+      clipped = bounds.height <= 1
+      atEdge = increasing
+        ? bounds.y + bounds.height >= webBounds.y + webBounds.height - 2
+        : bounds.y <= webBounds.y + 2
+    } else {
+      clipped = bounds.width <= 1
+      atEdge = increasing
+        ? bounds.x + bounds.width >= webBounds.x + webBounds.width - 2
+        : bounds.x <= webBounds.x + 2
+    }
+    return atEdge ? (index, element, bounds, clipped) : nil
+  }.sorted { left, right in
+    if left.3 != right.3 { return left.3 && !right.3 }
+    return increasing ? left.0 > right.0 : left.0 < right.0
+  }
+  guard let target = candidates.first else { return false }
+  guard AXUIElementPerformAction(target.1, "AXScrollToVisible" as CFString) == .success else {
+    return false
+  }
+  Thread.sleep(forTimeInterval: 0.2)
+  guard let after = axBounds(target.1) else { return false }
+  return !target.2.matches(after, tolerance: 1)
+}
+
+func performScroll(
+  contents: [AXUIElement],
+  webArea: AXUIElement,
+  payload: String
+) -> Bool {
+  let parts = payload.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+  guard parts.count == 2 else { return false }
+  let direction = parts[0]
+  let distance = parts[1]
+  guard ["up", "down", "left", "right"].contains(direction),
+    ["small", "medium", "viewport", "edge"].contains(distance)
+  else { return false }
+  guard let scrollBar = mainScrollBar(contents: contents, webArea: webArea, direction: direction),
+    axBool(scrollBar, kAXEnabledAttribute) != false,
+    let before = axDouble(scrollBar, kAXValueAttribute),
+    let minimum = axDouble(scrollBar, kAXMinValueAttribute),
+    let maximum = axDouble(scrollBar, kAXMaxValueAttribute),
+    maximum > minimum
+  else {
+    return performScrollToVisible(contents: contents, webArea: webArea, direction: direction)
+  }
+  let increasing = ["down", "right"].contains(direction)
+  let fraction: Double = switch distance {
+  case "small": 0.1
+  case "medium": 0.35
+  case "viewport": 0.8
+  default: 1
+  }
+  let desired = distance == "edge"
+    ? (increasing ? maximum : minimum)
+    : min(maximum, max(minimum, before + (increasing ? 1 : -1) * (maximum - minimum) * fraction))
+  if abs(desired - before) < 0.000_001 { return true }
+  guard setAttribute(scrollBar, kAXValueAttribute, NSNumber(value: desired)) else { return false }
+  Thread.sleep(forTimeInterval: 0.12)
+  guard let after = axDouble(scrollBar, kAXValueAttribute) else { return false }
+  return increasing ? after > before : after < before
+}
+
+func performMenuShortcut(
+  _ app: AXUIElement,
+  character: String,
+  virtualKey: Int
+) -> Bool {
+  guard let menuBar = axElement(app, kAXMenuBarAttribute) else { return false }
+  let candidates = descendants(menuBar, maximum: 2_000).filter { element in
+    guard axString(element, kAXRoleAttribute) == kAXMenuItemRole,
+      axBool(element, kAXEnabledAttribute) != false
+    else { return false }
+    let modifiers = (axValue(element, kAXMenuItemCmdModifiersAttribute) as? NSNumber)?.intValue ?? 0
+    guard modifiers == 0 else { return false }
+    let commandCharacter = (axString(element, kAXMenuItemCmdCharAttribute) ?? "").lowercased()
+    let commandVirtualKey = (axValue(element, kAXMenuItemCmdVirtualKeyAttribute) as? NSNumber)?.intValue
+    return commandCharacter == character.lowercased() || commandVirtualKey == virtualKey
+  }
+  guard candidates.count == 1,
+    AXUIElementPerformAction(candidates[0], kAXPressAction as CFString) == .success
+  else { return false }
+  Thread.sleep(forTimeInterval: 0.3)
+  return true
+}
+
+func performNamedKey(
+  app: AXUIElement,
+  contents: [AXUIElement],
+  webArea: AXUIElement,
+  webBounds: Bounds,
+  key: String
+) throws -> Bool {
+  guard [
+    "backspace", "delete", "down", "end", "enter", "home", "left", "pagedown",
+    "pageup", "right", "space", "up",
+  ].contains(key) else { return false }
+  if let editable = try focusedEditableElement(app, webBounds: webBounds) {
+    if key == "enter" {
+      if AXUIElementPerformAction(editable, kAXConfirmAction as CFString) == .success { return true }
+      return AXUIElementPerformAction(editable, kAXPressAction as CFString) == .success
+    }
+    if ["backspace", "delete", "home", "left", "right", "space", "end"].contains(key) {
+      return performTextKey(editable, key: key)
+    }
+    return false
+  }
+  if key == "enter", let focused = focusedElementInside(app, webBounds: webBounds) {
+    let role = axString(focused, kAXRoleAttribute) ?? ""
+    let subrole = axString(focused, kAXSubroleAttribute) ?? ""
+    let name = semanticName(focused, mappedRole: roleName(role, subrole) ?? "")
+    guard sensitivity(role: role, subrole: subrole, name: name) == "none" else {
+      try fail("BROWSER_USER_TAKEOVER_REQUIRED")
+    }
+    if AXUIElementPerformAction(focused, kAXConfirmAction as CFString) == .success { return true }
+    return AXUIElementPerformAction(focused, kAXPressAction as CFString) == .success
+  }
+  let scrollPayload: String = switch key {
+  case "up": "up:small"
+  case "down": "down:small"
+  case "left": "left:small"
+  case "right": "right:small"
+  case "pageup": "up:viewport"
+  case "pagedown", "space": "down:viewport"
+  case "home": "up:edge"
+  case "end": "down:edge"
+  default: ""
+  }
+  return !scrollPayload.isEmpty
+    && performScroll(contents: contents, webArea: webArea, payload: scrollPayload)
+}
+
 func run(_ values: [String]) throws {
   let command = try argument(values, 0)
   let processId = pid_t(try integerArgument(values, 1))
@@ -484,12 +886,68 @@ func run(_ values: [String]) throws {
     ])
     return
   }
+  if command == "diagnose-scroll" {
+    let (_, window) = try exactWindow(native)
+    let contents = descendants(window)
+    let webAreas = contents.filter {
+      axString($0, kAXRoleAttribute) == "AXWebArea" && axBounds($0) != nil
+    }.sorted {
+      let left = axBounds($0)!
+      let right = axBounds($1)!
+      return left.width * left.height > right.width * right.height
+    }
+    guard let webArea = webAreas.first else { try fail("BROWSER_OBSERVATION_REQUIRED") }
+    func attributeNames(_ element: AXUIElement) -> [String] {
+      var names: CFArray?
+      guard AXUIElementCopyAttributeNames(element, &names) == .success else { return [] }
+      return (names as? [String]) ?? []
+    }
+    var ancestors: [[String: Any]] = []
+    var ancestor: AXUIElement? = webArea
+    for _ in 0..<12 {
+      guard let candidate = ancestor else { break }
+      ancestors.append([
+        "role": axString(candidate, kAXRoleAttribute) ?? "",
+        "subrole": axString(candidate, kAXSubroleAttribute) ?? "",
+        "bounds": axBounds(candidate)?.dictionary ?? [:],
+        "actions": actionNames(candidate),
+        "attributes": attributeNames(candidate),
+      ])
+      ancestor = axElement(candidate, kAXParentAttribute)
+    }
+    let scrollBars = contents.filter {
+      axString($0, kAXRoleAttribute) == kAXScrollBarRole
+    }.map { element in
+      [
+        "bounds": axBounds(element)?.dictionary ?? [:],
+        "orientation": axString(element, kAXOrientationAttribute) ?? "",
+        "value": axDouble(element, kAXValueAttribute) ?? -1,
+        "minimum": axDouble(element, kAXMinValueAttribute) ?? -1,
+        "maximum": axDouble(element, kAXMaxValueAttribute) ?? -1,
+        "actions": actionNames(element),
+        "attributes": attributeNames(element),
+      ] as [String: Any]
+    }
+    let scrollTargets = contents.compactMap { element -> [String: Any]? in
+      guard actionNames(element).contains("AXScrollToVisible"), let bounds = axBounds(element)
+      else { return nil }
+      return [
+        "role": axString(element, kAXRoleAttribute) ?? "",
+        "bounds": bounds.dictionary,
+      ]
+    }
+    try output([
+      "ancestors": ancestors,
+      "scrollBars": scrollBars,
+      "scrollTargets": Array(scrollTargets.prefix(100)),
+      "scrollTargetCount": scrollTargets.count,
+    ])
+    return
+  }
   #endif
 
   if command == "isolate" {
-    let app = try application(processId)
-    guard let focused = axElement(app, kAXFocusedWindowAttribute), axBounds(focused)?.matches(native.bounds) == true
-    else { try fail("BROWSER_SURFACE_NOT_BOUND") }
+    let (_, window) = try exactWindow(native)
     let bounds = Bounds(
       x: try integerArgument(values, 3),
       y: try integerArgument(values, 4),
@@ -497,7 +955,7 @@ func run(_ values: [String]) throws {
       height: try integerArgument(values, 6)
     )
     guard bounds.width >= 400, bounds.height >= 300 else { try fail("BROWSER_SURFACE_NOT_BOUND") }
-    try setBounds(focused, bounds)
+    try setBounds(window, bounds)
     print("isolated")
     return
   }
@@ -513,8 +971,19 @@ func run(_ values: [String]) throws {
     return
   }
 
+  if command == "monitor-user-input" {
+    try monitorUserInput(native)
+    return
+  }
+
   let (app, window) = try exactWindow(native)
   try activate(native, window)
+
+  if command == "create-window" {
+    print(performMenuShortcut(app, character: "n", virtualKey: 45)
+      ? "performed" : "unsupported")
+    return
+  }
 
   if command == "close" {
     guard let closeButton = axElement(window, kAXCloseButtonAttribute),
@@ -561,6 +1030,7 @@ func run(_ values: [String]) throws {
     case "focus":
       success = setAttribute(element, kAXFocusedAttribute, kCFBooleanTrue)
     case "setValue", "select":
+      _ = setAttribute(element, kAXFocusedAttribute, kCFBooleanTrue)
       success = setAttribute(element, kAXValueAttribute, payload as CFString)
     case "invoke", "click", "submit":
       success = AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
@@ -586,6 +1056,39 @@ func run(_ values: [String]) throws {
     let pointInside = pointX >= webBounds.x && pointY >= webBounds.y
       && pointX < webBounds.x + webBounds.width && pointY < webBounds.y + webBounds.height
     let pointTarget = pointInside ? interactiveElement(app, x: pointX, y: pointY) : nil
+    if ["back", "forward", "reload"].contains(action) {
+      let shortcut: (String, Int) = switch action {
+      case "back": ("[", 33)
+      case "forward": ("]", 30)
+      default: ("r", 15)
+      }
+      print(performMenuShortcut(app, character: shortcut.0, virtualKey: shortcut.1)
+        ? "performed" : "unsupported")
+      return
+    }
+    if action == "scroll" {
+      guard let webArea = primaryWebArea(contents, matching: webBounds) else {
+        print("unsupported")
+        return
+      }
+      print(performScroll(contents: contents, webArea: webArea, payload: payload)
+        ? "performed" : "unsupported")
+      return
+    }
+    if action == "key" {
+      guard let webArea = primaryWebArea(contents, matching: webBounds), !payload.isEmpty else {
+        print("unsupported")
+        return
+      }
+      print(try performNamedKey(
+        app: app,
+        contents: contents,
+        webArea: webArea,
+        webBounds: webBounds,
+        key: payload
+      ) ? "performed" : "unsupported")
+      return
+    }
     if ["focus", "click", "invoke", "submit"].contains(action) {
       guard let target = pointTarget, let targetBounds = axBounds(target),
         webBounds.contains(targetBounds)
@@ -601,15 +1104,6 @@ func run(_ values: [String]) throws {
       let pressed = action == "focus"
         ? false : AXUIElementPerformAction(target, kAXPressAction as CFString) == .success
       print(focused || pressed ? "performed" : "unsupported")
-      return
-    }
-    if action == "key", ["36", "76"].contains(payload),
-      let focused = axElement(app, kAXFocusedUIElementAttribute),
-      let focusedBounds = axBounds(focused), webBounds.contains(focusedBounds)
-    {
-      let confirmed = AXUIElementPerformAction(focused, kAXConfirmAction as CFString) == .success
-      let pressed = AXUIElementPerformAction(focused, kAXPressAction as CFString) == .success
-      print(confirmed || pressed ? "performed" : "unsupported")
       return
     }
     if action == "setValue" || action == "type" {
