@@ -30,8 +30,8 @@ function fixture(options: { shellAvailability?: () => HostToolAvailability } = {
       unavailableReasons: {},
     })),
     execute: vi.fn(async () => ({
-      summary: "isolated browser opened",
-      content: [{ type: "text" as const, text: "isolated browser opened" }],
+      summary: "host operation completed",
+      content: [{ type: "text" as const, text: "host operation completed" }],
       data: { sessionId: "00000000-0000-4000-8000-000000000777" },
       sources: [],
       artifacts: [],
@@ -86,11 +86,13 @@ describe("ToolAppService", () => {
     });
     const frame: PiToolRequestFrame = {
       ...base,
+      piToolCallId: "pi-desktop-call",
+      toolName: "openerx_desktop",
       operation: {
-        operation: "browser",
-        action: "open",
-        url: "https://example.com/current",
-        idempotencyKey: "browser-side-effect-0001",
+        operation: "desktop",
+        action: "screenshot",
+        application: "Notes",
+        idempotencyKey: "desktop-capture-scope-0001",
       },
     };
     const pending = service.handleRequest(frame);
@@ -107,7 +109,7 @@ describe("ToolAppService", () => {
       payloadDigest: permission.payloadDigest,
     });
 
-    await expect(pending).resolves.toMatchObject({ summary: "isolated browser opened" });
+    await expect(pending).resolves.toMatchObject({ summary: "host operation completed" });
     expect(host.execute).toHaveBeenCalledTimes(1);
     expect(events.map(({ type }) => type)).toEqual(
       expect.arrayContaining([

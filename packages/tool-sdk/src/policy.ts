@@ -24,7 +24,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: "calculator",
         actions: ["execute"],
         reason: "执行确定性本地计算",
-        forcePerCallApproval: false,
+        approval: "automatic",
       };
     case "structured_data":
       return {
@@ -34,7 +34,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: "structured-data",
         actions: ["execute"],
         reason: "执行确定性结构化数据处理",
-        forcePerCallApproval: false,
+        approval: "automatic",
       };
     case "web_search":
       return {
@@ -44,7 +44,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: "search.openerx.platform",
         actions: ["search"],
         reason: `搜索 Web：${operation.query.slice(0, 160)}`,
-        forcePerCallApproval: false,
+        approval: "automatic",
       };
     case "image_generate":
       return {
@@ -54,7 +54,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: "image-generation.openerx.platform",
         actions: ["create"],
         reason: `生成图片：${operation.prompt.slice(0, 160)}`,
-        forcePerCallApproval: false,
+        approval: "automatic",
       };
     case "shell_execute":
       return {
@@ -64,7 +64,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: operation.workspaceGrantId ?? operation.cwd ?? "missing-workspace",
         actions: operation.allowNetwork ? ["execute", "external_write"] : ["execute"],
         reason: `在 ${operation.workspaceGrantId ?? operation.cwd ?? "未知工作区"} 执行 ${operation.command}`,
-        forcePerCallApproval: !operation.workspaceGrantId,
+        approval: operation.workspaceGrantId ? "automatic" : "per_call",
       };
     case "workspace_list":
     case "workspace_search":
@@ -79,7 +79,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: operation.workspaceGrantId,
         actions: [operation.operation === "workspace_search" ? "search" : "read"],
         reason: `读取已授权工作区：${operation.operation}`,
-        forcePerCallApproval: false,
+        approval: "automatic",
       };
     case "workspace_apply_patch":
     case "workspace_undo":
@@ -90,7 +90,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: operation.workspaceGrantId,
         actions: ["patch"],
         reason: `修改已授权工作区：${operation.operation}`,
-        forcePerCallApproval: false,
+        approval: "automatic",
       };
     case "shell_status":
     case "shell_input":
@@ -108,14 +108,14 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
               : "stop",
         ],
         reason: `管理 Shell 进程 ${operation.processId}`,
-        forcePerCallApproval: false,
+        approval: "automatic",
       };
     case "browser": {
       const action = operation.action;
       const risk =
-        action === "submit"
+        action === "submit" || action === "upload"
           ? "L4"
-          : action === "upload" || action === "download"
+          : action === "download"
             ? "L3"
             : action === "close"
               ? "L0"
@@ -149,7 +149,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
                     : "interact",
         ],
         reason: `隔离浏览器操作：${action}`,
-        forcePerCallApproval: action === "submit",
+        approval: action === "submit" || action === "upload" ? "per_call" : "automatic",
       };
     }
     case "desktop": {
@@ -159,14 +159,14 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         : operation.application;
       return {
         capability: "desktop",
-        risk: highImpact ? "L5" : operation.action === "screenshot" ? "L2" : "L5",
+        risk: highImpact ? "L5" : operation.action === "screenshot" ? "L2" : "L3",
         resourceType: "application",
         resource: operation.bundleId ?? operation.application,
         actions: [
           operation.action === "screenshot" ? "capture" : highImpact ? "high_impact" : "interact",
         ],
         reason: `控制桌面应用 ${target}：${operation.action}`,
-        forcePerCallApproval: highImpact || operation.action !== "screenshot",
+        approval: highImpact ? "per_call" : "scope",
       };
     }
     case "mcp_connect":
@@ -184,9 +184,11 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
                 : operation.annotations.destructiveHint
                   ? "L5"
                   : "L4"
-              : operation.operation === "mcp_disconnect"
-                ? "L3"
-                : "L2",
+              : operation.operation === "mcp_disconnect" && operation.clearCredentials
+                ? "L4"
+                : operation.operation === "mcp_disconnect"
+                  ? "L0"
+                  : "L2",
         resourceType: "server",
         resource: operation.serverId,
         actions: [
@@ -197,9 +199,12 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
               : "connect",
         ],
         reason: `MCP 操作：${operation.operation}`,
-        forcePerCallApproval:
+        approval:
           operation.operation === "mcp_connect" ||
-          (operation.operation === "mcp_call" && !operation.annotations.readOnlyHint),
+          (operation.operation === "mcp_call" && !operation.annotations.readOnlyHint) ||
+          (operation.operation === "mcp_disconnect" && operation.clearCredentials)
+            ? "per_call"
+            : "automatic",
       };
     case "skill_read":
       return {
@@ -209,7 +214,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: `${operation.installationId}:${operation.relativePath}`,
         actions: ["read"],
         reason: `读取已安装 Skill 资源：${operation.relativePath}`,
-        forcePerCallApproval: false,
+        approval: "automatic",
       };
     case "skill_script_execute":
       return {
@@ -219,7 +224,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: `${operation.installationId}:${operation.relativePath}`,
         actions: operation.allowNetwork ? ["execute", "external_write"] : ["execute"],
         reason: `执行 Skill 脚本：${operation.relativePath}`,
-        forcePerCallApproval: true,
+        approval: "per_call",
       };
   }
 }

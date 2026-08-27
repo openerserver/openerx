@@ -27,14 +27,14 @@ describe("M5 Tool Golden Tasks", () => {
     ]);
   });
 
-  it("enforces the M5 risk and exact per-call approval boundary", () => {
+  it("separates M5 risk from Codex-style automatic, scoped, and per-call approval", () => {
     expect(
       capabilityRequirement({
         operation: "web_search",
         query: "current protocol",
         idempotencyKey: "golden-web-0001",
       }),
-    ).toMatchObject({ capability: "web.search", risk: "L2", forcePerCallApproval: false });
+    ).toMatchObject({ capability: "web.search", risk: "L2", approval: "automatic" });
     expect(
       capabilityRequirement({
         operation: "shell_execute",
@@ -46,7 +46,20 @@ describe("M5 Tool Golden Tasks", () => {
         allowNetwork: false,
         idempotencyKey: "golden-shell-0001",
       }),
-    ).toMatchObject({ capability: "shell", risk: "L5", forcePerCallApproval: true });
+    ).toMatchObject({ capability: "shell", risk: "L5", approval: "per_call" });
+    expect(
+      capabilityRequirement({
+        operation: "shell_execute",
+        workspaceGrantId: "00000000-0000-4000-8000-000000000501",
+        relativeCwd: ".",
+        command: "node",
+        args: [],
+        timeoutMs: 1_000,
+        background: false,
+        allowNetwork: false,
+        idempotencyKey: "golden-shell-workspace-0001",
+      }),
+    ).toMatchObject({ capability: "shell", risk: "L3", approval: "automatic" });
     for (const action of ["submit", "send", "delete", "purchase"] as const) {
       expect(
         capabilityRequirement({
@@ -55,8 +68,34 @@ describe("M5 Tool Golden Tasks", () => {
           application: "fixture",
           idempotencyKey: `golden-desktop-${action}`,
         }),
-      ).toMatchObject({ risk: "L5", forcePerCallApproval: true });
+      ).toMatchObject({ risk: "L5", approval: "per_call" });
     }
+    expect(
+      capabilityRequirement({
+        operation: "desktop",
+        action: "type",
+        application: "fixture",
+        text: "draft",
+        idempotencyKey: "golden-desktop-type",
+      }),
+    ).toMatchObject({ risk: "L3", approval: "scope" });
+    expect(
+      capabilityRequirement({
+        operation: "browser",
+        action: "open",
+        url: "https://example.com",
+        idempotencyKey: "golden-browser-open",
+      }),
+    ).toMatchObject({ risk: "L2", approval: "automatic" });
+    expect(
+      capabilityRequirement({
+        operation: "browser",
+        action: "submit",
+        sessionId: "00000000-0000-4000-8000-000000000502",
+        selector: "form",
+        idempotencyKey: "golden-browser-submit",
+      }),
+    ).toMatchObject({ risk: "L4", approval: "per_call" });
     expect(
       capabilityRequirement({
         operation: "image_generate",
@@ -65,7 +104,7 @@ describe("M5 Tool Golden Tasks", () => {
         count: 1,
         idempotencyKey: "golden-image-0001",
       }),
-    ).toMatchObject({ capability: "image.generate", risk: "L2" });
+    ).toMatchObject({ capability: "image.generate", risk: "L2", approval: "automatic" });
   });
 
   it("keeps M5 evidence and recognizes the later M7 Skill evidence", () => {

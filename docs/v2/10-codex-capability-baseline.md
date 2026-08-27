@@ -54,7 +54,7 @@
 | TOOL-07 | 工具目录与内置生产力工具 | 工具按来源/命名空间分组并可按需发现；至少包含确定性计算、文件转换/渲染、结构化数据处理和平台提供的图片生成能力 |
 | TOOL-08 | 工具过程 | Pi 工具调用事件投影到对话中的可折叠活动，包含状态、输入/目标摘要、结果、来源、耗时和错误；原始 Pi/工具协议不作为普通用户主界面 |
 | TOOL-09 | 取消、重试与幂等 | Pi 管理调用生命周期和把结果送回 Agent Loop；Broker 可取消实际执行，外部写操作使用幂等键，重试不得重复产生副作用 |
-| TOOL-10 | 沙箱与审批 | V2 Broker 默认只写授权工作区且 Shell/脚本无任意网络；网络、浏览器、桌面控制和外部写入按风险分级，越出 Scope 前必须请求授权 |
+| TOOL-10 | 沙箱与审批 | V2 Broker 将风险、OS 沙箱和审批策略分离：授权工作区内读取/Patch/沙箱 Shell 自动执行；网络单独授予；桌面普通交互按对话 Scope；外部写入与高影响动作逐次确认 |
 
 2026-08-27 的 CX-109 本地检查点已覆盖 TOOL-05/TOOL-08 的类型化输入结果、命令输出、来源、Diff、Approval、Plan、安全 Reasoning、Compaction/Retry 与按 Run 回放。CX-110-D1 已把 TOOL-06 的桌面 OAuth 从 Client Secret/`client_credentials` 修正为 Main-owned Authorization Code + PKCE；CX-110-D2 又把静态工具目录接到真实 Host readiness，在当前 Mac 完成 Browser 全链路、Shell 沙箱负向测试和 Desktop 目标窗口捕获，并覆盖允许、拒绝与撤销；CX-110-D3 进一步验证 Developer ID 签名 macOS arm64 包的 TCC/Accessibility、精确窗口身份、TextEdit 受控输入及安装/升级/回滚数据保持。Apple 公证/DMG/Gatekeeper、第三方实网和 Windows 原生工具矩阵仍属于未完成范围。
 

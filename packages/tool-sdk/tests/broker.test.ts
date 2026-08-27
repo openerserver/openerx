@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { NormalizedToolResult } from "@openerx/contracts";
@@ -8,8 +9,8 @@ import {
   BuiltinToolAdapter,
   CapabilityBroker,
   capabilityRequirement,
-  operationDigest,
   WebSearchAdapter,
+  WorkspaceToolAdapter,
 } from "../src";
 
 const directories: string[] = [];
@@ -36,6 +37,7 @@ function fixture() {
   });
   return {
     chat,
+    directory,
     repository,
     projection: {
       generationId: "00000000-0000-4000-8000-000000000010",
@@ -97,7 +99,42 @@ describe("CapabilityBroker", () => {
     repository.close();
   });
 
-  it("blocks Web search until the exact payload is approved and keeps sources", async () => {
+  it("does not ask again for a patch inside an explicitly granted workspace", async () => {
+    const { chat, directory, repository, projection } = fixture();
+    const workspace = path.join(directory, "workspace");
+    mkdirSync(path.join(workspace, "src"), { recursive: true });
+    const target = path.join(workspace, "src", "example.ts");
+    writeFileSync(target, "before\n");
+    const grant = repository.grantWorkspace({
+      conversationId: projection.conversationId,
+      displayName: "workspace",
+      rootPath: workspace,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const broker = new CapabilityBroker(repository, [
+      new WorkspaceToolAdapter(repository, directory),
+    ]);
+
+    await expect(
+      broker.execute(projection, {
+        operation: "workspace_apply_patch",
+        workspaceGrantId: grant.id,
+        relativePath: "src/example.ts",
+        expectedSha256: createHash("sha256").update("before\n").digest("hex"),
+        replacements: [{ oldText: "before", newText: "after" }],
+        instructionDigests: [],
+        idempotencyKey: "workspace-patch-auto-0001",
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(repository.listPermissions()).toHaveLength(0);
+    expect(readFileSync(target, "utf8")).toBe("after\n");
+    chat.close();
+    repository.close();
+  });
+
+  it("runs first-party Web search automatically and keeps sources", async () => {
     const { chat, repository, projection } = fixture();
     const expected: NormalizedToolResult = {
       summary: "两条结果",
@@ -125,20 +162,9 @@ describe("CapabilityBroker", () => {
       idempotencyKey: "web-search-dedupe-0001",
     };
 
-    const blocked = await broker.execute(projection, operation);
-    expect(blocked.status).toBe("permission_required");
-    if (blocked.status !== "permission_required") throw new Error("expected permission");
-    expect(blocked.permission.payloadDigest).toBe(operationDigest(operation));
-    expect(transport.search).not.toHaveBeenCalled();
-
-    broker.resolvePermission({
-      permissionRequestId: blocked.permission.id,
-      decision: "session",
-      payloadDigest: blocked.permission.payloadDigest,
-    });
     const completed = await broker.execute(projection, operation);
     expect(completed).toMatchObject({ status: "completed", result: { sources: expected.sources } });
-    expect(repository.activeScopes("web.search")).toHaveLength(1);
+    expect(repository.activeScopes("web.search")).toHaveLength(0);
     expect(transport.search).toHaveBeenCalledTimes(1);
     chat.close();
     repository.close();
@@ -198,33 +224,38 @@ describe("CapabilityBroker", () => {
     repository.close();
   });
 
-  it("does not reuse a remote session scope outside its approved conversation", async () => {
+  it("derives session scope from the pending request and does not reuse it in another conversation", async () => {
     const { chat, repository, projection } = fixture();
-    const transport = {
-      search: vi.fn(async () => ({
-        summary: "result",
-        content: [{ type: "text" as const, text: "result" }],
-        data: {},
-        sources: [],
-        artifacts: [],
-        sideEffectCommitted: false,
-        durationMs: 1,
-      })),
-    };
-    const broker = new CapabilityBroker(repository, [new WebSearchAdapter(transport)]);
+    const execute = vi.fn(async () => ({
+      summary: "desktop screenshot",
+      content: [{ type: "text" as const, text: "desktop screenshot" }],
+      data: {},
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: false,
+      durationMs: 1,
+    }));
+    const broker = new CapabilityBroker(repository, [{ operations: ["desktop"], execute }]);
     const firstOperation = {
-      operation: "web_search" as const,
-      query: "conversation A",
-      recencyDays: 7,
-      idempotencyKey: "conversation-a-search",
+      operation: "desktop" as const,
+      action: "screenshot" as const,
+      application: "Notes",
+      idempotencyKey: "conversation-a-capture",
     };
     const blocked = await broker.execute(projection, firstOperation);
     if (blocked.status !== "permission_required") throw new Error("expected permission");
+    expect(() =>
+      broker.resolvePermission({
+        permissionRequestId: blocked.permission.id,
+        decision: "session",
+        payloadDigest: blocked.permission.payloadDigest,
+        scopeConversationId: "00000000-0000-4000-8000-000000000099",
+      }),
+    ).toThrow("PERMISSION_SCOPE_MISMATCH");
     broker.resolvePermission({
       permissionRequestId: blocked.permission.id,
       decision: "session",
       payloadDigest: blocked.permission.payloadDigest,
-      scopeConversationId: projection.conversationId,
     });
     expect((await broker.execute(projection, firstOperation)).status).toBe("completed");
 
@@ -254,20 +285,17 @@ describe("CapabilityBroker", () => {
       },
       {
         ...firstOperation,
-        query: "conversation B",
-        idempotencyKey: "conversation-b-search",
+        idempotencyKey: "conversation-b-capture",
       },
     );
     expect(second.status).toBe("permission_required");
-    expect(transport.search).toHaveBeenCalledTimes(1);
-    expect(repository.activeScopes("web.search")[0]?.conversationId).toBe(
-      projection.conversationId,
-    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(repository.activeScopes("desktop")[0]?.conversationId).toBe(projection.conversationId);
     chat.close();
     repository.close();
   });
 
-  it("requires Browser approval again after its persistent scope is revoked", async () => {
+  it("runs isolated Browser observation automatically but keeps submit per-call", async () => {
     const { chat, repository, projection } = fixture();
     const execute = vi.fn(async () => ({
       summary: "browser screenshot",
@@ -281,48 +309,39 @@ describe("CapabilityBroker", () => {
     const broker = new CapabilityBroker(repository, [
       { operations: ["browser"] as const, execute },
     ]);
-    const operation = {
+    const screenshot = {
       operation: "browser" as const,
       action: "screenshot" as const,
       sessionId: crypto.randomUUID(),
-      idempotencyKey: "browser-screenshot-approved-0001",
+      idempotencyKey: "browser-screenshot-automatic-0001",
     };
-    const blocked = await broker.execute(projection, operation);
-    if (blocked.status !== "permission_required") throw new Error("expected permission");
-    broker.resolvePermission({
-      permissionRequestId: blocked.permission.id,
-      decision: "persistent",
-      payloadDigest: blocked.permission.payloadDigest,
-    });
-    const browserScope = repository.activeScopes("browser")[0];
-    expect(browserScope).toMatchObject({ capability: "browser", actions: ["capture"] });
-    await expect(broker.execute(projection, operation)).resolves.toMatchObject({
+    await expect(broker.execute(projection, screenshot)).resolves.toMatchObject({
       status: "completed",
     });
-    if (!browserScope) throw new Error("browser scope missing");
-    repository.revokeScope(browserScope.id);
-
-    const afterRevoke = await broker.execute(
+    const submit = await broker.execute(
+      { ...projection, piToolCallId: "pi-call-browser-submit" },
       {
-        ...projection,
-        piToolCallId: "pi-call-browser-after-revoke",
+        operation: "browser",
+        action: "submit",
+        sessionId: screenshot.sessionId,
+        selector: "form",
+        idempotencyKey: "browser-submit-per-call-0001",
       },
-      { ...operation, idempotencyKey: "browser-screenshot-after-revoke-0001" },
     );
-    expect(afterRevoke).toMatchObject({
+    expect(submit).toMatchObject({
       status: "permission_required",
-      permission: { capability: "browser", actions: ["capture"] },
+      permission: { capability: "browser", risk: "L4", actions: ["external_write"] },
     });
     expect(execute).toHaveBeenCalledTimes(1);
     chat.close();
     repository.close();
   });
 
-  it("keeps a denied Browser navigation out of the Host adapter", async () => {
+  it("keeps a denied Browser submit out of the Host adapter", async () => {
     const { chat, repository, projection } = fixture();
     const execute = vi.fn(async () => ({
-      summary: "browser opened",
-      content: [{ type: "text" as const, text: "browser opened" }],
+      summary: "browser submitted",
+      content: [{ type: "text" as const, text: "browser submitted" }],
       data: {},
       sources: [],
       artifacts: [],
@@ -334,9 +353,10 @@ describe("CapabilityBroker", () => {
     ]);
     const operation = {
       operation: "browser" as const,
-      action: "open" as const,
-      url: "https://example.com/denied",
-      idempotencyKey: "browser-navigation-denied-0001",
+      action: "submit" as const,
+      sessionId: crypto.randomUUID(),
+      selector: "form",
+      idempotencyKey: "browser-submit-denied-0001",
     };
     const blocked = await broker.execute(projection, operation);
     if (blocked.status !== "permission_required") throw new Error("expected permission");
@@ -438,16 +458,6 @@ describe("CapabilityBroker", () => {
 
   it("does not replay an external action whose outcome became unknown", async () => {
     const { chat, repository, projection } = fixture();
-    repository.createScope({
-      capability: "browser",
-      resourceType: "domain",
-      resource: "example.com",
-      actions: ["navigate"],
-      maxRisk: "L2",
-      conversationId: projection.conversationId,
-      sessionOnly: false,
-      expiresAt: null,
-    });
     const execute = vi.fn(async () => {
       throw new Error("HOST_DISCONNECTED_AFTER_ACTION");
     });

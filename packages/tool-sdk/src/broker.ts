@@ -135,8 +135,8 @@ export class CapabilityBroker {
     }
 
     const requiresApproval =
-      requirement.risk !== "L0" &&
-      (requirement.forcePerCallApproval ||
+      requirement.approval !== "automatic" &&
+      (requirement.approval === "per_call" ||
         !this.#repository
           .activeScopes(requirement.capability)
           .some(
@@ -235,7 +235,19 @@ export class CapabilityBroker {
     payloadDigest: string;
     scopeConversationId?: string | null;
   }): PermissionRequest {
-    const result = this.#repository.resolvePermission(input);
+    const request = this.#repository.permission(input.permissionRequestId);
+    const conversationId = this.#repository.workItem(request.workItemId).conversationId;
+    if (
+      input.decision === "session" &&
+      input.scopeConversationId !== undefined &&
+      input.scopeConversationId !== conversationId
+    ) {
+      throw new ToolBrokerError("PERMISSION_SCOPE_MISMATCH");
+    }
+    const result = this.#repository.resolvePermission({
+      ...input,
+      scopeConversationId: input.decision === "session" ? conversationId : null,
+    });
     this.#pendingApprovals
       .get(input.permissionRequestId)
       ?.resolve(input.decision === "deny" ? "denied" : "approved");

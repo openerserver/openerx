@@ -108,7 +108,7 @@ describe("McpToolAdapter", () => {
         descriptorDigest: read.descriptorDigest,
         idempotencyKey: "mcp-read-policy-0001",
       }),
-    ).toMatchObject({ risk: "L0", forcePerCallApproval: false });
+    ).toMatchObject({ risk: "L0", approval: "automatic" });
     expect(
       capabilityRequirement({
         operation: "mcp_call",
@@ -119,7 +119,7 @@ describe("McpToolAdapter", () => {
         descriptorDigest: write.descriptorDigest,
         idempotencyKey: "mcp-write-policy-0001",
       }),
-    ).toMatchObject({ risk: "L4", forcePerCallApproval: true });
+    ).toMatchObject({ risk: "L4", approval: "per_call" });
 
     adapter.register({ ...config, enabled: false });
     await expect(adapter.discoverEnabledTools()).resolves.toEqual([]);

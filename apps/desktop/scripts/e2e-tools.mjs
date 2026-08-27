@@ -52,18 +52,11 @@ try {
   assert.equal(imported.length, 1);
   const uploadFileId = imported[0]?.id;
   assert.ok(uploadFileId);
+  const isolatedWindowPromise = application.waitForEvent("window");
   await page
     .getByLabel("发送消息")
     .fill(`打开隔离网页 [PI_TEST_BROWSER] ${fixtureUrl} FILE_ID=${uploadFileId}`);
   await page.getByRole("button", { name: "发送", exact: true }).click();
-
-  const firstPermission = page
-    .getByText("隔离浏览器操作：open", { exact: true })
-    .locator("..")
-    .getByRole("button", { name: "仅本次允许" });
-  await firstPermission.waitFor();
-  const isolatedWindowPromise = application.waitForEvent("window");
-  await firstPermission.click();
   const isolatedWindow = await isolatedWindowPromise;
   const isolatedWindowClosed = isolatedWindow.waitForEvent("close", { timeout: 90_000 });
   await isolatedWindow.waitForLoadState("domcontentloaded");
@@ -71,22 +64,7 @@ try {
   assert.equal(application.windows().length, 2);
 
   await page
-    .getByText("隔离浏览器操作：type", { exact: true })
-    .locator("..")
-    .getByRole("button", { name: "仅本次允许" })
-    .click();
-  await page
-    .getByText("隔离浏览器操作：screenshot", { exact: true })
-    .locator("..")
-    .getByRole("button", { name: "仅本次允许" })
-    .click();
-  await page
     .getByText("隔离浏览器操作：upload", { exact: true })
-    .locator("..")
-    .getByRole("button", { name: "仅本次允许" })
-    .click();
-  await page
-    .getByText("隔离浏览器操作：download", { exact: true })
     .locator("..")
     .getByRole("button", { name: "仅本次允许" })
     .click();
@@ -96,12 +74,16 @@ try {
     .getByText(/独立分区 openerx-isolated-browser-/)
     .waitFor();
   await page.waitForFunction(() => document.querySelectorAll(".tool-call-row").length === 6);
+  assert.equal(await page.getByLabel("工具权限确认").count(), 1);
   await isolatedWindowClosed;
   const remainingWindows = application.windows();
   assert.equal(remainingWindows.length, 1);
   const remainingWindow = remainingWindows[0];
   assert.ok(remainingWindow);
   page = remainingWindow;
+  console.log(
+    "E2E_BROWSER_APPROVALS_OK automatic=open-type-screenshot-download-close per_call=upload permission_cards=1",
+  );
 
   const completedBeforeDesktop = await page
     .locator(".message-assistant[data-message-status='completed']")
@@ -142,7 +124,7 @@ try {
   assert.ok(["运行时可用", "部分可用", "需要设置", "不可用"].includes(shellStatus));
   assert.ok(["运行时可用", "部分可用", "需要设置", "不可用"].includes(desktopStatus));
   console.log(
-    "E2E_TOOLS_OK permission-isolated-browser-type-screenshot-upload-download-close-projection",
+    "E2E_TOOLS_OK auto-isolated-browser-open-type-screenshot-download-close-upload-per-call-projection",
   );
   console.log(
     `E2E_DESKTOP_READINESS_OK browser=运行时可用 shell=${shellStatus} desktop=${desktopStatus} reason=${desktopReason ?? "none"} native_window_capture=pass`,

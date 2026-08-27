@@ -34,7 +34,7 @@ describe("M7 Skill Golden Tasks", () => {
         relativePath: "references/template.md",
         idempotencyKey: "golden-skill-read-0001",
       }),
-    ).toMatchObject({ capability: "skill", risk: "L0", forcePerCallApproval: false });
+    ).toMatchObject({ capability: "skill", risk: "L0", approval: "automatic" });
     expect(
       capabilityRequirement({
         operation: "skill_script_execute",
@@ -45,6 +45,6 @@ describe("M7 Skill Golden Tasks", () => {
         allowNetwork: false,
         idempotencyKey: "golden-skill-script-0001",
       }),
-    ).toMatchObject({ capability: "skill", risk: "L5", forcePerCallApproval: true });
+    ).toMatchObject({ capability: "skill", risk: "L5", approval: "per_call" });
   });
 });

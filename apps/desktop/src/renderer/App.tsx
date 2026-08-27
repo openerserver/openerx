@@ -870,7 +870,7 @@ function NewChat(): React.JSX.Element {
       <section className="welcome" aria-labelledby="welcome-title">
         <p className="eyebrow">个人 AI 工作区</p>
         <h1 id="welcome-title">今天想完成什么？</h1>
-        <p>描述目标，或附上文件；OpenerX 会在执行前说明需要的能力与权限。</p>
+        <p>描述目标，或附上文件；已授权范围内自动执行，越出范围或产生高影响副作用时再确认。</p>
       </section>
       <section className="suggestion-grid" aria-label="常用任务建议">
         {suggestions.map((suggestion) => (
@@ -1164,7 +1164,9 @@ function ContextDock({
         <div className="context-dropzone">
           <FolderSimple size={26} weight="regular" />
           <strong>授权可审阅、可撤销的项目目录</strong>
-          <span>模型只看到授权 ID 与相对路径；Shell 网络权限与目录权限分别授予。</span>
+          <span>
+            授权后，范围内读写和沙箱 Shell 自动执行；网络权限单独授予，外部高影响动作仍逐次确认。
+          </span>
           <div className="workspace-grant-controls">
             <label>
               <span>访问权限</span>
@@ -2024,7 +2026,7 @@ function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
                           })
                         }
                       >
-                        本次会话允许
+                        在此对话中允许
                       </button>
                     ) : null}
                     <button

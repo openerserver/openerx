@@ -16,7 +16,7 @@ export interface CapabilityRequirement {
   resource: string;
   actions: CapabilityAction[];
   reason: string;
-  forcePerCallApproval: boolean;
+  approval: "automatic" | "scope" | "per_call";
 }
 
 export interface ToolExecutionContext {
