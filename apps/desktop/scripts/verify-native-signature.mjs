@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outRoot = path.join(desktopRoot, "out");
-const requireSigned = process.env.OPENERX_RELEASE_MODE === "1";
+const releaseMode = process.env.OPENERX_RELEASE_MODE === "1";
+const requireSigned = releaseMode || process.env.OPENERX_REQUIRE_SIGNED_MACOS === "1";
+const requireNotarized = releaseMode || process.env.OPENERX_REQUIRE_NOTARIZED_MACOS === "1";
+const selectedTarget =
+  process.env.OPENERX_RELEASE_TARGET ??
+  (process.env.OPENERX_REQUIRE_SIGNED_MACOS === "1" ? `${process.platform}-${process.arch}` : null);
 
 function find(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -16,7 +21,9 @@ function find(directory) {
   });
 }
 
-const targets = find(outRoot);
+const targets = find(outRoot).filter(
+  (target) => !selectedTarget || target.includes(`${path.sep}OpenerX-${selectedTarget}${path.sep}`),
+);
 if (targets.length === 0) throw new Error("RELEASE_NATIVE_TARGET_NOT_FOUND");
 
 for (const target of targets) {
@@ -37,11 +44,56 @@ for (const target of targets) {
     if (verify.status !== 0) throw new Error(`MAC_CODE_SIGNATURE_INVALID:${relative}`);
     const details = spawnSync("codesign", ["-dv", "--verbose=4", target], { encoding: "utf8" });
     const output = `${details.stdout}${details.stderr}`;
-    if (!/Authority=Developer ID Application:/u.test(output) || /Signature=adhoc/u.test(output)) {
+    if (
+      !/Authority=Developer ID Application:/u.test(output) ||
+      /Signature=adhoc/u.test(output) ||
+      !/TeamIdentifier=[A-Z0-9]{10}/u.test(output) ||
+      !/(?:flags=0x[0-9a-f]+\(runtime\)|Runtime Version=)/u.test(output)
+    ) {
       throw new Error(`MAC_DEVELOPER_ID_MISSING:${relative}`);
     }
-    const staple = spawnSync("xcrun", ["stapler", "validate", target], { encoding: "utf8" });
-    if (staple.status !== 0) throw new Error(`MAC_NOTARIZATION_TICKET_INVALID:${relative}`);
+    const identifier = spawnSync(
+      "/usr/libexec/PlistBuddy",
+      ["-c", "Print :CFBundleIdentifier", path.join(target, "Contents", "Info.plist")],
+      { encoding: "utf8" },
+    );
+    if (identifier.status !== 0 || identifier.stdout.trim() !== "com.openerx.desktop") {
+      throw new Error(`MAC_BUNDLE_IDENTIFIER_INVALID:${relative}`);
+    }
+    const usage = spawnSync(
+      "/usr/libexec/PlistBuddy",
+      ["-c", "Print :NSAppleEventsUsageDescription", path.join(target, "Contents", "Info.plist")],
+      { encoding: "utf8" },
+    );
+    if (usage.status !== 0 || usage.stdout.trim().length < 20) {
+      throw new Error(`MAC_APPLE_EVENTS_USAGE_DESCRIPTION_MISSING:${relative}`);
+    }
+    const entitlements = spawnSync("codesign", ["-d", "--entitlements", ":-", target], {
+      encoding: "utf8",
+    });
+    const entitlementOutput = `${entitlements.stdout}${entitlements.stderr}`;
+    if (
+      entitlements.status !== 0 ||
+      !/<key>com\.apple\.security\.automation\.apple-events<\/key>\s*<true\s*\/>/u.test(
+        entitlementOutput,
+      ) ||
+      !/<key>com\.apple\.security\.cs\.allow-jit<\/key>\s*<true\s*\/>/u.test(entitlementOutput)
+    ) {
+      throw new Error(`MAC_DESKTOP_ENTITLEMENTS_INVALID:${relative}`);
+    }
+    const requirement = spawnSync("codesign", ["-dr", "-", target], { encoding: "utf8" });
+    const requirementOutput = `${requirement.stdout}${requirement.stderr}`;
+    if (
+      requirement.status !== 0 ||
+      !/identifier "com\.openerx\.desktop"/u.test(requirementOutput) ||
+      !/anchor apple generic/u.test(requirementOutput)
+    ) {
+      throw new Error(`MAC_DESIGNATED_REQUIREMENT_INVALID:${relative}`);
+    }
+    if (requireNotarized) {
+      const staple = spawnSync("xcrun", ["stapler", "validate", target], { encoding: "utf8" });
+      if (staple.status !== 0) throw new Error(`MAC_NOTARIZATION_TICKET_INVALID:${relative}`);
+    }
   } else {
     if (process.platform !== "win32") throw new Error("WINDOWS_SIGNATURE_REQUIRES_WINDOWS_RUNNER");
     const escaped = target.replaceAll("'", "''");
@@ -57,5 +109,7 @@ for (const target of targets) {
     );
     if (signature.status !== 0) throw new Error(`WINDOWS_AUTHENTICODE_INVALID:${relative}`);
   }
-  console.log(`[m9-native-signature] SIGNED OK: ${relative}`);
+  console.log(
+    `[m9-native-signature] SIGNED OK: ${relative}; notarization=${requireNotarized ? "valid" : "not-required"}`,
+  );
 }

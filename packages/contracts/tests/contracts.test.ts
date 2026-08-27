@@ -4,6 +4,8 @@ import {
   chatCommandEnvelopeSchema,
   desktopEnvironmentSchema,
   desktopMcpServerSaveInputSchema,
+  desktopNativePermissionRequestSchema,
+  desktopNativePermissionResultSchema,
   errorEnvelopeSchema,
   hostToolAvailabilitySchema,
   mainCapabilityAvailabilityRequestFrameSchema,
@@ -55,6 +57,26 @@ describe("desktop environment contract", () => {
         arch: "x64",
         appVersion: "2.0.0-alpha.0",
         nodeIntegration: true,
+      }),
+    ).toThrow();
+  });
+
+  it("keeps native permission requests typed and reason-coded", () => {
+    expect(desktopNativePermissionRequestSchema.parse({ permission: "accessibility" })).toEqual({
+      permission: "accessibility",
+    });
+    expect(
+      desktopNativePermissionResultSchema.parse({
+        permission: "accessibility",
+        status: "authorization_required",
+        reason: "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
+        settingsOpened: true,
+      }),
+    ).toMatchObject({ status: "authorization_required", settingsOpened: true });
+    expect(() =>
+      desktopNativePermissionRequestSchema.parse({
+        permission: "accessibility",
+        settingsUrl: "arbitrary://renderer-controlled",
       }),
     ).toThrow();
   });

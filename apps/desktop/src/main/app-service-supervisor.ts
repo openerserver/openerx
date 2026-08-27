@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import {
   type AppServiceAuthorization,
@@ -207,16 +207,38 @@ export class AppServiceSupervisor {
     const mainChannel = new MessageChannelMain();
     const piHostChannel = new MessageChannelMain();
     const remoteHostChannel = new MessageChannelMain();
+    const utilityStdio = process.env.OPENERX_E2E === "1" ? "pipe" : "inherit";
     this.#mainPort = mainChannel.port1;
     this.#piHostProcess = utilityProcess.fork(path.join(__dirname, this.#piHostEntry), [], {
       serviceName: "OpenerX Pi Host",
+      stdio: utilityStdio,
     });
     this.#appProcess = utilityProcess.fork(path.join(__dirname, "app-service.js"), [], {
       serviceName: "OpenerX App Service",
+      stdio: utilityStdio,
     });
     this.#remoteHostProcess = utilityProcess.fork(path.join(__dirname, "remote-host.js"), [], {
       serviceName: "OpenerX Remote Connector",
+      stdio: utilityStdio,
     });
+    if (process.env.OPENERX_E2E === "1") {
+      const utilityLogDirectory = path.join(this.#profileDirectory, "logs", "utility");
+      mkdirSync(utilityLogDirectory, { recursive: true });
+      for (const [name, child] of [
+        ["app-service", this.#appProcess],
+        ["pi-host", this.#piHostProcess],
+        ["remote-host", this.#remoteHostProcess],
+      ] as const) {
+        child.stdout?.on("data", (data: Buffer) => {
+          appendFileSync(path.join(utilityLogDirectory, `${name}.stdout.log`), data);
+          process.stdout.write(`[${name}] ${data}`);
+        });
+        child.stderr?.on("data", (data: Buffer) => {
+          appendFileSync(path.join(utilityLogDirectory, `${name}.stderr.log`), data);
+          process.stderr.write(`[${name}] ${data}`);
+        });
+      }
+    }
     this.#piHostProcess.postMessage(
       {
         kind: "pi-host.bootstrap",
@@ -258,9 +280,11 @@ export class AppServiceSupervisor {
       this.#remoteHandshakeComplete = true;
       this.#resolveIfReady();
     });
-    appProcess.once("exit", () => this.#handleExit("App Service", appProcess));
-    piHostProcess.once("exit", () => this.#handleExit("Pi Host", piHostProcess));
-    remoteHostProcess.once("exit", () => this.#handleExit("Remote Connector", remoteHostProcess));
+    appProcess.once("exit", (code) => this.#handleExit("App Service", appProcess, code));
+    piHostProcess.once("exit", (code) => this.#handleExit("Pi Host", piHostProcess, code));
+    remoteHostProcess.once("exit", (code) =>
+      this.#handleExit("Remote Connector", remoteHostProcess, code),
+    );
   }
 
   #handleMessage(data: unknown, expectedNonce: string): void {
@@ -477,6 +501,7 @@ export class AppServiceSupervisor {
   #handleExit(
     processName: "App Service" | "Pi Host" | "Remote Connector",
     exitedProcess: UtilityProcess,
+    exitCode: number,
   ): void {
     const currentProcess =
       processName === "App Service"
@@ -495,15 +520,15 @@ export class AppServiceSupervisor {
     this.#remoteHostProcess = null;
     this.#mainPort?.close();
     this.#mainPort = null;
-    this.#rejectReady?.(new Error(`${processName} exited before readiness`));
-    this.#rejectAll(new Error(`${processName} exited`));
+    this.#rejectReady?.(new Error(`${processName} exited before readiness (${exitCode})`));
+    this.#rejectAll(new Error(`${processName} exited (${exitCode})`));
     this.#ready = null;
     this.#restartCount += 1;
     if (this.#restartCount > 3) {
-      this.#emitStatus("unavailable", `${processName} exceeded restart budget`);
+      this.#emitStatus("unavailable", `${processName} exceeded restart budget (${exitCode})`);
       return;
     }
-    this.#emitStatus("restarting", `${processName} exited`);
+    this.#emitStatus("restarting", `${processName} exited (${exitCode})`);
     setTimeout(
       () => {
         if (!this.#stopping) this.#spawn();

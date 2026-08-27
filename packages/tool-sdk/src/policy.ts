@@ -154,15 +154,18 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
     }
     case "desktop": {
       const highImpact = ["submit", "send", "delete", "purchase"].includes(operation.action);
+      const target = operation.bundleId
+        ? `${operation.application} (${operation.bundleId})`
+        : operation.application;
       return {
         capability: "desktop",
         risk: highImpact ? "L5" : operation.action === "screenshot" ? "L2" : "L5",
         resourceType: "application",
-        resource: operation.application,
+        resource: operation.bundleId ?? operation.application,
         actions: [
           operation.action === "screenshot" ? "capture" : highImpact ? "high_impact" : "interact",
         ],
-        reason: `控制桌面应用 ${operation.application}：${operation.action}`,
+        reason: `控制桌面应用 ${target}：${operation.action}`,
         forcePerCallApproval: highImpact || operation.action !== "screenshot",
       };
     }
@@ -332,7 +335,19 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
         target: operation.url ?? operation.sessionId ?? "new-session",
       };
     case "desktop":
-      return { input: operation.action, target: operation.application };
+      return {
+        input:
+          operation.x === undefined || operation.y === undefined
+            ? operation.action === "type"
+              ? `type ${operation.text?.length ?? 0} chars`
+              : operation.action === "key"
+                ? `key ${operation.key ?? "missing"}`
+                : operation.action
+            : `${operation.action} (${operation.x}, ${operation.y}) capture=${operation.captureId ?? "missing"}`,
+        target: operation.bundleId
+          ? `${operation.application} (${operation.bundleId})`
+          : operation.application,
+      };
     case "mcp_connect":
     case "mcp_list_tools":
     case "mcp_disconnect":

@@ -276,6 +276,7 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   DESKTOP_SCREEN_CAPTURE_STATUS_UNKNOWN: "无法确认屏幕录制权限",
   DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED: "需在系统设置中允许辅助功能",
   DESKTOP_AUTOMATION_UNAVAILABLE: "系统自动化组件不可用",
+  DESKTOP_WINDOWS_NATIVE_CONTROL_UNAVAILABLE: "Windows 原生桌面控制尚未实现",
   DESKTOP_PLATFORM_UNSUPPORTED: "当前桌面平台尚未支持",
   MCP_SERVER_CONFIGURATION_REQUIRED: "需先添加并启用 MCP 服务",
   MCP_OAUTH_AUTHORIZATION_REQUIRED: "至少一个 MCP 服务需要浏览器授权",
@@ -4317,6 +4318,7 @@ function ToolCenter(): React.JSX.Element {
   const queryClient = useQueryClient();
   const mcpDetailsRef = useRef<HTMLDetailsElement>(null);
   const [mcpNotice, setMcpNotice] = useState<string | null>(null);
+  const [nativePermissionNotice, setNativePermissionNotice] = useState<string | null>(null);
   const [mcpName, setMcpName] = useState("");
   const [mcpTransport, setMcpTransport] = useState<"stdio" | "streamable_http">("stdio");
   const [mcpEndpoint, setMcpEndpoint] = useState("");
@@ -4340,6 +4342,20 @@ function ToolCenter(): React.JSX.Element {
   const runtimeReadiness = useQuery({
     queryKey: ["tools", "runtime-readiness"],
     queryFn: () => window.openerx.listToolRuntimeReadiness(),
+  });
+  const requestNativePermission = useMutation({
+    mutationFn: (permission: "screen_capture" | "accessibility") =>
+      window.openerx.requestDesktopNativePermission({ permission }),
+    onSuccess: async (state) => {
+      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
+      setNativePermissionNotice(
+        state.status === "granted"
+          ? "系统权限已生效。"
+          : state.settingsOpened
+            ? "系统设置已打开；授权后请返回并刷新能力状态。"
+            : "当前系统无法请求该权限。",
+      );
+    },
   });
   const mcpServers = useQuery({
     queryKey: ["tools", "mcp-servers"],
@@ -4449,6 +4465,7 @@ function ToolCenter(): React.JSX.Element {
             {runtimeReadiness.isFetching ? "检测中…" : "刷新能力状态"}
           </button>
         </div>
+        {nativePermissionNotice ? <p role="status">{nativePermissionNotice}</p> : null}
         <div className="tool-catalog-grid">
           {toolCatalog.map((tool) => {
             const readiness = readinessByCapability.get(tool.capability);
@@ -4470,6 +4487,28 @@ function ToolCenter(): React.JSX.Element {
                 <strong>{tool.name}</strong>
                 <span>{tool.detail}</span>
                 {reason ? <span className="tool-runtime-reason">{reason}</span> : null}
+                {tool.capability === "desktop" &&
+                readiness?.reason === "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED" ? (
+                  <button
+                    type="button"
+                    className="tool-runtime-action"
+                    disabled={requestNativePermission.isPending}
+                    onClick={() => requestNativePermission.mutate("screen_capture")}
+                  >
+                    打开屏幕录制设置
+                  </button>
+                ) : null}
+                {tool.capability === "desktop" &&
+                readiness?.reason === "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED" ? (
+                  <button
+                    type="button"
+                    className="tool-runtime-action"
+                    disabled={requestNativePermission.isPending}
+                    onClick={() => requestNativePermission.mutate("accessibility")}
+                  >
+                    请求辅助功能权限
+                  </button>
+                ) : null}
               </article>
             );
           })}

@@ -42,8 +42,9 @@ export function desktopHostToolAvailability(
   }
 
   if (probe.platform === "win32") {
-    if (probe.automationAvailable) availableToolNames.push("openerx_desktop");
-    else unavailableReasons.openerx_desktop = "DESKTOP_AUTOMATION_UNAVAILABLE";
+    unavailableReasons.openerx_desktop = probe.automationAvailable
+      ? "DESKTOP_WINDOWS_NATIVE_CONTROL_UNAVAILABLE"
+      : "DESKTOP_AUTOMATION_UNAVAILABLE";
     return { availableToolNames, unavailableReasons };
   }
 

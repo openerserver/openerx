@@ -35,6 +35,8 @@ import {
   type DesktopBridge,
   desktopEnvironmentSchema,
   desktopMcpServerSaveInputSchema,
+  desktopNativePermissionRequestSchema,
+  desktopNativePermissionResultSchema,
   deviceSessionSchema,
   diagnosticsPreviewSchema,
   emailChallengeSchema,
@@ -106,6 +108,13 @@ const bridge: DesktopBridge = {
   getEnvironment: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.environmentGet);
     return desktopEnvironmentSchema.parse(result);
+  },
+  requestDesktopNativePermission: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.desktopNativePermissionRequest,
+      desktopNativePermissionRequestSchema.parse(input),
+    );
+    return desktopNativePermissionResultSchema.parse(result);
   },
   getReleaseUpdateState: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.releaseUpdateState);

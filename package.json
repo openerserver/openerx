@@ -31,6 +31,8 @@
     "test:e2e:v2": "npm run test:e2e --workspace @openerx/desktop",
     "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run build --workspace @openerx/mobile && npm run build --workspace @openerx/desktop",
     "package:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run package --workspace @openerx/desktop",
+    "package:cx110:d3:macos": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run package --workspace @openerx/desktop -- --arch=$(node -p process.arch)",
+    "check:cx110:d3:macos": "npm run verify:d3:macos --workspace @openerx/desktop && npm run test:e2e:d3:macos --workspace @openerx/desktop",
     "release:gate:v2": "node scripts/m9/check-release-readiness.mjs --mode publish",
     "release:manifest:v2": "vite build --config scripts/m9/vite.release-manifest.config.mts --logLevel error && node .vite/release-tools/release-manifest.mjs",
     "verify:package:v2": "npm run verify:fuses --workspace @openerx/desktop",

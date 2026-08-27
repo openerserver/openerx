@@ -1,5 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { FuseV1Options, FuseVersion, flipFuses } from "@electron/fuses";
 import { MakerDMG } from "@electron-forge/maker-dmg";
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
@@ -9,6 +11,32 @@ import type { ForgeConfig } from "@electron-forge/shared-types";
 import { releaseUpdateConfigurationSchema } from "@openerx/contracts";
 
 const releaseMode = process.env.OPENERX_RELEASE_MODE === "1";
+const desktopDirectory = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const macEntitlements = path.join(desktopDirectory, "resources", "entitlements.mac.plist");
+const macChildEntitlements = path.join(
+  desktopDirectory,
+  "resources",
+  "entitlements.mac.inherit.plist",
+);
+
+const resvgNativePackages: Record<string, string> = {
+  "darwin-arm64": "@resvg/resvg-js-darwin-arm64",
+  "darwin-x64": "@resvg/resvg-js-darwin-x64",
+  "linux-arm64": "@resvg/resvg-js-linux-arm64-gnu",
+  "linux-armv7l": "@resvg/resvg-js-linux-arm-gnueabihf",
+  "linux-x64": "@resvg/resvg-js-linux-x64-gnu",
+  "win32-arm64": "@resvg/resvg-js-win32-arm64-msvc",
+  "win32-ia32": "@resvg/resvg-js-win32-ia32-msvc",
+  "win32-x64": "@resvg/resvg-js-win32-x64-msvc",
+};
+
+function copyRuntimePackage(buildPath: string, packageName: string): void {
+  const source = path.dirname(require.resolve(`${packageName}/package.json`));
+  const destination = path.join(buildPath, "node_modules", ...packageName.split("/"));
+  mkdirSync(path.dirname(destination), { recursive: true });
+  cpSync(source, destination, { recursive: true, dereference: true });
+}
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -41,10 +69,22 @@ function updateConfiguration() {
 }
 
 function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
-  if (!releaseMode) return {};
   if (process.platform === "darwin") {
+    const configuredIdentity = process.env.OPENERX_MAC_SIGN_IDENTITY?.trim();
+    if (!releaseMode && !configuredIdentity) return {};
+    const identity = configuredIdentity || requiredEnvironment("OPENERX_MAC_SIGN_IDENTITY");
+    const osxSign = {
+      identity,
+      ignore: (filePath: string) => /\.(?:asar|bin|dat|pak)$/iu.test(filePath),
+      optionsForFile: (filePath: string) => ({
+        hardenedRuntime: true,
+        entitlements:
+          path.basename(filePath) === "OpenerX.app" ? macEntitlements : macChildEntitlements,
+      }),
+    };
+    if (!releaseMode) return { osxSign };
     return {
-      osxSign: { identity: requiredEnvironment("OPENERX_MAC_SIGN_IDENTITY") },
+      osxSign,
       osxNotarize: {
         appleApiKey: requiredEnvironment("APPLE_API_KEY"),
         appleApiKeyId: requiredEnvironment("APPLE_API_KEY_ID"),
@@ -52,6 +92,7 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
       },
     };
   }
+  if (!releaseMode) return {};
   if (process.platform === "win32") {
     return {
       windowsSign: {
@@ -67,16 +108,27 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
 
 const config: ForgeConfig = {
   packagerConfig: {
-    asar: true,
+    asar: { unpack: "**/*.node" },
     appBundleId: "com.openerx.desktop",
     appCategoryType: "public.app-category-type.productivity",
     appCopyright: "Copyright © 2026 OpenerX",
     executableName: "OpenerX",
+    extendInfo: {
+      NSAppleEventsUsageDescription:
+        "OpenerX 仅在您逐次批准桌面操作后，使用系统自动化控制您指定的应用。",
+    },
     name: "OpenerX",
     ...signingConfiguration(),
   },
   hooks: {
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
+      const resvgNativePackage = resvgNativePackages[`${platform}-${arch}`];
+      if (!resvgNativePackage) {
+        throw new Error(`RESVG_NATIVE_TARGET_UNSUPPORTED:${platform}-${arch}`);
+      }
+      copyRuntimePackage(buildPath, "@resvg/resvg-js");
+      copyRuntimePackage(buildPath, resvgNativePackage);
+
       const releaseDirectory = path.join(buildPath, "release");
       mkdirSync(releaseDirectory, { recursive: true });
       writeFileSync(

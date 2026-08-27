@@ -77,6 +77,7 @@ export const ipcChannels = Object.freeze({
   toolScopesList: "tool:scopes:list",
   toolScopeRevoke: "tool:scope:revoke",
   toolRuntimeReadiness: "tool:runtime:readiness",
+  desktopNativePermissionRequest: "desktop:native-permission:request",
   mcpServersList: "mcp:servers:list",
   mcpServersAuthorization: "mcp:servers:authorization",
   mcpServerAuthorize: "mcp:server:authorize",
@@ -113,6 +114,26 @@ export const desktopEnvironmentSchema = z
 
 export type DesktopEnvironment = z.infer<typeof desktopEnvironmentSchema>;
 
+export const desktopNativePermissionSchema = z.enum(["screen_capture", "accessibility"]);
+export const desktopNativePermissionRequestSchema = z
+  .object({ permission: desktopNativePermissionSchema })
+  .strict();
+export const desktopNativePermissionResultSchema = z
+  .object({
+    permission: desktopNativePermissionSchema,
+    status: z.enum(["granted", "authorization_required", "unavailable"]),
+    reason: z
+      .string()
+      .regex(/^[A-Z0-9_]{2,80}$/u)
+      .nullable(),
+    settingsOpened: z.boolean(),
+  })
+  .strict();
+
+export type DesktopNativePermission = z.infer<typeof desktopNativePermissionSchema>;
+export type DesktopNativePermissionRequest = z.infer<typeof desktopNativePermissionRequestSchema>;
+export type DesktopNativePermissionResult = z.infer<typeof desktopNativePermissionResultSchema>;
+
 export interface DesktopBridge
   extends ChatBridge,
     AccountBridge,
@@ -127,6 +148,9 @@ export interface DesktopBridge
     RemoteDesktopBridge,
     ReleaseUpdateBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
+  requestDesktopNativePermission(
+    input: DesktopNativePermissionRequest,
+  ): Promise<DesktopNativePermissionResult>;
 }
 
 import type { ChatBridge } from "./chat";

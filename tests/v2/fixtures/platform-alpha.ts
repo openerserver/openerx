@@ -74,6 +74,42 @@ function latestUserText(context: unknown): string {
     .join("");
 }
 
+function turnToolResults(context: unknown): Array<{
+  content?: unknown;
+  details?: unknown;
+}> {
+  const candidate = context as Context;
+  let userIndex = -1;
+  for (let index = (candidate.messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    if (candidate.messages?.[index]?.role === "user") {
+      userIndex = index;
+      break;
+    }
+  }
+  return (candidate.messages ?? [])
+    .slice(userIndex + 1)
+    .filter(({ role }) => role === "toolResult") as Array<{
+    content?: unknown;
+    details?: unknown;
+  }>;
+}
+
+function toolResultText(result: { content?: unknown } | undefined): string {
+  if (!Array.isArray(result?.content)) return "";
+  return result.content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        Boolean(part) &&
+        typeof part === "object" &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part &&
+        typeof part.text === "string",
+    )
+    .map(({ text }) => text)
+    .join("\n");
+}
+
 const identity = new IdentityService(":memory:", {
   codeFactory: () => "123456",
   challengeCooldownMs: 0,
@@ -150,12 +186,119 @@ const models = new ModelGatewayService({
   executor: {
     async execute(request) {
       const text = latestUserText(request.context);
+      const toolResults = turnToolResults(request.context);
+      const d3DesktopTextEdit = text.includes("[CX110_D3_DESKTOP_TEXTEDIT]");
+      const d3DesktopMismatch = text.includes("[CX110_D3_DESKTOP_MISMATCH]");
+      const d3Marker = /MARKER=([A-Za-z0-9_-]{1,120})/u.exec(text)?.[1] ?? "CX110_D3_TYPED";
+      const firstDetails = toolResults[0]?.details as
+        | { data?: { captureId?: string; width?: number; height?: number } }
+        | undefined;
+      const captureId = firstDetails?.data?.captureId;
+      const captureWidth = firstDetails?.data?.width;
+      const captureHeight = firstDetails?.data?.height;
+      const d3Completed = d3DesktopMismatch
+        ? toolResults.length >= 2
+        : d3DesktopTextEdit && toolResults.length >= 3;
+      if ((d3DesktopTextEdit || d3DesktopMismatch) && d3Completed) {
+        console.error(
+          `[cx110-d3-fixture] ${JSON.stringify(
+            toolResults.map((result, index) => ({
+              index,
+              details: result.details,
+              text: toolResultText(result),
+            })),
+          )}`,
+        );
+      }
       const effectiveModelRef =
-        request.selectedModelRef === automaticModelRef
-          ? "platform/standard"
-          : request.selectedModelRef;
+        d3DesktopTextEdit || d3DesktopMismatch
+          ? "platform/tools"
+          : request.selectedModelRef === automaticModelRef
+            ? "platform/standard"
+            : request.selectedModelRef;
       return {
-        text: `平台 ${effectiveModelRef} 已回答：${text}`,
+        text:
+          d3DesktopTextEdit || d3DesktopMismatch
+            ? d3Completed
+              ? d3DesktopMismatch
+                ? `桌面身份错配已 fail-closed：${toolResultText(toolResults.at(-1))}`
+                : `签名桌面交互完成：${d3Marker}；${toolResultText(toolResults.at(-1))}`
+              : ""
+            : `平台 ${effectiveModelRef} 已回答：${text}`,
+        ...(d3DesktopTextEdit || d3DesktopMismatch
+          ? toolResults.length === 0
+            ? {
+                finishReason: "tool_calls",
+                toolCalls: [
+                  {
+                    id: d3DesktopMismatch ? "d3-mismatch-screenshot" : "d3-textedit-screenshot",
+                    name: "openerx_desktop",
+                    arguments: {
+                      action: "screenshot",
+                      application: "TextEdit",
+                      bundleId: "com.apple.TextEdit",
+                    },
+                  },
+                ],
+              }
+            : d3DesktopMismatch && toolResults.length === 1 && captureId
+              ? {
+                  finishReason: "tool_calls",
+                  toolCalls: [
+                    {
+                      id: d3DesktopMismatch ? "d3-mismatch-type" : "d3-textedit-type",
+                      name: "openerx_desktop",
+                      arguments: {
+                        action: "type",
+                        application: "TextEdit",
+                        bundleId: "com.apple.finder",
+                        captureId,
+                        text: d3Marker,
+                      },
+                    },
+                  ],
+                }
+              : d3DesktopTextEdit &&
+                  toolResults.length === 1 &&
+                  captureId &&
+                  typeof captureWidth === "number" &&
+                  typeof captureHeight === "number"
+                ? {
+                    finishReason: "tool_calls",
+                    toolCalls: [
+                      {
+                        id: "d3-textedit-focus",
+                        name: "openerx_desktop",
+                        arguments: {
+                          action: "click",
+                          application: "TextEdit",
+                          bundleId: "com.apple.TextEdit",
+                          captureId,
+                          x: Math.floor(captureWidth / 2),
+                          y: Math.floor(captureHeight / 2),
+                        },
+                      },
+                    ],
+                  }
+                : d3DesktopTextEdit && toolResults.length === 2 && captureId
+                  ? {
+                      finishReason: "tool_calls",
+                      toolCalls: [
+                        {
+                          id: "d3-textedit-type",
+                          name: "openerx_desktop",
+                          arguments: {
+                            action: "type",
+                            application: "TextEdit",
+                            bundleId: "com.apple.TextEdit",
+                            captureId,
+                            text: d3Marker,
+                          },
+                        },
+                      ],
+                    }
+                  : {}
+          : {}),
         effectiveModelRef,
         usage: {
           inputTokens: 21,

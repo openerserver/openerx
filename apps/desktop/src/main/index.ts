@@ -29,6 +29,8 @@ import {
   createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
   desktopMcpServerSaveInputSchema,
+  desktopNativePermissionRequestSchema,
+  desktopNativePermissionResultSchema,
   diagnosticsPreviewSchema,
   emptyInputSchema,
   fileAttachInputSchema,
@@ -85,6 +87,7 @@ import {
   net,
   protocol,
   shell,
+  systemPreferences,
 } from "electron";
 import started from "electron-squirrel-startup";
 import type { z } from "zod";
@@ -110,7 +113,12 @@ import {
   loadPackagedUpdateConfiguration,
 } from "./update-service";
 
-app.name = "OpenerX";
+const e2eApplicationName =
+  process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_APPLICATION_NAME?.trim() : undefined;
+if (e2eApplicationName && !/^OpenerX CX110 D3 [A-Za-z0-9_-]{1,64}$/u.test(e2eApplicationName)) {
+  throw new Error("OPENERX_E2E_APPLICATION_NAME_INVALID");
+}
+app.name = e2eApplicationName || "OpenerX";
 
 function configureApplicationMenu(): void {
   Menu.setApplicationMenu(
@@ -175,6 +183,49 @@ function registerIpcHandlers(
       platform: process.platform,
       arch: process.arch,
       appVersion: app.getVersion(),
+    });
+  });
+  ipcMain.handle(ipcChannels.desktopNativePermissionRequest, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    const input = desktopNativePermissionRequestSchema.parse(raw);
+    if (process.platform !== "darwin") {
+      return desktopNativePermissionResultSchema.parse({
+        permission: input.permission,
+        status: "unavailable",
+        reason: "DESKTOP_PLATFORM_UNSUPPORTED",
+        settingsOpened: false,
+      });
+    }
+    if (input.permission === "screen_capture") {
+      if (systemPreferences.getMediaAccessStatus("screen") === "granted") {
+        return desktopNativePermissionResultSchema.parse({
+          permission: input.permission,
+          status: "granted",
+          reason: null,
+          settingsOpened: false,
+        });
+      }
+      await shell.openExternal(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+      );
+      return desktopNativePermissionResultSchema.parse({
+        permission: input.permission,
+        status: "authorization_required",
+        reason: "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED",
+        settingsOpened: true,
+      });
+    }
+    const trusted = systemPreferences.isTrustedAccessibilityClient(true);
+    if (!trusted) {
+      await shell.openExternal(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+      );
+    }
+    return desktopNativePermissionResultSchema.parse({
+      permission: input.permission,
+      status: trusted ? "granted" : "authorization_required",
+      reason: trusted ? null : "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
+      settingsOpened: !trusted,
     });
   });
   ipcMain.handle(ipcChannels.releaseUpdateState, (event) => {

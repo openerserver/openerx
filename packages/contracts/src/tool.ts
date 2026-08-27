@@ -498,9 +498,14 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
         "purchase",
       ]),
       application: z.string().min(1).max(300),
+      bundleId: z
+        .string()
+        .regex(/^[A-Za-z0-9][A-Za-z0-9.-]{2,199}$/u)
+        .optional(),
+      captureId: entityIdSchema.optional(),
       x: z.number().int().nonnegative().optional(),
       y: z.number().int().nonnegative().optional(),
-      text: z.string().max(100_000).optional(),
+      text: z.string().max(10_000).optional(),
       key: z.string().max(100).optional(),
     })
     .strict(),

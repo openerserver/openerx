@@ -144,6 +144,12 @@ function createBridge(): DesktopBridge {
       arch: "arm64",
       appVersion: "2.0.0-alpha.0",
     }),
+    requestDesktopNativePermission: vi.fn().mockResolvedValue({
+      permission: "accessibility",
+      status: "authorization_required",
+      reason: "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
+      settingsOpened: true,
+    }),
     getReleaseUpdateState: vi.fn().mockResolvedValue({
       status: "disabled",
       channel: "internal",
@@ -1477,9 +1483,16 @@ describe("M1 chat renderer", () => {
     expect(within(shellCard).getByText("需先授权一个可写工作区")).toBeTruthy();
     expect(within(desktopCard).getByText("部分可用")).toBeTruthy();
     expect(within(desktopCard).getByText("需在系统设置中允许辅助功能")).toBeTruthy();
+    await user.click(within(desktopCard).getByRole("button", { name: "请求辅助功能权限" }));
+    await waitFor(() =>
+      expect(bridge.requestDesktopNativePermission).toHaveBeenCalledWith({
+        permission: "accessibility",
+      }),
+    );
+    expect(await screen.findByText("系统设置已打开；授权后请返回并刷新能力状态。")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "刷新能力状态" }));
-    await waitFor(() => expect(bridge.listToolRuntimeReadiness).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(bridge.listToolRuntimeReadiness).toHaveBeenCalledTimes(3));
   });
 
   it("requires explicit confirmation before revoking Skill permissions and disabling it", async () => {

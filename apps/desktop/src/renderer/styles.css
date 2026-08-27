@@ -2294,6 +2294,12 @@ h1 {
   border-radius: 7px;
 }
 
+.tool-catalog > p[role="status"] {
+  margin: 0 12px 12px;
+  color: var(--workspace-muted-strong);
+  font-size: 10px;
+}
+
 .tool-catalog-grid article {
   display: grid;
   gap: 4px;
@@ -2338,6 +2344,17 @@ h1 {
 .tool-catalog-grid .tool-runtime-reason {
   padding-top: 5px;
   border-top: 1px solid var(--workspace-border);
+}
+
+.tool-catalog-grid .tool-runtime-action {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 6px 8px;
+  color: var(--workspace-text);
+  font-size: 10px;
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 7px;
 }
 
 .tool-catalog-grid small {

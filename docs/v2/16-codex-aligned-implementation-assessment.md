@@ -1,14 +1,14 @@
 # OpenerX V2 按 Codex 实现方式的能力评估
 
-> 状态：`P0 + CX-101–CX-109 + CX-110-D1/D2 IMPLEMENTED / LOCAL VERIFIED`；完整 CX-110/P2 仍未完成
+> 状态：`P0 + CX-101–CX-109 + CX-110-D1/D2/D3 IMPLEMENTED / LOCAL VERIFIED`；完整 CX-110/P2 仍未完成
 >
 > 评估日期：2026-08-26（Asia/Shanghai）
 >
 > 实现验证：2026-08-27 14:51（Asia/Shanghai）
 >
-> 代码基线：`HEAD e8983b8a13cc5e9f6df7e065ee375deefbff4ae9` 加当前未提交的 P0、CX-101 至 CX-109 与 CX-110-D1/D2 实现
+> 代码基线：`HEAD 732c21aa8cd4e69187150f3ea888ed751eb50129` 加当前未提交的 CX-110-D3 实现
 >
-> 本文最初用于给出取舍、错误判断、目标架构和验收门禁；当前版本同时记录按本文完成的 P0、CX-101 至 CX-109 与 CX-110-D1/D2 实现状态。整个 P1、完整 CX-110 和 P2 仍不得因合同、夹具或局部测试而宣称完成。
+> 本文最初用于给出取舍、错误判断、目标架构和验收门禁；当前版本同时记录按本文完成的 P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 实现状态。整个 P1、完整 CX-110 和 P2 仍不得因合同、夹具或局部测试而宣称完成。
 
 ## 1. 结论
 
@@ -21,7 +21,7 @@ OpenerX 已经具备一套方向正确的骨架：Pi 是唯一 Agent Harness，R
 1. **实现语义错误**：分支与 Pi Session 不一致、历史图片跨轮次/跨分支重复注入、Shell 并非始终处于操作系统沙箱、指定应用截图实际截取整个主屏、图片类工具结果被压成 JSON 文本、停止与 Usage 生命周期不完整、图片生成复用了 Web 搜索权限名、通用副作用被过度声明为幂等。
 2. **能力声明超出实际证据**：原始评估时，工作区补丁式编辑、Office 文件端到端创建/编辑/原生预览、按需工具发现、真实 Web/图片服务、第三方 MCP OAuth、Windows 原生沙箱与应用控制只有部分合同、适配器、夹具或本地测试，不能视为 Codex 等价能力已经完成。
 
-2026-08-26 已实现并本地验证 `CX-001` 至 `CX-010`；2026-08-27 又实现并本地验证 `CX-101` 至 `CX-109`，完成 `CX-110-D1` 桌面 MCP OAuth Authorization Code + PKCE 和 `CX-110-D2` 桌面运行时 Host readiness/macOS 原生矩阵。因此当前结论更新为：**P0 正确性和安全阻断已关闭，Codex 式工作区、工具协议、有界 Office Agent 生产链、丰富 Run Item 回放、桌面 OAuth 主进程边界和 fail-closed Host 工具暴露已形成本地检查点；第三方实网、签名包与 Windows 原生证据仍未完成；多 Agent、定时任务、云端执行仍暂不实现。**
+2026-08-26 已实现并本地验证 `CX-001` 至 `CX-010`；2026-08-27 又实现并本地验证 `CX-101` 至 `CX-109`，完成 `CX-110-D1` 桌面 MCP OAuth Authorization Code + PKCE、`CX-110-D2` 桌面运行时 Host readiness/macOS 原生矩阵，以及 `CX-110-D3` Developer ID 签名 macOS arm64 的稳定 TCC 身份、安装/升级/回滚和 Accessibility 受控交互。因此当前结论更新为：**P0 正确性和安全阻断已关闭，Codex 式工作区、工具协议、有界 Office Agent 生产链、丰富 Run Item 回放、桌面 OAuth 主进程边界、fail-closed Host 工具暴露和签名 macOS 本地生命周期已形成检查点；Apple 公证/分发、第三方实网与 Windows 原生证据仍未完成；多 Agent、定时任务、云端执行仍暂不实现。**
 
 ## 2. “按 Codex 实现方式”的判定标准
 
@@ -128,7 +128,7 @@ flowchart TD
 | CX-107 | 每 Turn 的模型/思考配置快照 | PASS——每次 send/edit/regenerate 在 Prompt 前固化 requested model、thinking、工具集、Skill 和初始指令；Usage 回填 effective model/fallback，历史 Run 不受默认值修改。 | 每个 Turn 固化 requested/effective model、思考强度、回退理由、工具集和 Skill；后续修改 Conversation 默认值不能改写历史。 |
 | CX-108 | Office 成果端到端工作流 | PASS（本地）——Documents/Spreadsheets/Presentations/PDF Skill 通过独立类型化工具创建和修改真实二进制，追加不可变版本；每页/表/幻灯片同时生成客户端 SVG 与 Pi PNG。8 个自然语言创建/修改 Turn、原生打开和逐画布视觉检查通过。live Provider、任意第三方 Office 预览和 Windows Microsoft Office 仍归 CX-110/发布矩阵。 | 通过文档/表格/演示/PDF Skill 真正生成和编辑二进制文件，渲染为页面/工作表/幻灯片进行视觉验收，客户端显示忠实预览；测试必须从 Agent 请求开始，而不是只检查预制夹具。 |
 | CX-109 | 丰富的 Item 与结果投影 | PASS（本地）——v13 `run_items` 持久化 Model/安全 Reasoning/Plan/Tool/Command/Source/Diff/Approval/Compaction/Retry；Capability 与 File/Office 工具保存类型化输入和结果引用，失败命令保留输出；UI 可选择 Run 回放。原始 `thinking_delta` 不进入产品投影。 | 持久保存有类型的工具输入输出引用、来源、计划、推理摘要、命令输出、文件差异、审批和压缩事件；UI 可按 Run 回放。 |
-| CX-110 | 真实平台和原生矩阵 | **IN PROGRESS；D1/D2 PASS（桌面本地）**——D1 已移除 Renderer Client Secret/`client_credentials` 并完成 Main-owned Authorization Code + PKCE；D2 把九类工具目录接到实时 Host readiness，探测失败不进入 Turn 工具集。当前 Mac 的真实 Electron Browser 全链路、Shell OS 沙箱负向矩阵和 OpenerX 目标窗口捕获通过，Browser/Desktop deny 与 Scope 撤销后重授权通过。仍不覆盖第三方实网、签名包 TCC 身份和 Windows 原生矩阵。 | 对真实服务、真实 OAuth 授权码流程、签名 macOS/Windows 包及原生控制分别形成日期化端到端证据；不可用时产品明确显示 unavailable。 |
+| CX-110 | 真实平台和原生矩阵 | **IN PROGRESS；D1/D2/D3 PASS（桌面本地）**——D1 完成 Main-owned Authorization Code + PKCE；D2 将工具目录接到实时 Host readiness，并验证当前 Mac 的 Browser/Shell/Desktop 原生矩阵；D3 完成 Developer ID 签名 macOS arm64 的 TCC/Accessibility、精确 CGWindow 身份、TextEdit 正向与身份错配负向操作，以及隔离安装/升级/真回滚的数据保持。仍不覆盖 Apple 公证/DMG/Gatekeeper、第三方实网和 Windows 原生矩阵。 | 对真实服务、真实 OAuth 授权码流程、签名 macOS/Windows 包及原生控制分别形成日期化端到端证据；不可用时产品明确显示 unavailable。 |
 
 ## 6. 当前不应实现或不应直接开放：P2
 
@@ -145,12 +145,12 @@ flowchart TD
 
 ## 7. 对现有“已完成”文档的修正意见
 
-P0、CX-101 至 CX-109 与 CX-110-D1/D2 已按本文形成本地实现检查点，但既有能力文档仍应按以下口径解释：
+P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 已按本文形成本地实现检查点，但既有能力文档仍应按以下口径解释：
 
 1. `docs/v2/10-codex-capability-baseline.md` 是**目标矩阵**，不是实现状态。FILE-02、FILE-04/FILE-05、TOOL-01、TOOL-05、TOOL-07 和 TOOL-08 的 CX-101 至 CX-109 本地切片已有日期化证据；任意第三方 Office 文件预览、live Provider 和 Windows/macOS 发布级证据仍不能据此宣称完成。
 2. `docs/v2/evidence/m4-2026-08-26.md` 继续证明解析、受控存储、版本和真实 Office 夹具质量；Agent 创建/修改与全画布预览应以新的 CX-108 证据为准，不能仍用 parsed text 或 M4 预制夹具代替。
-3. `docs/v2/evidence/m5-2026-08-26.md` 的 PASS 应继续限定为 local implementation checkpoint；CX-110-D1 的本机 OAuth+MCP 协议 fixture 证明授权码实现，CX-110-D2 证明当前 Mac 的 Host readiness、Browser/Shell/Desktop 本机切片，但 Web/图片 live Provider、任意第三方 MCP、签名 TCC 身份或 Windows 原生安全仍需要独立证据。
-4. `docs/v2/13-development-plan.md` 的 milestone 退出条件已增加本文的 P0/CX-101 至 CX-109 与 CX-110-D1/D2 检查点；“合同存在、测试通过、夹具可读”仍不能单独推出完整 P1 或发布级“Codex 能力已实现”。
+3. `docs/v2/evidence/m5-2026-08-26.md` 的 PASS 应继续限定为 local implementation checkpoint；CX-110-D1 的本机 OAuth+MCP 协议 fixture 证明授权码实现，CX-110-D2 证明当前 Mac 的 Host readiness、Browser/Shell/Desktop 本机切片，CX-110-D3 证明签名 macOS arm64 的本地 TCC/生命周期/受控交互；Web/图片 live Provider、任意第三方 MCP、Apple 公证分发或 Windows 原生安全仍需要独立证据。
+4. `docs/v2/13-development-plan.md` 的 milestone 退出条件已增加本文的 P0/CX-101 至 CX-109 与 CX-110-D1/D2/D3 检查点；“合同存在、测试通过、夹具可读”仍不能单独推出完整 P1 或发布级“Codex 能力已实现”。
 5. 在上述文档修订前，本文优先解释“是否按 Codex 方式完成”，但不替代原产品合同和发布合同。
 
 ## 8. 实施顺序
@@ -181,9 +181,9 @@ P0、CX-101 至 CX-109 与 CX-110-D1/D2 已按本文形成本地实现检查点�
 
 ### 阶段 D：成果生产与真实环境验证
 
-1. CX-108、CX-109 与 CX-110-D1/D2 已完成本地检查点；继续按桌面优先实现 CX-110-D3。
+1. CX-108、CX-109 与 CX-110-D1/D2/D3 已完成本地检查点；继续按桌面优先关闭 CX-110 剩余项。
 2. 已通过 Skill 交付有界 DOCX/XLSX/PPTX/PDF 的生成、修改、渲染和视觉验证；继续补 live 模型与双平台原生证据。
-3. 下一步先补签名 macOS 包的 TCC 身份、安装/升级/回滚和 Accessibility 受控交互，再补 live provider、第三方实网 OAuth 与 Windows 原生矩阵。
+3. 下一步补 live Provider、第三方实网 OAuth、Apple 公证/DMG/Gatekeeper 分发安装与 Windows 原生矩阵。
 
 退出条件：不再用预制夹具或模拟传输替代真实用户流程；每项能力有日期化、可复现的端到端证据。
 
@@ -212,22 +212,22 @@ P0、CX-101 至 CX-109 与 CX-110-D1/D2 已按本文形成本地实现检查点�
 
 ## 10. 本次质量证据
 
-2026-08-27 14:51（Asia/Shanghai）对当前 P0 + CX-101 至 CX-109 + CX-110-D1/D2 工作树运行 `npm run check:v2`，结果为 `exit 0`：
+2026-08-27 16:25（Asia/Shanghai）对当前 P0 + CX-101 至 CX-109 + CX-110-D1/D2/D3 工作树运行 `npm run check:v2`，结果为 `exit 0`：
 
-- V2 边界检查：217 个源文件，没有导入 Legacy 或兄弟 app/service 实现。
-- Release Graph：159 个 production 文件，13 个 Pi import 仍只存在于 `packages/pi-host`，45 条 workspace edges 合法。
-- Local release readiness、313 个文件的 Biome lint 和全部 workspace TypeScript 检查通过。
-- 全部 workspace 254 个测试加根目录 61 个测试，合计 315 个；新增 D2 专项覆盖 strict readiness/frame、Main 往返、Host/OS fail-closed、macOS 权限矩阵、Browser/Desktop deny 与撤销、Shell Workspace 撤销和 UI 状态原因。
-- iOS/Android 导出、Electron production bundle、新增 PNG 栅格化依赖、三平台 Fuse 检查和 release artifact 校验通过。
-- 本地包仍是 unsigned，且 release readiness 明确保留 12 组外部证据；这不影响当前本地实现检查点，但不能据此宣称完整 P1、签名发布、第三方实网 OAuth、live Provider、任意 Office 文件预览或 Windows 原生沙箱已完成。
+- V2 边界检查：222 个源文件，没有导入 Legacy 或兄弟 app/service 实现。
+- Release Graph：162 个 production 文件，13 个 Pi import 仍只存在于 `packages/pi-host`，45 条 workspace edges 合法。
+- Local release readiness、318 个文件的 Biome lint 和全部 workspace TypeScript 检查通过。
+- 全部 workspace 265 个测试加根目录 61 个测试，合计 326 个；D3 新增签名身份、原生权限、capture registry、CGWindow/PID/bundle/window fail-closed、AX 文本输入、UI 权限入口和生命周期覆盖。
+- iOS/Android 导出、Electron production bundle、Darwin arm64/x64 与 Windows x64 Fuse、release artifact 校验通过。
+- 通用 `check:v2` 仍按预期生成并标记本地 unsigned 包；独立 D3 门禁随后以 Developer ID 重建 arm64 包并执行签名生命周期。release readiness 仍保留 12 组外部证据，不能据此宣称完整 P1、Apple 公证发布、第三方实网 OAuth、live Provider、任意 Office 文件预览或 Windows 原生沙箱已完成。
 
 评估时的 `RELEASE_RENDERER_UPDATE_SECRET_BOUNDARY` 已由 CX-010 修复，完整门禁不再在 `verify:release-artifacts` 失败。
 
 ## 11. 下一步建议
 
-P0、CX-101 至 CX-109 与 CX-110-D1/D2 已完成本地实现检查点，下一步继续按桌面优先推进：
+P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 已完成本地实现检查点，下一步继续按桌面优先推进：
 
-1. `CX-110-D3`：先完成签名 macOS 包的 TCC 身份、安装/升级/回滚和 Accessibility 受控交互矩阵，保持 unavailable/fail-closed 语义。
-2. 之后补 live Provider、第三方实网 OAuth、任意第三方 Office 预览和 Windows 原生 Shell/Desktop；全部外部证据齐备后才能更新完整 P1/PASS。
+1. 补 Apple 公证/stapling、DMG/Gatekeeper 和真实分发安装，但继续保持正式凭据与发布批准 Gate。
+2. 补 live Provider、第三方实网 OAuth、任意第三方 Office 预览和 Windows 原生 Shell/Desktop；全部外部证据齐备后才能更新完整 P1/PASS。
 
-CX-101 至 CX-107 的证据见 `docs/v2/evidence/p1-codex-alignment-cx101-107-2026-08-27.md`；CX-108 的代码、真实成果、原生打开、测试、门禁结果与限制见 `docs/v2/evidence/p1-codex-alignment-cx108-2026-08-27.md`；CX-109 的合同、迁移、Pi/File 投影、隐私边界和 Run 回放见 `docs/v2/evidence/p1-codex-alignment-cx109-2026-08-27.md`；CX-110-D1 的桌面 OAuth 进程边界、协议夹具和限制见 `docs/v2/evidence/p1-codex-alignment-cx110-desktop-oauth-2026-08-27.md`；CX-110-D2 的运行时状态、macOS 原生矩阵和真实 Electron 证据见 `docs/v2/evidence/p1-codex-alignment-cx110-desktop-runtime-2026-08-27.md`。
+CX-101 至 CX-107 的证据见 `docs/v2/evidence/p1-codex-alignment-cx101-107-2026-08-27.md`；CX-108 的代码、真实成果、原生打开、测试、门禁结果与限制见 `docs/v2/evidence/p1-codex-alignment-cx108-2026-08-27.md`；CX-109 的合同、迁移、Pi/File 投影、隐私边界和 Run 回放见 `docs/v2/evidence/p1-codex-alignment-cx109-2026-08-27.md`；CX-110-D1 的桌面 OAuth 进程边界、协议夹具和限制见 `docs/v2/evidence/p1-codex-alignment-cx110-desktop-oauth-2026-08-27.md`；CX-110-D2 的运行时状态、macOS 原生矩阵和真实 Electron 证据见 `docs/v2/evidence/p1-codex-alignment-cx110-desktop-runtime-2026-08-27.md`；CX-110-D3 的 Developer ID 身份、TCC、受控交互与安装生命周期见 `docs/v2/evidence/p1-codex-alignment-cx110-desktop-signed-lifecycle-2026-08-27.md`。

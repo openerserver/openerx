@@ -6,8 +6,21 @@ import { promisify } from "node:util";
 import type { HostToolAvailability, NormalizedToolResult, ToolOperation } from "@openerx/contracts";
 import { BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
 import type { ToolCredentialVault } from "./credential-vault";
+import { type DesktopCaptureRecord, DesktopCaptureRegistry } from "./desktop-capture-registry";
 import { desktopHostToolAvailability } from "./desktop-tool-availability";
-import { desktopWindowCaptureOptions, selectDesktopWindow } from "./desktop-window-target";
+import {
+  desktopWindowCaptureOptions,
+  selectDesktopWindow,
+  selectDesktopWindowByNativeId,
+} from "./desktop-window-target";
+import {
+  macDesktopAutomationError,
+  macDesktopAutomationScript,
+  macDesktopCaptureTargetScript,
+  macDesktopKeyCode,
+  parseMacDesktopAutomationResult,
+  parseMacDesktopCaptureTarget,
+} from "./mac-desktop-automation";
 import { OAuthLoopbackController } from "./oauth-loopback-controller";
 
 const execFileAsync = promisify(execFile);
@@ -67,6 +80,7 @@ function inside(root: string, target: string): boolean {
 export class ElectronToolCapabilityHost {
   readonly #profileDirectory: string;
   readonly #browserSessions = new Map<string, BrowserSession>();
+  readonly #desktopCaptures = new DesktopCaptureRegistry();
   readonly #oauth: OAuthLoopbackController;
 
   constructor(
@@ -119,6 +133,7 @@ export class ElectronToolCapabilityHost {
   close(): void {
     for (const browser of this.#browserSessions.values()) browser.window.destroy();
     this.#browserSessions.clear();
+    this.#desktopCaptures.clear();
     this.#oauth.close();
   }
 
@@ -312,82 +327,164 @@ export class ElectronToolCapabilityHost {
   async #desktop(
     operation: Extract<ToolOperation, { operation: "desktop" }>,
   ): Promise<NormalizedToolResult> {
+    const application = operation.application.trim().normalize("NFC");
+    if (!application || /[\t\r\n]/u.test(application)) {
+      throw new Error("DESKTOP_APPLICATION_INVALID");
+    }
+    const availability = await this.availability();
+    if (!availability.availableToolNames.includes("openerx_desktop")) {
+      throw new Error(
+        availability.unavailableReasons.openerx_desktop ?? "DESKTOP_HOST_UNAVAILABLE",
+      );
+    }
     if (operation.action === "screenshot") {
       const sources = await desktopCapturer.getSources(desktopWindowCaptureOptions());
-      const source = selectDesktopWindow(sources, operation.application);
+      const nativeTarget =
+        process.platform === "darwin" && operation.bundleId
+          ? await this.#macDesktopCaptureTarget(operation.bundleId)
+          : null;
+      const source = nativeTarget
+        ? selectDesktopWindowByNativeId(sources, nativeTarget.windowId)
+        : selectDesktopWindow(sources, application);
       if (!source) throw new Error("DESKTOP_TARGET_WINDOW_NOT_FOUND");
+      const size = source.thumbnail.getSize();
+      const capture = this.#desktopCaptures.record({
+        application,
+        bundleId: operation.bundleId,
+        windowTitle: nativeTarget?.windowTitle ?? source.name,
+        ...(nativeTarget
+          ? {
+              nativeApplication: nativeTarget.application,
+              nativeProcessId: nativeTarget.processId,
+              nativeWindowId: nativeTarget.windowId,
+            }
+          : {}),
+        imageWidth: size.width,
+        imageHeight: size.height,
+      });
       const png = source.thumbnail.toPNG().toString("base64");
       return imageResult("已捕获目标应用窗口", png, {
-        application: operation.application,
-        capturedWindow: source.name,
-        width: source.thumbnail.getSize().width,
-        height: source.thumbnail.getSize().height,
+        application,
+        bundleId: operation.bundleId ?? null,
+        captureId: capture.captureId,
+        expiresInMs: 60_000,
+        capturedWindow: capture.windowTitle,
+        nativeTarget,
+        width: size.width,
+        height: size.height,
       });
     }
+    const interactionUnavailable = availability.unavailableReasons["openerx_desktop:interact"];
+    if (interactionUnavailable) throw new Error(interactionUnavailable);
+    if (!operation.bundleId) throw new Error("DESKTOP_BUNDLE_ID_REQUIRED");
+    if (!operation.captureId) throw new Error("DESKTOP_CAPTURE_REQUIRED");
+    const capture = this.#desktopCaptures.resolve({
+      captureId: operation.captureId,
+      application,
+      bundleId: operation.bundleId,
+      x: operation.x,
+      y: operation.y,
+    });
+    let nativeTarget: unknown;
     if (process.platform === "darwin") {
-      await this.#macDesktop(operation);
+      nativeTarget = await this.#macDesktop(operation, capture);
     } else if (process.platform === "win32") {
-      await this.#windowsDesktop(operation);
+      throw new Error("DESKTOP_WINDOWS_NATIVE_CONTROL_UNAVAILABLE");
     } else {
       throw new Error("DESKTOP_PLATFORM_UNSUPPORTED");
     }
     return result(
       `桌面操作已执行：${operation.action}`,
-      { application: operation.application },
+      { application, bundleId: operation.bundleId, captureId: capture.captureId, nativeTarget },
       true,
     );
   }
 
-  async #macDesktop(operation: Extract<ToolOperation, { operation: "desktop" }>): Promise<void> {
-    const script = [
-      "on run argv",
-      "set appName to item 1 of argv",
-      "set actionName to item 2 of argv",
-      "tell application appName to activate",
-      "delay 0.1",
-      'tell application "System Events"',
-      'if actionName is "type" then keystroke (item 3 of argv)',
-      'if actionName is "key" then keystroke (item 3 of argv)',
-      'if actionName is "click" or actionName is "submit" or actionName is "send" or actionName is "delete" or actionName is "purchase" then click at {(item 3 of argv as integer), (item 4 of argv as integer)}',
-      "end tell",
-      "end run",
-    ].join("\n");
-    const coordinateAction = ["click", "submit", "send", "delete", "purchase"].includes(
-      operation.action,
-    );
-    if (coordinateAction && (operation.x === undefined || operation.y === undefined)) {
-      throw new Error("DESKTOP_COORDINATES_REQUIRED");
+  async #macDesktopCaptureTarget(bundleId: string, expectedWindowId?: number) {
+    try {
+      const { stdout } = await execFileAsync(
+        "/usr/bin/osascript",
+        [
+          "-l",
+          "JavaScript",
+          "-e",
+          macDesktopCaptureTargetScript(),
+          "--",
+          bundleId,
+          ...(expectedWindowId === undefined ? [] : [String(expectedWindowId)]),
+        ],
+        { encoding: "utf8", maxBuffer: 64 * 1_024, timeout: 5_000 },
+      );
+      const target = parseMacDesktopCaptureTarget(stdout);
+      if (target.bundleId !== bundleId) throw new Error("DESKTOP_TARGET_IDENTITY_MISMATCH");
+      return target;
+    } catch (error) {
+      throw macDesktopAutomationError(error);
     }
-    await execFileAsync("/usr/bin/osascript", [
-      "-e",
-      script,
-      operation.application,
-      operation.action,
-      coordinateAction ? String(operation.x) : (operation.text ?? operation.key ?? ""),
-      coordinateAction ? String(operation.y) : "",
-    ]);
   }
 
-  async #windowsDesktop(
+  async #macDesktop(
     operation: Extract<ToolOperation, { operation: "desktop" }>,
-  ): Promise<void> {
+    capture: DesktopCaptureRecord,
+  ): Promise<unknown> {
+    if (!capture.nativeProcessId || !capture.nativeWindowId) {
+      throw new Error("DESKTOP_CAPTURE_IDENTITY_MISSING");
+    }
+    const currentTarget = await this.#macDesktopCaptureTarget(
+      operation.bundleId ?? "",
+      capture.nativeWindowId,
+    );
+    if (
+      currentTarget.bundleId !== operation.bundleId ||
+      currentTarget.processId !== capture.nativeProcessId ||
+      currentTarget.windowId !== capture.nativeWindowId ||
+      currentTarget.windowTitle !== capture.windowTitle
+    ) {
+      throw new Error("DESKTOP_TARGET_WINDOW_CHANGED");
+    }
     const coordinateAction = ["click", "submit", "send", "delete", "purchase"].includes(
       operation.action,
     );
     if (coordinateAction && (operation.x === undefined || operation.y === undefined)) {
       throw new Error("DESKTOP_COORDINATES_REQUIRED");
     }
-    const script = coordinateAction
-      ? '$x=[int]$args[1];$y=[int]$args[2];Add-Type -TypeDefinition \'using System;using System.Runtime.InteropServices;public class M{[DllImport("user32.dll")]public static extern bool SetCursorPos(int X,int Y);[DllImport("user32.dll")]public static extern void mouse_event(int f,int x,int y,int d,int e);}\';(New-Object -ComObject WScript.Shell).AppActivate($args[0]);[M]::SetCursorPos($x,$y);[M]::mouse_event(2,0,0,0,0);[M]::mouse_event(4,0,0,0,0)'
-      : "$w=New-Object -ComObject WScript.Shell;$w.AppActivate($args[0]);$w.SendKeys($args[1])";
-    await execFileAsync("powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      script,
-      operation.application,
-      coordinateAction ? String(operation.x) : (operation.text ?? operation.key ?? ""),
-      coordinateAction ? String(operation.y) : "",
-    ]);
+    if (operation.action === "type" && operation.text === undefined) {
+      throw new Error("DESKTOP_TEXT_REQUIRED");
+    }
+    if (operation.action === "key" && operation.key === undefined) {
+      throw new Error("DESKTOP_KEY_REQUIRED");
+    }
+    const payload =
+      operation.action === "key"
+        ? String(macDesktopKeyCode(operation.key ?? ""))
+        : operation.action === "type"
+          ? (operation.text ?? "")
+          : "";
+    try {
+      const { stdout } = await execFileAsync(
+        "/usr/bin/osascript",
+        [
+          "-e",
+          macDesktopAutomationScript(),
+          operation.bundleId ?? "",
+          String(capture.nativeProcessId),
+          capture.windowTitle,
+          operation.action,
+          payload,
+          String(operation.x ?? -1),
+          String(operation.y ?? -1),
+          String(capture.imageWidth),
+          String(capture.imageHeight),
+        ],
+        { encoding: "utf8", maxBuffer: 64 * 1_024, timeout: 10_000 },
+      );
+      const target = parseMacDesktopAutomationResult(stdout);
+      if (target.bundleId !== operation.bundleId || target.processId !== capture.nativeProcessId) {
+        throw new Error("DESKTOP_TARGET_IDENTITY_MISMATCH");
+      }
+      return target;
+    } catch (error) {
+      throw macDesktopAutomationError(error);
+    }
   }
 }

@@ -68,7 +68,21 @@ describe("desktopHostToolAvailability", () => {
     });
   });
 
-  it("does not advertise unsupported or unavailable Desktop automation", () => {
+  it("does not advertise Windows Desktop until native target-bounded control exists", () => {
+    expect(
+      desktopHostToolAvailability({
+        platform: "win32",
+        browserAvailable: true,
+        screenCaptureStatus: "unknown",
+        accessibilityTrusted: false,
+        automationAvailable: true,
+      }),
+    ).toEqual({
+      availableToolNames: ["openerx_browser"],
+      unavailableReasons: {
+        openerx_desktop: "DESKTOP_WINDOWS_NATIVE_CONTROL_UNAVAILABLE",
+      },
+    });
     expect(
       desktopHostToolAvailability({
         platform: "win32",

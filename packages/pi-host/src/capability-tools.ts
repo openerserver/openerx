@@ -226,7 +226,7 @@ export function createProductCapabilityTools(input: {
       name: "openerx_desktop",
       label: "Control desktop",
       description:
-        "Capture or control one desktop application. Submit, send, delete, and purchase always require explicit per-call approval.",
+        "Capture or control one exact desktop application. Take a screenshot first; every interaction requires its short-lived captureId plus the target bundleId. Screenshot x/y coordinates are relative to the captured window. Every interaction requires explicit per-call approval.",
       parameters: Type.Object(
         {
           action: Type.Union(
@@ -235,9 +235,13 @@ export function createProductCapabilityTools(input: {
             ),
           ),
           application: Type.String({ minLength: 1, maxLength: 300 }),
+          bundleId: Type.Optional(
+            Type.String({ minLength: 3, maxLength: 200, pattern: "^[A-Za-z0-9][A-Za-z0-9.-]+$" }),
+          ),
+          captureId: Type.Optional(Type.String({ format: "uuid" })),
           x: Type.Optional(Type.Integer({ minimum: 0 })),
           y: Type.Optional(Type.Integer({ minimum: 0 })),
-          text: Type.Optional(Type.String({ maxLength: 100_000 })),
+          text: Type.Optional(Type.String({ maxLength: 10_000 })),
           key: Type.Optional(Type.String({ maxLength: 100 })),
         },
         { additionalProperties: false },

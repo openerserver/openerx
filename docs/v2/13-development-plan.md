@@ -288,7 +288,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 | Billing | 报价、预留、账本、Webhook、退款、对账 | 支付测试环境与合规确认 |
 | File | Scope、解析、引用、版本、渲染 | 每种办公成果真实打开 |
 | Tool | Pi tool lifecycle、Broker、取消、MCP | 浏览器/Shell/桌面双平台 |
-| Codex 对齐 | P0、CX-101 至 CX-109 与 CX-110-D1/D2 的合同、Run 快照、工作区 Patch/Diff、分层指令、独立 MCP、按需工具发现、Office 真实成果、丰富 Run Item、桌面 MCP Authorization Code + PKCE，以及 fail-closed Host readiness/macOS Browser、Shell、Desktop 本机矩阵 | 签名 macOS TCC/安装升级回滚、live Provider、第三方实网 OAuth、任意 Office 预览和 Windows 原生矩阵 |
+| Codex 对齐 | P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 的合同、Run 快照、工作区 Patch/Diff、分层指令、独立 MCP、按需工具发现、Office 真实成果、丰富 Run Item、桌面 MCP Authorization Code + PKCE、fail-closed Host readiness/macOS Browser/Shell/Desktop 本机矩阵，以及 Developer ID 签名 macOS arm64 的 TCC/安装升级回滚/受控交互 | Apple 公证与分发安装、live Provider、第三方实网 OAuth、任意 Office 预览和 Windows 原生矩阵 |
 | Skill | Pi 加载、安装、更新、卸载、失败隔离 | 个人/工作区 Skill 双平台 |
 | Remote | 配对/撤销、签名/加密、命令幂等、Pi 映射、游标恢复、通知脱敏 | iOS/Android 真机 × Windows/macOS 主机；休眠、断线、丢失手机和多控制器演练 |
 | Release | 全矩阵、升级、回滚、安全扫描 | 签名包和发布批准 |
@@ -312,11 +312,13 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-M9 本地发布基础、Codex 对齐 P0、CX-101 至 CX-109 与 CX-110-D1/D2 已完成本地检查点。当前按
-桌面优先推进 CX-110-D3：先完成签名 macOS 包的 TCC 身份、安装/升级/回滚和 Accessibility
-受控交互矩阵；运行时仍必须保持 unavailable/fail-closed，不因签名或授权缺失而静默降级。
+M9 本地发布基础、Codex 对齐 P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 已完成本地检查点。
+CX-110-D3 已验证 Developer ID 签名 macOS arm64 包的稳定 TCC 身份、隔离安装/升级/真回滚、
+Profile/Keychain 数据保持和 TextEdit Accessibility 受控交互；Apple 公证、DMG/Gatekeeper 分发安装
+与 Windows 原生矩阵仍未完成。运行时继续保持 unavailable/fail-closed，不因签名或授权缺失而静默降级。
 
-其后再补既有 12 组真实环境证据：DeepSeek 长请求 Stop/失败、Provider 账单对账、第三方实网
-OAuth、目标用户 Beta、Windows/macOS 签名安装升级回滚、iOS/Android 商店/推送/Remote 真机
+下一步仍按桌面优先补 live Provider、第三方实网 OAuth、Apple 公证/分发安装和 Windows 原生
+Shell/Desktop；随后再补既有 12 组真实环境证据：DeepSeek 长请求 Stop/失败、Provider 账单对账、
+目标用户 Beta、Windows/macOS 发布级签名安装升级回滚、iOS/Android 商店/推送/Remote 真机
 矩阵、性能预算及安全/隐私/支付/税务/保留评审。全部证据完成并取得明确用户批准后，才可把
 `2.0.0-alpha.0` 冻结为稳定版本并开放 stable 发布门禁。

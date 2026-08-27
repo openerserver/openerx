@@ -6,7 +6,7 @@
 >
 > 合同类型：V1 文件、工具、Skill 功能范围与发布门禁
 >
-> 实现检查点：P0、CX-101 至 CX-109、CX-110-D1 与 CX-110-D2 已完成本地验证；这不等于本合同要求的 Windows/macOS 发布级端到端完成。证据见 [P1 Codex 对齐 CX-101 至 CX-107 实现证据](evidence/p1-codex-alignment-cx101-107-2026-08-27.md)、[CX-108 Office Agent 实现证据](evidence/p1-codex-alignment-cx108-2026-08-27.md)、[CX-109 丰富 Run Item 实现证据](evidence/p1-codex-alignment-cx109-2026-08-27.md)、[CX-110-D1 桌面 MCP OAuth 实现证据](evidence/p1-codex-alignment-cx110-desktop-oauth-2026-08-27.md)和 [CX-110-D2 桌面运行时能力证据](evidence/p1-codex-alignment-cx110-desktop-runtime-2026-08-27.md)。
+> 实现检查点：P0、CX-101 至 CX-109、CX-110-D1/D2 与签名 macOS arm64 的 CX-110-D3 已完成本地验证；这不等于本合同要求的 Windows/macOS 发布级端到端完成。证据见 [P1 Codex 对齐 CX-101 至 CX-107 实现证据](evidence/p1-codex-alignment-cx101-107-2026-08-27.md)、[CX-108 Office Agent 实现证据](evidence/p1-codex-alignment-cx108-2026-08-27.md)、[CX-109 丰富 Run Item 实现证据](evidence/p1-codex-alignment-cx109-2026-08-27.md)、[CX-110-D1 桌面 MCP OAuth 实现证据](evidence/p1-codex-alignment-cx110-desktop-oauth-2026-08-27.md)、[CX-110-D2 桌面运行时能力证据](evidence/p1-codex-alignment-cx110-desktop-runtime-2026-08-27.md)和 [CX-110-D3 签名桌面生命周期证据](evidence/p1-codex-alignment-cx110-desktop-signed-lifecycle-2026-08-27.md)。
 
 ## 1. 合同解释
 
@@ -56,7 +56,7 @@
 | TOOL-09 | 取消、重试与幂等 | Pi 管理调用生命周期和把结果送回 Agent Loop；Broker 可取消实际执行，外部写操作使用幂等键，重试不得重复产生副作用 |
 | TOOL-10 | 沙箱与审批 | V2 Broker 默认只写授权工作区且 Shell/脚本无任意网络；网络、浏览器、桌面控制和外部写入按风险分级，越出 Scope 前必须请求授权 |
 
-2026-08-27 的 CX-109 本地检查点已覆盖 TOOL-05/TOOL-08 的类型化输入结果、命令输出、来源、Diff、Approval、Plan、安全 Reasoning、Compaction/Retry 与按 Run 回放。CX-110-D1 已把 TOOL-06 的桌面 OAuth 从 Client Secret/`client_credentials` 修正为 Main-owned Authorization Code + PKCE；CX-110-D2 又把静态工具目录接到真实 Host readiness，在当前 Mac 完成 Browser 全链路、Shell 沙箱负向测试和 Desktop 目标窗口捕获，并覆盖允许、拒绝与撤销。第三方实网、签名包 TCC 身份和 Windows 原生工具矩阵仍属于未完成范围。
+2026-08-27 的 CX-109 本地检查点已覆盖 TOOL-05/TOOL-08 的类型化输入结果、命令输出、来源、Diff、Approval、Plan、安全 Reasoning、Compaction/Retry 与按 Run 回放。CX-110-D1 已把 TOOL-06 的桌面 OAuth 从 Client Secret/`client_credentials` 修正为 Main-owned Authorization Code + PKCE；CX-110-D2 又把静态工具目录接到真实 Host readiness，在当前 Mac 完成 Browser 全链路、Shell 沙箱负向测试和 Desktop 目标窗口捕获，并覆盖允许、拒绝与撤销；CX-110-D3 进一步验证 Developer ID 签名 macOS arm64 包的 TCC/Accessibility、精确窗口身份、TextEdit 受控输入及安装/升级/回滚数据保持。Apple 公证/DMG/Gatekeeper、第三方实网和 Windows 原生工具矩阵仍属于未完成范围。
 
 浏览器会话、系统 Shell 和桌面应用操作均属于设备能力，不能因为账户在另一台设备已经允许而自动继承授权。
 
