@@ -154,6 +154,10 @@ export interface CreatePlatformProviderOptions {
   requiresImageInput?: boolean;
   onUsage?: (record: UsageRecord) => void;
   streamChunkSize?: number;
+  contextRedactions?: ReadonlyArray<{
+    value: string;
+    replacement: string;
+  }>;
 }
 
 export interface PlatformProviderHandle {
@@ -219,12 +223,37 @@ function contextHasImages(context: Context): boolean {
   );
 }
 
+function redactContext(
+  context: Context,
+  redactions: CreatePlatformProviderOptions["contextRedactions"],
+): Context {
+  if (!redactions || redactions.length === 0) return context;
+  const redact = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      return redactions.reduce(
+        (current, item) =>
+          item.value.length > 0 ? current.replaceAll(item.value, item.replacement) : current,
+        value,
+      );
+    }
+    if (Array.isArray(value)) return value.map(redact);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, nestedValue]) => [key, redact(nestedValue)]),
+      );
+    }
+    return value;
+  };
+  return redact(context) as Context;
+}
+
 function streamPlatform(
   model: Model<string>,
   context: Context,
   options: SimpleStreamOptions | undefined,
   configuration: CreatePlatformProviderOptions,
 ): AssistantMessageEventStream {
+  const modelContext = redactContext(context, configuration.contextRedactions);
   const stream = createAssistantMessageEventStream();
   const output: AssistantMessage = {
     role: "assistant",
@@ -257,12 +286,12 @@ function streamPlatform(
       const request: ModelGatewayRequestDto = {
         ...configuration.request,
         thinkingLevel: options?.reasoning ?? "off",
-        requestDedupeKey: roundDedupeKey(configuration.request.requestDedupeKey, context),
+        requestDedupeKey: roundDedupeKey(configuration.request.requestDedupeKey, modelContext),
         requirements: {
-          ...(contextHasImages(context) ? { imageInput: true } : {}),
-          ...(context.tools && context.tools.length > 0 ? { functionCalling: true } : {}),
+          ...(contextHasImages(modelContext) ? { imageInput: true } : {}),
+          ...(modelContext.tools && modelContext.tools.length > 0 ? { functionCalling: true } : {}),
         },
-        context,
+        context: modelContext,
       };
       const pushDelta = (delta: string): void => {
         if (options?.signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");

@@ -1,10 +1,10 @@
 # PBASH 实施计划
 
-- 状态：`PBASH-001..PBASH-006 LOCAL COMPLETE / PBASH-007 LOCAL DETERMINISTIC COMPLETE / PBASH-008 LOCAL FAIL-CLOSED COMPLETE / EXTERNAL RELEASE BLOCKED`
+- 状态：`PBASH-001..PBASH-007 LOCAL COMPLETE / PBASH-008 LOCAL FAIL-CLOSED COMPLETE / EXTERNAL RELEASE BLOCKED`
 - 日期：2026-08-28（Asia/Shanghai）
 - 架构依据：[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)
-- 当前目标：PBASH-001 至 PBASH-008 的本机实现与文档切片已收口；真实模型 A/B、Developer ID/
-  公证包、跨 OS backend 和真机矩阵保留为外部发布门禁
+- 当前目标：PBASH-001 至 PBASH-008 的本机实现与文档切片已收口；Developer ID/公证包、跨 OS
+  backend 和真机矩阵保留为外部发布门禁
 
 ## 1. 实施原则
 
@@ -26,7 +26,7 @@
 | PBASH-004 | 直接写变更证据与高隔离 working copy | LOCAL COMPLETE | diff/conflict、CoW change set、审阅/应用/丢弃/撤销和不降级门禁通过 |
 | PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | LOCAL COMPLETE | 至少一次投递不重复副作用；Remote 不扩大权限 |
 | PBASH-006 | 环境与 egress policy | LOCAL COMPLETE | 默认离线、Secret canary、私网/metadata/DNS rebinding 阻断通过 |
-| PBASH-007 | Golden A/B 与渐进启用 | LOCAL DETERMINISTIC COMPLETE | 9 类 Runner A/B 零越界、无未解释回归；模型 A/B 外部待办 |
+| PBASH-007 | Golden A/B 与渐进启用 | LOCAL COMPLETE | 9 类 Runner A/B；真实模型 3 次配对完成，Brokered 严格 26/27、功能 27/27 |
 | PBASH-008 | 签名构建与平台矩阵 | LOCAL FAIL-CLOSED COMPLETE / EXTERNAL BLOCKED | 当前 macOS 仅 Local Alpha；其他平台 unavailable；签名/跨 OS 待外部证据 |
 
 ## 3. PBASH-001 代码工作包
@@ -218,7 +218,7 @@ PBASH-004A 的实现与复现证据见
 
 实现与复现证据见 [PBASH-006 日期化证据](evidence/pbash-006-2026-08-28.md)。
 
-## 12. PBASH-007 本机确定性完成
+## 12. PBASH-007 本机完成
 
 1. 固定同一工作区、命令、timeout 和默认断网，对比旧 argv Shell 与 Brokered raw Bash；9 类任务中
    旧路径 8/9、Brokered 路径 9/9，安全越界与未解释回归均为 0。
@@ -226,10 +226,13 @@ PBASH-004A 的实现与复现证据见
    路径成功。探索、搜索、构建、测试、lint、失败诊断、长输出和停止均对齐。
 3. 工具中心展示 Local Alpha、Runner/backend、policy、环境、网络和工作区状态；flag 关闭只显示
    `openerx_shell` 回滚路径，打开只投影 `bash`，Runner unavailable 时不静默回退。
-4. 本轮没有调用真实模型，模型轮次、Token、无效工具调用和 Provider 成本明确为 N/A，继续保留为
-   External Beta 门禁，不用 Runner 测试冒充模型效果。
+4. 随后用 `deepseek-v4-flash`、thinking off、同一固定快照与默认断网完成 3 次真实模型配对：legacy
+   严格 22/27，Brokered 严格 26/27、功能 27/27；Token -13.3%，未预期工具错误 3→0。
+5. Platform Provider 在请求前脱敏 Pi 私有 Session/Agent 路径；`bash` 合同明确从活动授权根启动。
+   Brokered 27 次运行未观察到活动根或 Pi 私有 cwd 绝对路径暴露。
 
-实现与复现证据见 [PBASH-007 日期化证据](evidence/pbash-007-2026-08-28.md)。
+实现与复现证据见 [PBASH-007 日期化证据](evidence/pbash-007-2026-08-28.md) 与
+[真实模型 A/B 证据](evidence/pbash-007-model-ab-2026-08-28.md)。
 
 ## 13. PBASH-008 本机 fail-closed 完成
 
@@ -243,4 +246,4 @@ PBASH-004A 的实现与复现证据见
 
 实现与复现证据见 [PBASH-008 日期化证据](evidence/pbash-008-2026-08-28.md)，机器可读支持矩阵见
 [PBASH-008 平台矩阵](evidence/pbash-008-platform-matrix-2026-08-28.json)。Developer ID/公证包、
-macOS x64 真机、Linux/WSL2/Windows backend 和真实模型 A/B 仍是外部硬门禁，不以本机完成状态替代。
+macOS x64 真机、Linux/WSL2/Windows backend 仍是外部硬门禁，不以本机完成状态替代。

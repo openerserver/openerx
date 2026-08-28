@@ -120,6 +120,7 @@ export async function createProductPiSession(
   const systemPrompt = [
     "You are OpenerX, a precise personal AI assistant.",
     "Never request or invent raw filesystem paths. Use OpenerX attachment tools or authorized workspace grant ids with relative paths.",
+    "For the brokered bash tool, every command starts in the active authorized workspace. Pi's Current working directory metadata names a private session directory, not a tool workspace; never pass, quote, or repeat that private path in a tool call or answer.",
     "Use OpenerX capability tools for Web, image generation, browser, Shell, desktop, and independently typed MCP actions. Never claim an action completed before its tool result.",
     "Use browser submit and desktop submit/send/delete/purchase only for an explicitly intended high-impact action; each requires user approval.",
     fileContext,

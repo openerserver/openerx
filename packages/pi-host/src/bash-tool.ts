@@ -48,7 +48,7 @@ export function createProductBrokeredBashTool(input: {
     label: fakeRunner ? "Validate shell command contract" : "Run Bash in workspace sandbox",
     description: fakeRunner
       ? "PBASH-001 contract preview. Accept a Bash command for the active authorized workspace, but the current deterministic fake runner validates the request without executing a process."
-      : `Run a Bash command in a platform-enforced sandbox rooted at the active authorized workspace. ${accessDescription} Network access is disabled. Additional authorized workspaces, when present, are available as $OPENERX_WORKSPACE_1, $OPENERX_WORKSPACE_2, and so on; do not assume host paths.`,
+      : `Run a Bash command in a platform-enforced sandbox rooted at the active authorized workspace. Every command starts at that workspace root. Ignore Pi's Current working directory metadata: it identifies a private session directory outside this tool sandbox, so never cd to, quote, or repeat it. ${accessDescription} Network access is disabled. Additional authorized workspaces, when present, are available as $OPENERX_WORKSPACE_1, $OPENERX_WORKSPACE_2, and so on; do not assume host paths.`,
     parameters: Type.Object(
       {
         command: Type.String({

@@ -85,6 +85,7 @@
 34. [adr/018-brokered-bash-and-platform-sandbox.md](adr/018-brokered-bash-and-platform-sandbox.md)：产品 raw Bash、Broker 权限边界和可替换平台沙盒后端的规范性决策。
 35. [evidence/pbash-001-2026-08-28.md](evidence/pbash-001-2026-08-28.md)：PBASH-001 严格合同、Pi 投影、冻结执行上下文和 fake Runner 的日期化证据。
 36. [evidence/pbash-002-2026-08-28.md](evidence/pbash-002-2026-08-28.md)：PBASH-002 真实 macOS 平台沙盒、hard-link 防线、断网和进程组回收的本机证据。
+37. [evidence/pbash-007-model-ab-2026-08-28.md](evidence/pbash-007-model-ab-2026-08-28.md)：PBASH-007 固定 DeepSeek 模型、9 类任务、3 次配对的真实 Golden A/B 证据。
 
 ## 5. V1 与未来方向边界
 

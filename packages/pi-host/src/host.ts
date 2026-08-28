@@ -307,6 +307,16 @@ export function startPiHostProcess(
                 authoritativeUsageRecords.push(usage);
               }
             },
+            contextRedactions: [
+              {
+                value: workspaceDirectory,
+                replacement: "<private-pi-session-directory-not-a-tool-workspace>",
+              },
+              {
+                value: agentDirectory,
+                replacement: "<private-pi-agent-directory>",
+              },
+            ],
           });
           modelRuntime = await ModelRuntime.create({
             modelsPath: null,

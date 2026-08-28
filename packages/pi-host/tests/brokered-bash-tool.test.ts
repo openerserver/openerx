@@ -92,6 +92,8 @@ describe("PBASH-001 Pi bash projection", () => {
     if (!bash) throw new Error("brokered bash tool missing");
     expect(bash.label).toBe("Run Bash in workspace sandbox");
     expect(bash.description).toContain("platform-enforced sandbox");
+    expect(bash.description).toContain("Every command starts at that workspace root");
+    expect(bash.description).toContain("Ignore Pi's Current working directory metadata");
     expect(bash.description).toContain("Network access is disabled");
     expect(bash.description).toContain("$OPENERX_WORKSPACE_1");
     expect(bash.description).not.toContain(realExecution.activeExecutionGrantId);

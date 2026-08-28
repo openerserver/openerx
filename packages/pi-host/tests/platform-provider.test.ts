@@ -204,6 +204,79 @@ describe("Platform Model Pi Provider", () => {
     );
   });
 
+  it("redacts private host paths before hashing and sending model context", async () => {
+    const privateDirectory = "/private/profile/pi-workspace";
+    const accountId = randomUUID();
+    const conversationId = randomUUID();
+    const messageId = randomUUID();
+    const execute = vi.fn(async (gatewayRequest: ModelGatewayRequestDto) => ({
+      text: "ok",
+      effectiveModelRef: model.modelRef,
+      fallbackReason: null,
+      finishReason: "stop" as const,
+      usage: {
+        usageId: randomUUID(),
+        accountId,
+        conversationId,
+        messageId,
+        runId: null,
+        toolCallId: null,
+        selectedModelRef: gatewayRequest.selectedModelRef,
+        effectiveModelRef: model.modelRef,
+        fallbackReason: null,
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        reasoningTokens: null,
+        totalTokens: 2,
+        providerReported: true,
+        missingReasons: { reasoningTokens: "provider_not_reported" },
+        dedupeKey: gatewayRequest.requestDedupeKey,
+        recordedAt: "2026-08-28T10:00:00.000Z",
+      },
+    }));
+    const platform = createPlatformModelProvider({
+      catalog: [model],
+      transport: { execute },
+      request: {
+        accountId,
+        conversationId,
+        messageId,
+        selectedModelRef: model.modelRef,
+        approvedFallbackModelRef: null,
+        requestDedupeKey: "model-call-context-redaction",
+      },
+      contextRedactions: [
+        {
+          value: privateDirectory,
+          replacement: "<private-pi-session-directory-not-a-tool-workspace>",
+        },
+      ],
+    });
+    const stream = platform.provider.streamSimple(
+      platform.model,
+      {
+        systemPrompt: `Current working directory: ${privateDirectory}`,
+        messages: [
+          {
+            role: "user",
+            content: `do not use ${privateDirectory}`,
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      undefined,
+    );
+    for await (const _event of stream) {
+      // Exhaust the provider stream so the transport request completes.
+    }
+    const request = execute.mock.calls[0]?.[0];
+    expect(JSON.stringify(request?.context)).not.toContain(privateDirectory);
+    expect(JSON.stringify(request?.context)).toContain(
+      "<private-pi-session-directory-not-a-tool-workspace>",
+    );
+  });
+
   it("streams a Gateway response through Pi and preserves authoritative unknown usage", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openerx-platform-provider-"));
     temporaryDirectories.push(root);

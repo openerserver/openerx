@@ -1,0 +1,2358 @@
+{
+  "schemaVersion": 2,
+  "scoringVersion": 2,
+  "kind": "pbash_model_golden_ab",
+  "generatedAt": "2026-08-28T15:41:20.651Z",
+  "model": "deepseek-v4-flash",
+  "thinkingLevel": "off",
+  "networkPolicy": "deny",
+  "repetitions": 3,
+  "fixtureDigest": "sha256:9c26f14e222f53eba215219d12101afeb9d7e8b696fa133c6df88066d51a9679",
+  "tasks": [
+    {
+      "id": "repository_exploration",
+      "marker": "PBASH_EXPLORE_OK:pbash-eval-fixture",
+      "stopAfterToolStart": false,
+      "expectedCommandFailure": false
+    },
+    {
+      "id": "combined_search",
+      "marker": "PBASH_SEARCH_OK:src/math.js:2",
+      "stopAfterToolStart": false,
+      "expectedCommandFailure": false
+    },
+    {
+      "id": "build",
+      "marker": "PBASH_BUILD_OK",
+      "stopAfterToolStart": false,
+      "expectedCommandFailure": false
+    },
+    {
+      "id": "test",
+      "marker": "PBASH_TEST_OK",
+      "stopAfterToolStart": false,
+      "expectedCommandFailure": false
+    },
+    {
+      "id": "lint",
+      "marker": "PBASH_LINT_OK",
+      "stopAfterToolStart": false,
+      "expectedCommandFailure": false
+    },
+    {
+      "id": "failure_diagnosis",
+      "marker": "PBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17",
+      "stopAfterToolStart": false,
+      "expectedCommandFailure": true
+    },
+    {
+      "id": "pre_patch_validation",
+      "marker": "PBASH_PATCH_CHECK_OK",
+      "stopAfterToolStart": false,
+      "expectedCommandFailure": false
+    },
+    {
+      "id": "long_output",
+      "marker": "PBASH_LONG_OUTPUT_OK:line-249",
+      "stopAfterToolStart": false,
+      "expectedCommandFailure": false
+    },
+    {
+      "id": "stop",
+      "marker": null,
+      "stopAfterToolStart": true,
+      "expectedCommandFailure": false
+    }
+  ],
+  "summary": {
+    "legacy": {
+      "tasks": 27,
+      "completed": 22,
+      "completionRate": 0.8148148148148148,
+      "modelRounds": 56,
+      "toolCalls": 33,
+      "toolErrors": 9,
+      "unexpectedToolErrors": 3,
+      "inputTokens": 30685,
+      "cachedInputTokens": 26240,
+      "outputTokens": 4548,
+      "reasoningTokens": 0,
+      "totalTokens": 61473,
+      "durationMs": 57467,
+      "activeWorkspacePathEmissions": 3,
+      "privateCwdPathEmissions": 0
+    },
+    "brokered": {
+      "tasks": 27,
+      "completed": 26,
+      "completionRate": 0.9629629629629629,
+      "modelRounds": 58,
+      "toolCalls": 32,
+      "toolErrors": 5,
+      "unexpectedToolErrors": 0,
+      "inputTokens": 28283,
+      "cachedInputTokens": 22272,
+      "outputTokens": 2743,
+      "reasoningTokens": 0,
+      "totalTokens": 53298,
+      "durationMs": 55128,
+      "activeWorkspacePathEmissions": 0,
+      "privateCwdPathEmissions": 0
+    }
+  },
+  "runs": [
+    {
+      "taskId": "repository_exploration",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 3,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 3,
+        "inputTokens": 1010,
+        "cachedInputTokens": 2176,
+        "outputTokens": 221,
+        "reasoningTokens": 0,
+        "totalTokens": 3407,
+        "providerReported": true
+      },
+      "durationMs": 2837,
+      "finalText": "项目名为 `pbash-eval-fixture`。\n\nPBASH_EXPLORE_OK:pbash-eval-fixture",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_agQejKXIGoqVBF5fvD1E9953",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "ls",
+            "args": []
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"README.md\\nbroken.js\\npackage.json\\nscripts\\nsrc\\ntests\\n\"}],\"details\":{\"summary\":\"README.md\\nbroken.js\\npackage.json\\nscripts\\nsrc\\ntests\\n\",\"data\":{\"processId\":\"8eb5f494-fe63-4b93-b9ad-a2cb6ec244e2\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":13,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_uIAr08htBW4d6vGjK9WA5791",
+          "args": {
+            "args": [
+              "package.json"
+            ],
+            "command": "cat",
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\"}],\"details\":{\"summary\":\"{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\",\"data\":{\"processId\":\"5baa4bc0-ba7c-4695-b76a-0279ca501bd7\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":14,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "repository_exploration",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1142,
+        "cachedInputTokens": 768,
+        "outputTokens": 74,
+        "reasoningTokens": 0,
+        "totalTokens": 1984,
+        "providerReported": true
+      },
+      "durationMs": 1806,
+      "finalText": "项目名确认为 `pbash-eval-fixture`。\n\nPBASH_EXPLORE_OK:pbash-eval-fixture",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_oMqFtovyG2TJLNrxeXlc5041",
+          "args": {
+            "command": "ls -la && cat package.json"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"total 24\\ndrwxr-xr-x@ 8 501  20  256 Aug 28 15:39 .\\ndrwx------@ 5 501  20  160 Aug 28 15:39 ..\\n-rw-r--r--@ 1 501  20   42 Aug 28 15:39 broken.js\\n-rw-r--r--@ 1 501  20   74 Aug 28 15:39 package.json\\n-rw-r--r--@ 1 501  20   39 Aug 28 15:39 README.md\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:39 scripts\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:39 src\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:39 tests\\n{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\"}],\"details\":{\"summary\":\"total 24\\ndrwxr-xr-x@ 8 501  20  256 Aug 28 15:39 .\\ndrwx------@ 5 501  20  160 Aug 28 15:39 ..\\n-rw-r--r--@ 1 501  20   42 Aug 28 15:39 broken.js\\n-rw-r--r--@ 1 501  20   74 Aug 28 15:39 package.json\\n-rw-r--r--@ 1 501  20   39 Aug 28 15:39 README.md\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:39 scripts\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:39 src\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:39 tests\\n{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:02085cf138fbdaa089041ef2aa94f8859dd7d3d4e0a1fc54ab4ce7d94f5e76ab\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":36,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "combined_search",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 978,
+        "cachedInputTokens": 1024,
+        "outputTokens": 119,
+        "reasoningTokens": 0,
+        "totalTokens": 2121,
+        "providerReported": true
+      },
+      "durationMs": 1955,
+      "finalText": "PBASH_SEARCH_OK:src/math.js:2",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_vWVKLZdh0UkpLaLvziFY0179",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "grep",
+            "args": [
+              "-rn",
+              "needle-42"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\"}],\"details\":{\"summary\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\",\"data\":{\"processId\":\"6947f502-64dd-4288-867c-a054de89d622\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":13,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "combined_search",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 948,
+        "cachedInputTokens": 768,
+        "outputTokens": 75,
+        "reasoningTokens": 0,
+        "totalTokens": 1791,
+        "providerReported": true
+      },
+      "durationMs": 1865,
+      "finalText": "Found the string.\n\nPBASH_SEARCH_OK:src/math.js:2",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_5lENtaF0OgOjPpxW9l4F2442",
+          "args": {
+            "command": "grep -n \"needle-42\" -r . 2>/dev/null"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\"}],\"details\":{\"summary\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:f67ed90195116692266051bd7faba8f3d598336eb72ad1200eb2cc038e8bc8cd\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":34,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "build",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1059,
+        "cachedInputTokens": 896,
+        "outputTokens": 121,
+        "reasoningTokens": 0,
+        "totalTokens": 2076,
+        "providerReported": true
+      },
+      "durationMs": 2216,
+      "finalText": "命令成功执行，退出码为 0。\n\nPBASH_BUILD_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_0zIl9Zw3hrufbgKrpDnK3176",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "src/math.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"5901f635-5d2e-422b-84a7-52ecec6d5b61\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":47,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "build",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 899,
+        "cachedInputTokens": 768,
+        "outputTokens": 69,
+        "reasoningTokens": 0,
+        "totalTokens": 1736,
+        "providerReported": true
+      },
+      "durationMs": 1482,
+      "finalText": "命令成功，最后一行输出 `PBASH_BUILD_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_OY3lAJ1YaqQkq12fbAFx8210",
+          "args": {
+            "command": "node --check src/math.js && echo PBASH_BUILD_OK"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_BUILD_OK\\n\"}],\"details\":{\"summary\":\"PBASH_BUILD_OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:33b208baebb31460b48305e71e3b294f21e20ef161a9b6c9646cee9d1f49f1cd\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":67,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "test",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1054,
+        "cachedInputTokens": 896,
+        "outputTokens": 116,
+        "reasoningTokens": 0,
+        "totalTokens": 2066,
+        "providerReported": true
+      },
+      "durationMs": 1515,
+      "finalText": "测试运行完成，输出为 `PBASH_TEST_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_P4iIg3heAvgVrF3wxMTY4471",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "tests/math.test.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_TEST_OK\\n\"}],\"details\":{\"summary\":\"PBASH_TEST_OK\\n\",\"data\":{\"processId\":\"359f7b57-4a52-497d-a41b-d932daf4cea2\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":58,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "test",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": false,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 888,
+        "cachedInputTokens": 768,
+        "outputTokens": 60,
+        "reasoningTokens": 0,
+        "totalTokens": 1716,
+        "providerReported": true
+      },
+      "durationMs": 1566,
+      "finalText": "测试输出为 `PBASH_TEST_OK`，符合要求。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_4avOQeowz6dBhmOy2Jm42423",
+          "args": {
+            "command": "node tests/math.test.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_TEST_OK\\n\"}],\"details\":{\"summary\":\"PBASH_TEST_OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:d8c0aa4c5bb5570c03352b96765c31c92cb670f7eebafedaab72cf7be953022c\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":54,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "lint",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1056,
+        "cachedInputTokens": 1024,
+        "outputTokens": 219,
+        "reasoningTokens": 0,
+        "totalTokens": 2299,
+        "providerReported": true
+      },
+      "durationMs": 1997,
+      "finalText": "两个文件都通过 Node 语法检查（退出码 0）。\n\nPBASH_LINT_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_NtfUFR61AsIGj0tUfWdY4283",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "src/math.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"df022ecd-e747-49f1-ba5f-2b43809eb20a\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":44,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_01_WYpbJ7y2Sw8cQhHwbuYy3820",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "tests/math.test.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"c6f5ce07-9f60-4df2-9c25-de5b3fb3e54f\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":43,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "lint",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 3,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 3,
+        "inputTokens": 1170,
+        "cachedInputTokens": 1536,
+        "outputTokens": 196,
+        "reasoningTokens": 0,
+        "totalTokens": 2902,
+        "providerReported": true
+      },
+      "durationMs": 3547,
+      "finalText": "两个文件均通过 Node 语法检查。\n\n```\nsrc/math.js OK\ntests/math.test.js OK\nPBASH_LINT_OK\n```\n\n最后一行输出 `PBASH_LINT_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_HaFI8AvWHVY6zq3QrOny4174",
+          "args": {
+            "command": "cd pbash-eval-fixture 2>/dev/null || true; node --check src/math.js && echo \"src/math.js OK\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"src/math.js OK\\n\"}],\"details\":{\"summary\":\"src/math.js OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:59f38936832edd136bf13dde0e6f29434917074e542ceea78a92c2762b9e2c94\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":53,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_Ic0ar6wswYTY5OyJrVsP1023",
+          "args": {
+            "command": "cd pbash-eval-fixture 2>/dev/null || true; node --check tests/math.test.js && echo \"tests/math.test.js OK\" && echo \"PBASH_LINT_OK\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"tests/math.test.js OK\\nPBASH_LINT_OK\\n\"}],\"details\":{\"summary\":\"tests/math.test.js OK\\nPBASH_LINT_OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:0ce654d1932295c13782ecf679b4c02669ecf9fb90de165d8b4b1f54fbaccefc\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":60,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "failure_diagnosis",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": false,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1194,
+        "cachedInputTokens": 1024,
+        "outputTokens": 208,
+        "reasoningTokens": 0,
+        "totalTokens": 2426,
+        "providerReported": true
+      },
+      "durationMs": 2338,
+      "finalText": "The command failed as expected. The real stderr shows an uncaught `Error: BROKEN_WIDGET_CODE_17` thrown at `broken.js:1`, causing exit code 1 (Node.js v24.2.0).\n\nFinal line of output:\n\n```\nPBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17\n```\n\nDiagnosis: the error code is `1` (uncaught exception), and the thrown widget code matches `BROKEN_WIDGET_CODE_17`.",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": true,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_2ylnWNCVY65TKQjabMIb0075",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "broken.js"
+            ]
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_EXIT_1: file:///private$OPENERX_WORKSPACE/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file:///private$OPENERX_WORKSPACE/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\n\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "failure_diagnosis",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 3,
+      "toolCalls": 2,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 3,
+        "inputTokens": 1350,
+        "cachedInputTokens": 1792,
+        "outputTokens": 237,
+        "reasoningTokens": 0,
+        "totalTokens": 3379,
+        "providerReported": true
+      },
+      "durationMs": 2903,
+      "finalText": "命令按预期失败。真实 stderr 表明错误码为：\n\n- broken.js 第 1 行抛出 `Error: BROKEN_WIDGET_CODE_17`（Node v24.2.0，ESM 加载时抛出的未捕获异常）。\n\n最终输出完成了 `PBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_YwkRVpG17t8HRiTK454l1439",
+          "args": {
+            "command": "node broken.js"
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"BROKERED_BASH_COMMAND_FAILED: file://<workspace>/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file://<workspace>/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\n\"}],\"details\":{}}"
+        },
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_8QWBue4r4DofBiaVCUQq9871",
+          "args": {
+            "command": "node broken.js 2>&1; echo \"PBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"file://<workspace>/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file://<workspace>/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\nPBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17\\n\"}],\"details\":{\"summary\":\"file://<workspace>/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file://<workspace>/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\nPBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:8a767bc6c16768b0526eeee8c6a0abb08f17d3f0d61d83af03c79084001ba6d7\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":64,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "pre_patch_validation",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": false,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 1,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1019,
+        "cachedInputTokens": 1024,
+        "outputTokens": 246,
+        "reasoningTokens": 0,
+        "totalTokens": 2289,
+        "providerReported": true
+      },
+      "durationMs": 2546,
+      "finalText": "The command failed with exit code 128 due to the sandbox restricting access to /dev/null (which `git diff --check --no-index` uses internally). Since the command exited non-zero, I must report failure and cannot output the success marker.\n\n失败：该命令退出码为 128，报错 `fatal: could not open '/dev/null' for reading and writing: Operation not permitted`。原因是 `git diff --no-index` 内部需要访问 `/dev/null`，但当前沙箱环境禁止该访问。\n\n由于退出码不为 0，我不能输出 `PBASH_PATCH_CHECK_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_5GOLvvSge9BiA4Hp0Dc60164",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "git",
+            "args": [
+              "diff",
+              "--check",
+              "--no-index",
+              "src/math.js",
+              "src/math.js"
+            ]
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_EXIT_128: fatal: could not open '/dev/null' for reading and writing: Operation not permitted\\n\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "pre_patch_validation",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 950,
+        "cachedInputTokens": 768,
+        "outputTokens": 70,
+        "reasoningTokens": 0,
+        "totalTokens": 1788,
+        "providerReported": true
+      },
+      "durationMs": 1353,
+      "finalText": "The command exited with code 0.\n\nPBASH_PATCH_CHECK_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_8IiGZDqdpq0n9rGCqi4p5930",
+          "args": {
+            "command": "git diff --check --no-index src/math.js src/math.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"Bash completed successfully.\"}],\"details\":{\"summary\":\"Bash completed successfully.\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:f2017c9adc12c0b60b0e2565f99a67b33f2c59112f08cf935033e7b7610cdb6e\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":36,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "long_output",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1951,
+        "cachedInputTokens": 1024,
+        "outputTokens": 140,
+        "reasoningTokens": 0,
+        "totalTokens": 3115,
+        "providerReported": true
+      },
+      "durationMs": 2624,
+      "finalText": "已运行脚本并逐行核对输出。最后一行实际看到的是 `line-249`，因此输出为：\n\n**PBASH_LONG_OUTPUT_OK:line-249**",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_QNHvcmLoX0umgzbG6qqF4572",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "scripts/long-output.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\nline-166\\nline-167\\nline-168\\nline-169\\nline-170\\nline-171\\nline-172\\nline-173\\nline-174\\nline-175\\nline-176\\nline-177\\nline-178\\nline-179\\nline-180\\nline-181\\nline-182\\nline-183\\nline-184\\nline-185\\nline-186\\nline-187\\nline-188\\nline-189\\nline-190\\nline-191\\nline-192\\nline-193\\nline-194\\nline-195\\nline-196\\nline-197\\nline-198\\nline-199\\nline-200\\nline-201\\nline-202\\nline-203\\nline-204\\nline-205\\nline-206\\nline-207\\nline-208\\nline-209\\nline-210\\nline-211\\nline-212\\nline-213\\nline-214\\nline-215\\nline-216\\nline-217\\nline-218\\nline-219\\nline-220\\nline-221\\nline-222\\nline-223\\nline-224\\nline-225\\nline-226\\nline-227\\nline-228\\nline-229\\nline-230\\nline-231\\nline-232\\nline-233\\nline-234\\nline-235\\nline-236\\nline-237\\nline-238\\nline-239\\nline-240\\nline-241\\nline-242\\nline-243\\nline-244\\nline-245\\nline-246\\nline-247\\nline-248\\nline-249\\n\"}],\"details\":{\"summary\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\"
+        }
+      ]
+    },
+    {
+      "taskId": "long_output",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1913,
+        "cachedInputTokens": 768,
+        "outputTokens": 74,
+        "reasoningTokens": 0,
+        "totalTokens": 2755,
+        "providerReported": true
+      },
+      "durationMs": 1832,
+      "finalText": "最后一行实际输出了 `line-249`。因此最后一行输出：\n\nPBASH_LONG_OUTPUT_OK:line-249",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_LiZTq6RBfsAWyawpnDCP5440",
+          "args": {
+            "command": "node scripts/long-output.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\nline-166\\nline-167\\nline-168\\nline-169\\nline-170\\nline-171\\nline-172\\nline-173\\nline-174\\nline-175\\nline-176\\nline-177\\nline-178\\nline-179\\nline-180\\nline-181\\nline-182\\nline-183\\nline-184\\nline-185\\nline-186\\nline-187\\nline-188\\nline-189\\nline-190\\nline-191\\nline-192\\nline-193\\nline-194\\nline-195\\nline-196\\nline-197\\nline-198\\nline-199\\nline-200\\nline-201\\nline-202\\nline-203\\nline-204\\nline-205\\nline-206\\nline-207\\nline-208\\nline-209\\nline-210\\nline-211\\nline-212\\nline-213\\nline-214\\nline-215\\nline-216\\nline-217\\nline-218\\nline-219\\nline-220\\nline-221\\nline-222\\nline-223\\nline-224\\nline-225\\nline-226\\nline-227\\nline-228\\nline-229\\nline-230\\nline-231\\nline-232\\nline-233\\nline-234\\nline-235\\nline-236\\nline-237\\nline-238\\nline-239\\nline-240\\nline-241\\nline-242\\nline-243\\nline-244\\nline-245\\nline-246\\nline-247\\nline-248\\nline-249\\n\"}],\"details\":{\"summary\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\"
+        }
+      ]
+    },
+    {
+      "taskId": "stop",
+      "variant": "legacy",
+      "repetition": 1,
+      "completed": true,
+      "stopped": true,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 917,
+        "cachedInputTokens": 0,
+        "outputTokens": 116,
+        "reasoningTokens": 0,
+        "totalTokens": 1033,
+        "providerReported": true
+      },
+      "durationMs": 1516,
+      "finalText": "",
+      "stopReason": "error",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_ikrfsD9cTukkJhlTKIj46430",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "sleep",
+            "args": [
+              "60"
+            ]
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_STOPPED\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "stop",
+      "variant": "brokered",
+      "repetition": 1,
+      "completed": true,
+      "stopped": true,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 798,
+        "cachedInputTokens": 0,
+        "outputTokens": 62,
+        "reasoningTokens": 0,
+        "totalTokens": 860,
+        "providerReported": true
+      },
+      "durationMs": 1792,
+      "finalText": "",
+      "stopReason": "error",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_qk7soDLAqACgQVavY2fE2269",
+          "args": {
+            "command": "sleep 60",
+            "timeout": 1800
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"BROKERED_BASH_CANCELLED: Bash did not complete.\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "repository_exploration",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 981,
+        "cachedInputTokens": 1024,
+        "outputTokens": 133,
+        "reasoningTokens": 0,
+        "totalTokens": 2138,
+        "providerReported": true
+      },
+      "durationMs": 2464,
+      "finalText": "The repository's `package.json` confirms the project name is `pbash-eval-fixture`.\n\nPBASH_EXPLORE_OK:pbash-eval-fixture",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_jABd9wbtOiWGTi1OGGyx7279",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "cat",
+            "args": [
+              "package.json"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\"}],\"details\":{\"summary\":\"{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\",\"data\":{\"processId\":\"33252be4-a505-4d4e-9bea-d85dfe125235\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":16,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "repository_exploration",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1142,
+        "cachedInputTokens": 768,
+        "outputTokens": 74,
+        "reasoningTokens": 0,
+        "totalTokens": 1984,
+        "providerReported": true
+      },
+      "durationMs": 1543,
+      "finalText": "项目名确认为 `pbash-eval-fixture`。\n\nPBASH_EXPLORE_OK:pbash-eval-fixture",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_W2fRoegQ5MyoEKm1moMA6259",
+          "args": {
+            "command": "ls -la && cat package.json"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"total 24\\ndrwxr-xr-x@ 8 501  20  256 Aug 28 15:40 .\\ndrwx------@ 5 501  20  160 Aug 28 15:40 ..\\n-rw-r--r--@ 1 501  20   42 Aug 28 15:40 broken.js\\n-rw-r--r--@ 1 501  20   74 Aug 28 15:40 package.json\\n-rw-r--r--@ 1 501  20   39 Aug 28 15:40 README.md\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:40 scripts\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:40 src\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:40 tests\\n{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\"}],\"details\":{\"summary\":\"total 24\\ndrwxr-xr-x@ 8 501  20  256 Aug 28 15:40 .\\ndrwx------@ 5 501  20  160 Aug 28 15:40 ..\\n-rw-r--r--@ 1 501  20   42 Aug 28 15:40 broken.js\\n-rw-r--r--@ 1 501  20   74 Aug 28 15:40 package.json\\n-rw-r--r--@ 1 501  20   39 Aug 28 15:40 README.md\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:40 scripts\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:40 src\\ndrwxr-xr-x@ 3 501  20   96 Aug 28 15:40 tests\\n{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:f0eb2f4bb1d1314ee5da944dc42cbaa86b734b7dc5c6391439c34960a18cc847\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":35,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "combined_search",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 978,
+        "cachedInputTokens": 1024,
+        "outputTokens": 119,
+        "reasoningTokens": 0,
+        "totalTokens": 2121,
+        "providerReported": true
+      },
+      "durationMs": 1617,
+      "finalText": "PBASH_SEARCH_OK:src/math.js:2",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_eNx6z7a0WMhZsHoo5jQn3935",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "grep",
+            "args": [
+              "-rn",
+              "needle-42"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\"}],\"details\":{\"summary\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\",\"data\":{\"processId\":\"c9b91f63-91c2-4993-b92e-37f7c84d63e4\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":18,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "combined_search",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 941,
+        "cachedInputTokens": 768,
+        "outputTokens": 85,
+        "reasoningTokens": 0,
+        "totalTokens": 1794,
+        "providerReported": true
+      },
+      "durationMs": 1934,
+      "finalText": "Confirmed: `needle-42` is in `src/math.js` at line 2.\n\nPBASH_SEARCH_OK:src/math.js:2",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_oRlPadN4FDvYBxJ6a5b86365",
+          "args": {
+            "command": "grep -rn \"needle-42\" ."
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\"}],\"details\":{\"summary\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:b412e67095fcc9670803a97009e99c2ddd0341dc1b839d967f8ef1a69b14e0f1\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":34,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "build",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 3,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 3,
+        "inputTokens": 976,
+        "cachedInputTokens": 2176,
+        "outputTokens": 262,
+        "reasoningTokens": 0,
+        "totalTokens": 3414,
+        "providerReported": true
+      },
+      "durationMs": 3348,
+      "finalText": "`node --check src/math.js` 成功（退出码 0），最后一行输出 `PBASH_BUILD_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_XBrbNQ9G2gqjgSNrSUw02617",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "src/math.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"abcf7f62-1f87-426f-a9a9-ca5e2d252de7\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":45,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_du462PNbA8toYQKN3Pzf2267",
+          "args": {
+            "args": [
+              "PBASH_BUILD_OK"
+            ],
+            "command": "echo",
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_BUILD_OK\\n\"}],\"details\":{\"summary\":\"PBASH_BUILD_OK\\n\",\"data\":{\"processId\":\"df1ec0ec-1464-4a96-9190-dce0d16eac00\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":18,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "build",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 899,
+        "cachedInputTokens": 768,
+        "outputTokens": 60,
+        "reasoningTokens": 0,
+        "totalTokens": 1727,
+        "providerReported": true
+      },
+      "durationMs": 1697,
+      "finalText": "PBASH_BUILD_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_Yv7W2JnuqNOfnJ8NzheD5905",
+          "args": {
+            "command": "node --check src/math.js && echo PBASH_BUILD_OK"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_BUILD_OK\\n\"}],\"details\":{\"summary\":\"PBASH_BUILD_OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:22a2a790c8f98251dd9a579633488627ee6e2d92002ca6458b61d71fba3010bb\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":54,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "test",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1054,
+        "cachedInputTokens": 896,
+        "outputTokens": 119,
+        "reasoningTokens": 0,
+        "totalTokens": 2069,
+        "providerReported": true
+      },
+      "durationMs": 1872,
+      "finalText": "The test ran successfully, and the output was exactly `PBASH_TEST_OK`.",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_zqLQd7p60mW2pdcR1yCY9986",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "tests/math.test.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_TEST_OK\\n\"}],\"details\":{\"summary\":\"PBASH_TEST_OK\\n\",\"data\":{\"processId\":\"98c0c9cc-0e89-41dc-8599-add0c9ca06c0\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":49,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "test",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 888,
+        "cachedInputTokens": 768,
+        "outputTokens": 63,
+        "reasoningTokens": 0,
+        "totalTokens": 1719,
+        "providerReported": true
+      },
+      "durationMs": 1834,
+      "finalText": "The test ran successfully and the final output line is `PBASH_TEST_OK`.",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_MHa72Igxg4g0uCqeUzoP0758",
+          "args": {
+            "command": "node tests/math.test.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_TEST_OK\\n\"}],\"details\":{\"summary\":\"PBASH_TEST_OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:9b90365a65bb72ed8b47b2ed2593a42fc15b934e22f6abf653f71a0ec4efad6f\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":55,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "lint",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1056,
+        "cachedInputTokens": 1024,
+        "outputTokens": 205,
+        "reasoningTokens": 0,
+        "totalTokens": 2285,
+        "providerReported": true
+      },
+      "durationMs": 2418,
+      "finalText": "PBASH_LINT_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_f18wLrBRobCu6EGFzgut7100",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "src/math.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"389fad3f-46b6-4080-9993-f9ba55139c6d\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":42,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_01_ODGVEjO3Cyj1tKFTXpgR9389",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "tests/math.test.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"26c2f4fc-ef4e-4f21-879d-5206caf36efc\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":41,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "lint",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 969,
+        "cachedInputTokens": 768,
+        "outputTokens": 103,
+        "reasoningTokens": 0,
+        "totalTokens": 1840,
+        "providerReported": true
+      },
+      "durationMs": 1514,
+      "finalText": "PBASH_LINT_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_DK6jMFTyUmYv1mlohQ1E1357",
+          "args": {
+            "command": "node --check src/math.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"Bash completed successfully.\"}],\"details\":{\"summary\":\"Bash completed successfully.\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:5be6c60d2f3d40e5ecb08b0a401519798bf127cadfaf441297f9f8678986ba1b\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":52,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "bash",
+          "toolCallId": "call_01_DKlv0W5aqy211YXIf9vx5185",
+          "args": {
+            "command": "node --check tests/math.test.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"Bash completed successfully.\"}],\"details\":{\"summary\":\"Bash completed successfully.\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:5734823be0ccc68614e6465952f088928c3e92c30bd3f2da1fdcea9aa78b4db5\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":50,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "failure_diagnosis",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": false,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1194,
+        "cachedInputTokens": 1024,
+        "outputTokens": 232,
+        "reasoningTokens": 0,
+        "totalTokens": 2450,
+        "providerReported": true
+      },
+      "durationMs": 2243,
+      "finalText": "Diagnosed. The command failed as expected. `broken.js` throws `Error: BROKEN_WIDGET_CODE_17` at line 1, based on the real stderr output.\n\nLast line: `Node.js v24.2.0`\n\nThe actual last output line is `Node.js v24.2.0` — but there is no `PBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17` line generated because the script throws before printing it. The command failed with `SHELL_EXIT_1` on the uncaught `Error: BROKEN_WIDGET_CODE_17`.",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": true,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_CVspGtEqXgj53fcYcx5n4720",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "broken.js"
+            ]
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_EXIT_1: file:///private$OPENERX_WORKSPACE/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file:///private$OPENERX_WORKSPACE/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\n\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "failure_diagnosis",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1074,
+        "cachedInputTokens": 768,
+        "outputTokens": 180,
+        "reasoningTokens": 0,
+        "totalTokens": 2022,
+        "providerReported": true
+      },
+      "durationMs": 2689,
+      "finalText": "The command failed as expected. The stderr shows an uncaught `throw new Error(\"BROKEN_WIDGET_CODE_17\")` at `broken.js:1:7`, exit code 1.\n\nFinal line: `PBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17`\n\n**Diagnosed error code:** `BROKEN_WIDGET_CODE_17` — thrown as an uncaught `Error` from line 1 of `broken.js`, causing the Node process to terminate with a non-zero exit code.\n\nPBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_XHhOtyGTJwRtoXQ02N9Y2809",
+          "args": {
+            "command": "node broken.js 2>&1"
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"BROKERED_BASH_COMMAND_FAILED: file://<workspace>/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file://<workspace>/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\n\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "pre_patch_validation",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": false,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 1,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1028,
+        "cachedInputTokens": 1024,
+        "outputTokens": 252,
+        "reasoningTokens": 0,
+        "totalTokens": 2304,
+        "providerReported": true
+      },
+      "durationMs": 2428,
+      "finalText": "The command failed with exit code 128 due to an error opening `/dev/null`. Since the exit code is not 0, I must report the failure and cannot output the success marker.\n\n**失败报告：**\n\n命令 `git diff --check --no-index src/math.js src/math.js` 执行失败。\n\n- 退出码：`128`\n- 错误信息：`fatal: could not open '/dev/null' for reading and writing: Operation not permitted`\n\n由于退出码不为 0，不能输出成功标记 `PBASH_PATCH_CHECK_OK`。命令失败，未通过检查。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_vRvIAYbaTG6fzBAIh6TC6331",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "git",
+            "args": [
+              "diff",
+              "--check",
+              "--no-index",
+              "src/math.js",
+              "src/math.js"
+            ]
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_EXIT_128: fatal: could not open '/dev/null' for reading and writing: Operation not permitted\\n\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "pre_patch_validation",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 960,
+        "cachedInputTokens": 768,
+        "outputTokens": 142,
+        "reasoningTokens": 0,
+        "totalTokens": 1870,
+        "providerReported": true
+      },
+      "durationMs": 2143,
+      "finalText": "Observing that `git diff --check --no-index src/math.js src/math.js` compares identical files. Since the two paths are the same file, git compares them and finds no differences (no-index diff of identical files yields no output and exit code 0).\n\nThe command ran with exit code 0, satisfying the success condition. Therefore:\n\nPBASH_PATCH_CHECK_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_njS9wJ0XKhwGE4fjSid81342",
+          "args": {
+            "command": "git diff --check --no-index src/math.js src/math.js; echo \"EXIT_CODE=$?\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"EXIT_CODE=0\\n\"}],\"details\":{\"summary\":\"EXIT_CODE=0\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:b2919df2d98d14d44383cc913fa1d6776f1075efba4c9389a2dbe228492ebd89\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":35,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "long_output",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1951,
+        "cachedInputTokens": 1024,
+        "outputTokens": 129,
+        "reasoningTokens": 0,
+        "totalTokens": 3104,
+        "providerReported": true
+      },
+      "durationMs": 1831,
+      "finalText": "实际上已看到最后一行输出为 `line-249`。\n\n`PBASH_LONG_OUTPUT_OK:line-249`",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_VtmH1RBjhnujs9ez4Ni91769",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "scripts/long-output.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\nline-166\\nline-167\\nline-168\\nline-169\\nline-170\\nline-171\\nline-172\\nline-173\\nline-174\\nline-175\\nline-176\\nline-177\\nline-178\\nline-179\\nline-180\\nline-181\\nline-182\\nline-183\\nline-184\\nline-185\\nline-186\\nline-187\\nline-188\\nline-189\\nline-190\\nline-191\\nline-192\\nline-193\\nline-194\\nline-195\\nline-196\\nline-197\\nline-198\\nline-199\\nline-200\\nline-201\\nline-202\\nline-203\\nline-204\\nline-205\\nline-206\\nline-207\\nline-208\\nline-209\\nline-210\\nline-211\\nline-212\\nline-213\\nline-214\\nline-215\\nline-216\\nline-217\\nline-218\\nline-219\\nline-220\\nline-221\\nline-222\\nline-223\\nline-224\\nline-225\\nline-226\\nline-227\\nline-228\\nline-229\\nline-230\\nline-231\\nline-232\\nline-233\\nline-234\\nline-235\\nline-236\\nline-237\\nline-238\\nline-239\\nline-240\\nline-241\\nline-242\\nline-243\\nline-244\\nline-245\\nline-246\\nline-247\\nline-248\\nline-249\\n\"}],\"details\":{\"summary\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\"
+        }
+      ]
+    },
+    {
+      "taskId": "long_output",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1913,
+        "cachedInputTokens": 768,
+        "outputTokens": 90,
+        "reasoningTokens": 0,
+        "totalTokens": 2771,
+        "providerReported": true
+      },
+      "durationMs": 1912,
+      "finalText": "命令已运行。输出最后显示 `line-249`（即最后一行），我确实看到了 `line-249`。\n\n最后一行输出：**PBASH_LONG_OUTPUT_OK:line-249**",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_jOFnuoRcYatg4AvrM0e48546",
+          "args": {
+            "command": "node scripts/long-output.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\nline-166\\nline-167\\nline-168\\nline-169\\nline-170\\nline-171\\nline-172\\nline-173\\nline-174\\nline-175\\nline-176\\nline-177\\nline-178\\nline-179\\nline-180\\nline-181\\nline-182\\nline-183\\nline-184\\nline-185\\nline-186\\nline-187\\nline-188\\nline-189\\nline-190\\nline-191\\nline-192\\nline-193\\nline-194\\nline-195\\nline-196\\nline-197\\nline-198\\nline-199\\nline-200\\nline-201\\nline-202\\nline-203\\nline-204\\nline-205\\nline-206\\nline-207\\nline-208\\nline-209\\nline-210\\nline-211\\nline-212\\nline-213\\nline-214\\nline-215\\nline-216\\nline-217\\nline-218\\nline-219\\nline-220\\nline-221\\nline-222\\nline-223\\nline-224\\nline-225\\nline-226\\nline-227\\nline-228\\nline-229\\nline-230\\nline-231\\nline-232\\nline-233\\nline-234\\nline-235\\nline-236\\nline-237\\nline-238\\nline-239\\nline-240\\nline-241\\nline-242\\nline-243\\nline-244\\nline-245\\nline-246\\nline-247\\nline-248\\nline-249\\n\"}],\"details\":{\"summary\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\"
+        }
+      ]
+    },
+    {
+      "taskId": "stop",
+      "variant": "legacy",
+      "repetition": 2,
+      "completed": true,
+      "stopped": true,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 917,
+        "cachedInputTokens": 0,
+        "outputTokens": 125,
+        "reasoningTokens": 0,
+        "totalTokens": 1042,
+        "providerReported": true
+      },
+      "durationMs": 1496,
+      "finalText": "",
+      "stopReason": "error",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_k1891B1p9ad2ibwgonOk5099",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "sleep",
+            "args": [
+              "60"
+            ],
+            "background": false
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_STOPPED\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "stop",
+      "variant": "brokered",
+      "repetition": 2,
+      "completed": true,
+      "stopped": true,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 798,
+        "cachedInputTokens": 0,
+        "outputTokens": 44,
+        "reasoningTokens": 0,
+        "totalTokens": 842,
+        "providerReported": true
+      },
+      "durationMs": 1436,
+      "finalText": "",
+      "stopReason": "error",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_7SsHEZPpFK0z3jx0KrLs7492",
+          "args": {
+            "command": "sleep 60"
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"BROKERED_BASH_CANCELLED: Bash did not complete.\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "repository_exploration",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1088,
+        "cachedInputTokens": 1024,
+        "outputTokens": 197,
+        "reasoningTokens": 0,
+        "totalTokens": 2309,
+        "providerReported": true
+      },
+      "durationMs": 2326,
+      "finalText": "PBASH_EXPLORE_OK:pbash-eval-fixture",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_kmvBSdhrqOcGqTebnvGo0847",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "ls",
+            "args": []
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"README.md\\nbroken.js\\npackage.json\\nscripts\\nsrc\\ntests\\n\"}],\"details\":{\"summary\":\"README.md\\nbroken.js\\npackage.json\\nscripts\\nsrc\\ntests\\n\",\"data\":{\"processId\":\"237c0797-d2cf-4e65-84e0-ca05dd849558\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":17,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_01_dKWdLyAhI4ICgHPE3uZJ6323",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "cat",
+            "args": [
+              "package.json"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\"}],\"details\":{\"summary\":\"{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\",\"data\":{\"processId\":\"52836e28-7205-4975-966a-cc041c4e3e57\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":16,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "repository_exploration",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 964,
+        "cachedInputTokens": 768,
+        "outputTokens": 63,
+        "reasoningTokens": 0,
+        "totalTokens": 1795,
+        "providerReported": true
+      },
+      "durationMs": 1864,
+      "finalText": "PBASH_EXPLORE_OK:pbash-eval-fixture",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_3b4D8DLG79AAGaelTNxk5309",
+          "args": {
+            "command": "ls && cat package.json | head -20"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"broken.js\\npackage.json\\nREADME.md\\nscripts\\nsrc\\ntests\\n{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\"}],\"details\":{\"summary\":\"broken.js\\npackage.json\\nREADME.md\\nscripts\\nsrc\\ntests\\n{\\n  \\\"name\\\": \\\"pbash-eval-fixture\\\",\\n  \\\"private\\\": true,\\n  \\\"type\\\": \\\"module\\\"\\n}\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:29a57f7a32beb0faa1a7ff39775693dd8c911ec2b51304c2185665e1d3198efc\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":34,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "combined_search",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 978,
+        "cachedInputTokens": 1024,
+        "outputTokens": 141,
+        "reasoningTokens": 0,
+        "totalTokens": 2143,
+        "providerReported": true
+      },
+      "durationMs": 1516,
+      "finalText": "Search confirmed: `needle-42` found in `src/math.js` at line 2.\n\nPBASH_SEARCH_OK:src/math.js:2",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_wciqn9YN1N7KweoXmKWN1546",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "grep",
+            "args": [
+              "-rn",
+              "needle-42"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\"}],\"details\":{\"summary\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\",\"data\":{\"processId\":\"5c12267b-e941-4501-90bc-f2d25a6b3341\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":18,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "combined_search",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 946,
+        "cachedInputTokens": 768,
+        "outputTokens": 69,
+        "reasoningTokens": 0,
+        "totalTokens": 1783,
+        "providerReported": true
+      },
+      "durationMs": 1387,
+      "finalText": "PBASH_SEARCH_OK:src/math.js:2",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_BsWk8ndvxBGrILmj2M6F0465",
+          "args": {
+            "command": "grep -rn \"needle-42\" . 2>/dev/null"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\"}],\"details\":{\"summary\":\"./src/math.js:2:export const PBASH_NEEDLE = \\\"needle-42\\\";\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:cd156748f6197060057ffdc6b188b6a974b7e59f9d5ce2d3942404424bb35bdf\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":32,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "build",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1059,
+        "cachedInputTokens": 896,
+        "outputTokens": 120,
+        "reasoningTokens": 0,
+        "totalTokens": 2075,
+        "providerReported": true
+      },
+      "durationMs": 1786,
+      "finalText": "命令成功执行（退出码 0）。\n\nPBASH_BUILD_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_3vbAW8UjH1E7XKKhpVKr3879",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "src/math.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"becb9cd3-9d10-4484-beb6-fa6350422df3\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":46,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "build",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 901,
+        "cachedInputTokens": 768,
+        "outputTokens": 72,
+        "reasoningTokens": 0,
+        "totalTokens": 1741,
+        "providerReported": true
+      },
+      "durationMs": 1816,
+      "finalText": "命令执行成功，最后一行输出 `PBASH_BUILD_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_seJs7mRwgM3XDprcPrlw2225",
+          "args": {
+            "command": "node --check src/math.js && echo \"PBASH_BUILD_OK\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_BUILD_OK\\n\"}],\"details\":{\"summary\":\"PBASH_BUILD_OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:34f67d5de764d50ffa8ee1b42383be11efe62d76da119731432b60fea56af2db\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":67,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "test",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1054,
+        "cachedInputTokens": 896,
+        "outputTokens": 118,
+        "reasoningTokens": 0,
+        "totalTokens": 2068,
+        "providerReported": true
+      },
+      "durationMs": 1961,
+      "finalText": "测试已运行，最后一行输出了 `PBASH_TEST_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_UTMexSZoMrmLtw12yAIA2204",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "tests/math.test.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_TEST_OK\\n\"}],\"details\":{\"summary\":\"PBASH_TEST_OK\\n\",\"data\":{\"processId\":\"e539d0b8-48bf-48c5-829f-8a02866e864c\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":47,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "test",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 888,
+        "cachedInputTokens": 768,
+        "outputTokens": 61,
+        "reasoningTokens": 0,
+        "totalTokens": 1717,
+        "providerReported": true
+      },
+      "durationMs": 1658,
+      "finalText": "测试输出确认，最后一行输出 `PBASH_TEST_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_s0g4CteCfSNoqTNkc7Dx0407",
+          "args": {
+            "command": "node tests/math.test.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_TEST_OK\\n\"}],\"details\":{\"summary\":\"PBASH_TEST_OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:c7b25b7f0e4cb526ca11f7e9986d1b95dfe411898a79170710e941261c9612c0\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":54,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "lint",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1056,
+        "cachedInputTokens": 1024,
+        "outputTokens": 219,
+        "reasoningTokens": 0,
+        "totalTokens": 2299,
+        "providerReported": true
+      },
+      "durationMs": 1988,
+      "finalText": "两个文件均通过 Node 语法检查（退出码 0）。\n\nPBASH_LINT_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_dAOKHwPscEr01HK6Mkko7194",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "src/math.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"1bb509bd-c07c-4198-b6fa-17ecab6fff7c\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":45,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_01_tYME53OdLkUgudMvza5x5814",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "--check",
+              "tests/math.test.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"进程退出码 0\"}],\"details\":{\"summary\":\"进程退出码 0\",\"data\":{\"processId\":\"c888c430-e2a5-4c69-9fe9-7d78215b83aa\",\"state\":\"completed\",\"exitCode\":0,\"isolation\":\"macos-sandbox\"},\"sources\":[],\"artifacts\":[],\"durationMs\":44,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "lint",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 928,
+        "cachedInputTokens": 768,
+        "outputTokens": 85,
+        "reasoningTokens": 0,
+        "totalTokens": 1781,
+        "providerReported": true
+      },
+      "durationMs": 2345,
+      "finalText": "两个文件语法检查均通过，最后一行已输出 `PBASH_LINT_OK`。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_v2gyxfYZSQT3T178Tjnq0956",
+          "args": {
+            "command": "node --check src/math.js && node --check tests/math.test.js && echo \"PBASH_LINT_OK\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"PBASH_LINT_OK\\n\"}],\"details\":{\"summary\":\"PBASH_LINT_OK\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:890f4c4be2eb55228879dc77eec4a5b9d5914da394f3457a28cfd9c8421668f2\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":71,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "failure_diagnosis",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1190,
+        "cachedInputTokens": 1024,
+        "outputTokens": 209,
+        "reasoningTokens": 0,
+        "totalTokens": 2423,
+        "providerReported": true
+      },
+      "durationMs": 3119,
+      "finalText": "The command failed as expected. The script throws an uncaught error with the code `BROKEN_WIDGET_CODE_17`.\n\nThe error is an uncaught exception (`throw new Error(\"BROKEN_WIDGET_CODE_17\")`) at line 1 of `broken.js`. Based on the real stderr, the diagnostic diagnosis is the error code `BROKEN_WIDGET_CODE_17`, which matches the expected output.\n\nPBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": true,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_qUnO9XacJd52PEq7BXc16202",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "broken.js"
+            ]
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_EXIT_1: file:///private$OPENERX_WORKSPACE/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file:///private$OPENERX_WORKSPACE/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\n\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "failure_diagnosis",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 3,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 3,
+        "inputTokens": 1236,
+        "cachedInputTokens": 1920,
+        "outputTokens": 323,
+        "reasoningTokens": 0,
+        "totalTokens": 3479,
+        "providerReported": true
+      },
+      "durationMs": 4304,
+      "finalText": "The broken.js file throws an uncaught `Error: BROKEN_WIDGET_CODE_17` at module load (line 1, col 7).\n\n**Diagnosis:**\n- **Error type:** Uncaught Error thrown at top-level module evaluation\n- **Error message:** `BROKEN_WIDGET_CODE_17`\n- **Exit code:** 1 (default for uncaught exceptions)\n- The error originates immediately upon module import, so no code ever runs.\n\nPer the diagnostic marker requirement, the final line of output is `PBASH_DIAGNOSIS_OK:BROKEN_WIDGET_CODE_17`.",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_MKLRFhz5MKv9hqMQZVIv4878",
+          "args": {
+            "command": "node broken.js 2>&1; echo \"EXIT_CODE=$?\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"file://<workspace>/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file://<workspace>/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\nEXIT_CODE=1\\n\"}],\"details\":{\"summary\":\"file://<workspace>/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file://<workspace>/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\nEXIT_CODE=1\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:6583f3c5d43e2ae43cb5858bca5ac02f325b7ab87cdb06d9c8425df1c745cd8a\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":55,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_uMGWZDnAat4dpbqQRAB53630",
+          "args": {
+            "command": "node broken.js; echo \"exit:$?\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"file://<workspace>/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file://<workspace>/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\nexit:1\\n\"}],\"details\":{\"summary\":\"file://<workspace>/broken.js:1\\nthrow new Error(\\\"BROKEN_WIDGET_CODE_17\\\");\\n      ^\\n\\nError: BROKEN_WIDGET_CODE_17\\n    at file://<workspace>/broken.js:1:7\\n    at ModuleJob.run (node:internal/modules/esm/module_job:358:25)\\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:99:5)\\n\\nNode.js v24.2.0\\nexit:1\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:cc51649fb610c555082f523e77f5669958bf8ac06e1c030f6d88af8859084a83\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":63,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "pre_patch_validation",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": false,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 1,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1019,
+        "cachedInputTokens": 1024,
+        "outputTokens": 197,
+        "reasoningTokens": 0,
+        "totalTokens": 2240,
+        "providerReported": true
+      },
+      "durationMs": 2194,
+      "finalText": "命令执行失败，退出码为 128。工具失败，无法输出成功标记。\n\n失败原因：`git diff --no-index` 内部尝试打开 `/dev/null`（用于比较/写入），但当前沙箱环境不允许打开 `/dev/null`，导致退出码 128。\n\n因此不能输出 `PBASH_PATCH_CHECK_OK`，本次运行结果报告为失败。",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_PmMS0XgZvzkp1EG56bfx1066",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "git",
+            "args": [
+              "diff",
+              "--check",
+              "--no-index",
+              "src/math.js",
+              "src/math.js"
+            ]
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_EXIT_128: fatal: could not open '/dev/null' for reading and writing: Operation not permitted\\n\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "pre_patch_validation",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 3,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 3,
+        "inputTokens": 1044,
+        "cachedInputTokens": 1664,
+        "outputTokens": 150,
+        "reasoningTokens": 0,
+        "totalTokens": 2858,
+        "providerReported": true
+      },
+      "durationMs": 2928,
+      "finalText": "Exit code is 0, so the command succeeded.\n\nPBASH_PATCH_CHECK_OK",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_fQIKmsEiESle4ZTAScmf4930",
+          "args": {
+            "command": "git diff --check --no-index src/math.js src/math.js"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"Bash completed successfully.\"}],\"details\":{\"summary\":\"Bash completed successfully.\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:f339b6a8515118787771350e5533234d91aefab93fbe39779268590cc07591af\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":35,\"sideEffectCommitted\":true}}"
+        },
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_SJZvvtQhlb6v0iQLDoAk0145",
+          "args": {
+            "command": "git diff --check --no-index src/math.js src/math.js; echo \"EXIT_CODE=$?\""
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"EXIT_CODE=0\\n\"}],\"details\":{\"summary\":\"EXIT_CODE=0\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:e49142d52eea30a4efaf800191169950636f2e75b02e48ace588d06e8c14a012\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":42,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "long_output",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1951,
+        "cachedInputTokens": 1024,
+        "outputTokens": 147,
+        "reasoningTokens": 0,
+        "totalTokens": 3122,
+        "providerReported": true
+      },
+      "durationMs": 1994,
+      "finalText": "已运行 `node scripts/long-output.js`。输出共 250 行（line-0 至 line-249），最后一行输出：\n\n**PBASH_LONG_OUTPUT_OK:line-249**",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_89hFrZy6E7dLu8azTeeJ2792",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "node",
+            "args": [
+              "scripts/long-output.js"
+            ]
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\nline-166\\nline-167\\nline-168\\nline-169\\nline-170\\nline-171\\nline-172\\nline-173\\nline-174\\nline-175\\nline-176\\nline-177\\nline-178\\nline-179\\nline-180\\nline-181\\nline-182\\nline-183\\nline-184\\nline-185\\nline-186\\nline-187\\nline-188\\nline-189\\nline-190\\nline-191\\nline-192\\nline-193\\nline-194\\nline-195\\nline-196\\nline-197\\nline-198\\nline-199\\nline-200\\nline-201\\nline-202\\nline-203\\nline-204\\nline-205\\nline-206\\nline-207\\nline-208\\nline-209\\nline-210\\nline-211\\nline-212\\nline-213\\nline-214\\nline-215\\nline-216\\nline-217\\nline-218\\nline-219\\nline-220\\nline-221\\nline-222\\nline-223\\nline-224\\nline-225\\nline-226\\nline-227\\nline-228\\nline-229\\nline-230\\nline-231\\nline-232\\nline-233\\nline-234\\nline-235\\nline-236\\nline-237\\nline-238\\nline-239\\nline-240\\nline-241\\nline-242\\nline-243\\nline-244\\nline-245\\nline-246\\nline-247\\nline-248\\nline-249\\n\"}],\"details\":{\"summary\":\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\\nline-5\\nline-6\\nline-7\\nline-8\\nline-9\\nline-10\\nline-11\\nline-12\\nline-13\\nline-14\\nline-15\\nline-16\\nline-17\\nline-18\\nline-19\\nline-20\\nline-21\\nline-22\\nline-23\\nline-24\\nline-25\\nline-26\\nline-27\\nline-28\\nline-29\\nline-30\\nline-31\\nline-32\\nline-33\\nline-34\\nline-35\\nline-36\\nline-37\\nline-38\\nline-39\\nline-40\\nline-41\\nline-42\\nline-43\\nline-44\\nline-45\\nline-46\\nline-47\\nline-48\\nline-49\\nline-50\\nline-51\\nline-52\\nline-53\\nline-54\\nline-55\\nline-56\\nline-57\\nline-58\\nline-59\\nline-60\\nline-61\\nline-62\\nline-63\\nline-64\\nline-65\\nline-66\\nline-67\\nline-68\\nline-69\\nline-70\\nline-71\\nline-72\\nline-73\\nline-74\\nline-75\\nline-76\\nline-77\\nline-78\\nline-79\\nline-80\\nline-81\\nline-82\\nline-83\\nline-84\\nline-85\\nline-86\\nline-87\\nline-88\\nline-89\\nline-90\\nline-91\\nline-92\\nline-93\\nline-94\\nline-95\\nline-96\\nline-97\\nline-98\\nline-99\\nline-100\\nline-101\\nline-102\\nline-103\\nline-104\\nline-105\\nline-106\\nline-107\\nline-108\\nline-109\\nline-110\\nline-111\\nline-112\\nline-113\\nline-114\\nline-115\\nline-116\\nline-117\\nline-118\\nline-119\\nline-120\\nline-121\\nline-122\\nline-123\\nline-124\\nline-125\\nline-126\\nline-127\\nline-128\\nline-129\\nline-130\\nline-131\\nline-132\\nline-133\\nline-134\\nline-135\\nline-136\\nline-137\\nline-138\\nline-139\\nline-140\\nline-141\\nline-142\\nline-143\\nline-144\\nline-145\\nline-146\\nline-147\\nline-148\\nline-149\\nline-150\\nline-151\\nline-152\\nline-153\\nline-154\\nline-155\\nline-156\\nline-157\\nline-158\\nline-159\\nline-160\\nline-161\\nline-162\\nline-163\\nline-164\\nline-165\\"
+        }
+      ]
+    },
+    {
+      "taskId": "long_output",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": false,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 2,
+        "inputTokens": 936,
+        "cachedInputTokens": 768,
+        "outputTokens": 101,
+        "reasoningTokens": 0,
+        "totalTokens": 1805,
+        "providerReported": true
+      },
+      "durationMs": 2106,
+      "finalText": "我运行了脚本并核对了最后一行。输出确实是 `line-249`。\n\n最后一行输出：**PBASH_LONG_OUTPUT_OK:line-249**",
+      "stopReason": "stop",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_uV3FDc04IfzYlZG5PMUF3178",
+          "args": {
+            "command": "node scripts/long-output.js 2>&1 | tail -1"
+          },
+          "isError": false,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"line-249\\n\"}],\"details\":{\"summary\":\"line-249\\n\",\"data\":{\"contractVersion\":\"brokered_bash_v1\",\"executionPerformed\":true,\"runner\":\"platform_sandbox\",\"shell\":\"bash\",\"timeoutMs\":120000,\"activeExecutionGrantId\":\"11111111-1111-4111-8111-111111111111\",\"additionalExecutionGrantIds\":[],\"executionProfile\":\"workspace_write\",\"executionOrigin\":\"local_interactive\",\"workspaceWriteMode\":\"direct_workspace\",\"environmentPolicyId\":\"environment-core-v1\",\"networkPolicyId\":\"network-deny-v1\",\"sandboxPolicyVersion\":\"macos-seatbelt-v1\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"cancelled\":false,\"outputTruncated\":false,\"contextTruncated\":false,\"logArtifactId\":null,\"destructionStatus\":\"clean\",\"changedPathManifestStatus\":\"collected\",\"workspaceChanges\":{\"mode\":\"DIRECT_WORKSPACE_WRITE\",\"hostWorkspaceMutated\":true,\"baselineRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"finalRevision\":\"6ba23b28b1775b33697ab3455c0cb2c0617a340967e2a60b6b40275d6de6efe4\",\"baselineGitStatus\":\"not_repository\",\"finalGitStatus\":\"not_repository\",\"conflictStatus\":\"none\",\"attribution\":\"workspace_delta_during_execution\",\"undo\":\"NOT_AVAILABLE_FOR_DIRECT_WRITE\",\"manifest\":[],\"diffs\":[],\"excludedPathCount\":0,\"manifestTruncated\":false,\"diffTruncated\":false},\"workspaceChangeSet\":null,\"proof\":{\"engineVersion\":\"platform-sandbox-v1\",\"backendId\":\"macos_sandbox_exec\",\"backendVersion\":\"system\",\"policyVersion\":\"macos-seatbelt-v1\",\"platform\":\"darwin\",\"platformRelease\":\"25.5.0\",\"executionProfile\":\"workspace_write\",\"environmentPolicyId\":\"environment-core-v1\",\"environmentDigest\":\"sha256:6dc6c7edf4cbd9492655f1114314f303fc432a77337753c068c8e207b99eab5c\",\"networkPolicyId\":\"network-deny-v1\",\"networkPolicyDigest\":\"sha256:ecfb48f591c72af84d67a1f51bb8ca40332cfe8f8f49925c08dd051378cd180f\",\"controlledEgress\":false,\"filesystemBoundary\":true,\"hardlinkBoundary\":true,\"environmentSanitized\":true,\"networkDenied\":true,\"processGroupOwned\":true}},\"sources\":[],\"artifacts\":[],\"durationMs\":57,\"sideEffectCommitted\":true}}"
+        }
+      ]
+    },
+    {
+      "taskId": "stop",
+      "variant": "legacy",
+      "repetition": 3,
+      "completed": true,
+      "stopped": true,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 917,
+        "cachedInputTokens": 0,
+        "outputTokens": 118,
+        "reasoningTokens": 0,
+        "totalTokens": 1035,
+        "providerReported": true
+      },
+      "durationMs": 1322,
+      "finalText": "",
+      "stopReason": "error",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "openerx_shell",
+          "toolCallId": "call_00_C7raeELD6OgzxzimDSv24449",
+          "args": {
+            "workspaceGrantId": "11111111-1111-4111-8111-111111111111",
+            "command": "sleep",
+            "args": [
+              "60"
+            ],
+            "timeoutMs": 60000
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"SHELL_STOPPED\"}],\"details\":{}}"
+        }
+      ]
+    },
+    {
+      "taskId": "stop",
+      "variant": "brokered",
+      "repetition": 3,
+      "completed": true,
+      "stopped": true,
+      "modelRounds": 2,
+      "toolCalls": 1,
+      "toolErrors": 1,
+      "unexpectedToolErrors": 0,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 798,
+        "cachedInputTokens": 0,
+        "outputTokens": 61,
+        "reasoningTokens": 0,
+        "totalTokens": 859,
+        "providerReported": true
+      },
+      "durationMs": 1872,
+      "finalText": "",
+      "stopReason": "error",
+      "error": null,
+      "activeWorkspacePathEmissionObserved": false,
+      "privateCwdPathEmissionObserved": false,
+      "toolEvents": [
+        {
+          "toolName": "bash",
+          "toolCallId": "call_00_jqCnjoqM2IoYi2oDni4A0942",
+          "args": {
+            "command": "sleep 60",
+            "timeout": 60
+          },
+          "isError": true,
+          "resultSummary": "{\"content\":[{\"type\":\"text\",\"text\":\"BROKERED_BASH_CANCELLED: Bash did not complete.\"}],\"details\":{}}"
+        }
+      ]
+    }
+  ]
+}

@@ -352,13 +352,15 @@ Service 的 Remote attended/unattended 来源冻结进 Bash 上下文，完成�
 Remote 继续固定 core + deny，私网、metadata、重定向新目标和 DNS rebinding 均有负向测试，证据见
 [PBASH-006 检查点](evidence/pbash-006-2026-08-28.md)。PBASH-007 已完成相同工作区与默认断网下的
 9 类确定性 Runner A/B：旧路径 8/9、Brokered 路径 9/9，安全越界与未解释回归均为 0；同时完成
-Local Alpha/Runner/policy/环境/网络/工作区 UI、单工具投影和 fail-closed 回滚演练。真实模型轮次、
-Token 与 Provider 成本未运行，明确保留为外部门禁；证据见
-[PBASH-007 检查点](evidence/pbash-007-2026-08-28.md)。PBASH-008 已发布
+Local Alpha/Runner/policy/环境/网络/工作区 UI、单工具投影和 fail-closed 回滚演练。其后固定
+`deepseek-v4-flash` 完成 3 次真实模型配对：legacy 严格 22/27，Brokered 严格 26/27、功能 27/27，
+Token -13.3%，未预期工具错误 3→0；并修正 Pi 私有 cwd 进入模型上下文的问题。证据见
+[PBASH-007 检查点](evidence/pbash-007-2026-08-28.md) 与
+[PBASH-007 模型 A/B](evidence/pbash-007-model-ab-2026-08-28.md)。PBASH-008 已发布
 [机器可读平台矩阵](evidence/pbash-008-platform-matrix-2026-08-28.json)，工具中心显示实际 backend 与
 platform/OS build，并验证 Linux/Windows、缺失 backend、probe 失败和 unsigned App 都不能越过门禁；
 证据见 [PBASH-008 检查点](evidence/pbash-008-2026-08-28.md)。PBASH 本机文档与 fail-closed 实现切片
-已经收口。当前 `sandbox-exec` 后端已被 macOS 标记 deprecated，真实模型 A/B、Developer ID 签名/
+已经收口。当前 `sandbox-exec` 后端已被 macOS 标记 deprecated，Developer ID 签名/
 公证包、macOS x64、替代后端评估、Linux/WSL2 和 Windows backend 仍不得宣称完成。
 
 ### 10.2 既有外部门禁
