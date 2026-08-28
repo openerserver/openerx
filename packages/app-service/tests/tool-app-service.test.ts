@@ -139,6 +139,7 @@ function platformEngine(available = true) {
       durationMs: 2,
       destructionStatus: "clean" as const,
       changedPathManifestStatus: "not_collected" as const,
+      workspaceChanges: null,
       proof: {
         engineVersion: PLATFORM_SANDBOX_ENGINE_VERSION,
         backendId: "test_macos_sandbox",
@@ -579,6 +580,7 @@ describe("ToolAppService", () => {
       activeExecutionGrantId: grant.id,
       additionalExecutionGrantIds: [],
       executionProfile: "workspace_write",
+      workspaceWriteMode: "direct_workspace",
       networkPolicyId: "network-deny-v1",
       sandboxPolicyVersion: "pbash-fake-v1",
     });
@@ -591,6 +593,42 @@ describe("ToolAppService", () => {
       reason: "BROKERED_BASH_FAKE_RUNNER_ONLY",
       availableToolNames: ["bash"],
     });
+    chat.close();
+    await service.close();
+  });
+
+  it("routes unattended remote and high-isolation writes to a non-degrading change-set mode", async () => {
+    const { chat, service, base, directory } = fixture({ brokeredBashV1: true });
+    const grant = service.grantWorkspace({
+      rootPath: directory,
+      conversationId: base.conversationId,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const remote = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "无人值守执行写入",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+      executionOrigin: "remote_unattended",
+    });
+    expect(remote.brokeredBashExecution).toMatchObject({
+      executionProfile: "workspace_write",
+      workspaceWriteMode: "isolated_change_set",
+    });
+    const highRisk = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "隔离运行后审阅",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+      requiresHighIsolation: true,
+    });
+    expect(highRisk.brokeredBashExecution?.workspaceWriteMode).toBe("isolated_change_set");
     chat.close();
     await service.close();
   });

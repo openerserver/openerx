@@ -91,6 +91,42 @@ export interface PlatformSandboxProof {
   processGroupOwned: true;
 }
 
+export type PlatformSandboxWorkspaceChangeKind = "created" | "modified" | "deleted" | "renamed";
+
+export interface PlatformSandboxWorkspaceChangeEntry {
+  workspaceGrantId: WorkspaceGrant["id"];
+  workspaceLogicalName: string;
+  relativePath: string;
+  previousRelativePath: string | null;
+  kind: PlatformSandboxWorkspaceChangeKind;
+  entryType: "file" | "directory" | "symlink" | "other";
+  beforeBytes: number | null;
+  afterBytes: number | null;
+  diffStatus: "available" | "binary" | "too_large" | "not_applicable";
+}
+
+export interface PlatformSandboxWorkspaceDiff {
+  workspaceChangeId: string;
+  workspaceGrantId: WorkspaceGrant["id"];
+  relativePath: string;
+  patch: string;
+}
+
+export interface PlatformSandboxWorkspaceChanges {
+  mode: "DIRECT_WORKSPACE_WRITE";
+  baselineRevision: string;
+  finalRevision: string;
+  baselineGitStatus: "clean" | "dirty" | "not_repository" | "unavailable";
+  finalGitStatus: "clean" | "dirty" | "not_repository" | "unavailable";
+  conflictStatus: "none" | "preexisting_dirty_overlap" | "git_status_unavailable";
+  attribution: "workspace_delta_during_execution";
+  undo: "NOT_AVAILABLE_FOR_DIRECT_WRITE";
+  manifest: PlatformSandboxWorkspaceChangeEntry[];
+  diffs: PlatformSandboxWorkspaceDiff[];
+  manifestTruncated: boolean;
+  diffTruncated: boolean;
+}
+
 export interface PlatformSandboxExecutionResult {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
@@ -102,7 +138,8 @@ export interface PlatformSandboxExecutionResult {
   cancelled: boolean;
   durationMs: number;
   destructionStatus: PlatformSandboxDestructionStatus;
-  changedPathManifestStatus: "not_collected";
+  changedPathManifestStatus: "not_collected" | "not_applicable" | "collected";
+  workspaceChanges: PlatformSandboxWorkspaceChanges | null;
   proof: PlatformSandboxProof;
 }
 

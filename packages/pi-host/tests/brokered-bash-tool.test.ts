@@ -15,6 +15,7 @@ const execution: BrokeredBashExecutionContext = {
   activeExecutionGrantId: "11111111-1111-4111-8111-111111111111",
   additionalExecutionGrantIds: ["22222222-2222-4222-8222-222222222222"],
   executionProfile: "workspace_write",
+  workspaceWriteMode: "direct_workspace",
   environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,

@@ -22,6 +22,7 @@ const execution = {
   activeExecutionGrantId: activeGrantId,
   additionalExecutionGrantIds: [additionalGrantId],
   executionProfile: "workspace_write" as const,
+  workspaceWriteMode: "direct_workspace" as const,
   environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
@@ -90,6 +91,8 @@ describe("brokered Bash contracts", () => {
       "BROKERED_BASH_DESTRUCTION_UNCERTAIN",
       "BROKERED_BASH_SANDBOX_EXEC_MISSING",
       "BROKERED_BASH_HARDLINK_BOUNDARY_UNSAFE",
+      "BROKERED_BASH_CHANGE_EVIDENCE_FAILED",
+      "BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE",
     ]) {
       expect(brokeredBashErrorCodeSchema.safeParse(code).success).toBe(true);
     }
@@ -128,6 +131,25 @@ describe("brokered Bash contracts", () => {
         additionalExecutionGrantIds: [activeGrantId],
       }).success,
     ).toBe(false);
+    expect(
+      brokeredBashOperationSchema.safeParse({
+        ...operation,
+        executionProfile: "read_only",
+        workspaceWriteMode: "direct_workspace",
+      }).success,
+    ).toBe(false);
+    expect(
+      brokeredBashOperationSchema.safeParse({
+        ...operation,
+        workspaceWriteMode: "none",
+      }).success,
+    ).toBe(false);
+    expect(
+      brokeredBashOperationSchema.safeParse({
+        ...operation,
+        workspaceWriteMode: "isolated_change_set",
+      }).success,
+    ).toBe(true);
   });
 
   it("binds prompt execution context to grants present in the trusted workspace frame", () => {

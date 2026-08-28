@@ -219,7 +219,8 @@ describe("MacOSSandboxExecEngine contract", () => {
       timedOut: false,
       cancelled: false,
       outputTruncated: false,
-      changedPathManifestStatus: "not_collected",
+      changedPathManifestStatus: "not_applicable",
+      workspaceChanges: null,
       proof: {
         filesystemBoundary: true,
         hardlinkBoundary: true,
@@ -293,6 +294,19 @@ describe("MacOSSandboxExecEngine contract", () => {
     );
     expect(write.exitCode, write.output).toBe(0);
     expect(readFileSync(path.join(workspace, "created.txt"), "utf8")).toBe("workspace-write");
+    expect(write.changedPathManifestStatus).toBe("collected");
+    expect(write.workspaceChanges).toMatchObject({
+      mode: "DIRECT_WORKSPACE_WRITE",
+      undo: "NOT_AVAILABLE_FOR_DIRECT_WRITE",
+      manifest: [
+        expect.objectContaining({
+          relativePath: "created.txt",
+          kind: "created",
+          diffStatus: "available",
+        }),
+      ],
+    });
+    expect(write.workspaceChanges?.diffs[0]?.patch).toContain("+workspace-write");
     expect(write.output).toContain("additional-read");
     expect(write.output).not.toContain(additional);
 

@@ -28,6 +28,10 @@ import {
   type PlatformSandboxResourceLimits,
   type PlatformSandboxRoot,
 } from "./platform-sandbox-engine";
+import {
+  captureWorkspaceWriteBaseline,
+  collectWorkspaceWriteChanges,
+} from "./workspace-change-tracker";
 
 const MACOS_SANDBOX_BACKEND_ID = "macos_sandbox_exec";
 const DEFAULT_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
@@ -562,6 +566,17 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
     }
     const roots = [active, ...additional];
     assertSafeHardlinkBoundary(roots);
+    let workspaceWriteBaseline: ReturnType<typeof captureWorkspaceWriteBaseline> | null = null;
+    if (request.executionProfile === "workspace_write") {
+      try {
+        workspaceWriteBaseline = captureWorkspaceWriteBaseline(
+          roots.filter(({ writable }) => writable),
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("BROKERED_BASH_")) throw error;
+        throw new Error("BROKERED_BASH_CHANGE_EVIDENCE_FAILED");
+      }
+    }
     const runnerTempRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "openerx-pbash-runner-")));
     const startedAt = Date.now();
     const replacements = outputReplacements(roots, runnerTempRoot);
@@ -688,6 +703,16 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
       for (const delta of stdoutSanitizer.finish()) stdout.append(Buffer.from(delta));
       for (const delta of stderrSanitizer.finish()) stderr.append(Buffer.from(delta));
       for (const delta of outputSanitizer.finish()) appendOutput(delta);
+      let workspaceChanges = null;
+      if (workspaceWriteBaseline) {
+        try {
+          assertSafeHardlinkBoundary(roots);
+          workspaceChanges = collectWorkspaceWriteChanges(workspaceWriteBaseline);
+        } catch (error) {
+          if (error instanceof Error && error.message.startsWith("BROKERED_BASH_")) throw error;
+          throw new Error("BROKERED_BASH_CHANGE_EVIDENCE_FAILED");
+        }
+      }
       return {
         exitCode: exit.code,
         signal: exit.signal,
@@ -699,7 +724,8 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
         cancelled: record.cancelled,
         durationMs: Date.now() - startedAt,
         destructionStatus,
-        changedPathManifestStatus: "not_collected",
+        changedPathManifestStatus: workspaceChanges ? "collected" : "not_applicable",
+        workspaceChanges,
         proof: {
           engineVersion: this.engineVersion,
           backendId: this.backendId,

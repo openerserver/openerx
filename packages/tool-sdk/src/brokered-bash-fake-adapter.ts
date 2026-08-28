@@ -21,6 +21,7 @@ function sameExecutionContext(
       (grantId, index) => grantId === expected.additionalExecutionGrantIds[index],
     ) &&
     operation.executionProfile === expected.executionProfile &&
+    operation.workspaceWriteMode === expected.workspaceWriteMode &&
     operation.environmentPolicyId === expected.environmentPolicyId &&
     operation.networkPolicyId === expected.networkPolicyId &&
     operation.sandboxPolicyVersion === expected.sandboxPolicyVersion
@@ -77,6 +78,9 @@ export class BrokeredBashFakeAdapter implements ToolAdapter {
     if (operation.executionProfile === "workspace_write" && activeGrant.access !== "read_write") {
       throw new Error("BROKERED_BASH_EXECUTION_PROFILE_MISMATCH");
     }
+    if (operation.workspaceWriteMode === "isolated_change_set") {
+      throw new Error("BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE");
+    }
 
     context.update("PBASH-001 fake runner validated the frozen execution context");
     return {
@@ -97,6 +101,7 @@ export class BrokeredBashFakeAdapter implements ToolAdapter {
         activeExecutionGrantId: activeGrant.id,
         additionalExecutionGrantIds: additionalGrants.map(({ id }) => id),
         executionProfile: operation.executionProfile,
+        workspaceWriteMode: operation.workspaceWriteMode,
         environmentPolicyId: operation.environmentPolicyId,
         networkPolicyId: operation.networkPolicyId,
         sandboxPolicyVersion: operation.sandboxPolicyVersion,

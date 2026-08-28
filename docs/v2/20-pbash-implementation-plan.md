@@ -1,10 +1,11 @@
 # PBASH 实施计划
 
-- 状态：`PBASH-001/PBASH-002/PBASH-003 LOCAL COMPLETE / PBASH-004 NEXT`
+- 状态：`PBASH-001/PBASH-002/PBASH-003 LOCAL COMPLETE / PBASH-004A LOCAL COMPLETE / PBASH-004B NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 架构依据：[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)
-- 当前目标：保持 PBASH-002/PBASH-003 的隔离、进度、脱敏和日志门禁，下一切片实现 PBASH-004 的
-  changed-path manifest、diff/conflict 与高隔离 working copy
+- 当前目标：保持 PBASH-002/PBASH-003 的隔离、进度、脱敏和日志门禁；PBASH-004A 已实现直接写
+  changed-path manifest、diff/conflict 与高隔离 fail-closed 路由，下一切片实现可审阅、应用或丢弃的
+  working-copy `WorkspaceChangeSet`
 
 ## 1. 实施原则
 
@@ -23,7 +24,7 @@
 | PBASH-001 | 严格合同、Pi 工具投影、冻结执行上下文、fake Broker/Runner | LOCAL COMPLETE | 合同、Pi Host、Broker、App Service 测试通过；无进程启动 |
 | PBASH-002 | `PlatformSandboxEngine` 与 macOS Seatbelt 后端 | LOCAL COMPLETE | 文件/网络/环境/进程树负向门禁通过；发布矩阵仍待 PBASH-008 |
 | PBASH-003 | 流式进度、取消和完整日志 Artifact | LOCAL COMPLETE | 顺序、截断、取消、断连测试通过 |
-| PBASH-004 | 直接写变更证据与高隔离 working copy | PENDING | diff/conflict 和无人值守 Remote 不降级门禁通过 |
+| PBASH-004 | 直接写变更证据与高隔离 working copy | IN PROGRESS（004A COMPLETE） | diff/conflict 和无人值守 Remote 不降级门禁通过；004B 完成 working copy 审阅/应用/丢弃 |
 | PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | PENDING | 至少一次投递不重复副作用 |
 | PBASH-006 | 环境与 egress policy | PENDING | 默认离线、Secret canary、私网/metadata 阻断通过 |
 | PBASH-007 | Golden A/B 与渐进启用 | PENDING | 安全零越界、核心 Coding 任务无未解释回归 |
@@ -137,10 +138,29 @@ deprecated，本检查点只证明当前本机后端，不是签名发布或未�
 本切片实现与复现证据见
 [PBASH-003 日期化证据](evidence/pbash-003-2026-08-28.md)。
 
-## 8. PBASH-004 下一切片
+## 8. PBASH-004A 本机完成
 
-1. 为 `workspace_write` 收集 changed-path manifest、受控 diff 和冲突状态。
-2. 直接写路径提供明确的“无通用 Undo”投影；高隔离路径设计 CoW/worktree
-   `WorkspaceChangeSet`，支持审阅后应用或丢弃。
-3. 为写入期间的新增 hard link、rename、删除、超大 diff、二进制文件和 `.git` 保护补负向门禁。
-4. Remote 无人值守与高风险写入不得静默降级为直接工作区写入。
+- [x] `workspace_write` 在 Runner 启动前、进程组完全销毁后，对每个可写 grant 收集不跟随符号链接且
+      排除任意层级 `.git` 的快照，返回 pre/post revision、Git clean/dirty 状态和 changed-path manifest。
+- [x] manifest 区分创建、修改、删除和基于 inode 的 rename；文本 diff 单文件限 1 MB、合计限 5 MB，
+      二进制和超大文件只返回类型与大小，不返回内容。
+- [x] 直接写结果固定标记 `DIRECT_WORKSPACE_WRITE`、`workspace_delta_during_execution` 和
+      `NOT_AVAILABLE_FOR_DIRECT_WRITE`，不把 Bash 副作用伪装成事务或通用 Undo。
+- [x] 基线已 dirty 且命令执行窗口修改同一路径时返回 `preexisting_dirty_overlap`；Git 不可用与非 Git
+      工作区分别显式返回，不把未知状态报告成 clean。
+- [x] 既有 hard-link pre/post 边界、运行时新增 link/clone 拒绝和 `.git` Seatbelt 保护继续生效；测试补齐
+      rename、删除、二进制、超大 diff 和多层 `.git` 负向矩阵。
+- [x] 冻结合同显式加入 `none / direct_workspace / isolated_change_set`。无人值守 Remote 或高隔离请求
+      只能路由到 `isolated_change_set`；当前后端未实现时返回
+      `BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE`，不会降级为直接写。
+
+PBASH-004A 的实现与复现证据见
+[PBASH-004A 日期化证据](evidence/pbash-004a-2026-08-28.md)。
+
+## 9. PBASH-004B 下一切片
+
+1. 用临时 worktree、CoW 或等价 working copy 从包含用户 dirty state 的当前基线启动命令。
+2. 持久化 `WorkspaceChangeSet`，覆盖文本 patch、二进制清单、创建/删除/重命名和大小摘要。
+3. 通过现有 Workspace 变更通道实现审阅后原子应用或丢弃，并为应用保留 Undo 前镜像。
+4. 接入真正的 Remote 来源/attended 状态；004A 的 trusted routing 字段只是 fail-closed 接口，不冒充
+   PBASH-005 的端到端 Remote 证据。

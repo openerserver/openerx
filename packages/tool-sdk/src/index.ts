@@ -14,3 +14,4 @@ export * from "./shell-adapter";
 export * from "./types";
 export * from "./web-search-adapter";
 export * from "./workspace-adapter";
+export * from "./workspace-change-tracker";

@@ -39,7 +39,7 @@ export function createProductBrokeredBashTool(input: {
     input.execution.sandboxPolicyVersion === BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION;
   const accessDescription =
     input.execution.executionProfile === "workspace_write"
-      ? "The active workspace is writable, except protected repository metadata such as .git."
+      ? "The active workspace is writable, except protected repository metadata such as .git. Direct writes return bounded change evidence and do not provide general Undo."
       : "The active workspace is read-only.";
   return defineTool({
     name: "bash",

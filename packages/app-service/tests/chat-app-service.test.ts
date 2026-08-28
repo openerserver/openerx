@@ -724,6 +724,7 @@ describe("ChatAppService", () => {
     expect(pi.prompts[0]?.workspace?.execution).toMatchObject({
       activeExecutionGrantId: grant.id,
       executionProfile: "workspace_write",
+      workspaceWriteMode: "direct_workspace",
       networkPolicyId: "network-deny-v1",
       sandboxPolicyVersion: "pbash-fake-v1",
     });

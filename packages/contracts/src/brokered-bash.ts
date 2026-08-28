@@ -28,6 +28,11 @@ export function brokeredBashRunnerMode(
 }
 
 export const brokeredBashExecutionProfileSchema = z.enum(["read_only", "workspace_write"]);
+export const brokeredBashWorkspaceWriteModeSchema = z.enum([
+  "none",
+  "direct_workspace",
+  "isolated_change_set",
+]);
 export const brokeredBashPolicyIdSchema = z.string().regex(/^[a-z][a-z0-9._-]{2,119}$/u);
 export const brokeredBashErrorCodeSchema = z.enum([
   "BROKERED_BASH_ACTIVE_WORKSPACE_REQUIRED",
@@ -36,6 +41,7 @@ export const brokeredBashErrorCodeSchema = z.enum([
   "BROKERED_BASH_BROAD_WORKSPACE_DENIED",
   "BROKERED_BASH_CANCELLED",
   "BROKERED_BASH_CAPABILITY_PROBE_FAILED",
+  "BROKERED_BASH_CHANGE_EVIDENCE_FAILED",
   "BROKERED_BASH_COMMAND_FAILED",
   "BROKERED_BASH_DESTRUCTION_UNCERTAIN",
   "BROKERED_BASH_EXECUTION_CONTEXT_MISMATCH",
@@ -43,6 +49,7 @@ export const brokeredBashErrorCodeSchema = z.enum([
   "BROKERED_BASH_EXECUTION_PROFILE_MISMATCH",
   "BROKERED_BASH_FAKE_RUNNER_ONLY",
   "BROKERED_BASH_HARDLINK_BOUNDARY_UNSAFE",
+  "BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE",
   "BROKERED_BASH_PLATFORM_UNSUPPORTED",
   "BROKERED_BASH_POLICY_MISMATCH",
   "BROKERED_BASH_PROTECTED_WORKSPACE_DENIED",
@@ -76,13 +83,19 @@ const executionContextShape = {
   activeExecutionGrantId: entityIdSchema,
   additionalExecutionGrantIds: additionalExecutionGrantIdsSchema,
   executionProfile: brokeredBashExecutionProfileSchema,
+  workspaceWriteMode: brokeredBashWorkspaceWriteModeSchema,
   environmentPolicyId: brokeredBashPolicyIdSchema,
   networkPolicyId: brokeredBashPolicyIdSchema,
   sandboxPolicyVersion: brokeredBashPolicyIdSchema,
 };
 
 function rejectActiveGrantDuplication(
-  value: { activeExecutionGrantId: string; additionalExecutionGrantIds: string[] },
+  value: {
+    activeExecutionGrantId: string;
+    additionalExecutionGrantIds: string[];
+    executionProfile: z.infer<typeof brokeredBashExecutionProfileSchema>;
+    workspaceWriteMode: z.infer<typeof brokeredBashWorkspaceWriteModeSchema>;
+  },
   context: z.RefinementCtx,
 ): void {
   if (value.additionalExecutionGrantIds.includes(value.activeExecutionGrantId)) {
@@ -90,6 +103,20 @@ function rejectActiveGrantDuplication(
       code: "custom",
       message: "Active execution grant cannot also be an additional grant",
       path: ["additionalExecutionGrantIds"],
+    });
+  }
+  if (value.executionProfile === "read_only" && value.workspaceWriteMode !== "none") {
+    context.addIssue({
+      code: "custom",
+      message: "read_only execution requires workspaceWriteMode=none",
+      path: ["workspaceWriteMode"],
+    });
+  }
+  if (value.executionProfile === "workspace_write" && value.workspaceWriteMode === "none") {
+    context.addIssue({
+      code: "custom",
+      message: "workspace_write execution requires an explicit write mode",
+      path: ["workspaceWriteMode"],
     });
   }
 }
@@ -121,6 +148,7 @@ export const brokeredBashOperationSchema = z
 
 export type BrokeredBashExecutionContext = z.infer<typeof brokeredBashExecutionContextSchema>;
 export type BrokeredBashExecutionProfile = z.infer<typeof brokeredBashExecutionProfileSchema>;
+export type BrokeredBashWorkspaceWriteMode = z.infer<typeof brokeredBashWorkspaceWriteModeSchema>;
 export type BrokeredBashRunnerMode = z.infer<typeof brokeredBashRunnerModeSchema>;
 export type BrokeredBashOperation = z.infer<typeof brokeredBashOperationSchema>;
 export type BrokeredBashErrorCode = z.infer<typeof brokeredBashErrorCodeSchema>;

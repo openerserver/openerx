@@ -328,7 +328,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-### 10.1 当前执行切片：PBASH-003 本机完成，PBASH-004 下一步
+### 10.1 当前执行切片：PBASH-004A 本机完成，PBASH-004B 下一步
 
 用户已接受 [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)，并已完成
 [PBASH 实施计划](20-pbash-implementation-plan.md) 的 PBASH-001 至 PBASH-003：严格
@@ -340,8 +340,12 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 `pi.tool.progress`、跨 chunk 输出脱敏、2,000 行/50 KiB 模型结果、2 MiB 受控日志 Artifact、
 `pi.tool.cancel` 与断连终态；证据见 [PBASH-003 检查点](evidence/pbash-003-2026-08-28.md)。
 
-下一切片是 PBASH-004：changed-path manifest、diff/conflict、直接写的恢复边界，以及高隔离
-CoW/worktree `WorkspaceChangeSet`。当前 `sandbox-exec` 后端已被 macOS 标记 deprecated，签名包、
+PBASH-004A 已加入直接写 pre/post revision、Git dirty/conflict 状态、创建/修改/删除/重命名 manifest、
+有界文本 diff、二进制/超大文件清单和明确的 `NO GENERAL UNDO` 投影；冻结合同同时加入
+`isolated_change_set` 路由，无人值守或高隔离写入在 CoW 后端未完成时稳定拒绝而不降级。证据见
+[PBASH-004A 检查点](evidence/pbash-004a-2026-08-28.md)。下一切片 PBASH-004B 实现可持久化、审阅、
+应用或丢弃的 CoW/worktree `WorkspaceChangeSet`，随后 PBASH-005 才接真正 Remote 来源。当前
+`sandbox-exec` 后端已被 macOS 标记 deprecated，签名包、
 支持 OS 矩阵、替代后端评估、Linux 和 Windows 仍不得宣称完成。
 
 ### 10.2 既有外部门禁

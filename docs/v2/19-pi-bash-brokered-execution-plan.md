@@ -1,14 +1,14 @@
 # OpenerX Pi Bash Broker 化执行方案
 
-- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002/PBASH-003 LOCAL COMPLETE / PBASH-004 NEXT`
+- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002/PBASH-003/PBASH-004A LOCAL COMPLETE / PBASH-004B NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 范围：Desktop Pi Host、App Service Capability Broker、Platform Sandbox Engine、Workspace Scope、Remote
 - 依赖：[ADR-V2-007](adr/007-pi-harness-boundary.md)、
   [ADR-V2-012](adr/012-capability-broker-and-tool-projection.md)、
   [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)
-- 当前证据边界：PBASH-003 已完成当前 macOS 主机上的真实 Bash、PlatformSandboxEngine、负向门禁、
-  有序脱敏进度和受控日志 Artifact；不代表变更恢复、签名包、未来 macOS、Linux、Windows、Remote
-  或发布门禁已经完成
+- 当前证据边界：PBASH-004A 已完成当前 macOS 主机上的直接写 manifest/diff/conflict 与不可降级的
+  高隔离路由；不代表 CoW `WorkspaceChangeSet` 审阅应用、签名包、未来 macOS、Linux、Windows、
+  端到端 Remote 或发布门禁已经完成
 
 ## 1. 结论
 
@@ -644,7 +644,7 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 - [ ] `PlatformSandboxEngine` 与目标平台后端合同稳定；macOS 可以使用 Seatbelt/`sandbox-exec` 实现，
       但不得绕过独立 Runner、资源限制、能力探测和 fail-closed。
 - [ ] 签名安装包中的文件、网络、进程、权限与销毁测试通过。
-- [ ] 基础直接写具有 pre/post revision、changed-path manifest、diff 和并发冲突证据；产品不承诺任意
+- [x] 基础直接写具有 pre/post revision、changed-path manifest、diff 和已有 dirty overlap 冲突证据；产品不承诺任意
       Shell 变更原子 Undo。
 - [ ] 无人值守 Remote 写入已使用 working copy/CoW `WorkspaceChangeSet`，或明确限定为只读；不可用时
       不降级为直接写。
@@ -709,6 +709,8 @@ probe、最小环境、默认断网、hard-link 预检、资源限制和进程�
 `LOCAL REAL SHELL / UNSIGNED / NOT RELEASE`。
 
 第三阶段新增私有 IPC v5、有序 `pi.tool.progress`、跨 chunk 脱敏、请求级取消和受控日志 Artifact，
-见 [PBASH-003 检查点](evidence/pbash-003-2026-08-28.md)。下一项是 **PBASH-004：变更可见与恢复**，
-覆盖 changed-path manifest、diff/conflict、直接写恢复边界与高隔离 working copy。签名包、OS 支持矩阵
-和 deprecated 后端替代评估仍属于 PBASH-008。
+见 [PBASH-003 检查点](evidence/pbash-003-2026-08-28.md)。PBASH-004A 已完成直接写 changed-path
+manifest、diff/conflict、明确的无通用 Undo 投影，以及 `isolated_change_set` 不降级路由；证据见
+[PBASH-004A 检查点](evidence/pbash-004a-2026-08-28.md)。下一项 **PBASH-004B** 实现可审阅、应用或
+丢弃的高隔离 working-copy `WorkspaceChangeSet`。签名包、OS 支持矩阵和 deprecated 后端替代评估仍
+属于 PBASH-008。

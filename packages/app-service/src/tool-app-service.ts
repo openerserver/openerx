@@ -421,6 +421,8 @@ export class ToolAppService {
     authenticated: boolean;
     activeExecutionGrantId?: string;
     additionalExecutionGrantIds?: string[];
+    executionOrigin?: "local_interactive" | "remote_attended" | "remote_unattended";
+    requiresHighIsolation?: boolean;
   }): Promise<PreparedGenerationTools> {
     const workspaceGrants = this.#repository
       .listWorkspaceGrants(input.conversationId)
@@ -1181,7 +1183,12 @@ export class ToolAppService {
 
   #prepareBrokeredBashExecution(
     workspaceGrants: WorkspaceGrant[],
-    input: { activeExecutionGrantId?: string; additionalExecutionGrantIds?: string[] },
+    input: {
+      activeExecutionGrantId?: string;
+      additionalExecutionGrantIds?: string[];
+      executionOrigin?: "local_interactive" | "remote_attended" | "remote_unattended";
+      requiresHighIsolation?: boolean;
+    },
     runtime: BrokeredBashRuntimeAvailability,
   ): BrokeredBashExecutionContext | undefined {
     if (!this.#brokeredBashV1 || !runtime.available || !runtime.sandboxPolicyVersion) {
@@ -1202,11 +1209,20 @@ export class ToolAppService {
     ) {
       return undefined;
     }
+    const requiresIsolatedChangeSet =
+      active.access === "read_write" &&
+      (input.executionOrigin === "remote_unattended" || input.requiresHighIsolation === true);
     return {
       contractVersion: BROKERED_BASH_CONTRACT_VERSION,
       activeExecutionGrantId: active.id,
       additionalExecutionGrantIds: additionalIds,
       executionProfile: active.access === "read_write" ? "workspace_write" : "read_only",
+      workspaceWriteMode:
+        active.access !== "read_write"
+          ? "none"
+          : requiresIsolatedChangeSet
+            ? "isolated_change_set"
+            : "direct_workspace",
       environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
       networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
       sandboxPolicyVersion: runtime.sandboxPolicyVersion,

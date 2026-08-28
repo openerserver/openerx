@@ -30,6 +30,7 @@ function sameExecutionContext(
       (grantId, index) => grantId === expected.additionalExecutionGrantIds[index],
     ) &&
     operation.executionProfile === expected.executionProfile &&
+    operation.workspaceWriteMode === expected.workspaceWriteMode &&
     operation.environmentPolicyId === expected.environmentPolicyId &&
     operation.networkPolicyId === expected.networkPolicyId &&
     operation.sandboxPolicyVersion === expected.sandboxPolicyVersion
@@ -88,6 +89,12 @@ function normalizedResult(
     summary: text.slice(-8_000),
     content: [
       { type: "text", text },
+      ...(result.workspaceChanges?.diffs ?? []).map((diff) => ({
+        type: "diff" as const,
+        workspaceChangeId: diff.workspaceChangeId,
+        relativePath: diff.relativePath,
+        patch: diff.patch,
+      })),
       ...(logArtifactId ? [{ type: "artifact" as const, artifactId: logArtifactId }] : []),
     ],
     data: {
@@ -99,6 +106,7 @@ function normalizedResult(
       activeExecutionGrantId: activeGrant.id,
       additionalExecutionGrantIds: additionalGrants.map(({ id }) => id),
       executionProfile: operation.executionProfile,
+      workspaceWriteMode: operation.workspaceWriteMode,
       environmentPolicyId: operation.environmentPolicyId,
       networkPolicyId: operation.networkPolicyId,
       sandboxPolicyVersion: operation.sandboxPolicyVersion,
@@ -111,6 +119,7 @@ function normalizedResult(
       logArtifactId,
       destructionStatus: result.destructionStatus,
       changedPathManifestStatus: result.changedPathManifestStatus,
+      workspaceChanges: result.workspaceChanges,
       proof: result.proof,
     },
     sources: [],
@@ -181,6 +190,9 @@ export class BrokeredBashAdapter implements ToolAdapter {
     }
     if (operation.executionProfile === "workspace_write" && activeGrant.access !== "read_write") {
       throw new Error("BROKERED_BASH_EXECUTION_PROFILE_MISMATCH");
+    }
+    if (operation.workspaceWriteMode === "isolated_change_set") {
+      throw new Error("BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE");
     }
     let acceptingProgress = true;
     let result: PlatformSandboxExecutionResult;

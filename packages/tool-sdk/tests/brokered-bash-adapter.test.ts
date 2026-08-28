@@ -66,6 +66,7 @@ class FakePlatformSandboxEngine implements PlatformSandboxEngine {
     durationMs: 3,
     destructionStatus: "clean",
     changedPathManifestStatus: "not_collected",
+    workspaceChanges: null,
     proof: {
       engineVersion: this.engineVersion,
       backendId: this.backendId,
@@ -115,6 +116,7 @@ function fixture() {
     activeExecutionGrantId: activeGrantId,
     additionalExecutionGrantIds: [],
     executionProfile: "workspace_write",
+    workspaceWriteMode: "direct_workspace",
     environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
     networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
     sandboxPolicyVersion: BROKERED_BASH_MACOS_SANDBOX_POLICY_VERSION,
@@ -179,6 +181,43 @@ afterEach(() => {
 describe("BrokeredBashAdapter", () => {
   it("dispatches only the frozen request and returns proof without private paths", async () => {
     const { adapter, context, engine, grant, operation, rootPath, update } = fixture();
+    engine.result = {
+      ...engine.result,
+      changedPathManifestStatus: "collected",
+      workspaceChanges: {
+        mode: "DIRECT_WORKSPACE_WRITE",
+        baselineRevision: "a".repeat(64),
+        finalRevision: "b".repeat(64),
+        baselineGitStatus: "clean",
+        finalGitStatus: "dirty",
+        conflictStatus: "none",
+        attribution: "workspace_delta_during_execution",
+        undo: "NOT_AVAILABLE_FOR_DIRECT_WRITE",
+        manifest: [
+          {
+            workspaceGrantId: grant.id,
+            workspaceLogicalName: "workspace",
+            relativePath: "created.txt",
+            previousRelativePath: null,
+            kind: "created",
+            entryType: "file",
+            beforeBytes: null,
+            afterBytes: 3,
+            diffStatus: "available",
+          },
+        ],
+        diffs: [
+          {
+            workspaceChangeId: "99999999-9999-4999-8999-999999999998",
+            workspaceGrantId: grant.id,
+            relativePath: "workspace/created.txt",
+            patch: "--- /dev/null\n+++ b/created.txt\n@@ -1,0 +1,1 @@\n+new",
+          },
+        ],
+        manifestTruncated: false,
+        diffTruncated: false,
+      },
+    };
     const result = await adapter.execute(operation, context);
     expect(result).toMatchObject({
       sideEffectCommitted: true,
@@ -196,6 +235,11 @@ describe("BrokeredBashAdapter", () => {
       artifacts: ["88888888-8888-4888-8888-888888888888"],
       content: expect.arrayContaining([
         { type: "artifact", artifactId: "88888888-8888-4888-8888-888888888888" },
+        expect.objectContaining({
+          type: "diff",
+          relativePath: "workspace/created.txt",
+          patch: expect.stringContaining("+new"),
+        }),
       ]),
     });
     expect(engine.requests[0]).toMatchObject({
@@ -238,6 +282,16 @@ describe("BrokeredBashAdapter", () => {
     });
     await expect(adapter.execute(operation, context)).rejects.toThrow(
       "BROKERED_BASH_WORKSPACE_GRANT_INVALID",
+    );
+    expect(engine.requests).toHaveLength(0);
+  });
+
+  it("fails isolated change-set requests closed instead of degrading to direct writes", async () => {
+    const { adapter, context, engine, execution, operation } = fixture();
+    execution.workspaceWriteMode = "isolated_change_set";
+    operation.workspaceWriteMode = "isolated_change_set";
+    await expect(adapter.execute(operation, context)).rejects.toThrow(
+      "BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE",
     );
     expect(engine.requests).toHaveLength(0);
   });
