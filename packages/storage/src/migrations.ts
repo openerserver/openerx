@@ -896,6 +896,34 @@ const migrations: readonly Migration[] = [
           FROM permission_requests pr;
     `,
   },
+  {
+    version: 14,
+    checksum: "pbash-workspace-change-sets-v14-20260828",
+    sql: `
+      CREATE TABLE workspace_change_sets (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        workspace_grant_id TEXT NOT NULL REFERENCES workspace_grants(id),
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK (status IN (
+          'pending_review', 'reviewed', 'applying', 'applied', 'reverted', 'discarded', 'blocked',
+          'apply_failed', 'outcome_unknown'
+        )),
+        baseline_revision TEXT NOT NULL,
+        final_revision TEXT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        diffs_json TEXT NOT NULL,
+        entries_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX workspace_change_sets_grant_idx
+        ON workspace_change_sets(owner_profile_id, workspace_grant_id, updated_at DESC);
+      CREATE INDEX workspace_change_sets_run_idx
+        ON workspace_change_sets(run_id, created_at);
+    `,
+  },
 ];
 
 export function migrateDatabase(

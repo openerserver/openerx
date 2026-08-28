@@ -140,11 +140,16 @@ function fixture() {
     }
     return grant;
   });
+  const writeChangeSet = vi.fn(() => ({
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    status: "pending_review",
+  }));
   const adapter = new BrokeredBashAdapter(
     resolve,
     (requestedGenerationId) => (requestedGenerationId === generationId ? execution : undefined),
     engine,
     vi.fn(async () => "88888888-8888-4888-8888-888888888888"),
+    writeChangeSet,
   );
   const operation: BrokeredBashOperation = {
     operation: "shell_command_execute",
@@ -169,7 +174,18 @@ function fixture() {
     },
     update,
   };
-  return { adapter, context, engine, execution, grant, operation, resolve, rootPath, update };
+  return {
+    adapter,
+    context,
+    engine,
+    execution,
+    grant,
+    operation,
+    resolve,
+    rootPath,
+    update,
+    writeChangeSet,
+  };
 }
 
 afterEach(() => {
@@ -186,6 +202,7 @@ describe("BrokeredBashAdapter", () => {
       changedPathManifestStatus: "collected",
       workspaceChanges: {
         mode: "DIRECT_WORKSPACE_WRITE",
+        hostWorkspaceMutated: true,
         baselineRevision: "a".repeat(64),
         finalRevision: "b".repeat(64),
         baselineGitStatus: "clean",
@@ -214,6 +231,8 @@ describe("BrokeredBashAdapter", () => {
             patch: "--- /dev/null\n+++ b/created.txt\n@@ -1,0 +1,1 @@\n+new",
           },
         ],
+        materialization: [],
+        excludedPathCount: 0,
         manifestTruncated: false,
         diffTruncated: false,
       },
@@ -286,14 +305,75 @@ describe("BrokeredBashAdapter", () => {
     expect(engine.requests).toHaveLength(0);
   });
 
-  it("fails isolated change-set requests closed instead of degrading to direct writes", async () => {
-    const { adapter, context, engine, execution, operation } = fixture();
+  it("persists isolated change-set requests without directly committing host writes", async () => {
+    const { adapter, context, engine, execution, grant, operation, writeChangeSet } = fixture();
     execution.workspaceWriteMode = "isolated_change_set";
     operation.workspaceWriteMode = "isolated_change_set";
-    await expect(adapter.execute(operation, context)).rejects.toThrow(
-      "BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE",
+    engine.result = {
+      ...engine.result,
+      changedPathManifestStatus: "collected",
+      workspaceChanges: {
+        mode: "ISOLATED_CHANGE_SET",
+        hostWorkspaceMutated: false,
+        baselineRevision: "a".repeat(64),
+        finalRevision: "b".repeat(64),
+        baselineGitStatus: "clean",
+        finalGitStatus: "dirty",
+        conflictStatus: "none",
+        attribution: "workspace_delta_during_execution",
+        undo: "REVIEW_REQUIRED_BEFORE_APPLY",
+        manifest: [
+          {
+            workspaceGrantId: grant.id,
+            workspaceLogicalName: "workspace",
+            relativePath: "created.txt",
+            previousRelativePath: null,
+            kind: "created",
+            entryType: "file",
+            beforeBytes: null,
+            afterBytes: 3,
+            diffStatus: "available",
+          },
+        ],
+        diffs: [],
+        materialization: [
+          {
+            workspaceGrantId: grant.id,
+            workspaceLogicalName: "workspace",
+            relativePath: "created.txt",
+            previousRelativePath: null,
+            kind: "created",
+            entryType: "file",
+            beforeSha256: null,
+            afterSha256: "c".repeat(64),
+            beforeText: null,
+            afterText: "new",
+            applySupported: true,
+          },
+        ],
+        excludedPathCount: 0,
+        manifestTruncated: false,
+        diffTruncated: false,
+      },
+    };
+    const result = await adapter.execute(operation, context);
+    expect(engine.requests).toHaveLength(1);
+    expect(writeChangeSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceGrantId: grant.id,
+        runId: context.projection.runId,
+        toolCallId: context.toolCallId,
+        blocked: false,
+      }),
     );
-    expect(engine.requests).toHaveLength(0);
+    expect(result.data).toMatchObject({
+      workspaceChangeSet: {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        status: "pending_review",
+      },
+      workspaceChanges: { hostWorkspaceMutated: false },
+    });
+    expect(JSON.stringify(result.data)).not.toContain("materialization");
   });
 
   it("turns cancellation, timeout, non-zero exit and uncertain destruction into typed failures", async () => {

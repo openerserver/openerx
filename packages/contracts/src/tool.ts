@@ -444,6 +444,38 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
   z
     .object({
       ...toolOperationBase,
+      operation: z.literal("workspace_change_set_review"),
+      workspaceGrantId: entityIdSchema,
+      workspaceChangeSetId: entityIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("workspace_change_set_apply"),
+      workspaceGrantId: entityIdSchema,
+      workspaceChangeSetId: entityIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("workspace_change_set_discard"),
+      workspaceGrantId: entityIdSchema,
+      workspaceChangeSetId: entityIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("workspace_change_set_undo"),
+      workspaceGrantId: entityIdSchema,
+      workspaceChangeSetId: entityIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
       operation: z.literal("shell_status"),
       processId: entityIdSchema,
     })

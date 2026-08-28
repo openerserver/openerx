@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
@@ -276,6 +284,300 @@ describe("WorkspaceToolAdapter", () => {
     );
     expect(readFileSync(target, "utf8")).toBe(before);
     expect(repository.workspaceChange(change.id).status).toBe("reverted");
+    chat.close();
+    repository.close();
+  });
+
+  it("reviews, atomically applies, and undoes a persisted isolated change set", async () => {
+    const { adapter, chat, repository, grant, context, workspace } = fixture();
+    const existingPath = path.join(workspace, "src", "app.ts");
+    const createdPath = path.join(workspace, "src", "generated.ts");
+    const deletedPath = path.join(workspace, "src", "remove.ts");
+    const renamedBeforePath = path.join(workspace, "src", "old-name.ts");
+    const renamedAfterPath = path.join(workspace, "src", "new-name.ts");
+    writeFileSync(deletedPath, "remove-me\n");
+    writeFileSync(renamedBeforePath, "rename-me\n");
+    const before = readFileSync(existingPath, "utf8");
+    const after = before.replace("value = 1", "value = 7");
+    const { toolCall } = repository.createToolCall({
+      runId: context.projection.runId,
+      piCallRef: "pi-isolated-bash-call",
+      toolName: "bash",
+      source: "openerx",
+      risk: "L3",
+      idempotencyKey: "isolated-bash-call-0001",
+      inputSummary: "isolated command",
+      targetSummary: grant.id,
+    });
+    const changeSet = repository.createWorkspaceChangeSet({
+      workspaceGrantId: grant.id,
+      runId: context.projection.runId,
+      toolCallId: toolCall.id,
+      baselineRevision: "a".repeat(64),
+      finalRevision: "b".repeat(64),
+      manifest: [
+        { relativePath: "src/app.ts", kind: "modified" },
+        { relativePath: "src/generated.ts", kind: "created" },
+        { relativePath: "src/remove.ts", kind: "deleted" },
+        {
+          relativePath: "src/new-name.ts",
+          previousRelativePath: "src/old-name.ts",
+          kind: "renamed",
+        },
+      ],
+      diffs: [
+        {
+          relativePath: "workspace/src/app.ts",
+          patch: `--- a/src/app.ts\n+++ b/src/app.ts\n-${before}+${after}`,
+        },
+      ],
+      entries: [
+        {
+          workspaceGrantId: grant.id,
+          workspaceLogicalName: "workspace",
+          relativePath: "src/app.ts",
+          previousRelativePath: null,
+          kind: "modified",
+          entryType: "file",
+          beforeSha256: digest(before),
+          afterSha256: digest(after),
+          beforeText: before,
+          afterText: after,
+          applySupported: true,
+        },
+        {
+          workspaceGrantId: grant.id,
+          workspaceLogicalName: "workspace",
+          relativePath: "src/remove.ts",
+          previousRelativePath: null,
+          kind: "deleted",
+          entryType: "file",
+          beforeSha256: digest("remove-me\n"),
+          afterSha256: null,
+          beforeText: "remove-me\n",
+          afterText: null,
+          applySupported: true,
+        },
+        {
+          workspaceGrantId: grant.id,
+          workspaceLogicalName: "workspace",
+          relativePath: "src/new-name.ts",
+          previousRelativePath: "src/old-name.ts",
+          kind: "renamed",
+          entryType: "file",
+          beforeSha256: digest("rename-me\n"),
+          afterSha256: digest("rename-me\n"),
+          beforeText: "rename-me\n",
+          afterText: "rename-me\n",
+          applySupported: true,
+        },
+        {
+          workspaceGrantId: grant.id,
+          workspaceLogicalName: "workspace",
+          relativePath: "src/generated.ts",
+          previousRelativePath: null,
+          kind: "created",
+          entryType: "file",
+          beforeSha256: null,
+          afterSha256: digest("generated\n"),
+          beforeText: null,
+          afterText: "generated\n",
+          applySupported: true,
+        },
+      ],
+      blocked: false,
+    });
+
+    await expect(
+      adapter.execute(
+        {
+          operation: "workspace_change_set_apply",
+          workspaceGrantId: grant.id,
+          workspaceChangeSetId: changeSet.id,
+          idempotencyKey: "change-set-unreviewed-apply-0001",
+        },
+        context,
+      ),
+    ).rejects.toThrow("WORKSPACE_CHANGE_SET_NOT_APPLICABLE");
+
+    const reviewed = await adapter.execute(
+      {
+        operation: "workspace_change_set_review",
+        workspaceGrantId: grant.id,
+        workspaceChangeSetId: changeSet.id,
+        idempotencyKey: "change-set-review-0001",
+      },
+      context,
+    );
+    expect(reviewed.content).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "diff" })]),
+    );
+    await adapter.execute(
+      {
+        operation: "workspace_change_set_apply",
+        workspaceGrantId: grant.id,
+        workspaceChangeSetId: changeSet.id,
+        idempotencyKey: "change-set-apply-0001",
+      },
+      context,
+    );
+    expect(readFileSync(existingPath, "utf8")).toBe(after);
+    expect(readFileSync(createdPath, "utf8")).toBe("generated\n");
+    expect(existsSync(deletedPath)).toBe(false);
+    expect(existsSync(renamedBeforePath)).toBe(false);
+    expect(readFileSync(renamedAfterPath, "utf8")).toBe("rename-me\n");
+    expect(repository.workspaceChangeSet(changeSet.id).status).toBe("applied");
+
+    await adapter.execute(
+      {
+        operation: "workspace_change_set_undo",
+        workspaceGrantId: grant.id,
+        workspaceChangeSetId: changeSet.id,
+        idempotencyKey: "change-set-undo-0001",
+      },
+      context,
+    );
+    expect(readFileSync(existingPath, "utf8")).toBe(before);
+    expect(existsSync(createdPath)).toBe(false);
+    expect(readFileSync(deletedPath, "utf8")).toBe("remove-me\n");
+    expect(readFileSync(renamedBeforePath, "utf8")).toBe("rename-me\n");
+    expect(existsSync(renamedAfterPath)).toBe(false);
+    expect(repository.workspaceChangeSet(changeSet.id).status).toBe("reverted");
+    chat.close();
+    repository.close();
+  });
+
+  it("rejects stale change-set baselines and allows blocked sets to be discarded", async () => {
+    const { adapter, chat, repository, grant, context, workspace } = fixture();
+    const target = path.join(workspace, "src", "app.ts");
+    const before = readFileSync(target, "utf8");
+    const { toolCall } = repository.createToolCall({
+      runId: context.projection.runId,
+      piCallRef: "pi-change-set-conflict",
+      toolName: "bash",
+      source: "openerx",
+      risk: "L3",
+      idempotencyKey: "isolated-bash-conflict-0001",
+      inputSummary: "isolated command",
+      targetSummary: grant.id,
+    });
+    const entry = {
+      workspaceGrantId: grant.id,
+      workspaceLogicalName: "workspace",
+      relativePath: "src/app.ts",
+      previousRelativePath: null,
+      kind: "modified" as const,
+      entryType: "file" as const,
+      beforeSha256: digest(before),
+      afterSha256: digest("isolated\n"),
+      beforeText: before,
+      afterText: "isolated\n",
+      applySupported: true,
+    };
+    const conflict = repository.createWorkspaceChangeSet({
+      workspaceGrantId: grant.id,
+      runId: context.projection.runId,
+      toolCallId: toolCall.id,
+      baselineRevision: "c".repeat(64),
+      finalRevision: "d".repeat(64),
+      manifest: [],
+      diffs: [],
+      entries: [entry],
+      blocked: false,
+    });
+    writeFileSync(target, "user-concurrent-edit\n");
+    await adapter.execute(
+      {
+        operation: "workspace_change_set_review",
+        workspaceGrantId: grant.id,
+        workspaceChangeSetId: conflict.id,
+        idempotencyKey: "change-set-conflict-review-0001",
+      },
+      context,
+    );
+    await expect(
+      adapter.execute(
+        {
+          operation: "workspace_change_set_apply",
+          workspaceGrantId: grant.id,
+          workspaceChangeSetId: conflict.id,
+          idempotencyKey: "change-set-conflict-apply-0001",
+        },
+        context,
+      ),
+    ).rejects.toThrow("WORKSPACE_CHANGE_SET_CONFLICT");
+    expect(repository.workspaceChangeSet(conflict.id).status).toBe("reviewed");
+    expect(readFileSync(target, "utf8")).toBe("user-concurrent-edit\n");
+
+    const blocked = repository.createWorkspaceChangeSet({
+      workspaceGrantId: grant.id,
+      runId: context.projection.runId,
+      toolCallId: toolCall.id,
+      baselineRevision: "e".repeat(64),
+      finalRevision: "f".repeat(64),
+      manifest: [{ relativePath: "asset.bin", diffStatus: "binary" }],
+      diffs: [],
+      entries: [{ ...entry, relativePath: "asset.bin", applySupported: false }],
+      blocked: true,
+    });
+    await expect(
+      adapter.execute(
+        {
+          operation: "workspace_change_set_apply",
+          workspaceGrantId: grant.id,
+          workspaceChangeSetId: blocked.id,
+          idempotencyKey: "change-set-blocked-apply-0001",
+        },
+        context,
+      ),
+    ).rejects.toThrow("WORKSPACE_CHANGE_SET_BLOCKED");
+    await adapter.execute(
+      {
+        operation: "workspace_change_set_discard",
+        workspaceGrantId: grant.id,
+        workspaceChangeSetId: blocked.id,
+        idempotencyKey: "change-set-blocked-discard-0001",
+      },
+      context,
+    );
+    expect(repository.workspaceChangeSet(blocked.id).status).toBe("discarded");
+
+    const recoveryBefore = readFileSync(target, "utf8");
+    const recoveryAfter = "partially-applied-before-crash\n";
+    const recovering = repository.createWorkspaceChangeSet({
+      workspaceGrantId: grant.id,
+      runId: context.projection.runId,
+      toolCallId: toolCall.id,
+      baselineRevision: "1".repeat(64),
+      finalRevision: "2".repeat(64),
+      manifest: [{ relativePath: "src/app.ts", kind: "modified" }],
+      diffs: [],
+      entries: [
+        {
+          ...entry,
+          beforeSha256: digest(recoveryBefore),
+          afterSha256: digest(recoveryAfter),
+          beforeText: recoveryBefore,
+          afterText: recoveryAfter,
+        },
+      ],
+      blocked: false,
+    });
+    repository.markWorkspaceChangeSet(recovering.id, "applying");
+    writeFileSync(target, recoveryAfter);
+    repository.recoverInterrupted();
+    expect(repository.workspaceChangeSet(recovering.id).status).toBe("outcome_unknown");
+    await adapter.execute(
+      {
+        operation: "workspace_change_set_undo",
+        workspaceGrantId: grant.id,
+        workspaceChangeSetId: recovering.id,
+        idempotencyKey: "change-set-recover-undo-0001",
+      },
+      context,
+    );
+    expect(readFileSync(target, "utf8")).toBe(recoveryBefore);
+    expect(repository.workspaceChangeSet(recovering.id).status).toBe("reverted");
     chat.close();
     repository.close();
   });

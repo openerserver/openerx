@@ -1,11 +1,10 @@
 # PBASH 实施计划
 
-- 状态：`PBASH-001/PBASH-002/PBASH-003 LOCAL COMPLETE / PBASH-004A LOCAL COMPLETE / PBASH-004B NEXT`
+- 状态：`PBASH-001/PBASH-002/PBASH-003/PBASH-004 LOCAL COMPLETE / PBASH-005 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 架构依据：[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)
-- 当前目标：保持 PBASH-002/PBASH-003 的隔离、进度、脱敏和日志门禁；PBASH-004A 已实现直接写
-  changed-path manifest、diff/conflict 与高隔离 fail-closed 路由，下一切片实现可审阅、应用或丢弃的
-  working-copy `WorkspaceChangeSet`
+- 当前目标：PBASH-004 已完成直接写证据与可审阅、应用、丢弃、撤销的 working-copy
+  `WorkspaceChangeSet`；下一切片 PBASH-005 接入真实 Remote 来源、审批、幂等与 `outcome_unknown` 对账
 
 ## 1. 实施原则
 
@@ -24,7 +23,7 @@
 | PBASH-001 | 严格合同、Pi 工具投影、冻结执行上下文、fake Broker/Runner | LOCAL COMPLETE | 合同、Pi Host、Broker、App Service 测试通过；无进程启动 |
 | PBASH-002 | `PlatformSandboxEngine` 与 macOS Seatbelt 后端 | LOCAL COMPLETE | 文件/网络/环境/进程树负向门禁通过；发布矩阵仍待 PBASH-008 |
 | PBASH-003 | 流式进度、取消和完整日志 Artifact | LOCAL COMPLETE | 顺序、截断、取消、断连测试通过 |
-| PBASH-004 | 直接写变更证据与高隔离 working copy | IN PROGRESS（004A COMPLETE） | diff/conflict 和无人值守 Remote 不降级门禁通过；004B 完成 working copy 审阅/应用/丢弃 |
+| PBASH-004 | 直接写变更证据与高隔离 working copy | LOCAL COMPLETE | diff/conflict、CoW change set、审阅/应用/丢弃/撤销和不降级门禁通过 |
 | PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | PENDING | 至少一次投递不重复副作用 |
 | PBASH-006 | 环境与 egress policy | PENDING | 默认离线、Secret canary、私网/metadata 阻断通过 |
 | PBASH-007 | Golden A/B 与渐进启用 | PENDING | 安全零越界、核心 Coding 任务无未解释回归 |
@@ -157,10 +156,29 @@ deprecated，本检查点只证明当前本机后端，不是签名发布或未�
 PBASH-004A 的实现与复现证据见
 [PBASH-004A 日期化证据](evidence/pbash-004a-2026-08-28.md)。
 
-## 9. PBASH-004B 下一切片
+## 9. PBASH-004B 本机完成
 
-1. 用临时 worktree、CoW 或等价 working copy 从包含用户 dirty state 的当前基线启动命令。
-2. 持久化 `WorkspaceChangeSet`，覆盖文本 patch、二进制清单、创建/删除/重命名和大小摘要。
-3. 通过现有 Workspace 变更通道实现审阅后原子应用或丢弃，并为应用保留 Undo 前镜像。
-4. 接入真正的 Remote 来源/attended 状态；004A 的 trusted routing 字段只是 fail-closed 接口，不冒充
-   PBASH-005 的端到端 Remote 证据。
+- [x] macOS Runner 使用 `/bin/cp -cRp` 建立 APFS CoW working copy；可写授权根只在副本中执行，宿主
+      根不会进入可写 sandbox root。副本来自命令开始时当前工作区，因此包含用户已有 dirty state。
+- [x] Runner 销毁全部后代后生成 `ISOLATED_CHANGE_SET`；公开结果只含 manifest/diff，before/after 恢复
+      材料不进入模型结果。
+- [x] SQLite v14 持久化 `WorkspaceChangeSet`、manifest、diff、恢复材料和状态机；
+      `openerx_workspace_changes` 可重新发现 pending、blocked 或 `outcome_unknown` change set。
+- [x] 新增 review/apply/discard/undo 工具。apply/undo 必须经过 L3 per-call 审批；未 review 的 set 不能
+      apply，blocked set 不能 apply 但可以 discard。
+- [x] apply 在任何写入前校验全部 grant、路径和 before hash；创建、修改、删除、rename 全部可表达时才
+      多文件应用。中途失败反向恢复 preimage；apply 后只有全部 after hash 仍匹配才能 Undo。
+- [x] `applying` 崩溃恢复为 `outcome_unknown`；只在每项处于 before 或 after 已知状态时允许恢复 Undo，
+      第三方内容一律冲突拒绝。
+- [x] 二进制、超限、目录、symlink、`.git` 或不可表达项 fail-closed 为 blocked；`node_modules` 与常见
+      build cache 留在 overlay，不进入 change set。文本恢复材料单文件 1 MB、全快照 20 MB。
+- [x] 真实 macOS AppService→Broker→Runner 测试证明隔离命令生成并持久化 change set，宿主 canary
+      不存在；直接写 PBASH-004A 路径保持不变。
+
+实现与复现证据见 [PBASH-004B 日期化证据](evidence/pbash-004b-2026-08-28.md)。
+
+## 10. PBASH-005 下一切片
+
+1. 把真实 Remote attended/unattended 来源接入已冻结的 `workspaceWriteMode` 路由。
+2. 完成审批响应绑定、command ID/幂等去重和断线重放。
+3. 将外部副作用与 change-set apply 的 `outcome_unknown` 对账投影到 Remote/UI。

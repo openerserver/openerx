@@ -1,4 +1,8 @@
-import type { BrokeredBashExecutionProfile, WorkspaceGrant } from "@openerx/contracts";
+import type {
+  BrokeredBashExecutionProfile,
+  BrokeredBashWorkspaceWriteMode,
+  WorkspaceGrant,
+} from "@openerx/contracts";
 
 export const PLATFORM_SANDBOX_ENGINE_VERSION = "platform-sandbox-v1" as const;
 export const PLATFORM_SANDBOX_DEFAULT_MAX_OUTPUT_BYTES = 2_000_000;
@@ -59,6 +63,7 @@ export interface PlatformSandboxExecutionRequest {
   command: string;
   timeoutMs: number;
   executionProfile: BrokeredBashExecutionProfile;
+  workspaceWriteMode: BrokeredBashWorkspaceWriteMode;
   environmentPolicyId: string;
   networkPolicyId: string;
   activeRoot: PlatformSandboxRoot;
@@ -112,17 +117,34 @@ export interface PlatformSandboxWorkspaceDiff {
   patch: string;
 }
 
+export interface PlatformSandboxWorkspaceMaterializationEntry {
+  workspaceGrantId: WorkspaceGrant["id"];
+  workspaceLogicalName: string;
+  relativePath: string;
+  previousRelativePath: string | null;
+  kind: PlatformSandboxWorkspaceChangeKind;
+  entryType: PlatformSandboxWorkspaceChangeEntry["entryType"];
+  beforeSha256: string | null;
+  afterSha256: string | null;
+  beforeText: string | null;
+  afterText: string | null;
+  applySupported: boolean;
+}
+
 export interface PlatformSandboxWorkspaceChanges {
-  mode: "DIRECT_WORKSPACE_WRITE";
+  mode: "DIRECT_WORKSPACE_WRITE" | "ISOLATED_CHANGE_SET";
+  hostWorkspaceMutated: boolean;
   baselineRevision: string;
   finalRevision: string;
   baselineGitStatus: "clean" | "dirty" | "not_repository" | "unavailable";
   finalGitStatus: "clean" | "dirty" | "not_repository" | "unavailable";
   conflictStatus: "none" | "preexisting_dirty_overlap" | "git_status_unavailable";
   attribution: "workspace_delta_during_execution";
-  undo: "NOT_AVAILABLE_FOR_DIRECT_WRITE";
+  undo: "NOT_AVAILABLE_FOR_DIRECT_WRITE" | "REVIEW_REQUIRED_BEFORE_APPLY";
   manifest: PlatformSandboxWorkspaceChangeEntry[];
   diffs: PlatformSandboxWorkspaceDiff[];
+  materialization: PlatformSandboxWorkspaceMaterializationEntry[];
+  excludedPathCount: number;
   manifestTruncated: boolean;
   diffTruncated: boolean;
 }

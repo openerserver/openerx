@@ -93,6 +93,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
     case "workspace_instructions":
     case "workspace_diff":
     case "workspace_changes":
+    case "workspace_change_set_review":
       return {
         capability: "workspace",
         risk: "L0",
@@ -104,6 +105,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
       };
     case "workspace_apply_patch":
     case "workspace_undo":
+    case "workspace_change_set_discard":
       return {
         capability: "workspace",
         risk: "L3",
@@ -112,6 +114,17 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         actions: ["patch"],
         reason: `修改已授权工作区：${operation.operation}`,
         approval: "automatic",
+      };
+    case "workspace_change_set_apply":
+    case "workspace_change_set_undo":
+      return {
+        capability: "workspace",
+        risk: "L3",
+        resourceType: "workspace",
+        resource: operation.workspaceGrantId,
+        actions: ["patch"],
+        reason: `应用已审阅的隔离工作区变更：${operation.workspaceChangeSetId}`,
+        approval: "per_call",
       };
     case "shell_status":
     case "shell_input":
@@ -313,9 +326,13 @@ export function hasUncertainExternalSideEffect(operation: ToolOperation): boolea
     case "workspace_instructions":
     case "workspace_diff":
     case "workspace_changes":
+    case "workspace_change_set_review":
       return false;
     case "workspace_apply_patch":
     case "workspace_undo":
+    case "workspace_change_set_apply":
+    case "workspace_change_set_discard":
+    case "workspace_change_set_undo":
       return true;
   }
 }
@@ -392,6 +409,11 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
       return { input: operation.operation, target: operation.workspaceChangeId };
     case "workspace_changes":
       return { input: `last ${operation.limit} changes`, target: operation.workspaceGrantId };
+    case "workspace_change_set_review":
+    case "workspace_change_set_apply":
+    case "workspace_change_set_discard":
+    case "workspace_change_set_undo":
+      return { input: operation.operation, target: operation.workspaceChangeSetId };
     case "shell_status":
     case "shell_input":
     case "shell_stop":

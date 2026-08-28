@@ -74,17 +74,44 @@ export type BrokeredBashLogArtifactWriter = (
   input: BrokeredBashLogArtifactInput,
 ) => Promise<string> | string;
 
+export interface BrokeredBashWorkspaceChangeSetInput {
+  workspaceGrantId: string;
+  runId: string;
+  toolCallId: string;
+  baselineRevision: string;
+  finalRevision: string;
+  manifest: NonNullable<PlatformSandboxExecutionResult["workspaceChanges"]>["manifest"];
+  diffs: NonNullable<PlatformSandboxExecutionResult["workspaceChanges"]>["diffs"];
+  entries: NonNullable<PlatformSandboxExecutionResult["workspaceChanges"]>["materialization"];
+  blocked: boolean;
+}
+
+export type BrokeredBashWorkspaceChangeSetWriter = (input: BrokeredBashWorkspaceChangeSetInput) => {
+  id: string;
+  status: string;
+};
+
 function normalizedResult(
   operation: BrokeredBashOperation,
   result: PlatformSandboxExecutionResult,
   activeGrant: WorkspaceGrant,
   additionalGrants: WorkspaceGrant[],
   logArtifactId: string | null,
+  workspaceChangeSet: { id: string; status: string } | null,
 ): NormalizedToolResult {
   const output = modelOutput(result);
   const fallback =
     result.exitCode === 0 ? "Bash completed successfully." : "Bash did not complete.";
-  const text = output.text || fallback;
+  const text = `${output.text || fallback}${
+    workspaceChangeSet
+      ? `\n\nWorkspace change set ${workspaceChangeSet.id} is ${workspaceChangeSet.status}; review it before applying.`
+      : ""
+  }`;
+  const publicWorkspaceChanges = result.workspaceChanges
+    ? Object.fromEntries(
+        Object.entries(result.workspaceChanges).filter(([key]) => key !== "materialization"),
+      )
+    : null;
   return {
     summary: text.slice(-8_000),
     content: [
@@ -119,7 +146,8 @@ function normalizedResult(
       logArtifactId,
       destructionStatus: result.destructionStatus,
       changedPathManifestStatus: result.changedPathManifestStatus,
-      workspaceChanges: result.workspaceChanges,
+      workspaceChanges: publicWorkspaceChanges,
+      workspaceChangeSet,
       proof: result.proof,
     },
     sources: [],
@@ -142,6 +170,7 @@ export class BrokeredBashAdapter implements ToolAdapter {
     ) => BrokeredBashExecutionContext | undefined,
     private readonly engine: PlatformSandboxEngine,
     private readonly writeLogArtifact?: BrokeredBashLogArtifactWriter,
+    private readonly writeWorkspaceChangeSet?: BrokeredBashWorkspaceChangeSetWriter,
   ) {}
 
   async execute(
@@ -191,9 +220,6 @@ export class BrokeredBashAdapter implements ToolAdapter {
     if (operation.executionProfile === "workspace_write" && activeGrant.access !== "read_write") {
       throw new Error("BROKERED_BASH_EXECUTION_PROFILE_MISMATCH");
     }
-    if (operation.workspaceWriteMode === "isolated_change_set") {
-      throw new Error("BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE");
-    }
     let acceptingProgress = true;
     let result: PlatformSandboxExecutionResult;
     try {
@@ -207,6 +233,7 @@ export class BrokeredBashAdapter implements ToolAdapter {
         command: operation.command,
         timeoutMs: operation.timeoutMs,
         executionProfile: operation.executionProfile,
+        workspaceWriteMode: operation.workspaceWriteMode,
         environmentPolicyId: operation.environmentPolicyId,
         networkPolicyId: operation.networkPolicyId,
         activeRoot: {
@@ -239,12 +266,37 @@ export class BrokeredBashAdapter implements ToolAdapter {
           toolCallId: context.toolCallId,
         })
       : null;
+    let workspaceChangeSet: { id: string; status: string } | null = null;
+    if (
+      result.workspaceChanges?.mode === "ISOLATED_CHANGE_SET" &&
+      result.workspaceChanges.manifest.length > 0
+    ) {
+      if (!this.writeWorkspaceChangeSet) {
+        throw new Error("BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE");
+      }
+      const changes = result.workspaceChanges;
+      workspaceChangeSet = this.writeWorkspaceChangeSet({
+        workspaceGrantId: activeGrant.id,
+        runId: projection.runId,
+        toolCallId: context.toolCallId,
+        baselineRevision: changes.baselineRevision,
+        finalRevision: changes.finalRevision,
+        manifest: changes.manifest,
+        diffs: changes.diffs,
+        entries: changes.materialization,
+        blocked:
+          changes.manifestTruncated ||
+          changes.materialization.length !== changes.manifest.length ||
+          changes.materialization.some(({ applySupported }) => !applySupported),
+      });
+    }
     const normalized = normalizedResult(
       operation,
       result,
       activeGrant,
       additionalGrants,
       logArtifactId,
+      workspaceChangeSet,
     );
     if (result.destructionStatus === "uncertain") {
       throw new ToolAdapterError("BROKERED_BASH_DESTRUCTION_UNCERTAIN", normalized);

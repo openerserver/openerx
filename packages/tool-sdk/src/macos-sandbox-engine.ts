@@ -337,6 +337,32 @@ function canonicalRoots(request: PlatformSandboxExecutionRequest): {
   return { active, additional };
 }
 
+function createWorkingCopy(sourceRoot: string, destinationRoot: string): string {
+  mkdirSync(destinationRoot, { recursive: true, mode: 0o700 });
+  const copied = spawnSync("/bin/cp", ["-cRp", `${sourceRoot}/.`, destinationRoot], {
+    encoding: "utf8",
+    timeout: 120_000,
+    maxBuffer: 1_000_000,
+    env: { PATH: "/usr/bin:/bin" },
+  });
+  if (copied.error || copied.status !== 0) throw new Error("BROKERED_BASH_WORKING_COPY_FAILED");
+  return realpathSync(destinationRoot);
+}
+
+function excludedWorkingCopyPath(relativePath: string): boolean {
+  const segments = relativePath.split("/");
+  return (
+    segments.includes("node_modules") ||
+    segments.includes("__pycache__") ||
+    segments.includes(".pytest_cache") ||
+    segments.includes(".mypy_cache") ||
+    segments.includes(".pnpm-store") ||
+    segments.includes(".gradle") ||
+    (segments.includes(".next") && segments.includes("cache")) ||
+    (segments.includes(".yarn") && segments.includes("cache"))
+  );
+}
+
 function assertSafeHardlinkBoundary(roots: CanonicalRoot[]): void {
   const pending = roots.map(({ rootPath, writable }) => ({ directory: rootPath, writable }));
   const observations = new Map<string, HardlinkObservation>();
@@ -564,22 +590,57 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
     if (request.executionProfile === "workspace_write" && !active.writable) {
       throw new Error("BROKERED_BASH_EXECUTION_PROFILE_MISMATCH");
     }
+    if (
+      (request.executionProfile === "read_only" && request.workspaceWriteMode !== "none") ||
+      (request.executionProfile === "workspace_write" && request.workspaceWriteMode === "none")
+    ) {
+      throw new Error("BROKERED_BASH_EXECUTION_PROFILE_MISMATCH");
+    }
     const roots = [active, ...additional];
     assertSafeHardlinkBoundary(roots);
+    const runnerTempRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "openerx-pbash-runner-")));
+    let executionRoots = roots;
+    try {
+      if (request.workspaceWriteMode === "isolated_change_set") {
+        const workingCopyRoot = path.join(runnerTempRoot, "working-copies");
+        mkdirSync(workingCopyRoot, { recursive: true, mode: 0o700 });
+        executionRoots = roots.map((root, index) =>
+          root.writable
+            ? {
+                ...root,
+                rootPath: createWorkingCopy(
+                  root.rootPath,
+                  path.join(workingCopyRoot, `workspace-${index}`),
+                ),
+              }
+            : root,
+        );
+        assertSafeHardlinkBoundary(executionRoots);
+      }
+    } catch (error) {
+      rmSync(runnerTempRoot, { recursive: true, force: true });
+      if (error instanceof Error && error.message.startsWith("BROKERED_BASH_")) throw error;
+      throw new Error("BROKERED_BASH_WORKING_COPY_FAILED");
+    }
+    const executionActive = executionRoots[0];
+    if (!executionActive) {
+      rmSync(runnerTempRoot, { recursive: true, force: true });
+      throw new Error("BROKERED_BASH_WORKING_COPY_FAILED");
+    }
     let workspaceWriteBaseline: ReturnType<typeof captureWorkspaceWriteBaseline> | null = null;
     if (request.executionProfile === "workspace_write") {
       try {
         workspaceWriteBaseline = captureWorkspaceWriteBaseline(
-          roots.filter(({ writable }) => writable),
+          executionRoots.filter(({ writable }) => writable),
         );
       } catch (error) {
+        rmSync(runnerTempRoot, { recursive: true, force: true });
         if (error instanceof Error && error.message.startsWith("BROKERED_BASH_")) throw error;
         throw new Error("BROKERED_BASH_CHANGE_EVIDENCE_FAILED");
       }
     }
-    const runnerTempRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "openerx-pbash-runner-")));
     const startedAt = Date.now();
-    const replacements = outputReplacements(roots, runnerTempRoot);
+    const replacements = outputReplacements([...roots, ...executionRoots], runnerTempRoot);
     const stdout = new BoundedBuffer(request.resourceLimits.maxOutputBytes);
     const stderr = new BoundedBuffer(request.resourceLimits.maxOutputBytes);
     const output = new BoundedBuffer(request.resourceLimits.maxOutputBytes);
@@ -624,9 +685,13 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
     let abort: (() => void) | undefined;
     let record: ActiveProcess | undefined;
     try {
-      const environment = makeRunnerEnvironment(runnerTempRoot, roots, this.#bashExecutable);
+      const environment = makeRunnerEnvironment(
+        runnerTempRoot,
+        executionRoots,
+        this.#bashExecutable,
+      );
       const profile = compileMacOSSandboxProfile({
-        roots: roots.map(({ rootPath, writable }) => ({ rootPath, writable })),
+        roots: executionRoots.map(({ rootPath, writable }) => ({ rootPath, writable })),
         runnerTempRoot,
         systemReadRoots: this.#systemReadRoots,
       });
@@ -655,7 +720,7 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
           this.#bashExecutable,
         ],
         {
-          cwd: active.rootPath,
+          cwd: executionActive.rootPath,
           env: environment,
           detached: true,
           stdio: ["pipe", "pipe", "pipe"],
@@ -706,8 +771,30 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
       let workspaceChanges = null;
       if (workspaceWriteBaseline) {
         try {
-          assertSafeHardlinkBoundary(roots);
+          assertSafeHardlinkBoundary(executionRoots);
           workspaceChanges = collectWorkspaceWriteChanges(workspaceWriteBaseline);
+          if (request.workspaceWriteMode === "isolated_change_set") {
+            const originalCount = workspaceChanges.manifest.length;
+            workspaceChanges.manifest = workspaceChanges.manifest.filter(
+              ({ relativePath }) => !excludedWorkingCopyPath(relativePath),
+            );
+            workspaceChanges.materialization = workspaceChanges.materialization.filter(
+              ({ relativePath }) => !excludedWorkingCopyPath(relativePath),
+            );
+            const includedDiffPaths = new Set(
+              workspaceChanges.manifest.map(
+                ({ workspaceLogicalName, relativePath }) =>
+                  `${workspaceLogicalName}/${relativePath}`,
+              ),
+            );
+            workspaceChanges.diffs = workspaceChanges.diffs.filter(({ relativePath }) =>
+              includedDiffPaths.has(relativePath),
+            );
+            workspaceChanges.excludedPathCount = originalCount - workspaceChanges.manifest.length;
+            workspaceChanges.mode = "ISOLATED_CHANGE_SET";
+            workspaceChanges.hostWorkspaceMutated = false;
+            workspaceChanges.undo = "REVIEW_REQUIRED_BEFORE_APPLY";
+          }
         } catch (error) {
           if (error instanceof Error && error.message.startsWith("BROKERED_BASH_")) throw error;
           throw new Error("BROKERED_BASH_CHANGE_EVIDENCE_FAILED");

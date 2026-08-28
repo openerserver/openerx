@@ -1,14 +1,14 @@
 # OpenerX Pi Bash Broker 化执行方案
 
-- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002/PBASH-003/PBASH-004A LOCAL COMPLETE / PBASH-004B NEXT`
+- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002/PBASH-003/PBASH-004 LOCAL COMPLETE / PBASH-005 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 范围：Desktop Pi Host、App Service Capability Broker、Platform Sandbox Engine、Workspace Scope、Remote
 - 依赖：[ADR-V2-007](adr/007-pi-harness-boundary.md)、
   [ADR-V2-012](adr/012-capability-broker-and-tool-projection.md)、
   [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)
-- 当前证据边界：PBASH-004A 已完成当前 macOS 主机上的直接写 manifest/diff/conflict 与不可降级的
-  高隔离路由；不代表 CoW `WorkspaceChangeSet` 审阅应用、签名包、未来 macOS、Linux、Windows、
-  端到端 Remote 或发布门禁已经完成
+- 当前证据边界：PBASH-004 已完成当前 macOS 主机上的直接写 manifest/diff/conflict 与 APFS CoW
+  `WorkspaceChangeSet` 审阅、应用、丢弃、撤销；不代表签名包、未来 macOS、Linux、Windows、端到端
+  Remote 或发布门禁已经完成
 
 ## 1. 结论
 
@@ -711,6 +711,8 @@ probe、最小环境、默认断网、hard-link 预检、资源限制和进程�
 第三阶段新增私有 IPC v5、有序 `pi.tool.progress`、跨 chunk 脱敏、请求级取消和受控日志 Artifact，
 见 [PBASH-003 检查点](evidence/pbash-003-2026-08-28.md)。PBASH-004A 已完成直接写 changed-path
 manifest、diff/conflict、明确的无通用 Undo 投影，以及 `isolated_change_set` 不降级路由；证据见
-[PBASH-004A 检查点](evidence/pbash-004a-2026-08-28.md)。下一项 **PBASH-004B** 实现可审阅、应用或
-丢弃的高隔离 working-copy `WorkspaceChangeSet`。签名包、OS 支持矩阵和 deprecated 后端替代评估仍
-属于 PBASH-008。
+[PBASH-004A 检查点](evidence/pbash-004a-2026-08-28.md)。PBASH-004B 已完成 APFS CoW working copy、
+持久化 `WorkspaceChangeSet`、review/apply/discard/undo、冲突与崩溃恢复，见
+[PBASH-004B 检查点](evidence/pbash-004b-2026-08-28.md)。下一项 **PBASH-005** 接入真实 Remote 来源、
+审批响应、幂等与 `outcome_unknown` 对账。签名包、OS 支持矩阵和 deprecated 后端替代评估仍属于
+PBASH-008。

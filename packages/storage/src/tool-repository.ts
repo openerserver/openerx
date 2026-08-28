@@ -26,10 +26,14 @@ import {
   type UsageRecord,
   type WorkItem,
   type WorkspaceChange,
+  type WorkspaceChangeSet,
+  type WorkspaceChangeSetEntry,
+  type WorkspaceChangeSetStatus,
   type WorkspaceGrant,
   type WorkspaceInstructionSource,
   workItemSchema,
   workspaceChangeSchema,
+  workspaceChangeSetSchema,
   workspaceGrantSchema,
 } from "@openerx/contracts";
 import { migrateDatabase } from "./migrations";
@@ -72,6 +76,8 @@ export interface WorkspaceChangeRecord extends WorkspaceChange {
   beforeText: string | null;
   afterText: string;
 }
+
+export type WorkspaceChangeSetRecord = WorkspaceChangeSet;
 
 export class ToolRepository {
   readonly #database: DatabaseSync;
@@ -908,6 +914,92 @@ export class ToolRepository {
     };
   }
 
+  createWorkspaceChangeSet(input: {
+    workspaceGrantId: string;
+    runId: string;
+    toolCallId: string;
+    baselineRevision: string;
+    finalRevision: string;
+    manifest: unknown[];
+    diffs: unknown[];
+    entries: WorkspaceChangeSetEntry[];
+    blocked: boolean;
+  }): WorkspaceChangeSetRecord {
+    const id = this.#idFactory();
+    const now = this.#now();
+    this.#database
+      .prepare(
+        `INSERT INTO workspace_change_sets
+         (id, owner_profile_id, workspace_grant_id, run_id, tool_call_id, status,
+          baseline_revision, final_revision, manifest_json, diffs_json, entries_json,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        this.#ownerProfileId,
+        input.workspaceGrantId,
+        input.runId,
+        input.toolCallId,
+        input.blocked ? "blocked" : "pending_review",
+        input.baselineRevision,
+        input.finalRevision,
+        JSON.stringify(input.manifest),
+        JSON.stringify(input.diffs),
+        JSON.stringify(input.entries),
+        now,
+        now,
+      );
+    return this.workspaceChangeSet(id);
+  }
+
+  workspaceChangeSet(id: string): WorkspaceChangeSetRecord {
+    const row = this.#database
+      .prepare("SELECT * FROM workspace_change_sets WHERE id = ? AND owner_profile_id = ?")
+      .get(id, this.#ownerProfileId) as SqlRow | undefined;
+    if (!row) throw new Error("WORKSPACE_CHANGE_SET_NOT_FOUND");
+    return this.#workspaceChangeSet(row);
+  }
+
+  listWorkspaceChangeSets(workspaceGrantId: string, limit = 50): WorkspaceChangeSetRecord[] {
+    return (
+      this.#database
+        .prepare(
+          `SELECT * FROM workspace_change_sets
+           WHERE owner_profile_id = ? AND workspace_grant_id = ?
+           ORDER BY updated_at DESC, id DESC LIMIT ?`,
+        )
+        .all(this.#ownerProfileId, workspaceGrantId, limit) as SqlRow[]
+    ).map((row) => this.#workspaceChangeSet(row));
+  }
+
+  markWorkspaceChangeSet(id: string, status: WorkspaceChangeSetStatus): WorkspaceChangeSetRecord {
+    const result = this.#database
+      .prepare(
+        "UPDATE workspace_change_sets SET status = ?, updated_at = ? WHERE id = ? AND owner_profile_id = ?",
+      )
+      .run(status, this.#now(), id, this.#ownerProfileId);
+    if (result.changes !== 1) throw new Error("WORKSPACE_CHANGE_SET_NOT_FOUND");
+    return this.workspaceChangeSet(id);
+  }
+
+  #workspaceChangeSet(row: SqlRow): WorkspaceChangeSetRecord {
+    return workspaceChangeSetSchema.parse({
+      id: row.id,
+      workspaceGrantId: row.workspace_grant_id,
+      runId: row.run_id,
+      toolCallId: row.tool_call_id,
+      status: row.status,
+      baselineRevision: row.baseline_revision,
+      finalRevision: row.final_revision,
+      manifest: JSON.parse(String(row.manifest_json)),
+      diffs: JSON.parse(String(row.diffs_json)),
+      entries: JSON.parse(String(row.entries_json)),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
   addRunInstructionSources(runId: string, sources: WorkspaceInstructionSource[]): ExecutionRun {
     if (sources.length === 0) return this.run(runId);
     const current = this.run(runId).instructionSources;
@@ -1067,6 +1159,12 @@ export class ToolRepository {
         .prepare(
           `UPDATE workspace_changes SET status = 'outcome_unknown', updated_at = ?
            WHERE status = 'preparing'`,
+        )
+        .run(now);
+      this.#database
+        .prepare(
+          `UPDATE workspace_change_sets SET status = 'outcome_unknown', updated_at = ?
+           WHERE status = 'applying'`,
         )
         .run(now);
       this.#database

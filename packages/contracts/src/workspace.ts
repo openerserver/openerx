@@ -67,10 +67,64 @@ export const workspaceChangeSchema = z
   })
   .strict();
 
+export const workspaceChangeSetStatusSchema = z.enum([
+  "pending_review",
+  "reviewed",
+  "applying",
+  "applied",
+  "reverted",
+  "discarded",
+  "blocked",
+  "apply_failed",
+  "outcome_unknown",
+]);
+
+export const workspaceChangeSetEntrySchema = z
+  .object({
+    workspaceGrantId: entityIdSchema,
+    workspaceLogicalName: z.string().min(1).max(240),
+    relativePath: z.string().min(1).max(2_048),
+    previousRelativePath: z.string().min(1).max(2_048).nullable(),
+    kind: z.enum(["created", "modified", "deleted", "renamed"]),
+    entryType: z.enum(["file", "directory", "symlink", "other"]),
+    beforeSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    afterSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    beforeText: z.string().max(1_000_000).nullable(),
+    afterText: z.string().max(1_000_000).nullable(),
+    applySupported: z.boolean(),
+  })
+  .strict();
+
+export const workspaceChangeSetSchema = z
+  .object({
+    id: entityIdSchema,
+    workspaceGrantId: entityIdSchema,
+    runId: entityIdSchema,
+    toolCallId: entityIdSchema,
+    status: workspaceChangeSetStatusSchema,
+    baselineRevision: z.string().regex(/^[a-f0-9]{64}$/u),
+    finalRevision: z.string().regex(/^[a-f0-9]{64}$/u),
+    manifest: z.array(z.unknown()).max(10_000),
+    diffs: z.array(z.unknown()).max(10_000),
+    entries: z.array(workspaceChangeSetEntrySchema).max(10_000),
+    createdAt: timestampSchema,
+    updatedAt: timestampSchema,
+  })
+  .strict();
+
 export type WorkspaceAccess = z.infer<typeof workspaceAccessSchema>;
 export type WorkspaceGrant = z.infer<typeof workspaceGrantSchema>;
 export type WorkspaceInstructionSource = z.infer<typeof workspaceInstructionSourceSchema>;
 export type WorkspaceChange = z.infer<typeof workspaceChangeSchema>;
+export type WorkspaceChangeSetStatus = z.infer<typeof workspaceChangeSetStatusSchema>;
+export type WorkspaceChangeSetEntry = z.infer<typeof workspaceChangeSetEntrySchema>;
+export type WorkspaceChangeSet = z.infer<typeof workspaceChangeSetSchema>;
 
 export interface WorkspaceBridge {
   chooseWorkspace(

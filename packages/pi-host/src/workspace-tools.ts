@@ -183,7 +183,7 @@ export function createProductWorkspaceTools(input: {
       name: "openerx_workspace_changes",
       label: "List workspace changes",
       description:
-        "List persisted changes, including outcome_unknown writes that may need review or undo after interruption.",
+        "List persisted file changes and isolated WorkspaceChangeSets, including outcome_unknown writes that need review or recovery.",
       parameters: Type.Object(
         {
           workspaceGrantId: grantId,
@@ -214,5 +214,53 @@ export function createProductWorkspaceTools(input: {
           workspaceChangeId: params.workspaceChangeId,
         }),
     }),
+    ...[
+      {
+        name: "openerx_workspace_change_set_review",
+        label: "Review isolated workspace changes",
+        description: "Review a persisted isolated Bash change set and its bounded diffs.",
+        operation: "workspace_change_set_review" as const,
+      },
+      {
+        name: "openerx_workspace_change_set_apply",
+        label: "Apply isolated workspace changes",
+        description:
+          "Apply a reviewed isolated Bash change set only when every host file still matches its recorded baseline.",
+        operation: "workspace_change_set_apply" as const,
+      },
+      {
+        name: "openerx_workspace_change_set_discard",
+        label: "Discard isolated workspace changes",
+        description:
+          "Discard a pending or blocked isolated Bash change set without changing the workspace.",
+        operation: "workspace_change_set_discard" as const,
+      },
+      {
+        name: "openerx_workspace_change_set_undo",
+        label: "Undo applied isolated changes",
+        description:
+          "Restore all recorded pre-change text only when every host file still matches the applied change set.",
+        operation: "workspace_change_set_undo" as const,
+      },
+    ].map(({ name, label, description, operation }) =>
+      defineTool({
+        name,
+        label,
+        description,
+        parameters: Type.Object(
+          {
+            workspaceGrantId: grantId,
+            workspaceChangeSetId: Type.String({ format: "uuid" }),
+          },
+          { additionalProperties: false },
+        ),
+        execute: async (toolCallId, params) =>
+          await invoke(toolCallId, name, {
+            operation,
+            workspaceGrantId: params.workspaceGrantId,
+            workspaceChangeSetId: params.workspaceChangeSetId,
+          }),
+      }),
+    ),
   ];
 }

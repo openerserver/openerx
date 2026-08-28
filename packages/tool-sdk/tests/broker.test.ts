@@ -70,6 +70,23 @@ describe("CapabilityBroker", () => {
     ).toBe("image.generate");
   });
 
+  it("requires per-call approval before applying or undoing an isolated change set", () => {
+    const base = {
+      workspaceGrantId: "11111111-1111-4111-8111-111111111111",
+      workspaceChangeSetId: "22222222-2222-4222-8222-222222222222",
+      idempotencyKey: "workspace-change-set-policy-0001",
+    };
+    expect(
+      capabilityRequirement({ operation: "workspace_change_set_review", ...base }),
+    ).toMatchObject({ risk: "L0", approval: "automatic", actions: ["read"] });
+    expect(
+      capabilityRequirement({ operation: "workspace_change_set_apply", ...base }),
+    ).toMatchObject({ risk: "L3", approval: "per_call", actions: ["patch"] });
+    expect(
+      capabilityRequirement({ operation: "workspace_change_set_undo", ...base }),
+    ).toMatchObject({ risk: "L3", approval: "per_call", actions: ["patch"] });
+  });
+
   it("executes deterministic L0 tools without approval and replays by idempotency key", async () => {
     const { chat, repository, projection } = fixture();
     const adapter = new BuiltinToolAdapter();

@@ -812,6 +812,85 @@ describe("ToolAppService", () => {
     await service.close();
   });
 
+  it("persists a live isolated Bash change set without mutating the host workspace", async () => {
+    if (!liveMacOSSandbox) return;
+    const platformSandboxEngine = new MacOSSandboxExecEngine();
+    const { chat, service, base, directory } = fixture({
+      brokeredBashV1: true,
+      brokeredBashRunnerMode: "macos",
+      platformSandboxEngine,
+    });
+    const grant = service.grantWorkspace({
+      rootPath: directory,
+      conversationId: base.conversationId,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "隔离生成文件后审阅",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+      requiresHighIsolation: true,
+    });
+    const execution = prepared.brokeredBashExecution;
+    if (!execution) throw new Error("isolated execution context missing");
+    expect(execution.workspaceWriteMode).toBe("isolated_change_set");
+    service.startGeneration({
+      generationId: base.generationId,
+      conversationId: base.conversationId,
+      branchId: base.branchId,
+      assistantMessageId: base.assistantMessageId,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    service.freezeGenerationConfiguration(base.generationId, {
+      initialToolNames: prepared.initialToolNames,
+      availableToolNames: prepared.availableToolNames,
+      skillInstallationIds: [],
+      instructionSources: prepared.instructionSources,
+      brokeredBashExecution: execution,
+    });
+    const result = await service.handleRequest({
+      ...base,
+      piToolCallId: "pi-live-isolated-bash-call",
+      toolName: "bash",
+      operation: {
+        operation: "shell_command_execute",
+        idempotencyKey: "pbash-live-isolated-app-service-0001",
+        ...execution,
+        shell: "bash",
+        command: "printf isolated-result > isolated-result.txt",
+        timeoutMs: 5_000,
+      },
+    });
+    expect(existsSync(path.join(directory, "isolated-result.txt"))).toBe(false);
+    expect(result).toMatchObject({
+      sideEffectCommitted: true,
+      data: {
+        workspaceChanges: {
+          mode: "ISOLATED_CHANGE_SET",
+          hostWorkspaceMutated: false,
+        },
+        workspaceChangeSet: { status: "pending_review" },
+      },
+    });
+    const sets = service.repository().listWorkspaceChangeSets(grant.id);
+    expect(sets).toHaveLength(1);
+    expect(sets[0]).toMatchObject({ status: "pending_review", workspaceGrantId: grant.id });
+    expect(sets[0]?.entries[0]).toMatchObject({
+      relativePath: "isolated-result.txt",
+      kind: "created",
+      afterText: "isolated-result",
+      applySupported: true,
+    });
+    chat.close();
+    await service.close();
+  });
+
   it("keeps Bash unavailable when the selected platform backend fails its probe", async () => {
     const platform = platformEngine(false);
     const { chat, service, base, directory } = fixture({

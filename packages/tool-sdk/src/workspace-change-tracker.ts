@@ -7,10 +7,12 @@ import type {
   PlatformSandboxWorkspaceChangeEntry,
   PlatformSandboxWorkspaceChanges,
   PlatformSandboxWorkspaceDiff,
+  PlatformSandboxWorkspaceMaterializationEntry,
 } from "./platform-sandbox-engine";
 
 const MAX_ENTRIES = 250_000;
 const MAX_TEXT_FILE_BYTES = 1_000_000;
+const MAX_SNAPSHOT_TEXT_BYTES = 20_000_000;
 const MAX_TOTAL_DIFF_BYTES = 5_000_000;
 const MAX_MANIFEST_ENTRIES = 10_000;
 
@@ -48,7 +50,11 @@ function posixRelative(rootPath: string, entryPath: string): string {
   return path.relative(rootPath, entryPath).split(path.sep).join("/") || ".";
 }
 
-function snapshotEntry(entryPath: string, relativePath: string): SnapshotEntry {
+function snapshotEntry(
+  entryPath: string,
+  relativePath: string,
+  textBudget: { used: number },
+): SnapshotEntry {
   const stats = lstatSync(entryPath);
   const common = {
     relativePath,
@@ -99,6 +105,10 @@ function snapshotEntry(entryPath: string, relativePath: string): SnapshotEntry {
   if (content.includes(0)) {
     return { ...common, entryType: "file", digest, text: null, textStatus: "binary" };
   }
+  if (textBudget.used + content.byteLength > MAX_SNAPSHOT_TEXT_BYTES) {
+    return { ...common, entryType: "file", digest, text: null, textStatus: "too_large" };
+  }
+  textBudget.used += content.byteLength;
   return {
     ...common,
     entryType: "file",
@@ -158,7 +168,7 @@ function gitStatus(rootPath: string): {
   return { status: dirtyPaths.size === 0 ? "clean" : "dirty", dirtyPaths };
 }
 
-function snapshotRoot(root: PlatformSandboxRoot): RootSnapshot {
+function snapshotRoot(root: PlatformSandboxRoot, textBudget: { used: number }): RootSnapshot {
   const entries = new Map<string, SnapshotEntry>();
   const pending = [root.rootPath];
   while (pending.length > 0) {
@@ -169,7 +179,7 @@ function snapshotRoot(root: PlatformSandboxRoot): RootSnapshot {
       if (entries.size >= MAX_ENTRIES) throw new Error("BROKERED_BASH_WORKSPACE_PREFLIGHT_LIMIT");
       const entryPath = path.join(directory, dirent.name);
       const relativePath = posixRelative(root.rootPath, entryPath);
-      const entry = snapshotEntry(entryPath, relativePath);
+      const entry = snapshotEntry(entryPath, relativePath, textBudget);
       entries.set(relativePath, entry);
       if (entry.entryType === "directory") pending.push(entryPath);
     }
@@ -191,7 +201,8 @@ function combinedRevision(roots: RootSnapshot[]): string {
 export function captureWorkspaceWriteBaseline(
   roots: PlatformSandboxRoot[],
 ): WorkspaceWriteBaseline {
-  const snapshots = roots.map(snapshotRoot);
+  const textBudget = { used: 0 };
+  const snapshots = roots.map((root) => snapshotRoot(root, textBudget));
   return { roots: snapshots, revision: combinedRevision(snapshots) };
 }
 
@@ -225,9 +236,11 @@ function aggregateGitStatus(roots: RootSnapshot[]): RootSnapshot["gitStatus"] {
 export function collectWorkspaceWriteChanges(
   baseline: WorkspaceWriteBaseline,
 ): PlatformSandboxWorkspaceChanges {
-  const finalRoots = baseline.roots.map(({ root }) => snapshotRoot(root));
+  const textBudget = { used: 0 };
+  const finalRoots = baseline.roots.map(({ root }) => snapshotRoot(root, textBudget));
   const manifest: PlatformSandboxWorkspaceChangeEntry[] = [];
   const diffs: PlatformSandboxWorkspaceDiff[] = [];
+  const materialization: PlatformSandboxWorkspaceMaterializationEntry[] = [];
   let diffBytes = 0;
   let diffTruncated = false;
   let preexistingDirtyOverlap = false;
@@ -261,6 +274,23 @@ export function collectWorkspaceWriteChanges(
         beforeBytes: previous.size,
         afterBytes: next.size,
         diffStatus: "not_applicable",
+      });
+      materialization.push({
+        workspaceGrantId: beforeRoot.root.grantId,
+        workspaceLogicalName: beforeRoot.root.logicalName,
+        relativePath: next.relativePath,
+        previousRelativePath: previous.relativePath,
+        kind: "renamed",
+        entryType: next.entryType,
+        beforeSha256: previous.entryType === "file" ? previous.digest : null,
+        afterSha256: next.entryType === "file" ? next.digest : null,
+        beforeText: previous.text,
+        afterText: next.text,
+        applySupported:
+          previous.entryType === "file" &&
+          next.entryType === "file" &&
+          previous.textStatus === "text" &&
+          next.textStatus === "text",
       });
     }
     const pairs: Array<{
@@ -303,6 +333,22 @@ export function collectWorkspaceWriteChanges(
         diffStatus,
       };
       manifest.push(manifestEntry);
+      materialization.push({
+        workspaceGrantId: beforeRoot.root.grantId,
+        workspaceLogicalName: beforeRoot.root.logicalName,
+        relativePath: entry.relativePath,
+        previousRelativePath: null,
+        kind: pair.kind,
+        entryType: entry.entryType,
+        beforeSha256: pair.before?.entryType === "file" ? pair.before.digest : null,
+        afterSha256: pair.after?.entryType === "file" ? pair.after.digest : null,
+        beforeText: pair.before?.text ?? null,
+        afterText: pair.after?.text ?? null,
+        applySupported:
+          entry.entryType === "file" &&
+          (pair.before === null || pair.before.textStatus === "text") &&
+          (pair.after === null || pair.after.textStatus === "text"),
+      });
       if (diffStatus === "available") {
         const patch = unifiedDiff(
           entry.relativePath,
@@ -334,6 +380,7 @@ export function collectWorkspaceWriteChanges(
   const finalGitStatus = aggregateGitStatus(finalRoots);
   return {
     mode: "DIRECT_WORKSPACE_WRITE",
+    hostWorkspaceMutated: true,
     baselineRevision: baseline.revision,
     finalRevision: combinedRevision(finalRoots),
     baselineGitStatus,
@@ -348,6 +395,8 @@ export function collectWorkspaceWriteChanges(
     undo: "NOT_AVAILABLE_FOR_DIRECT_WRITE",
     manifest: manifest.slice(0, MAX_MANIFEST_ENTRIES),
     diffs,
+    materialization: materialization.slice(0, MAX_MANIFEST_ENTRIES),
+    excludedPathCount: 0,
     manifestTruncated: manifest.length > MAX_MANIFEST_ENTRIES,
     diffTruncated,
   };

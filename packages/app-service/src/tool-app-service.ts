@@ -322,6 +322,7 @@ export class ToolAppService {
                 (generationId) => this.#brokeredBashExecutionByGeneration.get(generationId),
                 this.#platformSandboxEngine,
                 options.writeBrokeredBashLogArtifact,
+                (input) => this.#repository.createWorkspaceChangeSet(input),
               ),
             ]
           : []),
@@ -481,6 +482,10 @@ export class ToolAppService {
             "openerx_workspace_diff",
             "openerx_workspace_changes",
             "openerx_workspace_undo",
+            "openerx_workspace_change_set_review",
+            "openerx_workspace_change_set_apply",
+            "openerx_workspace_change_set_discard",
+            "openerx_workspace_change_set_undo",
           ]
         : []),
       ...(this.#brokeredBashV1
@@ -545,6 +550,10 @@ export class ToolAppService {
         "openerx_workspace_diff",
         "openerx_workspace_changes",
         "openerx_workspace_undo",
+        "openerx_workspace_change_set_review",
+        "openerx_workspace_change_set_apply",
+        "openerx_workspace_change_set_discard",
+        "openerx_workspace_change_set_undo",
       );
       if (/运行|命令|测试|构建|run|command|build|test/u.test(prompt)) {
         if (this.#brokeredBashV1) {

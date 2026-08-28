@@ -17,7 +17,11 @@ import type {
   WorkspaceGrant,
   WorkspaceInstructionSource,
 } from "@openerx/contracts";
-import type { ToolRepository, WorkspaceChangeRecord } from "@openerx/storage";
+import type {
+  ToolRepository,
+  WorkspaceChangeRecord,
+  WorkspaceChangeSetRecord,
+} from "@openerx/storage";
 import type { ToolAdapter, ToolExecutionContext } from "./types";
 
 const MAX_TEXT_BYTES = 5_000_000;
@@ -82,6 +86,10 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     "workspace_diff",
     "workspace_changes",
     "workspace_undo",
+    "workspace_change_set_review",
+    "workspace_change_set_apply",
+    "workspace_change_set_discard",
+    "workspace_change_set_undo",
   ] as const;
 
   constructor(
@@ -110,6 +118,30 @@ export class WorkspaceToolAdapter implements ToolAdapter {
         return this.#changes(operation.workspaceGrantId, operation.limit, context);
       case "workspace_undo":
         return this.#undo(operation.workspaceGrantId, operation.workspaceChangeId, context);
+      case "workspace_change_set_review":
+        return this.#changeSetReview(
+          operation.workspaceGrantId,
+          operation.workspaceChangeSetId,
+          context,
+        );
+      case "workspace_change_set_apply":
+        return this.#changeSetApply(
+          operation.workspaceGrantId,
+          operation.workspaceChangeSetId,
+          context,
+        );
+      case "workspace_change_set_discard":
+        return this.#changeSetDiscard(
+          operation.workspaceGrantId,
+          operation.workspaceChangeSetId,
+          context,
+        );
+      case "workspace_change_set_undo":
+        return this.#changeSetUndo(
+          operation.workspaceGrantId,
+          operation.workspaceChangeSetId,
+          context,
+        );
       default:
         throw new Error("WORKSPACE_OPERATION_NOT_SUPPORTED");
     }
@@ -412,16 +444,34 @@ export class WorkspaceToolAdapter implements ToolAdapter {
       createdAt: change.createdAt,
       updatedAt: change.updatedAt,
     }));
+    const changeSets = this.repository.listWorkspaceChangeSets(grantId, limit).map((changeSet) => ({
+      id: changeSet.id,
+      runId: changeSet.runId,
+      status: changeSet.status,
+      changeCount: changeSet.entries.length,
+      baselineRevision: changeSet.baselineRevision,
+      finalRevision: changeSet.finalRevision,
+      createdAt: changeSet.createdAt,
+      updatedAt: changeSet.updatedAt,
+    }));
     const text =
-      changes.length === 0
+      changes.length === 0 && changeSets.length === 0
         ? "该工作区没有已记录的修改。"
-        : changes
-            .map(
+        : [
+            ...changes.map(
               (change) =>
                 `${change.id} · ${change.status} · ${change.relativePath} · ${change.updatedAt}`,
-            )
-            .join("\n");
-    return result(`${changes.length} 个已记录工作区修改`, { changes }, [{ type: "text", text }]);
+            ),
+            ...changeSets.map(
+              (changeSet) =>
+                `${changeSet.id} · change-set:${changeSet.status} · ${changeSet.changeCount} changes · ${changeSet.updatedAt}`,
+            ),
+          ].join("\n");
+    return result(
+      `${changes.length} 个文件修改，${changeSets.length} 个隔离变更集`,
+      { changes, changeSets },
+      [{ type: "text", text }],
+    );
   }
 
   #undo(grantId: string, changeId: string, context: ToolExecutionContext): NormalizedToolResult {
@@ -466,6 +516,250 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     } finally {
       if (existsSync(temporary)) unlinkSync(temporary);
     }
+  }
+
+  #changeSet(
+    grantId: string,
+    changeSetId: string,
+    context: ToolExecutionContext,
+  ): WorkspaceChangeSetRecord {
+    this.#grant(context, grantId);
+    const changeSet = this.repository.workspaceChangeSet(changeSetId);
+    if (changeSet.workspaceGrantId !== grantId) {
+      throw new Error("WORKSPACE_CHANGE_SET_SCOPE_MISMATCH");
+    }
+    return changeSet;
+  }
+
+  #changeSetReview(
+    grantId: string,
+    changeSetId: string,
+    context: ToolExecutionContext,
+  ): NormalizedToolResult {
+    const changeSet = this.#changeSet(grantId, changeSetId, context);
+    if (changeSet.status !== "pending_review") return this.#changeSetResult(changeSet, false);
+    return this.#changeSetResult(
+      this.repository.markWorkspaceChangeSet(changeSet.id, "reviewed"),
+      true,
+    );
+  }
+
+  #changeSetDiscard(
+    grantId: string,
+    changeSetId: string,
+    context: ToolExecutionContext,
+  ): NormalizedToolResult {
+    const changeSet = this.#changeSet(grantId, changeSetId, context);
+    if (changeSet.status === "discarded") return this.#changeSetResult(changeSet, false);
+    if (
+      changeSet.status !== "pending_review" &&
+      changeSet.status !== "reviewed" &&
+      changeSet.status !== "blocked"
+    ) {
+      throw new Error("WORKSPACE_CHANGE_SET_NOT_DISCARDABLE");
+    }
+    return this.#changeSetResult(
+      this.repository.markWorkspaceChangeSet(changeSet.id, "discarded"),
+      true,
+    );
+  }
+
+  #changeSetApply(
+    grantId: string,
+    changeSetId: string,
+    context: ToolExecutionContext,
+  ): NormalizedToolResult {
+    const changeSet = this.#changeSet(grantId, changeSetId, context);
+    if (changeSet.status === "applied") return this.#changeSetResult(changeSet, false);
+    if (changeSet.status === "blocked") throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
+    if (changeSet.status !== "reviewed") {
+      throw new Error("WORKSPACE_CHANGE_SET_NOT_APPLICABLE");
+    }
+    this.#validateChangeSetState(changeSet, "before", context);
+    this.repository.markWorkspaceChangeSet(changeSet.id, "applying");
+    try {
+      this.#writeChangeSet(changeSet, "apply", context);
+    } catch (error) {
+      try {
+        this.#writeChangeSet(changeSet, "undo", context, false);
+      } finally {
+        this.repository.markWorkspaceChangeSet(changeSet.id, "apply_failed");
+      }
+      throw error;
+    }
+    return this.#changeSetResult(
+      this.repository.markWorkspaceChangeSet(changeSet.id, "applied"),
+      true,
+    );
+  }
+
+  #changeSetUndo(
+    grantId: string,
+    changeSetId: string,
+    context: ToolExecutionContext,
+  ): NormalizedToolResult {
+    const changeSet = this.#changeSet(grantId, changeSetId, context);
+    if (changeSet.status === "reverted") return this.#changeSetResult(changeSet, false);
+    if (changeSet.status !== "applied" && changeSet.status !== "outcome_unknown") {
+      throw new Error("WORKSPACE_CHANGE_SET_NOT_APPLIED");
+    }
+    if (changeSet.status === "outcome_unknown") {
+      this.#validateRecoverableChangeSetState(changeSet, context);
+    } else {
+      this.#validateChangeSetState(changeSet, "after", context);
+    }
+    this.#writeChangeSet(changeSet, "undo", context);
+    return this.#changeSetResult(
+      this.repository.markWorkspaceChangeSet(changeSet.id, "reverted"),
+      true,
+    );
+  }
+
+  #validateChangeSetState(
+    changeSet: WorkspaceChangeSetRecord,
+    side: "before" | "after",
+    context: ToolExecutionContext,
+  ): void {
+    for (const entry of changeSet.entries) {
+      if (!entry.applySupported || entry.entryType !== "file") {
+        throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
+      }
+      if (
+        entry.relativePath.split("/").includes(".git") ||
+        entry.previousRelativePath?.split("/").includes(".git")
+      ) {
+        throw new Error("WORKSPACE_CHANGE_SET_PROTECTED_PATH");
+      }
+      const grant = this.#grant(context, entry.workspaceGrantId);
+      if (grant.access !== "read_write") throw new Error("WORKSPACE_WRITE_NOT_GRANTED");
+      const relativePath =
+        side === "before" && entry.kind === "renamed"
+          ? (entry.previousRelativePath ?? entry.relativePath)
+          : entry.relativePath;
+      const { target } = this.#writeTarget(grant, relativePath);
+      const expected = side === "before" ? entry.beforeSha256 : entry.afterSha256;
+      const actual = existsSync(target) ? sha256(textFile(target)) : null;
+      if (actual !== expected) throw new Error("WORKSPACE_CHANGE_SET_CONFLICT");
+      if (entry.kind === "renamed") {
+        const otherRelative = side === "before" ? entry.relativePath : entry.previousRelativePath;
+        if (!otherRelative) throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
+        const { target: otherTarget } = this.#writeTarget(grant, otherRelative);
+        if (existsSync(otherTarget)) throw new Error("WORKSPACE_CHANGE_SET_CONFLICT");
+      }
+    }
+  }
+
+  #writeChangeSet(
+    changeSet: WorkspaceChangeSetRecord,
+    direction: "apply" | "undo",
+    context: ToolExecutionContext,
+    strict = true,
+  ): void {
+    const entries = direction === "apply" ? changeSet.entries : [...changeSet.entries].reverse();
+    for (const entry of entries) {
+      try {
+        const grant = this.#grant(context, entry.workspaceGrantId);
+        const applying = direction === "apply";
+        if (entry.kind === "renamed") {
+          const fromRelative = applying
+            ? (entry.previousRelativePath ?? entry.relativePath)
+            : entry.relativePath;
+          const toRelative = applying
+            ? entry.relativePath
+            : (entry.previousRelativePath ?? entry.relativePath);
+          const { target: from } = this.#writeTarget(grant, fromRelative);
+          const { target: to } = this.#writeTarget(grant, toRelative);
+          const content = applying ? entry.afterText : entry.beforeText;
+          if (content === null) throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
+          this.#atomicWrite(to, content);
+          if (existsSync(from)) unlinkSync(from);
+          continue;
+        }
+        const { target } = this.#writeTarget(grant, entry.relativePath);
+        const content = applying ? entry.afterText : entry.beforeText;
+        if (content === null) {
+          if (existsSync(target)) unlinkSync(target);
+        } else {
+          this.#atomicWrite(target, content);
+        }
+      } catch (error) {
+        if (strict) throw error;
+      }
+    }
+  }
+
+  #validateRecoverableChangeSetState(
+    changeSet: WorkspaceChangeSetRecord,
+    context: ToolExecutionContext,
+  ): void {
+    for (const entry of changeSet.entries) {
+      if (!entry.applySupported || entry.entryType !== "file") {
+        throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
+      }
+      const grant = this.#grant(context, entry.workspaceGrantId);
+      if (entry.kind === "renamed") {
+        const previous = entry.previousRelativePath;
+        if (!previous) throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
+        const { target: beforeTarget } = this.#writeTarget(grant, previous);
+        const { target: afterTarget } = this.#writeTarget(grant, entry.relativePath);
+        const beforeHash = existsSync(beforeTarget) ? sha256(textFile(beforeTarget)) : null;
+        const afterHash = existsSync(afterTarget) ? sha256(textFile(afterTarget)) : null;
+        const atBefore = beforeHash === entry.beforeSha256 && afterHash === null;
+        const atAfter = beforeHash === null && afterHash === entry.afterSha256;
+        if (!atBefore && !atAfter) throw new Error("WORKSPACE_CHANGE_SET_CONFLICT");
+        continue;
+      }
+      const { target } = this.#writeTarget(grant, entry.relativePath);
+      const actual = existsSync(target) ? sha256(textFile(target)) : null;
+      if (actual !== entry.beforeSha256 && actual !== entry.afterSha256) {
+        throw new Error("WORKSPACE_CHANGE_SET_CONFLICT");
+      }
+    }
+  }
+
+  #changeSetResult(
+    changeSet: WorkspaceChangeSetRecord,
+    sideEffectCommitted: boolean,
+  ): NormalizedToolResult {
+    const diffs = changeSet.diffs.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const diff = value as Record<string, unknown>;
+      if (typeof diff.relativePath !== "string" || typeof diff.patch !== "string") return [];
+      const workspaceChangeId =
+        typeof diff.workspaceChangeId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+          diff.workspaceChangeId,
+        )
+          ? diff.workspaceChangeId
+          : changeSet.id;
+      return [
+        {
+          type: "diff" as const,
+          workspaceChangeId,
+          relativePath: diff.relativePath,
+          patch: diff.patch,
+        },
+      ];
+    });
+    return result(
+      `WorkspaceChangeSet ${changeSet.id} · ${changeSet.status} · ${changeSet.entries.length} changes`,
+      {
+        changeSet: {
+          id: changeSet.id,
+          workspaceGrantId: changeSet.workspaceGrantId,
+          runId: changeSet.runId,
+          status: changeSet.status,
+          baselineRevision: changeSet.baselineRevision,
+          finalRevision: changeSet.finalRevision,
+          manifest: changeSet.manifest,
+          applySupported: changeSet.entries.every(({ applySupported }) => applySupported),
+          createdAt: changeSet.createdAt,
+          updatedAt: changeSet.updatedAt,
+        },
+      },
+      [{ type: "text", text: `WorkspaceChangeSet ${changeSet.status}` }, ...diffs],
+      sideEffectCommitted,
+    );
   }
 
   #changeResult(change: WorkspaceChangeRecord, sideEffectCommitted: boolean): NormalizedToolResult {

@@ -53,6 +53,7 @@ function request(input: {
   activeRoot: PlatformSandboxRoot;
   command: string;
   executionProfile?: BrokeredBashExecutionProfile;
+  workspaceWriteMode?: PlatformSandboxExecutionRequest["workspaceWriteMode"];
   additionalRoots?: PlatformSandboxRoot[];
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -68,6 +69,9 @@ function request(input: {
     command: input.command,
     timeoutMs: input.timeoutMs ?? 5_000,
     executionProfile: input.executionProfile ?? "read_only",
+    workspaceWriteMode:
+      input.workspaceWriteMode ??
+      (input.executionProfile === "workspace_write" ? "direct_workspace" : "none"),
     environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
     networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
     activeRoot: input.activeRoot,
@@ -393,6 +397,41 @@ describe("MacOSSandboxExecEngine contract", () => {
       ),
     ).rejects.toThrow("BROKERED_BASH_HARDLINK_BOUNDARY_UNSAFE");
     expect(readFileSync(outsideFile, "utf8")).toBe("outside-hardlink-original");
+    await engine.stopAll();
+  });
+
+  it("runs isolated_change_set in a CoW working copy without mutating the host workspace", async () => {
+    if (!liveMacOS) return;
+    const workspace = temporaryDirectory("openerx-pbash-isolated-");
+    writeFileSync(path.join(workspace, "existing.txt"), "host-original");
+    const engine = new MacOSSandboxExecEngine();
+    const result = await engine.execute(
+      request({
+        activeRoot: root(workspace, "read_write", "b"),
+        executionProfile: "workspace_write",
+        workspaceWriteMode: "isolated_change_set",
+        command:
+          "printf isolated > existing.txt; printf created > created.txt; mkdir -p node_modules/pkg; printf cache > node_modules/pkg/cache.txt",
+      }),
+    );
+    expect(result.exitCode, result.output).toBe(0);
+    expect(readFileSync(path.join(workspace, "existing.txt"), "utf8")).toBe("host-original");
+    expect(existsSync(path.join(workspace, "created.txt"))).toBe(false);
+    expect(result.workspaceChanges).toMatchObject({
+      mode: "ISOLATED_CHANGE_SET",
+      hostWorkspaceMutated: false,
+      undo: "REVIEW_REQUIRED_BEFORE_APPLY",
+      manifest: expect.arrayContaining([
+        expect.objectContaining({ relativePath: "created.txt", kind: "created" }),
+        expect.objectContaining({ relativePath: "existing.txt", kind: "modified" }),
+      ]),
+      excludedPathCount: 3,
+    });
+    expect(
+      result.workspaceChanges?.manifest.some(({ relativePath }) =>
+        relativePath.includes("node_modules"),
+      ),
+    ).toBe(false);
     await engine.stopAll();
   });
 
