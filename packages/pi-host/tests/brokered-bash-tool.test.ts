@@ -1,0 +1,82 @@
+import {
+  BROKERED_BASH_CONTRACT_VERSION,
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+  BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+  BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+  type BrokeredBashExecutionContext,
+  type PiToolRequestFrame,
+} from "@openerx/contracts";
+import { describe, expect, it } from "vitest";
+import { createProductCapabilityTools } from "../src/capability-tools";
+
+const execution: BrokeredBashExecutionContext = {
+  contractVersion: BROKERED_BASH_CONTRACT_VERSION,
+  activeExecutionGrantId: "11111111-1111-4111-8111-111111111111",
+  additionalExecutionGrantIds: ["22222222-2222-4222-8222-222222222222"],
+  executionProfile: "workspace_write",
+  environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+  networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+  sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+};
+
+function fixture(withExecution = true) {
+  const frames: PiToolRequestFrame[] = [];
+  const tools = createProductCapabilityTools({
+    generationId: "33333333-3333-4333-8333-333333333333",
+    conversationId: "44444444-4444-4444-8444-444444444444",
+    branchId: "55555555-5555-4555-8555-555555555555",
+    assistantMessageId: "66666666-6666-4666-8666-666666666666",
+    ...(withExecution ? { brokeredBashExecution: execution } : {}),
+    browserComputerUseV2: true,
+    transport: {
+      async request(frame) {
+        frames.push(frame);
+        return {
+          summary: "fake accepted",
+          content: [{ type: "text", text: "executionPerformed=false" }],
+          data: { executionPerformed: false },
+          sources: [],
+          artifacts: [],
+          sideEffectCommitted: false,
+          durationMs: 1,
+        };
+      },
+    },
+  });
+  return { bash: tools.find(({ name }) => name === "bash"), frames };
+}
+
+describe("PBASH-001 Pi bash projection", () => {
+  it("keeps grant, profile and policy fields outside the model-visible schema", async () => {
+    const { bash, frames } = fixture();
+    if (!bash) throw new Error("brokered bash tool missing");
+    const schema = JSON.stringify(bash.parameters);
+    expect(schema).toContain("command");
+    expect(schema).toContain("timeout");
+    expect(schema).not.toMatch(/grant|profile|policy|sandbox|network|cwd|path/iu);
+
+    await bash.execute(
+      "pi-bash-call-1",
+      { command: "npm test -- --run", timeout: 30 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(frames[0]).toMatchObject({
+      piToolCallId: "pi-bash-call-1",
+      toolName: "bash",
+      operation: {
+        operation: "shell_command_execute",
+        idempotencyKey: "tool:33333333-3333-4333-8333-333333333333:pi-bash-call-1:bash",
+        ...execution,
+        shell: "bash",
+        command: "npm test -- --run",
+        timeoutMs: 30_000,
+      },
+    });
+  });
+
+  it("does not register bash without a trusted execution context", () => {
+    expect(fixture(false).bash).toBeUndefined();
+  });
+});

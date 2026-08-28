@@ -621,6 +621,7 @@ export class ChatAppService {
           availableToolNames: preparedTools.availableToolNames,
           skillInstallationIds: skillMounts.map(({ installationId }) => installationId),
           instructionSources: preparedTools.instructionSources,
+          brokeredBashExecution: preparedTools.brokeredBashExecution,
         });
       }
       const currentUserMessageId = draft.receipt.userMessageId ?? history.at(-1)?.messageId;
@@ -654,6 +655,9 @@ export class ChatAppService {
                   expiresAt: grant.expiresAt,
                 })),
                 instructionSources: preparedTools.instructionSources,
+                ...(preparedTools.brokeredBashExecution
+                  ? { execution: preparedTools.brokeredBashExecution }
+                  : {}),
               },
               mcpTools: preparedTools.mcpTools,
               initialToolNames: preparedTools.initialToolNames,

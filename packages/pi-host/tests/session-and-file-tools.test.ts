@@ -3,8 +3,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import {
+  BROKERED_BASH_CONTRACT_VERSION,
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+  BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+  BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+} from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProductPiSession, ModelRuntime } from "../src/agent-session";
+import { createProductCapabilityTools } from "../src/capability-tools";
 import { createProductFileTools } from "../src/file-tools";
 import { ProductSessionRegistry } from "../src/session-registry";
 
@@ -117,6 +124,43 @@ describe("Pi persistent SessionManager boundary", () => {
 });
 
 describe("Pi native Broker tools", () => {
+  it("registers the product bash name without restoring Pi builtin filesystem tools", async () => {
+    const { cwd, agentDir } = directories();
+    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const faux = fauxProvider({ tokensPerSecond: 10_000 });
+    runtime.registerNativeProvider(faux.provider);
+    const customTools = createProductCapabilityTools({
+      generationId: randomUUID(),
+      conversationId: randomUUID(),
+      branchId: randomUUID(),
+      assistantMessageId: randomUUID(),
+      brokeredBashExecution: {
+        contractVersion: BROKERED_BASH_CONTRACT_VERSION,
+        activeExecutionGrantId: randomUUID(),
+        additionalExecutionGrantIds: [],
+        executionProfile: "read_only",
+        environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+        networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+        sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+      },
+      transport: { request: vi.fn() },
+    }).filter(({ name }) => name === "bash");
+    const { session } = await createProductPiSession({
+      cwd,
+      agentDir,
+      history: [],
+      modelRuntime: runtime,
+      model: faux.getModel(),
+      customTools,
+    });
+
+    expect(session.getActiveToolNames()).toEqual(["bash"]);
+    expect(session.getActiveToolNames()).not.toEqual(
+      expect.arrayContaining(["read", "write", "edit", "openerx_shell"]),
+    );
+    session.dispose();
+  });
+
   it("registers only OpenerX file tools and forwards operations without raw paths", async () => {
     const { cwd, agentDir } = directories();
     const request = vi.fn(async () => [{ id: randomUUID(), displayName: "brief.pdf" }]);

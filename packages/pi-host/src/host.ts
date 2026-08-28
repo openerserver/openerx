@@ -283,6 +283,9 @@ export function startPiHostProcess(
           conversationId: frame.conversationId,
           branchId: frame.branchId,
           assistantMessageId: frame.assistantMessageId,
+          ...(frame.workspace?.execution
+            ? { brokeredBashExecution: frame.workspace.execution }
+            : {}),
           transport: capabilityToolTransport,
         });
         const workspaceTools = createProductWorkspaceTools({

@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import type { CapabilityScope, ToolOperation } from "@openerx/contracts";
+import {
+  BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+  type CapabilityScope,
+  type ToolOperation,
+} from "@openerx/contracts";
 import { riskAtMost } from "@openerx/domain";
 import type { CapabilityRequirement } from "./types";
 
@@ -66,6 +70,23 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         reason: `在 ${operation.workspaceGrantId ?? operation.cwd ?? "未知工作区"} 执行 ${operation.command}`,
         approval: operation.workspaceGrantId ? "automatic" : "per_call",
       };
+    case "shell_command_execute": {
+      const networkDenied = operation.networkPolicyId === BROKERED_BASH_DENY_NETWORK_POLICY_ID;
+      const risk = !networkDenied
+        ? "L4"
+        : operation.executionProfile === "workspace_write"
+          ? "L3"
+          : "L2";
+      return {
+        capability: "shell",
+        risk,
+        resourceType: "workspace",
+        resource: operation.activeExecutionGrantId,
+        actions: networkDenied ? ["execute"] : ["execute", "external_write"],
+        reason: `在已冻结工作区执行 Brokered Bash：${operation.command.slice(0, 500)}`,
+        approval: "automatic",
+      };
+    }
     case "workspace_list":
     case "workspace_search":
     case "workspace_read":
@@ -268,6 +289,11 @@ export function hasUncertainExternalSideEffect(operation: ToolOperation): boolea
     case "mcp_call":
     case "mcp_disconnect":
       return operation.operation === "mcp_call" ? !operation.annotations.readOnlyHint : true;
+    case "shell_command_execute":
+      return (
+        operation.executionProfile === "workspace_write" ||
+        operation.networkPolicyId !== BROKERED_BASH_DENY_NETWORK_POLICY_ID
+      );
     case "browser":
       return operation.action !== "screenshot";
     case "browser_computer_use":
@@ -342,6 +368,11 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
         target: operation.workspaceGrantId
           ? `${operation.workspaceGrantId}:${operation.relativeCwd ?? "."}`
           : (operation.cwd ?? "missing-workspace"),
+      };
+    case "shell_command_execute":
+      return {
+        input: operation.command.slice(0, 2_000),
+        target: `${operation.activeExecutionGrantId} +${operation.additionalExecutionGrantIds.length} (${operation.executionProfile})`,
       };
     case "workspace_list":
     case "workspace_search":

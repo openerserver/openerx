@@ -3,6 +3,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type {
   AppServiceAuthorization,
+  BrokeredBashExecutionContext,
   ChatEvent,
   ExecutionRun,
   HostToolAvailability,
@@ -26,9 +27,18 @@ import type {
   WorkspaceGrant,
   WorkspaceInstructionSource,
 } from "@openerx/contracts";
-import { piHostContractVersion } from "@openerx/contracts";
+import {
+  BROKERED_BASH_CONTRACT_VERSION,
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+  BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+  BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+  BROKERED_BASH_V1_FEATURE_FLAG,
+  brokeredBashV1Enabled,
+  piHostContractVersion,
+} from "@openerx/contracts";
 import type { ToolRepository } from "@openerx/storage";
 import {
+  BrokeredBashFakeAdapter,
   BuiltinToolAdapter,
   type CapabilityAvailabilityHost,
   CapabilityBroker,
@@ -196,6 +206,7 @@ export interface ToolAppServiceOptions {
   emit(event: ChatEvent): void;
   additionalAdapters?: ToolAdapter[];
   shellAvailability?: () => HostToolAvailability;
+  brokeredBashV1?: boolean;
 }
 
 interface ActiveProjection {
@@ -209,6 +220,7 @@ export interface PreparedGenerationTools {
   mcpTools: McpToolDescriptor[];
   initialToolNames: string[];
   availableToolNames: string[];
+  brokeredBashExecution?: BrokeredBashExecutionContext;
 }
 
 export class ToolAppService {
@@ -218,11 +230,13 @@ export class ToolAppService {
   readonly #selectedModelRef: (assistantMessageId: string) => string;
   readonly #projectionByGeneration = new Map<string, ActiveProjection>();
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
+  readonly #brokeredBashExecutionByGeneration = new Map<string, BrokeredBashExecutionContext>();
   readonly #abortByGeneration = new Map<string, AbortController>();
   readonly #mcp: McpToolAdapter;
   readonly #workspace: WorkspaceToolAdapter;
   readonly #host: CapabilityAvailabilityHost;
   readonly #shellAvailability: () => HostToolAvailability;
+  readonly #brokeredBashV1: boolean;
 
   constructor(options: ToolAppServiceOptions) {
     this.#repository = options.repository;
@@ -230,6 +244,8 @@ export class ToolAppService {
     this.#selectedModelRef = options.selectedModelRef;
     this.#host = options.host;
     this.#shellAvailability = options.shellAvailability ?? shellToolAvailability;
+    this.#brokeredBashV1 =
+      options.brokeredBashV1 ?? brokeredBashV1Enabled(process.env[BROKERED_BASH_V1_FEATURE_FLAG]);
     const oauth = options.oauth;
     this.#mcp = new McpToolAdapter(
       options.host,
@@ -261,6 +277,15 @@ export class ToolAppService {
       new ShellToolAdapter([options.workspaceDirectory], (workspaceGrantId, conversationId) =>
         options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
       ),
+      ...(this.#brokeredBashV1
+        ? [
+            new BrokeredBashFakeAdapter(
+              (workspaceGrantId, conversationId) =>
+                options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
+              (generationId) => this.#brokeredBashExecutionByGeneration.get(generationId),
+            ),
+          ]
+        : []),
       this.#workspace,
       new HostCapabilityAdapter(options.host, options.resolveUploadPath, options.ingestDownload),
       this.#mcp,
@@ -355,6 +380,8 @@ export class ToolAppService {
     hasFiles: boolean;
     skillInstallationIds: string[];
     authenticated: boolean;
+    activeExecutionGrantId?: string;
+    additionalExecutionGrantIds?: string[];
   }): Promise<PreparedGenerationTools> {
     const workspaceGrants = this.#repository
       .listWorkspaceGrants(input.conversationId)
@@ -374,6 +401,7 @@ export class ToolAppService {
     });
     const hostAvailability = await this.#safeHostAvailability();
     const shellAvailability = this.#shellAvailability();
+    const brokeredBashExecution = this.#prepareBrokeredBashExecution(workspaceGrants, input);
     let mcpTools: McpToolDescriptor[] = [];
     try {
       mcpTools = await this.#mcp.discoverEnabledTools();
@@ -409,11 +437,15 @@ export class ToolAppService {
             "openerx_workspace_undo",
           ]
         : []),
-      ...(workspaceGrants.some(({ access }) => access === "read_write")
-        ? shellAvailability.availableToolNames.filter(
-            (name) => name === "openerx_shell" || name === "openerx_shell_process",
-          )
-        : []),
+      ...(this.#brokeredBashV1
+        ? brokeredBashExecution
+          ? ["bash"]
+          : []
+        : workspaceGrants.some(({ access }) => access === "read_write")
+          ? shellAvailability.availableToolNames.filter(
+              (name) => name === "openerx_shell" || name === "openerx_shell_process",
+            )
+          : []),
       ...(input.skillInstallationIds.length > 0 ? ["read", "openerx_skill_script"] : []),
       ...mcpTools.map(({ name }) => name),
     ];
@@ -469,7 +501,9 @@ export class ToolAppService {
         "openerx_workspace_undo",
       );
       if (/运行|命令|测试|构建|run|command|build|test/u.test(prompt)) {
-        add("openerx_shell", "openerx_shell_process");
+        if (this.#brokeredBashV1) {
+          if (brokeredBashExecution) add("bash");
+        } else add("openerx_shell", "openerx_shell_process");
       }
     }
     if (input.skillInstallationIds.length > 0) add("read", "openerx_skill_script");
@@ -488,6 +522,7 @@ export class ToolAppService {
       mcpTools,
       initialToolNames: ["openerx_tool_search", ...selected],
       availableToolNames,
+      ...(brokeredBashExecution ? { brokeredBashExecution } : {}),
     };
   }
 
@@ -525,15 +560,17 @@ export class ToolAppService {
     const desktopInteractionReason =
       hostAvailability.unavailableReasons["openerx_desktop:interact"] ?? null;
     const desktopReason = hostAvailability.unavailableReasons.openerx_desktop ?? null;
-    const shellHostAvailable = shellAvailability.availableToolNames.includes("openerx_shell");
-    const writableWorkspaceAvailable = this.#repository.listWorkspaceGrants().some((grant) => {
-      if (grant.access !== "read_write") return false;
+    const executionWorkspaceGrants = this.#repository.listWorkspaceGrants().filter((grant) => {
       try {
         return lstatSync(realpathSync(grant.rootPath)).isDirectory();
       } catch {
         return false;
       }
     });
+    const shellHostAvailable = shellAvailability.availableToolNames.includes("openerx_shell");
+    const writableWorkspaceAvailable = executionWorkspaceGrants.some(
+      ({ access }) => access === "read_write",
+    );
     const mcp = await this.#mcpRuntimeReadiness(checkedAt);
 
     return [
@@ -568,19 +605,33 @@ export class ToolAppService {
       ),
       readiness(
         "shell",
-        !shellHostAvailable
-          ? "unavailable"
-          : writableWorkspaceAvailable
-            ? "available"
-            : "authorization_required",
-        !shellHostAvailable
-          ? (shellAvailability.unavailableReasons.openerx_shell ?? "SHELL_OS_SANDBOX_UNAVAILABLE")
-          : writableWorkspaceAvailable
-            ? null
-            : "WORKSPACE_WRITE_GRANT_REQUIRED",
-        shellHostAvailable && writableWorkspaceAvailable
-          ? ["openerx_shell", "openerx_shell_process"]
-          : [],
+        this.#brokeredBashV1
+          ? executionWorkspaceGrants.length === 1
+            ? "degraded"
+            : "authorization_required"
+          : !shellHostAvailable
+            ? "unavailable"
+            : writableWorkspaceAvailable
+              ? "available"
+              : "authorization_required",
+        this.#brokeredBashV1
+          ? executionWorkspaceGrants.length === 1
+            ? "BROKERED_BASH_FAKE_RUNNER_ONLY"
+            : executionWorkspaceGrants.length === 0
+              ? "WORKSPACE_GRANT_REQUIRED"
+              : "BROKERED_BASH_ACTIVE_WORKSPACE_REQUIRED"
+          : !shellHostAvailable
+            ? (shellAvailability.unavailableReasons.openerx_shell ?? "SHELL_OS_SANDBOX_UNAVAILABLE")
+            : writableWorkspaceAvailable
+              ? null
+              : "WORKSPACE_WRITE_GRANT_REQUIRED",
+        this.#brokeredBashV1
+          ? executionWorkspaceGrants.length === 1
+            ? ["bash"]
+            : []
+          : shellHostAvailable && writableWorkspaceAvailable
+            ? ["openerx_shell", "openerx_shell_process"]
+            : [],
       ),
       readiness(
         "desktop",
@@ -686,12 +737,17 @@ export class ToolAppService {
     generationId: string,
     input: Pick<
       PreparedGenerationTools,
-      "initialToolNames" | "availableToolNames" | "instructionSources"
+      "initialToolNames" | "availableToolNames" | "instructionSources" | "brokeredBashExecution"
     > & { skillInstallationIds: string[] },
   ): ExecutionRun {
     const projection = this.#projectionByGeneration.get(generationId);
     if (!projection) throw new Error("GENERATION_RUN_NOT_FOUND");
     const run = this.#repository.freezeRunConfiguration(projection.run.id, input);
+    if (input.brokeredBashExecution) {
+      this.#brokeredBashExecutionByGeneration.set(generationId, input.brokeredBashExecution);
+    } else {
+      this.#brokeredBashExecutionByGeneration.delete(generationId);
+    }
     projection.run = run;
     return run;
   }
@@ -1016,6 +1072,7 @@ export class ToolAppService {
     this.#abortByGeneration.get(generationId)?.abort();
     this.#abortByGeneration.delete(generationId);
     this.#authorizationByGeneration.delete(generationId);
+    this.#brokeredBashExecutionByGeneration.delete(generationId);
     this.#projectionByGeneration.delete(generationId);
   }
 
@@ -1041,7 +1098,39 @@ export class ToolAppService {
   async close(): Promise<void> {
     for (const controller of this.#abortByGeneration.values()) controller.abort();
     await this.#broker.stopAll();
+    this.#brokeredBashExecutionByGeneration.clear();
     this.#repository.close();
+  }
+
+  #prepareBrokeredBashExecution(
+    workspaceGrants: WorkspaceGrant[],
+    input: { activeExecutionGrantId?: string; additionalExecutionGrantIds?: string[] },
+  ): BrokeredBashExecutionContext | undefined {
+    if (!this.#brokeredBashV1) return undefined;
+    const grants = new Map(workspaceGrants.map((grant) => [grant.id, grant]));
+    const active = input.activeExecutionGrantId
+      ? grants.get(input.activeExecutionGrantId)
+      : workspaceGrants.length === 1
+        ? workspaceGrants[0]
+        : undefined;
+    if (!active) return undefined;
+    const additionalIds = input.additionalExecutionGrantIds ?? [];
+    if (
+      new Set(additionalIds).size !== additionalIds.length ||
+      additionalIds.includes(active.id) ||
+      additionalIds.some((grantId) => !grants.has(grantId))
+    ) {
+      return undefined;
+    }
+    return {
+      contractVersion: BROKERED_BASH_CONTRACT_VERSION,
+      activeExecutionGrantId: active.id,
+      additionalExecutionGrantIds: additionalIds,
+      executionProfile: active.access === "read_write" ? "workspace_write" : "read_only",
+      environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+      networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+      sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+    };
   }
 
   #ensureProjection(frame: PiToolRequestFrame): ActiveProjection {

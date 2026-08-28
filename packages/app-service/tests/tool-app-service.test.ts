@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
+  BrokeredBashOperation,
   ChatEvent,
   HostToolAvailability,
   PiActivityEvent,
@@ -13,7 +14,9 @@ import { ToolAppService } from "../src";
 
 const directories: string[] = [];
 
-function fixture(options: { shellAvailability?: () => HostToolAvailability } = {}) {
+function fixture(
+  options: { shellAvailability?: () => HostToolAvailability; brokeredBashV1?: boolean } = {},
+) {
   const directory = mkdtempSync(path.join(tmpdir(), "openerx-tool-service-"));
   directories.push(directory);
   const databasePath = path.join(directory, "openerx.sqlite");
@@ -53,6 +56,7 @@ function fixture(options: { shellAvailability?: () => HostToolAvailability } = {
     selectedModelRef: () => "platform/auto",
     emit: (event) => events.push(event),
     ...(options.shellAvailability ? { shellAvailability: options.shellAvailability } : {}),
+    brokeredBashV1: options.brokeredBashV1 ?? false,
   });
   const base = {
     kind: "pi.tool.request" as const,
@@ -442,6 +446,209 @@ describe("ToolAppService", () => {
     });
     expect(prepared.availableToolNames).not.toContain("openerx_shell");
     expect(prepared.initialToolNames).not.toContain("openerx_shell");
+    chat.close();
+    await service.close();
+  });
+
+  it("exposes only brokered bash when the default-off PBASH-001 flag is enabled", async () => {
+    const { chat, service, base, directory } = fixture({
+      brokeredBashV1: true,
+      shellAvailability: () => ({
+        availableToolNames: ["openerx_shell", "openerx_shell_process"],
+        unavailableReasons: {},
+      }),
+    });
+    const grant = service.grantWorkspace({
+      rootPath: directory,
+      conversationId: null,
+      access: "read_write",
+      allowNetwork: true,
+      expiresAt: null,
+    });
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "运行构建和测试命令",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+    });
+
+    expect(prepared.availableToolNames).toContain("bash");
+    expect(prepared.availableToolNames).not.toContain("openerx_shell");
+    expect(prepared.availableToolNames).not.toContain("openerx_shell_process");
+    expect(prepared.initialToolNames).toContain("bash");
+    expect(prepared.brokeredBashExecution).toMatchObject({
+      activeExecutionGrantId: grant.id,
+      additionalExecutionGrantIds: [],
+      executionProfile: "workspace_write",
+      networkPolicyId: "network-deny-v1",
+      sandboxPolicyVersion: "pbash-fake-v1",
+    });
+    expect(
+      (
+        await service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+      ).find(({ capability }) => capability === "shell"),
+    ).toMatchObject({
+      status: "degraded",
+      reason: "BROKERED_BASH_FAKE_RUNNER_ONLY",
+      availableToolNames: ["bash"],
+    });
+    chat.close();
+    await service.close();
+  });
+
+  it("requires an explicit active execution grant when multiple workspaces exist", async () => {
+    const { chat, service, base, directory } = fixture({
+      brokeredBashV1: true,
+      shellAvailability: () => ({
+        availableToolNames: ["openerx_shell", "openerx_shell_process"],
+        unavailableReasons: {},
+      }),
+    });
+    const secondRoot = mkdtempSync(path.join(tmpdir(), "openerx-pbash-second-"));
+    directories.push(secondRoot);
+    const active = service.grantWorkspace({
+      rootPath: directory,
+      conversationId: null,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const additional = service.grantWorkspace({
+      rootPath: secondRoot,
+      conversationId: null,
+      access: "read_only",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const ambiguous = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "运行测试",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+    });
+    expect(ambiguous.availableToolNames).not.toContain("bash");
+    expect(ambiguous.availableToolNames).not.toContain("openerx_shell");
+    expect(ambiguous.availableToolNames).not.toContain("openerx_shell_process");
+    expect(ambiguous.brokeredBashExecution).toBeUndefined();
+
+    const selected = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "运行测试",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: active.id,
+      additionalExecutionGrantIds: [additional.id],
+    });
+    expect(selected.availableToolNames).toContain("bash");
+    expect(selected.brokeredBashExecution).toMatchObject({
+      activeExecutionGrantId: active.id,
+      additionalExecutionGrantIds: [additional.id],
+    });
+    expect(selected.availableToolNames).not.toContain("openerx_shell");
+    expect(selected.availableToolNames).not.toContain("openerx_shell_process");
+    chat.close();
+    await service.close();
+  });
+
+  it("runs the complete Broker path through a deterministic fake without touching the filesystem", async () => {
+    const { chat, tools, service, base, directory } = fixture({ brokeredBashV1: true });
+    const grant = service.grantWorkspace({
+      rootPath: directory,
+      conversationId: base.conversationId,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "运行测试命令",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+    });
+    const execution = prepared.brokeredBashExecution;
+    if (!execution) throw new Error("brokered Bash execution context missing");
+    service.startGeneration({
+      generationId: base.generationId,
+      conversationId: base.conversationId,
+      branchId: base.branchId,
+      assistantMessageId: base.assistantMessageId,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    service.freezeGenerationConfiguration(base.generationId, {
+      initialToolNames: prepared.initialToolNames,
+      availableToolNames: prepared.availableToolNames,
+      skillInstallationIds: [],
+      instructionSources: prepared.instructionSources,
+      brokeredBashExecution: execution,
+    });
+    expect(() =>
+      service.freezeGenerationConfiguration(base.generationId, {
+        initialToolNames: prepared.initialToolNames,
+        availableToolNames: prepared.availableToolNames,
+        skillInstallationIds: [],
+        instructionSources: prepared.instructionSources,
+        brokeredBashExecution: { ...execution, sandboxPolicyVersion: "pbash-fake-v2" },
+      }),
+    ).toThrow("RUN_CONFIGURATION_ALREADY_FROZEN");
+    const canaryPath = path.join(directory, "pbash-fake-must-not-exist");
+    const frame: PiToolRequestFrame = {
+      ...base,
+      piToolCallId: "pi-brokered-bash-call",
+      toolName: "bash",
+      operation: {
+        operation: "shell_command_execute",
+        idempotencyKey: "pbash-app-service-fake-0001",
+        ...execution,
+        shell: "bash",
+        command: `touch ${canaryPath}`,
+        timeoutMs: 120_000,
+      },
+    };
+    await expect(service.handleRequest(frame)).resolves.toMatchObject({
+      sideEffectCommitted: false,
+      data: { executionPerformed: false, runner: "deterministic_fake" },
+    });
+    expect(existsSync(canaryPath)).toBe(false);
+    const workItem = tools.listWorkItems(base.conversationId)[0];
+    if (!workItem?.activeRunId) throw new Error("active run missing");
+    expect(tools.toolCallByPiRef(workItem.activeRunId, frame.piToolCallId)).toMatchObject({
+      status: "completed",
+      toolName: "bash",
+      input: { operation: "shell_command_execute" },
+    });
+
+    await expect(
+      service.handleRequest({
+        ...frame,
+        requestId: "77777777-7777-4777-8777-777777777777",
+        piToolCallId: "pi-brokered-bash-tampered",
+        operation: {
+          ...(frame.operation as BrokeredBashOperation),
+          idempotencyKey: "pbash-app-service-tampered-0001",
+          sandboxPolicyVersion: "pbash-fake-v2",
+        },
+      }),
+    ).rejects.toThrow("BROKERED_BASH_EXECUTION_CONTEXT_MISMATCH");
+
+    service.revokeWorkspace(grant.id);
+    await expect(
+      service.handleRequest({
+        ...frame,
+        requestId: "88888888-8888-4888-8888-888888888888",
+        piToolCallId: "pi-brokered-bash-revoked",
+        operation: {
+          ...(frame.operation as BrokeredBashOperation),
+          idempotencyKey: "pbash-app-service-revoked-0001",
+        },
+      }),
+    ).rejects.toThrow("BROKERED_BASH_WORKSPACE_GRANT_INVALID");
+    expect(existsSync(canaryPath)).toBe(false);
     chat.close();
     await service.close();
   });

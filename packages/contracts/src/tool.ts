@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brokeredBashOperationSchema } from "./brokered-bash";
 import { browserComputerUseOperationV2Schema } from "./browser-computer-use";
 import { entityIdSchema, timestampSchema } from "./common";
 import { officeArtifactWriteInputSchema } from "./file";
@@ -313,6 +314,7 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
       expression: z.string().trim().min(1).max(2_000),
     })
     .strict(),
+  brokeredBashOperationSchema,
   z
     .object({
       ...toolOperationBase,

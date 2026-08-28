@@ -669,4 +669,64 @@ describe("ChatAppService", () => {
     );
     service.close();
   });
+
+  it("freezes PBASH-001 execution context into the Pi prompt without exposing legacy Shell", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-pbash-chat-"));
+    temporaryDirectories.push(directory);
+    const database = path.join(directory, "openerx.sqlite");
+    const pi = new ScriptedPiHostClient();
+    const toolRepository = new ToolRepository(database);
+    let service: ChatAppService;
+    const tools = new ToolAppService({
+      repository: toolRepository,
+      workspaceDirectory: directory,
+      brokeredBashV1: true,
+      host: {
+        availability: async () => ({ availableToolNames: [], unavailableReasons: {} }),
+        execute: async () => ({
+          summary: "unused",
+          content: [{ type: "text", text: "unused" }],
+          sources: [],
+          artifacts: [],
+          sideEffectCommitted: false,
+          durationMs: 0,
+        }),
+        resolve: async () => "unused",
+        clear: async () => undefined,
+      },
+      resolveUploadPath: () => "unused",
+      ingestDownload: async () => ({ fileId: crypto.randomUUID(), displayName: "unused" }),
+      selectedModelRef: () => "platform/auto",
+      emit: (event) => service.emitExternal(event),
+    });
+    const grant = tools.grantWorkspace({
+      rootPath: directory,
+      conversationId: null,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    service = new ChatAppService(new ChatRepository(database), pi, null, null, tools);
+    service.initialize();
+
+    const receipt = (await service.handle({
+      command: "chat.send",
+      input: {
+        conversationId: null,
+        text: "运行构建测试命令",
+        idempotencyKey: "pbash-chat-prompt-0001",
+      },
+    })) as { conversationId: string };
+    await waitForTerminal(service, receipt.conversationId);
+
+    expect(pi.prompts[0]?.availableToolNames).toContain("bash");
+    expect(pi.prompts[0]?.availableToolNames).not.toContain("openerx_shell");
+    expect(pi.prompts[0]?.workspace?.execution).toMatchObject({
+      activeExecutionGrantId: grant.id,
+      executionProfile: "workspace_write",
+      networkPolicyId: "network-deny-v1",
+      sandboxPolicyVersion: "pbash-fake-v1",
+    });
+    service.close();
+  });
 });

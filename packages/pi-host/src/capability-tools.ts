@@ -3,12 +3,14 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import {
   BROWSER_COMPUTER_USE_CONTRACT_VERSION,
   BROWSER_COMPUTER_USE_V2_FEATURE_FLAG,
+  type BrokeredBashExecutionContext,
   type BrowserComputerUseOperationV2,
   browserComputerUseV2Enabled,
   type PiToolRequestFrame,
   type ToolOperation,
 } from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
+import { createProductBrokeredBashTool } from "./bash-tool";
 import { productToolResult } from "./tool-result";
 
 export interface PiCapabilityToolTransport {
@@ -32,6 +34,7 @@ export function createProductCapabilityTools(input: {
   assistantMessageId: string;
   transport: PiCapabilityToolTransport;
   browserComputerUseV2?: boolean;
+  brokeredBashExecution?: BrokeredBashExecutionContext;
 }): ToolDefinition[] {
   const invoke = async (
     toolCallId: string,
@@ -241,6 +244,18 @@ export function createProductCapabilityTools(input: {
       });
 
   return [
+    ...(input.brokeredBashExecution
+      ? [
+          createProductBrokeredBashTool({
+            generationId: input.generationId,
+            conversationId: input.conversationId,
+            branchId: input.branchId,
+            assistantMessageId: input.assistantMessageId,
+            execution: input.brokeredBashExecution,
+            transport: input.transport,
+          }),
+        ]
+      : []),
     defineTool({
       name: "openerx_calculate",
       label: "Calculate",

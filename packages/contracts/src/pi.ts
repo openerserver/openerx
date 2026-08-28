@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brokeredBashExecutionContextSchema } from "./brokered-bash";
 import { entityIdSchema, timestampSchema } from "./chat";
 import { supportedFileFormatSchema } from "./file";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
@@ -13,7 +14,7 @@ import {
 } from "./tool";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 3 as const;
+export const piHostContractVersion = 4 as const;
 
 export const piHostBootstrapSchema = z
   .object({
@@ -101,6 +102,7 @@ export const piPromptFrameSchema = z
           )
           .max(100),
         instructionSources: z.array(workspaceInstructionSourceSchema).max(500),
+        execution: brokeredBashExecutionContextSchema.optional(),
       })
       .strict()
       .optional(),
@@ -126,6 +128,33 @@ export const piPromptFrameSchema = z
         code: "custom",
         message: "Pi prompt history must end with a user message",
         path: ["history"],
+      });
+    }
+    const workspace = frame.workspace;
+    const execution = workspace?.execution;
+    if (!workspace || !execution) return;
+    const grants = new Map(workspace.grants.map((grant) => [grant.id, grant]));
+    const active = grants.get(execution.activeExecutionGrantId);
+    if (!active) {
+      context.addIssue({
+        code: "custom",
+        message: "Active execution grant must be present in the prompt workspace",
+        path: ["workspace", "execution", "activeExecutionGrantId"],
+      });
+    }
+    for (const grantId of execution.additionalExecutionGrantIds) {
+      if (grants.has(grantId)) continue;
+      context.addIssue({
+        code: "custom",
+        message: "Additional execution grant must be present in the prompt workspace",
+        path: ["workspace", "execution", "additionalExecutionGrantIds"],
+      });
+    }
+    if (execution.executionProfile === "workspace_write" && active?.access !== "read_write") {
+      context.addIssue({
+        code: "custom",
+        message: "workspace_write requires a read_write active grant",
+        path: ["workspace", "execution", "executionProfile"],
       });
     }
   });

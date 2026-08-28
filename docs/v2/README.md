@@ -2,7 +2,7 @@
 
 > 状态：`PRODUCT_CONTRACT_APPROVED / IMPLEMENTATION_IN_PROGRESS`
 >
-> 修订日期：2026-08-27
+> 修订日期：2026-08-28
 >
 > 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation、M2
 > 至 M9 本地实现检查点已完成，M8/M9 外部 Beta 与发布证据正在补齐；新主线只在 `apps/`、
@@ -80,6 +80,10 @@
 29. [release/01-release-runbook.md](release/01-release-runbook.md)：V1 发布、升级、撤回和回滚操作手册。
 30. [evidence/m9-2026-08-26.md](evidence/m9-2026-08-26.md)：M9 本地发布基础检查点证据。
 31. [evidence/deepseek-vision-2026-08-26.md](evidence/deepseek-vision-2026-08-26.md)：图片上传到 Pi、自动视觉选模、DeepSeek 多模态请求与真实接口证据。
+32. [19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)：Pi Bash 保留原始 Shell 语义、执行权交给 Broker 与平台沙盒的已接受架构。
+33. [20-pbash-implementation-plan.md](20-pbash-implementation-plan.md)：PBASH-001 至 PBASH-008 的可执行实施顺序、当前切片和验收门槛。
+34. [adr/018-brokered-bash-and-platform-sandbox.md](adr/018-brokered-bash-and-platform-sandbox.md)：产品 raw Bash、Broker 权限边界和可替换平台沙盒后端的规范性决策。
+35. [evidence/pbash-001-2026-08-28.md](evidence/pbash-001-2026-08-28.md)：PBASH-001 严格合同、Pi 投影、冻结执行上下文和 fake Runner 的日期化证据。
 
 ## 5. V1 与未来方向边界
 
@@ -137,3 +141,10 @@ origin + Main 启动 nonce、五分钟一次性精确标签页引用、tab/docum
 MV3 扩展、Native Messaging/Main owner-only 传输、可信连接 UI、真实 Bridge 烟测、签名安装权限、
 托管 Chromium 和 Windows 尚无完成证据；
 `legacy_dom_v1` 仅作为显式 feature flag 回滚路径保留。
+
+Pi Bash Broker 化采用“产品 raw-shell ToolDefinition → Capability Broker → BrokeredShellRunner →
+PlatformSandboxEngine”结构；架构和安全边界见
+[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)。当前按
+[20-pbash-implementation-plan.md](20-pbash-implementation-plan.md) 已完成 PBASH-001，只实现严格合同和
+deterministic fake Runner；[日期化证据](evidence/pbash-001-2026-08-28.md) 不代表真实 Shell 或本机隔离
+完成。下一阶段从 PBASH-002 的 PlatformSandboxEngine 和 macOS capability probe 开始。

@@ -1,4 +1,5 @@
 export * from "./broker";
+export * from "./brokered-bash-fake-adapter";
 export * from "./builtin-adapter";
 export * from "./host-adapter";
 export * from "./image-generation-adapter";

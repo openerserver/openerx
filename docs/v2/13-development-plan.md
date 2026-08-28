@@ -2,7 +2,7 @@
 
 > 状态：`M0-M9 LOCAL COMPLETE / EXTERNAL BETA AND RELEASE GATES PENDING`
 >
-> 更新日期：2026-08-27（Asia/Shanghai）
+> 更新日期：2026-08-28（Asia/Shanghai）
 >
 > 适用范围：Electron + React 的 Windows/macOS 执行主机与 React Native iOS/Android Remote Companion
 
@@ -327,6 +327,18 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 | 跨平台问题后置 | 从每个 Alpha 开始持续产出三个桌面目标和 iOS/Android 真机 E2E |
 
 ## 10. 当前下一步
+
+### 10.1 当前执行切片：PBASH-001
+
+用户已接受 [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)，并已完成
+[PBASH 实施计划](20-pbash-implementation-plan.md) 的 PBASH-001：严格 `brokered_bash_v1` 合同、
+产品自有 `bash` ToolDefinition、按 Generation 冻结的执行上下文，以及不启动真实进程的 deterministic
+fake Runner。该切片默认 feature flag 关闭，并保持 `noTools: "builtin"`；证据严格标记为
+`CONTRACT ONLY / FAKE RUNNER / NO REAL SHELL`，见
+[PBASH-001 检查点](evidence/pbash-001-2026-08-28.md)。下一切片是 PBASH-002；在其平台引擎和负向门禁
+完成前，不得把当前工作宣称为本机 Bash、Seatbelt 或发布级隔离完成。
+
+### 10.2 既有外部门禁
 
 M9 本地发布基础、Codex 对齐 P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 已完成本地检查点。
 CX-110-D3 已验证 Developer ID 签名 macOS arm64 包的稳定 TCC 身份、隔离安装/升级/真回滚、

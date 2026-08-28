@@ -60,7 +60,7 @@ describe("Pi AgentSession composition", () => {
     parentPort.emit("message", {
       data: {
         kind: "pi-host.bootstrap",
-        contractVersion: 3,
+        contractVersion: 4,
         nonce: "c".repeat(64),
         profileDirectory: root,
       },
@@ -139,7 +139,7 @@ describe("Pi AgentSession composition", () => {
     parentPort.emit("message", {
       data: {
         kind: "pi-host.bootstrap",
-        contractVersion: 3,
+        contractVersion: 4,
         nonce: "b".repeat(64),
         profileDirectory: root,
       },
@@ -294,7 +294,7 @@ describe("Pi AgentSession composition", () => {
     parentPort.emit("message", {
       data: {
         kind: "pi-host.bootstrap",
-        contractVersion: 3,
+        contractVersion: 4,
         nonce: "d".repeat(64),
         profileDirectory: root,
       },
@@ -347,7 +347,7 @@ describe("Pi AgentSession composition", () => {
     parentPort.emit("message", {
       data: {
         kind: "pi-host.bootstrap",
-        contractVersion: 3,
+        contractVersion: 4,
         nonce: "a".repeat(64),
         profileDirectory: root,
       },
