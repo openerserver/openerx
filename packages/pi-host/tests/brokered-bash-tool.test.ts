@@ -3,6 +3,7 @@ import {
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+  BROKERED_BASH_MACOS_SANDBOX_POLICY_VERSION,
   type BrokeredBashExecutionContext,
   type PiToolRequestFrame,
 } from "@openerx/contracts";
@@ -19,14 +20,14 @@ const execution: BrokeredBashExecutionContext = {
   sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
 };
 
-function fixture(withExecution = true) {
+function fixture(withExecution = true, executionContext: BrokeredBashExecutionContext = execution) {
   const frames: PiToolRequestFrame[] = [];
   const tools = createProductCapabilityTools({
     generationId: "33333333-3333-4333-8333-333333333333",
     conversationId: "44444444-4444-4444-8444-444444444444",
     branchId: "55555555-5555-4555-8555-555555555555",
     assistantMessageId: "66666666-6666-4666-8666-666666666666",
-    ...(withExecution ? { brokeredBashExecution: execution } : {}),
+    ...(withExecution ? { brokeredBashExecution: executionContext } : {}),
     browserComputerUseV2: true,
     transport: {
       async request(frame) {
@@ -78,5 +79,19 @@ describe("PBASH-001 Pi bash projection", () => {
 
   it("does not register bash without a trusted execution context", () => {
     expect(fixture(false).bash).toBeUndefined();
+  });
+
+  it("describes real sandbox execution without exposing trusted path or grant fields", () => {
+    const realExecution: BrokeredBashExecutionContext = {
+      ...execution,
+      sandboxPolicyVersion: BROKERED_BASH_MACOS_SANDBOX_POLICY_VERSION,
+    };
+    const { bash } = fixture(true, realExecution);
+    if (!bash) throw new Error("brokered bash tool missing");
+    expect(bash.label).toBe("Run Bash in workspace sandbox");
+    expect(bash.description).toContain("platform-enforced sandbox");
+    expect(bash.description).toContain("Network access is disabled");
+    expect(bash.description).toContain("$OPENERX_WORKSPACE_1");
+    expect(bash.description).not.toContain(realExecution.activeExecutionGrantId);
   });
 });

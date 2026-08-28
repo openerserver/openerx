@@ -1,13 +1,13 @@
 # OpenerX Pi Bash Broker 化执行方案
 
-- 状态：`ARCHITECTURE ACCEPTED / PBASH-001 LOCAL COMPLETE / REAL RUNNER PENDING`
+- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002 LOCAL COMPLETE / PBASH-003 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 范围：Desktop Pi Host、App Service Capability Broker、Platform Sandbox Engine、Workspace Scope、Remote
 - 依赖：[ADR-V2-007](adr/007-pi-harness-boundary.md)、
   [ADR-V2-012](adr/012-capability-broker-and-tool-projection.md)、
   [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)
-- 当前证据边界：PBASH-001 仅完成合同、工具投影和 deterministic fake Runner；不代表本机 Bash、
-  PlatformSandboxEngine、跨平台 Runner 或发布门禁已经完成
+- 当前证据边界：PBASH-002 已完成当前 macOS 主机上的真实 Bash、PlatformSandboxEngine 和负向门禁；
+  不代表流式日志、签名包、未来 macOS、Linux、Windows、Remote 或发布门禁已经完成
 
 ## 1. 结论
 
@@ -43,8 +43,9 @@ Pi AgentSession
 8. 网络默认关闭，环境变量默认使用 `core` 最小策略，不继承 SSH Agent、浏览器、云服务或包管理器
    凭证。
 9. 当前 `openerx_shell` argv 工具在迁移期间保留为回滚路径，不与新 `bash` 同时执行同一调用。
-10. macOS 可以把 Seatbelt/`sandbox-exec` 作为可发布的平台后端，但必须封装在统一接口内，并通过签名
-    构建、OS 版本和逃逸测试；后端不可用时 fail-closed，不得裸跑 Shell。
+10. macOS 当前可把 Seatbelt/`sandbox-exec` 作为本地后端，但系统已将该接口标记 deprecated；它必须
+    封装在统一接口内，并在签名构建、OS 版本和逃逸矩阵通过后才可能成为发布后端。不可用时
+    fail-closed，不得裸跑 Shell。
 11. 基础 `workspace_write` 可以直接写授权工作区并生成变更证据；CoW/worktree 是高隔离 profile，外部
     无人值守远程写入必须使用，但不再是所有本地 Beta 的统一硬门槛。
 
@@ -492,15 +493,16 @@ macOS 后端可以把 `/bin/bash` 作为 Seatbelt profile 内的子进程运行�
 `/usr/bin/sandbox-exec`，但该可执行文件只作为 `MacOSSandboxBackend` 的实现细节，不进入 Broker 或
 模型合同。
 
-它可以成为 Beta/Release 的 macOS 发布后端，前提是：
+它只可能在以下条件全部满足后成为 Beta/Release 的 macOS 发布后端：
 
 - 针对工作区外读写、符号链接、hard link、`process*`、`mach-lookup`、网络和进程后代完成负向测试；
 - 额外使用独立 Helper、进程组与资源限制补齐 Seatbelt 不负责的 CPU、内存、进程数和临时磁盘边界；
 - 未签名开发、签名安装包和支持的 macOS 版本分别留存真实证据；
 - 系统组件缺失、行为漂移或 profile 验证失败时移除工具，而不是裸跑 Bash。
 
-因此，“接口被标记 deprecated”是维护风险，不再自动等于“Beta 前必须更换”。真正的发布条件是统一
-抽象、可重复测试、签名构建验证和 fail-closed。
+PBASH-002 只证明 macOS 26.5.2 本机的 `macos-seatbelt-v1`。系统手册已明确把
+`sandbox-exec` 标记为 deprecated，因此真正的发布条件仍是统一抽象、可重复测试、签名构建验证、
+支持 OS 矩阵和 fail-closed；任一条件失败都必须更换后端或保持 unavailable。
 
 ### 10.3 Linux 后端
 
@@ -624,16 +626,16 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 
 ### 13.1 Local Alpha
 
-- [ ] Pi 原始 `createLocalBashOperations` 不可从生产会话到达。
-- [ ] `bash` 只在存在有效活动 WorkspaceGrant 且 Runner 可用时出现。
+- [x] Pi 原始 `createLocalBashOperations` 不可从生产会话到达。
+- [x] `bash` 只在存在有效活动 WorkspaceGrant 且 Runner 可用时出现。
 - [ ] 所有命令通过 Broker，ToolCall、Scope、审批和幂等可查询。
-- [ ] 工作区外读写、宿主凭证和默认网络负向测试通过。
+- [x] 工作区外读写、宿主凭证和默认网络负向测试通过。
 - [ ] timeout、Abort、Stop、Host/App Service 断连能回收整个进程树。
 - [ ] Pi 收到有序流式更新和最终 exit code；完整输出不暴露宿主路径。
 - [ ] Remote 重复投递不重复执行。
-- [ ] 当前 argv Shell 可通过单一 feature flag 恢复。
-- [ ] 证据明确标记 `LOCAL ALPHA / DIRECT_WORKSPACE_WRITE / NO GENERAL UNDO`。
-- [ ] backend capability、policy 版本和销毁状态进入审计；初始化失败不会裸跑 Shell。
+- [x] 当前 argv Shell 可通过单一 feature flag 恢复。
+- [x] 证据明确标记 `LOCAL ALPHA / DIRECT_WORKSPACE_WRITE / NO GENERAL UNDO`。
+- [x] backend capability、policy 版本和销毁状态进入审计；初始化失败不会裸跑 Shell。
 
 ### 13.2 External Beta
 
@@ -691,18 +693,19 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 | 后台/PTY      | V1 不支持                                                                     | 是否需要统一长期进程体验            |
 | 输出          | 2,000 行/50 KiB 上下文，完整日志最大 2 MiB Artifact                           | 大日志性能与脱敏                    |
 | 持久写入      | 基础直接写 + diff/manifest；无人值守 Remote 强制 working copy/CoW             | 大仓库性能、二进制策略              |
-| macOS sandbox | Seatbelt/`sandbox-exec` 可发布，但只作为 backend 实现细节                     | 签名构建和 OS 版本矩阵              |
+| macOS sandbox | Seatbelt/`sandbox-exec` 仅为已通过本机门禁的可替换 backend 实现细节             | deprecated 接口替代评估、签名构建和 OS 版本矩阵 |
 | Linux sandbox | bubblewrap/maintained helper，能力不足 fail-closed                            | 发行版/WSL2 矩阵                    |
 | Windows       | 未有等价 Runner 前 unavailable                                                | POSIX Runner 或独立 PowerShell 决策 |
 
 ## 16. 当前检查点与下一任务
 
-PBASH-001 已在 2026-08-28 完成严格合同、`workspace.execution`、产品 `bash` ToolDefinition、Generation
-冻结上下文、grant 重查、deterministic fake adapter 和 Pi 0.84.3 `noTools: "builtin"` 兼容测试。证据见
-[PBASH-001 检查点](evidence/pbash-001-2026-08-28.md)。该结果严格标记为
-`CONTRACT ONLY / FAKE RUNNER / NO REAL SHELL`。
+PBASH-001 与 PBASH-002 已在 2026-08-28 依次完成：前者冻结合同、产品 `bash` ToolDefinition 和
+deterministic fake adapter；后者接入真实 `PlatformSandboxEngine`、`macos-seatbelt-v1`、capability
+probe、最小环境、默认断网、hard-link 预检、资源限制和进程组回收。证据分别见
+[PBASH-001 检查点](evidence/pbash-001-2026-08-28.md) 与
+[PBASH-002 检查点](evidence/pbash-002-2026-08-28.md)。PBASH-002 严格标记为当前主机
+`LOCAL REAL SHELL / UNSIGNED / NOT RELEASE`。
 
-下一项是 **PBASH-002：BrokeredShellRunner + PlatformSandboxEngine + macOS capability probe**。它必须先
-定义稳定引擎接口和 fake backend capability contract，再接 Seatbelt 后端，并通过路径、环境、网络、
-timeout、取消和全后代回收负向测试。完成这些门禁前不得启动真实 Bash，也不得把 PBASH-001 证据宣称
-为本机隔离完成。
+下一项是 **PBASH-003：有序进度、跨 chunk 脱敏和完整日志 Artifact**。在该切片完成前，真实 Runner
+只向 Broker 返回有界最终输出；不得把内部 stdout/stderr chunk 直接投影给 Pi。签名包、OS 支持矩阵和
+deprecated 后端替代评估仍属于 PBASH-008。

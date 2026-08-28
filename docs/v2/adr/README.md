@@ -22,7 +22,7 @@ a superseding ADR that records migration and rollback impact.
 | [ADR-V2-015](015-personal-beta-diagnostics-and-export.md) | Personal Beta diagnostics, performance budgets and separate personal-data export | Accepted and M8 local slice implemented |
 | [ADR-V2-016](016-signed-release-and-update.md) | Signed native candidates, Ed25519 update manifests, promotion and rollback | Accepted and M9 local foundation implemented |
 | [ADR-V2-017](017-browser-computer-use-host-and-contract.md) | System-default and managed-Chromium computer-use backends with a semantic/visual V2 contract | Accepted; BCU-002 deterministic Host kernel implemented |
-| [ADR-V2-018](018-brokered-bash-and-platform-sandbox.md) | Product raw Bash contract, Broker authority and replaceable platform sandbox backends | Accepted; PBASH-001 local contract implemented, real Runner pending |
+| [ADR-V2-018](018-brokered-bash-and-platform-sandbox.md) | Product raw Bash contract, Broker authority and replaceable platform sandbox backends | Accepted; PBASH-001/PBASH-002 local macOS implementation complete, signed release pending |
 
 ADR-V2-001 through ADR-V2-018 are accepted. The M2 implementation evidence for ADR-V2-008/009 is
 recorded in [the checkpoint report](../evidence/m2-2026-08-25.md). ADR-V2-010 is implemented by the
@@ -42,6 +42,7 @@ unwired deterministic Observation/action kernel in the [BCU-002 checkpoint](../e
 Browser Bridge, Accessibility adapters, runtime projection and real-browser smoke evidence remain later
 gates.
 ADR-V2-018 supersedes ADR-V2-012's argv-only Shell decision while retaining the legacy adapter as a
-feature-flag rollback path. PBASH-001 evidence is recorded in the
-[PBASH-001 checkpoint](../evidence/pbash-001-2026-08-28.md); real platform sandbox and process execution
-remain PBASH-002 and later gates.
+feature-flag rollback path. PBASH-001 contract evidence is recorded in the
+[PBASH-001 checkpoint](../evidence/pbash-001-2026-08-28.md); the current-host macOS platform sandbox and
+real process evidence is recorded in the [PBASH-002 checkpoint](../evidence/pbash-002-2026-08-28.md).
+Streaming/log artifacts, signed packages, supported-OS validation and other platforms remain later gates.

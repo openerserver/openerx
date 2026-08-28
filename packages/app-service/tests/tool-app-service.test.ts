@@ -3,19 +3,34 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
   BrokeredBashOperation,
+  BrokeredBashRunnerMode,
   ChatEvent,
   HostToolAvailability,
   PiActivityEvent,
   PiToolRequestFrame,
 } from "@openerx/contracts";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
+import {
+  MacOSSandboxExecEngine,
+  PLATFORM_SANDBOX_ENGINE_VERSION,
+  type PlatformSandboxCapability,
+  type PlatformSandboxEngine,
+  type PlatformSandboxExecutionRequest,
+} from "@openerx/tool-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolAppService } from "../src";
 
 const directories: string[] = [];
+const liveMacOSSandbox =
+  process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec") && existsSync("/bin/bash");
 
 function fixture(
-  options: { shellAvailability?: () => HostToolAvailability; brokeredBashV1?: boolean } = {},
+  options: {
+    shellAvailability?: () => HostToolAvailability;
+    brokeredBashV1?: boolean;
+    brokeredBashRunnerMode?: BrokeredBashRunnerMode;
+    platformSandboxEngine?: PlatformSandboxEngine;
+  } = {},
 ) {
   const directory = mkdtempSync(path.join(tmpdir(), "openerx-tool-service-"));
   directories.push(directory);
@@ -57,6 +72,12 @@ function fixture(
     emit: (event) => events.push(event),
     ...(options.shellAvailability ? { shellAvailability: options.shellAvailability } : {}),
     brokeredBashV1: options.brokeredBashV1 ?? false,
+    ...(options.brokeredBashRunnerMode
+      ? { brokeredBashRunnerMode: options.brokeredBashRunnerMode }
+      : {}),
+    ...(options.platformSandboxEngine
+      ? { platformSandboxEngine: options.platformSandboxEngine }
+      : {}),
   });
   const base = {
     kind: "pi.tool.request" as const,
@@ -69,6 +90,74 @@ function fixture(
     toolName: "openerx_browser",
   };
   return { chat, tools, service, host, events, base, directory };
+}
+
+function platformEngine(available = true) {
+  const probe = vi.fn(
+    async (): Promise<PlatformSandboxCapability> => ({
+      available,
+      reason: available ? null : "BROKERED_BASH_CAPABILITY_PROBE_FAILED",
+      engineVersion: PLATFORM_SANDBOX_ENGINE_VERSION,
+      backendId: "test_macos_sandbox",
+      backendVersion: "test",
+      policyVersion: "macos-seatbelt-v1",
+      platform: "darwin" as const,
+      platformRelease: "test-build",
+      supportedProfiles: available ? ["read_only", "workspace_write"] : [],
+      environmentPolicyIds: available ? ["environment-core-v1"] : [],
+      networkPolicyIds: available ? ["network-deny-v1"] : [],
+      capabilities: {
+        filesystemBoundary: available,
+        hardlinkBoundary: available,
+        readOnlyRoots: available,
+        writableRoots: available,
+        networkDeny: available,
+        sanitizedEnvironment: available,
+        processGroupCleanup: available,
+        descendantSandboxInheritance: available,
+        pty: false,
+      },
+    }),
+  );
+  const execute = vi.fn(async (request: PlatformSandboxExecutionRequest) => ({
+    exitCode: 0,
+    signal: null,
+    stdout: "real-broker-ok",
+    stderr: "",
+    output: "real-broker-ok",
+    outputTruncated: false,
+    timedOut: false,
+    cancelled: false,
+    durationMs: 2,
+    destructionStatus: "clean" as const,
+    changedPathManifestStatus: "not_collected" as const,
+    proof: {
+      engineVersion: PLATFORM_SANDBOX_ENGINE_VERSION,
+      backendId: "test_macos_sandbox",
+      backendVersion: "test",
+      policyVersion: "macos-seatbelt-v1",
+      platform: "darwin" as const,
+      platformRelease: "test-build",
+      executionProfile: request.executionProfile,
+      environmentPolicyId: request.environmentPolicyId,
+      networkPolicyId: request.networkPolicyId,
+      filesystemBoundary: true as const,
+      hardlinkBoundary: true as const,
+      environmentSanitized: true as const,
+      networkDenied: true as const,
+      processGroupOwned: true as const,
+    },
+  }));
+  const stopAll = vi.fn(async () => undefined);
+  const engine: PlatformSandboxEngine = {
+    engineVersion: PLATFORM_SANDBOX_ENGINE_VERSION,
+    backendId: "test_macos_sandbox",
+    policyVersion: "macos-seatbelt-v1",
+    probe,
+    execute,
+    stopAll,
+  };
+  return { engine, execute, probe, stopAll };
 }
 
 afterEach(() => {
@@ -493,6 +582,212 @@ describe("ToolAppService", () => {
       reason: "BROKERED_BASH_FAKE_RUNNER_ONLY",
       availableToolNames: ["bash"],
     });
+    chat.close();
+    await service.close();
+  });
+
+  it("projects and executes real brokered Bash only after the platform capability probe passes", async () => {
+    const platform = platformEngine();
+    const { chat, service, base, directory } = fixture({
+      brokeredBashV1: true,
+      brokeredBashRunnerMode: "macos",
+      platformSandboxEngine: platform.engine,
+      shellAvailability: () => ({
+        availableToolNames: ["openerx_shell", "openerx_shell_process"],
+        unavailableReasons: {},
+      }),
+    });
+    const grant = service.grantWorkspace({
+      rootPath: directory,
+      conversationId: base.conversationId,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "运行真实 Broker 测试命令",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+    });
+    const execution = prepared.brokeredBashExecution;
+    if (!execution) throw new Error("platform execution context missing");
+    expect(prepared.availableToolNames).toContain("bash");
+    expect(prepared.availableToolNames).not.toContain("openerx_shell");
+    expect(execution).toMatchObject({
+      sandboxPolicyVersion: "macos-seatbelt-v1",
+      networkPolicyId: "network-deny-v1",
+    });
+    expect(
+      (
+        await service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+      ).find(({ capability }) => capability === "shell"),
+    ).toMatchObject({ status: "available", reason: null, availableToolNames: ["bash"] });
+
+    service.startGeneration({
+      generationId: base.generationId,
+      conversationId: base.conversationId,
+      branchId: base.branchId,
+      assistantMessageId: base.assistantMessageId,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    service.freezeGenerationConfiguration(base.generationId, {
+      initialToolNames: prepared.initialToolNames,
+      availableToolNames: prepared.availableToolNames,
+      skillInstallationIds: [],
+      instructionSources: prepared.instructionSources,
+      brokeredBashExecution: execution,
+    });
+    const frame: PiToolRequestFrame = {
+      ...base,
+      piToolCallId: "pi-platform-bash-call",
+      toolName: "bash",
+      operation: {
+        operation: "shell_command_execute",
+        idempotencyKey: "pbash-platform-app-service-0001",
+        ...execution,
+        shell: "bash",
+        command: "npm test",
+        timeoutMs: 120_000,
+      },
+    };
+    await expect(service.handleRequest(frame)).resolves.toMatchObject({
+      summary: "real-broker-ok",
+      sideEffectCommitted: true,
+      data: {
+        executionPerformed: true,
+        runner: "platform_sandbox",
+        destructionStatus: "clean",
+      },
+    });
+    expect(platform.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRoot: expect.objectContaining({ grantId: grant.id, rootPath: grant.rootPath }),
+        command: "npm test",
+      }),
+    );
+    chat.close();
+    await service.close();
+    expect(platform.stopAll).toHaveBeenCalledOnce();
+  });
+
+  it("executes the full AppService to Broker path through the live macOS sandbox", async () => {
+    if (!liveMacOSSandbox) return;
+    const platformSandboxEngine = new MacOSSandboxExecEngine();
+    await expect(platformSandboxEngine.probe()).resolves.toMatchObject({ available: true });
+    const { chat, service, base, directory } = fixture({
+      brokeredBashV1: true,
+      brokeredBashRunnerMode: "macos",
+      platformSandboxEngine,
+    });
+    const grant = service.grantWorkspace({
+      rootPath: directory,
+      conversationId: base.conversationId,
+      access: "read_only",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "输出沙盒存活标记",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+    });
+    const execution = prepared.brokeredBashExecution;
+    if (!execution) throw new Error("live platform execution context missing");
+    service.startGeneration({
+      generationId: base.generationId,
+      conversationId: base.conversationId,
+      branchId: base.branchId,
+      assistantMessageId: base.assistantMessageId,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    service.freezeGenerationConfiguration(base.generationId, {
+      initialToolNames: prepared.initialToolNames,
+      availableToolNames: prepared.availableToolNames,
+      skillInstallationIds: [],
+      instructionSources: prepared.instructionSources,
+      brokeredBashExecution: execution,
+    });
+    await expect(
+      service.handleRequest({
+        ...base,
+        piToolCallId: "pi-live-macos-bash-call",
+        toolName: "bash",
+        operation: {
+          operation: "shell_command_execute",
+          idempotencyKey: "pbash-live-app-service-0001",
+          ...execution,
+          shell: "bash",
+          command: "printf pbash-app-service-live",
+          timeoutMs: 5_000,
+        },
+      }),
+    ).resolves.toMatchObject({
+      summary: "pbash-app-service-live",
+      sideEffectCommitted: false,
+      data: {
+        executionPerformed: true,
+        runner: "platform_sandbox",
+        sandboxPolicyVersion: "macos-seatbelt-v1",
+        proof: {
+          backendId: "macos_sandbox_exec",
+          filesystemBoundary: true,
+          hardlinkBoundary: true,
+          environmentSanitized: true,
+          networkDenied: true,
+          processGroupOwned: true,
+        },
+      },
+    });
+    chat.close();
+    await service.close();
+  });
+
+  it("keeps Bash unavailable when the selected platform backend fails its probe", async () => {
+    const platform = platformEngine(false);
+    const { chat, service, base, directory } = fixture({
+      brokeredBashV1: true,
+      brokeredBashRunnerMode: "macos",
+      platformSandboxEngine: platform.engine,
+      shellAvailability: () => ({
+        availableToolNames: ["openerx_shell", "openerx_shell_process"],
+        unavailableReasons: {},
+      }),
+    });
+    service.grantWorkspace({
+      rootPath: directory,
+      conversationId: null,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "运行测试",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+    });
+    expect(prepared.availableToolNames).not.toContain("bash");
+    expect(prepared.availableToolNames).not.toContain("openerx_shell");
+    expect(prepared.brokeredBashExecution).toBeUndefined();
+    expect(
+      (
+        await service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+      ).find(({ capability }) => capability === "shell"),
+    ).toMatchObject({
+      status: "unavailable",
+      reason: "BROKERED_BASH_CAPABILITY_PROBE_FAILED",
+      availableToolNames: [],
+    });
+    expect(platform.execute).not.toHaveBeenCalled();
     chat.close();
     await service.close();
   });

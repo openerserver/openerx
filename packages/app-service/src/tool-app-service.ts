@@ -32,12 +32,16 @@ import {
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+  BROKERED_BASH_RUNNER_MODE_ENV,
   BROKERED_BASH_V1_FEATURE_FLAG,
+  type BrokeredBashRunnerMode,
+  brokeredBashRunnerMode,
   brokeredBashV1Enabled,
   piHostContractVersion,
 } from "@openerx/contracts";
 import type { ToolRepository } from "@openerx/storage";
 import {
+  BrokeredBashAdapter,
   BrokeredBashFakeAdapter,
   BuiltinToolAdapter,
   type CapabilityAvailabilityHost,
@@ -50,8 +54,10 @@ import {
   HostCapabilityAdapter,
   HttpPlatformImageGenerationTransport,
   HttpPlatformWebSearchTransport,
+  MacOSSandboxExecEngine,
   McpToolAdapter,
   type OAuthInteractionHost,
+  type PlatformSandboxEngine,
   ShellToolAdapter,
   shellToolAvailability,
   summarizeOperation,
@@ -207,6 +213,15 @@ export interface ToolAppServiceOptions {
   additionalAdapters?: ToolAdapter[];
   shellAvailability?: () => HostToolAvailability;
   brokeredBashV1?: boolean;
+  brokeredBashRunnerMode?: BrokeredBashRunnerMode;
+  platformSandboxEngine?: PlatformSandboxEngine;
+}
+
+interface BrokeredBashRuntimeAvailability {
+  available: boolean;
+  mode: BrokeredBashRunnerMode | null;
+  reason: string | null;
+  sandboxPolicyVersion: string | null;
 }
 
 interface ActiveProjection {
@@ -237,6 +252,8 @@ export class ToolAppService {
   readonly #host: CapabilityAvailabilityHost;
   readonly #shellAvailability: () => HostToolAvailability;
   readonly #brokeredBashV1: boolean;
+  readonly #brokeredBashRunnerMode: BrokeredBashRunnerMode | null;
+  readonly #platformSandboxEngine?: PlatformSandboxEngine;
 
   constructor(options: ToolAppServiceOptions) {
     this.#repository = options.repository;
@@ -246,6 +263,13 @@ export class ToolAppService {
     this.#shellAvailability = options.shellAvailability ?? shellToolAvailability;
     this.#brokeredBashV1 =
       options.brokeredBashV1 ?? brokeredBashV1Enabled(process.env[BROKERED_BASH_V1_FEATURE_FLAG]);
+    this.#brokeredBashRunnerMode =
+      options.brokeredBashRunnerMode ??
+      brokeredBashRunnerMode(process.env[BROKERED_BASH_RUNNER_MODE_ENV]);
+    this.#platformSandboxEngine =
+      this.#brokeredBashV1 && this.#brokeredBashRunnerMode === "macos"
+        ? (options.platformSandboxEngine ?? new MacOSSandboxExecEngine())
+        : undefined;
     const oauth = options.oauth;
     this.#mcp = new McpToolAdapter(
       options.host,
@@ -277,7 +301,7 @@ export class ToolAppService {
       new ShellToolAdapter([options.workspaceDirectory], (workspaceGrantId, conversationId) =>
         options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
       ),
-      ...(this.#brokeredBashV1
+      ...(this.#brokeredBashV1 && this.#brokeredBashRunnerMode === "fake"
         ? [
             new BrokeredBashFakeAdapter(
               (workspaceGrantId, conversationId) =>
@@ -285,7 +309,18 @@ export class ToolAppService {
               (generationId) => this.#brokeredBashExecutionByGeneration.get(generationId),
             ),
           ]
-        : []),
+        : this.#brokeredBashV1 &&
+            this.#brokeredBashRunnerMode === "macos" &&
+            this.#platformSandboxEngine
+          ? [
+              new BrokeredBashAdapter(
+                (workspaceGrantId, conversationId) =>
+                  options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
+                (generationId) => this.#brokeredBashExecutionByGeneration.get(generationId),
+                this.#platformSandboxEngine,
+              ),
+            ]
+          : []),
       this.#workspace,
       new HostCapabilityAdapter(options.host, options.resolveUploadPath, options.ingestDownload),
       this.#mcp,
@@ -401,7 +436,12 @@ export class ToolAppService {
     });
     const hostAvailability = await this.#safeHostAvailability();
     const shellAvailability = this.#shellAvailability();
-    const brokeredBashExecution = this.#prepareBrokeredBashExecution(workspaceGrants, input);
+    const brokeredBashRuntime = await this.#brokeredBashRuntimeAvailability();
+    const brokeredBashExecution = this.#prepareBrokeredBashExecution(
+      workspaceGrants,
+      input,
+      brokeredBashRuntime,
+    );
     let mcpTools: McpToolDescriptor[] = [];
     try {
       mcpTools = await this.#mcp.discoverEnabledTools();
@@ -533,6 +573,7 @@ export class ToolAppService {
     const checkedAt = new Date().toISOString();
     const hostAvailability = await this.#safeHostAvailability();
     const shellAvailability = this.#shellAvailability();
+    const brokeredBashRuntime = await this.#brokeredBashRuntimeAvailability();
     const readiness = (
       capability: ToolRuntimeCapability,
       status: ToolRuntimeStatus,
@@ -606,27 +647,35 @@ export class ToolAppService {
       readiness(
         "shell",
         this.#brokeredBashV1
-          ? executionWorkspaceGrants.length === 1
-            ? "degraded"
-            : "authorization_required"
+          ? !brokeredBashRuntime.available
+            ? "unavailable"
+            : executionWorkspaceGrants.length === 1
+              ? brokeredBashRuntime.mode === "fake"
+                ? "degraded"
+                : "available"
+              : "authorization_required"
           : !shellHostAvailable
             ? "unavailable"
             : writableWorkspaceAvailable
               ? "available"
               : "authorization_required",
         this.#brokeredBashV1
-          ? executionWorkspaceGrants.length === 1
-            ? "BROKERED_BASH_FAKE_RUNNER_ONLY"
-            : executionWorkspaceGrants.length === 0
-              ? "WORKSPACE_GRANT_REQUIRED"
-              : "BROKERED_BASH_ACTIVE_WORKSPACE_REQUIRED"
+          ? !brokeredBashRuntime.available
+            ? (brokeredBashRuntime.reason ?? "BROKERED_BASH_RUNNER_UNAVAILABLE")
+            : executionWorkspaceGrants.length === 1
+              ? brokeredBashRuntime.mode === "fake"
+                ? "BROKERED_BASH_FAKE_RUNNER_ONLY"
+                : null
+              : executionWorkspaceGrants.length === 0
+                ? "WORKSPACE_GRANT_REQUIRED"
+                : "BROKERED_BASH_ACTIVE_WORKSPACE_REQUIRED"
           : !shellHostAvailable
             ? (shellAvailability.unavailableReasons.openerx_shell ?? "SHELL_OS_SANDBOX_UNAVAILABLE")
             : writableWorkspaceAvailable
               ? null
               : "WORKSPACE_WRITE_GRANT_REQUIRED",
         this.#brokeredBashV1
-          ? executionWorkspaceGrants.length === 1
+          ? brokeredBashRuntime.available && executionWorkspaceGrants.length === 1
             ? ["bash"]
             : []
           : shellHostAvailable && writableWorkspaceAvailable
@@ -1105,8 +1154,11 @@ export class ToolAppService {
   #prepareBrokeredBashExecution(
     workspaceGrants: WorkspaceGrant[],
     input: { activeExecutionGrantId?: string; additionalExecutionGrantIds?: string[] },
+    runtime: BrokeredBashRuntimeAvailability,
   ): BrokeredBashExecutionContext | undefined {
-    if (!this.#brokeredBashV1) return undefined;
+    if (!this.#brokeredBashV1 || !runtime.available || !runtime.sandboxPolicyVersion) {
+      return undefined;
+    }
     const grants = new Map(workspaceGrants.map((grant) => [grant.id, grant]));
     const active = input.activeExecutionGrantId
       ? grants.get(input.activeExecutionGrantId)
@@ -1129,7 +1181,67 @@ export class ToolAppService {
       executionProfile: active.access === "read_write" ? "workspace_write" : "read_only",
       environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
       networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
-      sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+      sandboxPolicyVersion: runtime.sandboxPolicyVersion,
+    };
+  }
+
+  async #brokeredBashRuntimeAvailability(): Promise<BrokeredBashRuntimeAvailability> {
+    if (!this.#brokeredBashV1) {
+      return {
+        available: false,
+        mode: null,
+        reason: "BROKERED_BASH_DISABLED",
+        sandboxPolicyVersion: null,
+      };
+    }
+    if (this.#brokeredBashRunnerMode === "fake") {
+      return {
+        available: true,
+        mode: "fake",
+        reason: "BROKERED_BASH_FAKE_RUNNER_ONLY",
+        sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+      };
+    }
+    if (this.#brokeredBashRunnerMode !== "macos" || !this.#platformSandboxEngine) {
+      return {
+        available: false,
+        mode: this.#brokeredBashRunnerMode,
+        reason: "BROKERED_BASH_RUNNER_MODE_INVALID",
+        sandboxPolicyVersion: null,
+      };
+    }
+    const capability = await this.#platformSandboxEngine.probe();
+    const requiredCapabilities =
+      capability.capabilities.filesystemBoundary &&
+      capability.capabilities.hardlinkBoundary &&
+      capability.capabilities.readOnlyRoots &&
+      capability.capabilities.writableRoots &&
+      capability.capabilities.networkDeny &&
+      capability.capabilities.sanitizedEnvironment &&
+      capability.capabilities.processGroupCleanup &&
+      capability.capabilities.descendantSandboxInheritance &&
+      !capability.capabilities.pty;
+    if (
+      !capability.available ||
+      !requiredCapabilities ||
+      capability.policyVersion !== this.#platformSandboxEngine.policyVersion ||
+      !capability.supportedProfiles.includes("read_only") ||
+      !capability.supportedProfiles.includes("workspace_write") ||
+      !capability.environmentPolicyIds.includes(BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID) ||
+      !capability.networkPolicyIds.includes(BROKERED_BASH_DENY_NETWORK_POLICY_ID)
+    ) {
+      return {
+        available: false,
+        mode: "macos",
+        reason: capability.reason ?? "BROKERED_BASH_CAPABILITY_PROBE_FAILED",
+        sandboxPolicyVersion: null,
+      };
+    }
+    return {
+      available: true,
+      mode: "macos",
+      reason: null,
+      sandboxPolicyVersion: capability.policyVersion,
     };
   }
 

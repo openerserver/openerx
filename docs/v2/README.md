@@ -84,6 +84,7 @@
 33. [20-pbash-implementation-plan.md](20-pbash-implementation-plan.md)：PBASH-001 至 PBASH-008 的可执行实施顺序、当前切片和验收门槛。
 34. [adr/018-brokered-bash-and-platform-sandbox.md](adr/018-brokered-bash-and-platform-sandbox.md)：产品 raw Bash、Broker 权限边界和可替换平台沙盒后端的规范性决策。
 35. [evidence/pbash-001-2026-08-28.md](evidence/pbash-001-2026-08-28.md)：PBASH-001 严格合同、Pi 投影、冻结执行上下文和 fake Runner 的日期化证据。
+36. [evidence/pbash-002-2026-08-28.md](evidence/pbash-002-2026-08-28.md)：PBASH-002 真实 macOS 平台沙盒、hard-link 防线、断网和进程组回收的本机证据。
 
 ## 5. V1 与未来方向边界
 
@@ -145,6 +146,7 @@ MV3 扩展、Native Messaging/Main owner-only 传输、可信连接 UI、真实 
 Pi Bash Broker 化采用“产品 raw-shell ToolDefinition → Capability Broker → BrokeredShellRunner →
 PlatformSandboxEngine”结构；架构和安全边界见
 [19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)。当前按
-[20-pbash-implementation-plan.md](20-pbash-implementation-plan.md) 已完成 PBASH-001，只实现严格合同和
-deterministic fake Runner；[日期化证据](evidence/pbash-001-2026-08-28.md) 不代表真实 Shell 或本机隔离
-完成。下一阶段从 PBASH-002 的 PlatformSandboxEngine 和 macOS capability probe 开始。
+[20-pbash-implementation-plan.md](20-pbash-implementation-plan.md) 已完成 PBASH-001 合同/fake Runner 与
+PBASH-002 当前 macOS 主机真实 `PlatformSandboxEngine`。本机负向门禁和边界见
+[PBASH-002 日期化证据](evidence/pbash-002-2026-08-28.md)；`sandbox-exec` 已 deprecated，当前结果不代表
+签名发布或未来 OS 支持。下一阶段是 PBASH-003 的有序进度、跨 chunk 脱敏和完整日志 Artifact。

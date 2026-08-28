@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   BROKERED_BASH_DEFAULT_TIMEOUT_MS,
+  BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
   BROKERED_BASH_MAX_COMMAND_BYTES,
   BROKERED_BASH_MAX_TIMEOUT_MS,
   type BrokeredBashExecutionContext,
@@ -27,11 +28,18 @@ export function createProductBrokeredBashTool(input: {
   execution: BrokeredBashExecutionContext;
   transport: BrokeredBashToolTransport;
 }): ToolDefinition {
+  const fakeRunner =
+    input.execution.sandboxPolicyVersion === BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION;
+  const accessDescription =
+    input.execution.executionProfile === "workspace_write"
+      ? "The active workspace is writable, except protected repository metadata such as .git."
+      : "The active workspace is read-only.";
   return defineTool({
     name: "bash",
-    label: "Validate shell command contract",
-    description:
-      "PBASH-001 contract preview. Accept a Bash command for the active authorized workspace, but the current deterministic fake runner validates the request without executing a process.",
+    label: fakeRunner ? "Validate shell command contract" : "Run Bash in workspace sandbox",
+    description: fakeRunner
+      ? "PBASH-001 contract preview. Accept a Bash command for the active authorized workspace, but the current deterministic fake runner validates the request without executing a process."
+      : `Run a Bash command in a platform-enforced sandbox rooted at the active authorized workspace. ${accessDescription} Network access is disabled. Additional authorized workspaces, when present, are available as $OPENERX_WORKSPACE_1, $OPENERX_WORKSPACE_2, and so on; do not assume host paths.`,
     parameters: Type.Object(
       {
         command: Type.String({

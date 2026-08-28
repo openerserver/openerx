@@ -3,9 +3,11 @@ import { entityIdSchema } from "./common";
 
 export const BROKERED_BASH_CONTRACT_VERSION = "brokered_bash_v1" as const;
 export const BROKERED_BASH_V1_FEATURE_FLAG = "OPENERX_BROKERED_BASH_V1" as const;
+export const BROKERED_BASH_RUNNER_MODE_ENV = "OPENERX_BROKERED_BASH_RUNNER" as const;
 export const BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID = "environment-core-v1" as const;
 export const BROKERED_BASH_DENY_NETWORK_POLICY_ID = "network-deny-v1" as const;
 export const BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION = "pbash-fake-v1" as const;
+export const BROKERED_BASH_MACOS_SANDBOX_POLICY_VERSION = "macos-seatbelt-v1" as const;
 export const BROKERED_BASH_MAX_COMMAND_BYTES = 65_536;
 export const BROKERED_BASH_DEFAULT_TIMEOUT_MS = 120_000;
 export const BROKERED_BASH_MAX_TIMEOUT_MS = 1_800_000;
@@ -15,18 +17,51 @@ export function brokeredBashV1Enabled(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true";
 }
 
+export const brokeredBashRunnerModeSchema = z.enum(["fake", "macos"]);
+
+export function brokeredBashRunnerMode(
+  value: string | undefined,
+): z.infer<typeof brokeredBashRunnerModeSchema> | null {
+  if (value === undefined || value.trim() === "") return "fake";
+  const parsed = brokeredBashRunnerModeSchema.safeParse(value.trim().toLocaleLowerCase());
+  return parsed.success ? parsed.data : null;
+}
+
 export const brokeredBashExecutionProfileSchema = z.enum(["read_only", "workspace_write"]);
 export const brokeredBashPolicyIdSchema = z.string().regex(/^[a-z][a-z0-9._-]{2,119}$/u);
 export const brokeredBashErrorCodeSchema = z.enum([
   "BROKERED_BASH_ACTIVE_WORKSPACE_REQUIRED",
   "BROKERED_BASH_ADDITIONAL_WORKSPACE_INVALID",
+  "BROKERED_BASH_BASH_MISSING",
+  "BROKERED_BASH_BROAD_WORKSPACE_DENIED",
+  "BROKERED_BASH_CANCELLED",
+  "BROKERED_BASH_CAPABILITY_PROBE_FAILED",
+  "BROKERED_BASH_COMMAND_FAILED",
+  "BROKERED_BASH_DESTRUCTION_UNCERTAIN",
   "BROKERED_BASH_EXECUTION_CONTEXT_MISMATCH",
   "BROKERED_BASH_EXECUTION_CONTEXT_REQUIRED",
   "BROKERED_BASH_EXECUTION_PROFILE_MISMATCH",
   "BROKERED_BASH_FAKE_RUNNER_ONLY",
+  "BROKERED_BASH_HARDLINK_BOUNDARY_UNSAFE",
+  "BROKERED_BASH_PLATFORM_UNSUPPORTED",
   "BROKERED_BASH_POLICY_MISMATCH",
+  "BROKERED_BASH_PROTECTED_WORKSPACE_DENIED",
+  "BROKERED_BASH_PROCESS_LIMIT_PROBE_FAILED",
+  "BROKERED_BASH_PROCESS_LIMIT_UNAVAILABLE",
+  "BROKERED_BASH_RESOURCE_LIMIT_INVALID",
+  "BROKERED_BASH_RUNNER_MODE_INVALID",
+  "BROKERED_BASH_RUNNER_START_FAILED",
   "BROKERED_BASH_RUNNER_UNAVAILABLE",
+  "BROKERED_BASH_SANDBOX_EXEC_MISSING",
+  "BROKERED_BASH_SANDBOX_PATH_INVALID",
+  "BROKERED_BASH_SANDBOX_PROFILE_TOO_LARGE",
+  "BROKERED_BASH_TIMEOUT",
+  "BROKERED_BASH_TOOL_CALL_ALREADY_RUNNING",
   "BROKERED_BASH_WORKSPACE_GRANT_INVALID",
+  "BROKERED_BASH_WORKSPACE_PREFLIGHT_FAILED",
+  "BROKERED_BASH_WORKSPACE_PREFLIGHT_LIMIT",
+  "BROKERED_BASH_WORKSPACE_ROOT_INVALID",
+  "BROKERED_BASH_WORKSPACE_ROOT_OVERLAP",
 ]);
 
 const additionalExecutionGrantIdsSchema = z
@@ -86,5 +121,6 @@ export const brokeredBashOperationSchema = z
 
 export type BrokeredBashExecutionContext = z.infer<typeof brokeredBashExecutionContextSchema>;
 export type BrokeredBashExecutionProfile = z.infer<typeof brokeredBashExecutionProfileSchema>;
+export type BrokeredBashRunnerMode = z.infer<typeof brokeredBashRunnerModeSchema>;
 export type BrokeredBashOperation = z.infer<typeof brokeredBashOperationSchema>;
 export type BrokeredBashErrorCode = z.infer<typeof brokeredBashErrorCodeSchema>;

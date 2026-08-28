@@ -4,7 +4,9 @@ import {
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+  brokeredBashErrorCodeSchema,
   brokeredBashOperationSchema,
+  brokeredBashRunnerMode,
   brokeredBashV1Enabled,
   piHostContractVersion,
   piPromptFrameSchema,
@@ -32,7 +34,7 @@ const operation = {
   timeoutMs: 120_000,
 };
 
-describe("PBASH-001 brokered Bash contracts", () => {
+describe("brokered Bash contracts", () => {
   it("keeps the feature flag default-off and bumps the private Pi IPC contract", () => {
     expect(brokeredBashV1Enabled(undefined)).toBe(false);
     expect(brokeredBashV1Enabled("0")).toBe(false);
@@ -40,6 +42,28 @@ describe("PBASH-001 brokered Bash contracts", () => {
     expect(brokeredBashV1Enabled("1")).toBe(true);
     expect(brokeredBashV1Enabled("TRUE")).toBe(true);
     expect(piHostContractVersion).toBe(4);
+  });
+
+  it("selects runner mode explicitly and fails closed on invalid configuration", () => {
+    expect(brokeredBashRunnerMode(undefined)).toBe("fake");
+    expect(brokeredBashRunnerMode("  ")).toBe("fake");
+    expect(brokeredBashRunnerMode("fake")).toBe("fake");
+    expect(brokeredBashRunnerMode("MACOS")).toBe("macos");
+    expect(brokeredBashRunnerMode("host-shell")).toBeNull();
+  });
+
+  it("keeps PBASH-002 failures on stable machine-readable codes", () => {
+    for (const code of [
+      "BROKERED_BASH_COMMAND_FAILED",
+      "BROKERED_BASH_TIMEOUT",
+      "BROKERED_BASH_CANCELLED",
+      "BROKERED_BASH_DESTRUCTION_UNCERTAIN",
+      "BROKERED_BASH_SANDBOX_EXEC_MISSING",
+      "BROKERED_BASH_HARDLINK_BOUNDARY_UNSAFE",
+    ]) {
+      expect(brokeredBashErrorCodeSchema.safeParse(code).success).toBe(true);
+    }
+    expect(brokeredBashErrorCodeSchema.safeParse("BROKERED_BASH_EXIT_7").success).toBe(false);
   });
 
   it("accepts the complete versioned operation and rejects unsafe or ambiguous inputs", () => {

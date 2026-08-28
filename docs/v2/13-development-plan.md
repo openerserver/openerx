@@ -328,15 +328,19 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-### 10.1 当前执行切片：PBASH-001
+### 10.1 当前执行切片：PBASH-002 本机完成，PBASH-003 下一步
 
 用户已接受 [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)，并已完成
-[PBASH 实施计划](20-pbash-implementation-plan.md) 的 PBASH-001：严格 `brokered_bash_v1` 合同、
-产品自有 `bash` ToolDefinition、按 Generation 冻结的执行上下文，以及不启动真实进程的 deterministic
-fake Runner。该切片默认 feature flag 关闭，并保持 `noTools: "builtin"`；证据严格标记为
-`CONTRACT ONLY / FAKE RUNNER / NO REAL SHELL`，见
-[PBASH-001 检查点](evidence/pbash-001-2026-08-28.md)。下一切片是 PBASH-002；在其平台引擎和负向门禁
-完成前，不得把当前工作宣称为本机 Bash、Seatbelt 或发布级隔离完成。
+[PBASH 实施计划](20-pbash-implementation-plan.md) 的 PBASH-001 与 PBASH-002：严格
+`brokered_bash_v1` 合同、产品自有 `bash` ToolDefinition、Generation 冻结上下文、显式
+`fake`/`macos` runner mode、真实 `PlatformSandboxEngine` 和 `macos-seatbelt-v1` 后端。当前 macOS
+主机已通过文件、hard link、最小环境、默认断网、宿主进程和全后代回收门禁，并继续保持
+`noTools: "builtin"`；证据见 [PBASH-001 检查点](evidence/pbash-001-2026-08-28.md) 与
+[PBASH-002 检查点](evidence/pbash-002-2026-08-28.md)。
+
+下一切片是 PBASH-003：有序 `pi.tool.progress`、跨 chunk 脱敏和完整日志 Artifact。完成前真实 Runner
+只返回有界最终输出。当前 `sandbox-exec` 后端已被 macOS 标记 deprecated，签名包、支持 OS 矩阵、
+替代后端评估、Linux 和 Windows 仍不得宣称完成。
 
 ### 10.2 既有外部门禁
 

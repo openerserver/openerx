@@ -1,6 +1,6 @@
 # ADR-V2-018: Brokered Bash and platform sandbox boundary
 
-- Status: Accepted; PBASH-001 local contract implemented, real Runner unavailable
+- Status: Accepted; PBASH-001/PBASH-002 local implementation complete, signed release pending
 - Date: 2026-08-28
 - Owners: Desktop, App Service, Pi Host and Security
 - Supersedes: the Shell execution decision in ADR-V2-012
@@ -38,16 +38,26 @@ grant state and policy binding, returns `executionPerformed=false`, and never im
 API. `OPENERX_BROKERED_BASH_V1` defaults off. When enabled, legacy `openerx_shell` tools are suppressed;
 if a trusted active workspace cannot be selected, Shell exposure is empty rather than falling back.
 
+PBASH-002 adds explicit `fake`/`macos` runner modes, a stable `PlatformSandboxEngine` contract and a
+`macos-seatbelt-v1` backend. App Service projects real `bash` only after the backend capability probe
+passes. The backend launches `/bin/bash --noprofile --norc` through the external system
+`/usr/bin/sandbox-exec` process, starts from an empty environment, denies network and broad Mach/process
+access, constrains roots and resources, and owns one process group per ToolCall. A pre-spawn inode scan
+rejects hard links with aliases outside the authorized root set or across writable/read-only boundaries;
+the profile also denies creating hard links and file clones. PBASH-002 deliberately returns only bounded
+final output—streaming and complete log artifacts remain PBASH-003.
+
 ## Consequences
 
 - Models keep the familiar raw Bash call shape without receiving grant IDs, host paths or policy knobs.
 - Pi Host cannot create a host process or approve a broader execution profile.
 - App Service gains a generation-bound contract that later platform backends can implement without
   changing the model tool.
-- PBASH-001 is contract evidence only. It is not proof of Seatbelt, filesystem isolation, network denial,
-  cancellation, process-tree cleanup or signed-package behavior.
-- A real Runner requires platform-specific negative tests and capability evidence before the feature can
-  leave fake mode.
+- PBASH-001 remains contract-only evidence; PBASH-002 supplies current-host macOS process, filesystem,
+  environment, network, hard-link and process-tree evidence.
+- `/usr/bin/sandbox-exec` is marked deprecated by the current macOS manual. It remains a replaceable local
+  backend and cannot become release evidence without signed-package and supported-OS matrix validation.
+- Linux and Windows remain unavailable; a missing or drifting backend never falls back to host Bash.
 
 ## Migration and rollback
 
@@ -68,14 +78,17 @@ if a trusted active workspace cannot be selected, Shell exposure is empty rather
 - Require Docker or a VM on every platform: useful high-isolation backends remain optional implementations,
   not a universal product contract.
 - Treat `/usr/bin/sandbox-exec` as a newly installed sandbox: it is only one macOS backend implementation
-  detail and still requires versioned policy and signed-build evidence.
+  detail, is deprecated by macOS, and still requires versioned policy and signed-build evidence.
 
 ## Verification
 
 - [Brokered Bash architecture](../19-pi-bash-brokered-execution-plan.md)
 - [PBASH implementation plan](../20-pbash-implementation-plan.md)
 - [PBASH-001 implementation evidence](../evidence/pbash-001-2026-08-28.md)
+- [PBASH-002 implementation evidence](../evidence/pbash-002-2026-08-28.md)
 - `packages/contracts/tests/brokered-bash.test.ts`
 - `packages/pi-host/tests/brokered-bash-tool.test.ts`
 - `packages/tool-sdk/tests/brokered-bash-fake-adapter.test.ts`
+- `packages/tool-sdk/tests/brokered-bash-adapter.test.ts`
+- `packages/tool-sdk/tests/macos-sandbox-engine.test.ts`
 - `packages/app-service/tests/tool-app-service.test.ts`
