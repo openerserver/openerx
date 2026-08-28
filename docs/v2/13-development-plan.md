@@ -328,7 +328,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-### 10.1 当前执行切片：PBASH-007 本机确定性完成，PBASH-008 下一步
+### 10.1 当前执行切片：PBASH-008 本机 fail-closed 完成，外部发布受阻
 
 用户已接受 [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)，并已完成
 [PBASH 实施计划](20-pbash-implementation-plan.md) 的 PBASH-001 至 PBASH-003：严格
@@ -354,9 +354,12 @@ Remote 继续固定 core + deny，私网、metadata、重定向新目标和 DNS 
 9 类确定性 Runner A/B：旧路径 8/9、Brokered 路径 9/9，安全越界与未解释回归均为 0；同时完成
 Local Alpha/Runner/policy/环境/网络/工作区 UI、单工具投影和 fail-closed 回滚演练。真实模型轮次、
 Token 与 Provider 成本未运行，明确保留为外部门禁；证据见
-[PBASH-007 检查点](evidence/pbash-007-2026-08-28.md)。下一切片 PBASH-008 收口本机平台支持矩阵。当前
-`sandbox-exec` 后端已被 macOS 标记 deprecated，Developer ID 签名/公证包、
-支持 OS 矩阵、替代后端评估、Linux 和 Windows 仍不得宣称完成。
+[PBASH-007 检查点](evidence/pbash-007-2026-08-28.md)。PBASH-008 已发布
+[机器可读平台矩阵](evidence/pbash-008-platform-matrix-2026-08-28.json)，工具中心显示实际 backend 与
+platform/OS build，并验证 Linux/Windows、缺失 backend、probe 失败和 unsigned App 都不能越过门禁；
+证据见 [PBASH-008 检查点](evidence/pbash-008-2026-08-28.md)。PBASH 本机文档与 fail-closed 实现切片
+已经收口。当前 `sandbox-exec` 后端已被 macOS 标记 deprecated，真实模型 A/B、Developer ID 签名/
+公证包、macOS x64、替代后端评估、Linux/WSL2 和 Windows backend 仍不得宣称完成。
 
 ### 10.2 既有外部门禁
 

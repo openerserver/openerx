@@ -1,14 +1,15 @@
 # OpenerX Pi Bash Broker 化执行方案
 
-- 状态：`ARCHITECTURE ACCEPTED / PBASH-001..PBASH-006 LOCAL COMPLETE / PBASH-007 LOCAL DETERMINISTIC COMPLETE / PBASH-008 NEXT`
+- 状态：`ARCHITECTURE ACCEPTED / PBASH-001..PBASH-006 LOCAL COMPLETE / PBASH-007 LOCAL DETERMINISTIC COMPLETE / PBASH-008 LOCAL FAIL-CLOSED COMPLETE / EXTERNAL RELEASE BLOCKED`
 - 日期：2026-08-28（Asia/Shanghai）
 - 范围：Desktop Pi Host、App Service Capability Broker、Platform Sandbox Engine、Workspace Scope、Remote
 - 依赖：[ADR-V2-007](adr/007-pi-harness-boundary.md)、
   [ADR-V2-012](adr/012-capability-broker-and-tool-projection.md)、
   [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)
-- 当前证据边界：PBASH-007 已在本机完成 9 类旧 Shell/Brokered Bash 确定性 A/B、工具中心运行时信息、
-  单工具投影和回滚路径；真实模型 A/B、iOS/Android 真机、生产 HTTPS/WSS/推送、签名包、未来 macOS、
-  Linux、Windows 或发布故障演练仍未完成
+- 当前证据边界：PBASH-008 已发布机器可读平台矩阵、严格拒绝未签名包，并验证 Linux/Windows 与
+  backend probe 失败时 fail-closed；当前 macOS 仍只是 unsigned Local Alpha。真实模型 A/B、
+  iOS/Android 真机、生产 HTTPS/WSS/推送、Developer ID/公证包、未来 macOS、Linux/Windows backend
+  或发布故障演练仍未完成
 
 ## 1. 结论
 
@@ -540,7 +541,7 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 | PBASH-005 | Remote、审批与幂等 | Remote 同链路、精确审批、重复投递、`outcome_unknown` 对账                                          | LOCAL COMPLETE；重放不重复执行；Remote 不扩大权限             |
 | PBASH-006 | 网络与环境 policy  | `none/core/all`、include/exclude/set、egress proxy/domain policy、Secret canary                    | 默认离线；环境无凭证；允许网络仍不能访问本机/私网/metadata    |
 | PBASH-007 | 效果评估与渐进启用 | Golden A/B、feature flag、工具可用性 UI、回滚演练                                                  | LOCAL DETERMINISTIC COMPLETE；模型级 A/B 仍是外部门禁          |
-| PBASH-008 | 发布与平台矩阵     | 签名 macOS、Linux/Windows 后端路线和安装包证据                                                     | 明确支持矩阵通过；不支持平台 fail-closed                      |
+| PBASH-008 | 发布与平台矩阵     | 签名 macOS、Linux/Windows 后端路线和安装包证据                                                     | LOCAL FAIL-CLOSED COMPLETE；签名/跨 OS External Blocked       |
 
 ### 11.1 建议改动位置
 
@@ -655,7 +656,7 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 
 ### 13.3 Release
 
-- [ ] macOS/Linux/Windows 明确支持矩阵已发布；纳入支持的平台通过门禁，其他平台 fail-closed。
+- [x] macOS/Linux/Windows 明确支持矩阵已发布；当前无 Release Supported 平台，未支持平台 fail-closed。
 - [ ] Runner 更新、签名、版本锁定和回滚流程完成。
 - [ ] 每个平台的 backend/policy/OS 版本支持矩阵和失效策略已经发布；不要求所有平台使用同一隔离技术。
 - [ ] 真实 Remote、离线、重复投递、网络切换和主机重启故障演练通过。
@@ -699,7 +700,7 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 | Linux sandbox | bubblewrap/maintained helper，能力不足 fail-closed                            | 发行版/WSL2 矩阵                    |
 | Windows       | 未有等价 Runner 前 unavailable                                                | POSIX Runner 或独立 PowerShell 决策 |
 
-## 16. 当前检查点与下一任务
+## 16. 当前检查点与外部门禁
 
 PBASH-001、PBASH-002 与 PBASH-003 已在 2026-08-28 依次完成：第一阶段冻结合同、产品 `bash`
 ToolDefinition 和 deterministic fake adapter；第二阶段接入真实 `PlatformSandboxEngine`、`macos-seatbelt-v1`、capability
@@ -719,6 +720,9 @@ manifest、diff/conflict、明确的无通用 Undo 投影，以及 `isolated_cha
 `include/exclude/set`、冻结摘要、Secret canary 与受控 HTTP(S) egress proxy，证据见
 [PBASH-006 检查点](evidence/pbash-006-2026-08-28.md)。PBASH-007 已完成 9 类本机确定性 A/B、停止、
 渐进启用、运行时 UI 和回滚演练；旧路径因 `/dev/null` 边界在补丁前验证失败，Brokered 路径 9/9
-通过且无未解释回归，见 [PBASH-007 检查点](evidence/pbash-007-2026-08-28.md)。下一项 **PBASH-008**
-收口本机 fail-closed 平台矩阵；真实模型 A/B、真机/生产 Remote、签名包、跨 OS 后端和 deprecated
-后端替代评估仍是外部发布门禁。
+通过且无未解释回归，见 [PBASH-007 检查点](evidence/pbash-007-2026-08-28.md)。PBASH-008 已发布
+[机器可读平台矩阵](evidence/pbash-008-platform-matrix-2026-08-28.json)，把当前 macOS arm64 限定为
+unsigned Local Alpha，并验证 Linux/Windows、缺失 backend、probe 失败及严格签名门禁均 fail-closed；
+见 [PBASH-008 检查点](evidence/pbash-008-2026-08-28.md)。PBASH 本机文档任务至此收口。真实模型 A/B、
+真机/生产 Remote、Developer ID/公证包、macOS x64、Linux/WSL2/Windows backend 和 deprecated 后端
+替代评估仍是外部发布门禁。

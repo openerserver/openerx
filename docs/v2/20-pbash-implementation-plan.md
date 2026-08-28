@@ -1,10 +1,10 @@
 # PBASH 实施计划
 
-- 状态：`PBASH-001..PBASH-006 LOCAL COMPLETE / PBASH-007 LOCAL DETERMINISTIC COMPLETE / PBASH-008 NEXT`
+- 状态：`PBASH-001..PBASH-006 LOCAL COMPLETE / PBASH-007 LOCAL DETERMINISTIC COMPLETE / PBASH-008 LOCAL FAIL-CLOSED COMPLETE / EXTERNAL RELEASE BLOCKED`
 - 日期：2026-08-28（Asia/Shanghai）
 - 架构依据：[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)
-- 当前目标：PBASH-007 已完成本机确定性 Golden A/B、渐进启用、工具可用性 UI 与回滚演练；真实模型
-  A/B 保留为外部门禁，下一切片 PBASH-008 收口签名构建与平台支持矩阵
+- 当前目标：PBASH-001 至 PBASH-008 的本机实现与文档切片已收口；真实模型 A/B、Developer ID/
+  公证包、跨 OS backend 和真机矩阵保留为外部发布门禁
 
 ## 1. 实施原则
 
@@ -27,7 +27,7 @@
 | PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | LOCAL COMPLETE | 至少一次投递不重复副作用；Remote 不扩大权限 |
 | PBASH-006 | 环境与 egress policy | LOCAL COMPLETE | 默认离线、Secret canary、私网/metadata/DNS rebinding 阻断通过 |
 | PBASH-007 | Golden A/B 与渐进启用 | LOCAL DETERMINISTIC COMPLETE | 9 类 Runner A/B 零越界、无未解释回归；模型 A/B 外部待办 |
-| PBASH-008 | 签名构建与平台矩阵 | PENDING | 支持平台通过，其他平台 fail-closed |
+| PBASH-008 | 签名构建与平台矩阵 | LOCAL FAIL-CLOSED COMPLETE / EXTERNAL BLOCKED | 当前 macOS 仅 Local Alpha；其他平台 unavailable；签名/跨 OS 待外部证据 |
 
 ## 3. PBASH-001 代码工作包
 
@@ -231,8 +231,16 @@ PBASH-004A 的实现与复现证据见
 
 实现与复现证据见 [PBASH-007 日期化证据](evidence/pbash-007-2026-08-28.md)。
 
-## 13. PBASH-008 下一切片
+## 13. PBASH-008 本机 fail-closed 完成
 
-1. 发布明确的平台支持矩阵：当前 macOS 本机 Local Alpha、Linux/WSL2/Windows unavailable。
-2. 对未支持平台、缺失 backend、probe 失败和无签名构建保持 fail-closed，并记录可重复证据。
-3. Developer ID 签名/公证包、Linux/WSL2 和 Windows 真机后端属于外部环境硬门禁，不以文档状态代替。
+1. 已发布机器可读平台矩阵：当前 macOS 26.5.2 arm64 仅为 unsigned Local Alpha；macOS x64 未做
+   主机 Runner 验证；Linux、WSL2 和 Windows 均 unavailable。
+2. Linux/Windows、缺失 `sandbox-exec`/Bash、强制拒绝自检失败与 App Service probe 失败都有稳定
+   fail-closed 结果；开启 flag 后 Runner 失败不会回退到旧 Shell 或 Pi 内置 Bash。
+3. 工具中心新增实际 backend ID 与 platform/OS build，避免只显示含糊的“macos runner”。
+4. 宽松签名检查把现有 macOS/Windows 制品全部标为 `LOCAL UNSIGNED`；严格 macOS 门禁按预期以
+   `MAC_CODE_SIGNATURE_INVALID` 拒绝当前 arm64 App。
+
+实现与复现证据见 [PBASH-008 日期化证据](evidence/pbash-008-2026-08-28.md)，机器可读支持矩阵见
+[PBASH-008 平台矩阵](evidence/pbash-008-platform-matrix-2026-08-28.json)。Developer ID/公证包、
+macOS x64 真机、Linux/WSL2/Windows backend 和真实模型 A/B 仍是外部硬门禁，不以本机完成状态替代。

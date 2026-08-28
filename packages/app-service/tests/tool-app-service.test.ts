@@ -620,6 +620,8 @@ describe("ToolAppService", () => {
       details: expect.arrayContaining([
         "阶段：Local Alpha",
         "Runner：fake",
+        "Backend：deterministic_fake",
+        "平台：test-only",
         "环境：core（Secret 过滤）",
         "网络：默认拒绝",
       ]),
@@ -784,6 +786,11 @@ describe("ToolAppService", () => {
       status: "available",
       reason: null,
       availableToolNames: ["bash"],
+      details: expect.arrayContaining([
+        "Backend：test_macos_sandbox",
+        "平台：darwin test-build",
+        "Sandbox：macos-seatbelt-v1",
+      ]),
     });
 
     service.startGeneration({
@@ -1059,6 +1066,8 @@ describe("ToolAppService", () => {
       details: expect.arrayContaining([
         "阶段：Local Alpha",
         "Runner：macos",
+        "Backend：test_macos_sandbox",
+        "平台：darwin test-build",
         "Sandbox：unavailable",
       ]),
     });

@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-08-28",
+  "contract": "brokered_bash_v1",
+  "releaseClaim": false,
+  "matrix": [
+    {
+      "platform": "macOS",
+      "architecture": "arm64",
+      "testedOs": "26.5.2 (25F84)",
+      "stage": "local_alpha",
+      "backend": "macos_sandbox_exec",
+      "policy": "macos-seatbelt-v1",
+      "localRuntimeVerified": true,
+      "signedArtifactVerified": false,
+      "releaseSupported": false,
+      "blockers": [
+        "Developer ID signed and notarized package",
+        "installed-package sandbox regression matrix",
+        "deprecated sandbox-exec replacement decision"
+      ]
+    },
+    {
+      "platform": "macOS",
+      "architecture": "x64",
+      "testedOs": null,
+      "stage": "unavailable_for_release",
+      "backend": "macos_sandbox_exec",
+      "policy": "macos-seatbelt-v1",
+      "localRuntimeVerified": false,
+      "signedArtifactVerified": false,
+      "releaseSupported": false,
+      "blockers": ["x64 host runtime matrix", "signed and notarized package"]
+    },
+    {
+      "platform": "Linux",
+      "architecture": "x64/arm64",
+      "testedOs": null,
+      "stage": "unavailable",
+      "backend": null,
+      "policy": null,
+      "localRuntimeVerified": false,
+      "signedArtifactVerified": false,
+      "releaseSupported": false,
+      "failClosedReason": "BROKERED_BASH_PLATFORM_UNSUPPORTED",
+      "blockers": ["bubblewrap or maintained helper backend", "distribution matrix"]
+    },
+    {
+      "platform": "WSL2",
+      "architecture": "x64/arm64",
+      "testedOs": null,
+      "stage": "unavailable",
+      "backend": null,
+      "policy": null,
+      "localRuntimeVerified": false,
+      "signedArtifactVerified": false,
+      "releaseSupported": false,
+      "failClosedReason": "BROKERED_BASH_PLATFORM_UNSUPPORTED",
+      "blockers": ["explicit WSL2 backend and host-boundary threat model"]
+    },
+    {
+      "platform": "Windows",
+      "architecture": "x64/arm64",
+      "testedOs": null,
+      "stage": "unavailable",
+      "backend": null,
+      "policy": null,
+      "localRuntimeVerified": false,
+      "signedArtifactVerified": false,
+      "releaseSupported": false,
+      "failClosedReason": "BROKERED_BASH_PLATFORM_UNSUPPORTED",
+      "blockers": ["native sandbox or isolated PowerShell runner", "signed installer matrix"]
+    }
+  ]
+}

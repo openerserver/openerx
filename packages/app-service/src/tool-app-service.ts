@@ -240,6 +240,8 @@ interface BrokeredBashRuntimeAvailability {
   mode: BrokeredBashRunnerMode | null;
   reason: string | null;
   sandboxPolicyVersion: string | null;
+  backendId: string | null;
+  platform: string | null;
 }
 
 interface ActiveProjection {
@@ -796,6 +798,8 @@ export class ToolAppService {
           ? [
               "阶段：Local Alpha",
               `Runner：${brokeredBashRuntime.mode ?? "unavailable"}`,
+              `Backend：${brokeredBashRuntime.backendId ?? "unavailable"}`,
+              `平台：${brokeredBashRuntime.platform ?? "unverified"}`,
               `Sandbox：${brokeredBashRuntime.sandboxPolicyVersion ?? "unavailable"}`,
               "环境：core（Secret 过滤）",
               "网络：默认拒绝",
@@ -1416,6 +1420,8 @@ export class ToolAppService {
         mode: null,
         reason: "BROKERED_BASH_DISABLED",
         sandboxPolicyVersion: null,
+        backendId: null,
+        platform: null,
       };
     }
     if (this.#brokeredBashRunnerMode === "fake") {
@@ -1424,6 +1430,8 @@ export class ToolAppService {
         mode: "fake",
         reason: "BROKERED_BASH_FAKE_RUNNER_ONLY",
         sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
+        backendId: "deterministic_fake",
+        platform: "test-only",
       };
     }
     if (this.#brokeredBashRunnerMode !== "macos" || !this.#platformSandboxEngine) {
@@ -1432,6 +1440,8 @@ export class ToolAppService {
         mode: this.#brokeredBashRunnerMode,
         reason: "BROKERED_BASH_RUNNER_MODE_INVALID",
         sandboxPolicyVersion: null,
+        backendId: null,
+        platform: process.platform,
       };
     }
     const capability = await this.#platformSandboxEngine.probe();
@@ -1459,6 +1469,8 @@ export class ToolAppService {
         mode: "macos",
         reason: capability.reason ?? "BROKERED_BASH_CAPABILITY_PROBE_FAILED",
         sandboxPolicyVersion: null,
+        backendId: capability.backendId,
+        platform: `${capability.platform} ${capability.platformRelease}`,
       };
     }
     return {
@@ -1466,6 +1478,8 @@ export class ToolAppService {
       mode: "macos",
       reason: null,
       sandboxPolicyVersion: capability.policyVersion,
+      backendId: capability.backendId,
+      platform: `${capability.platform} ${capability.platformRelease}`,
     };
   }
 

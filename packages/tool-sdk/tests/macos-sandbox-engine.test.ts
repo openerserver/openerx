@@ -157,11 +157,14 @@ describe("MacOSSandboxExecEngine contract", () => {
   });
 
   it("fails capability discovery closed on unsupported or missing backends", async () => {
-    await expect(new MacOSSandboxExecEngine({ platform: "linux" }).probe()).resolves.toMatchObject({
-      available: false,
-      reason: "BROKERED_BASH_PLATFORM_UNSUPPORTED",
-      supportedProfiles: [],
-    });
+    for (const platform of ["linux", "win32"] as const) {
+      await expect(new MacOSSandboxExecEngine({ platform }).probe()).resolves.toMatchObject({
+        available: false,
+        platform,
+        reason: "BROKERED_BASH_PLATFORM_UNSUPPORTED",
+        supportedProfiles: [],
+      });
+    }
     await expect(
       new MacOSSandboxExecEngine({
         platform: "darwin",
