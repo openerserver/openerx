@@ -1,10 +1,11 @@
 # OpenerX Browser Computer-Use 重构方案
 
-- 状态：`ACCEPTED / BCU-003 AX + ACTION MATRIX + INPUT MONITOR + TRUSTED TAKEOVER UI IMPLEMENTED / LIVE INPUT GATE BLOCKED`
-- 日期：2026-08-27（Asia/Shanghai）
+- 状态：`ACCEPTED / BCU-003 AX LIVE GATES PASS + BRIDGE SECURITY FOUNDATION IMPLEMENTED / SIGNED TRANSPORT PENDING`
+- 日期：2026-08-27；live gate 更新于 2026-08-28（Asia/Shanghai）
 - 范围：桌面端 Browser Capability；BCU-003 已接通 macOS 系统默认浏览器本地 AX 纵向切片、原生
-  动作矩阵、用户输入暂停后端和可信工具中心接管/恢复 UI；真实输入门禁及原生 UI 联调因机器锁屏
-  未通过，Bridge、签名安装门禁和托管 Chromium 尚未完成，不改变当前发布状态
+  动作矩阵、用户输入暂停后端和可信工具中心接管/恢复 UI；真实物理输入与原生 Tool Center runners
+  已在解锁机器 PASS；Bridge 协议、一次性标签页授权状态机和 Adapter 接入已实现，MV3 扩展、Native
+  Messaging Host、可信连接 UI、签名安装门禁和托管 Chromium 尚未完成，不改变当前发布状态
 - 最新产品决定：浏览器必须是独立可见的操作面，不嵌入聊天页面；默认优先使用机器上的系统默认
   浏览器以复用用户已有账号状态，用户可切换到 Electron 自带 Chromium 的托管浏览器以提高隔离和
   安全等级；两种后端都采用“语义优先 -> 视觉验证 -> 坐标兜底”的混合 computer-use，不向模型暴露
@@ -63,23 +64,34 @@ M5 的 Electron `BrowserWindow` + selector 实现仍以 `legacy_dom_v1` 冻结�
   判断，键盘按前台 PID + 精确 AX focused window 判断；不记录键值、文本或坐标。命中后立即进入
   `paused_for_user`，旧 Observation 失效，后续 fallback 停止；monitor 丢失则会话 fail-closed。
 - Host 内部恢复原语会重新校验相同 surface、重启 monitor 并生成 fresh baseline，只允许可信 UI
-  通过窄 IPC 调用，不把 `resume` 暴露成模型动作。确定性跨层测试已通过；真实 Computer Use 点击
-  runner 已加入，但 2026-08-27 验证时 Mac 处于锁屏，未形成 live PASS 证据。
+  通过窄 IPC 调用，不把 `resume` 暴露成模型动作。确定性跨层测试已通过；真人接管 runner 已加入。
+  2026-08-28 已确认 Computer Use 的 AX/合成点击和按键不会进入只读 `CGEventTap`，因此不能用 Agent
+  自己的动作伪造用户接管；同日物理点击已通过精确窗口暂停、暂停期拒绝、fresh-baseline 恢复、
+  旧 Observation 拒绝和专用窗口关闭门禁。
 - 工具中心通过受信 Main/Preload IPC 按不透明 `sessionId` 列出、暂停和恢复独立会话，只显示浏览器、
   backend、control path 和状态；不加载网页，也不接收 URL、标题、截图、语义元素或 Observation。
+- Chrome-first Browser Bridge 安全基础已实现：固定扩展 origin + Main 启动 nonce 双重认证、严格消息
+  schema、五分钟内一次性 `browserContextRef`、精确 URL claim、`browserWindowId + tabId + documentId +
+  origin` 与受信原生窗口身份组合绑定、递增序列防重放、同源导航 Observation 失效、跨域/换页/断连
+  整体撤销，以及只允许版本化语义/浏览器动作。Pi 结果中不出现 tab ID 或浏览器窗口 ID；敏感字段在
+  命令发往 Bridge 前进入用户接管。
 
 当前差距仍然明确：
 
-- 尚无签名 Browser Bridge、已有标签页授权和用户后端模式 UI；系统浏览器当前只走独占窗口 AX 路径。
-- 用户输入 monitor、自动暂停和可信 Renderer 接管/恢复 UI 已实现并通过确定性测试，但真实输入及
-  原生 UI-to-browser 门禁尚未闭环；signed-app 权限保持也未验证。真实通用 key 只覆盖代表性
+- Bridge 安全状态机和 `SystemDefaultBrowserAdapter` 可注入路径已经存在，但尚无可安装 MV3 扩展、
+  Native Messaging Host、Main owner-only 本地传输、原生窗口关联和可信连接/撤销 UI；因此实际产品
+  仍只走独占窗口 AX 路径，不能把确定性 Bridge fixture 视为真实 Browser Bridge 可用。
+- 用户输入 monitor、自动暂停和可信 Renderer 接管/恢复 UI 已实现并通过确定性测试，真实物理输入
+  与原生 UI-to-browser 门禁也已 PASS；signed-app 权限保持仍未验证。真实通用 key 只覆盖代表性
   `Backspace`，其余允许列表由合同/单元测试覆盖；上传、下载、登录和浏览器权限提示仍要求用户
   接管，drag 明确拒绝。
 - readiness 已检查平台、Screen Recording、Accessibility 和 OS automation，但尚未在展示工具前探测
   helper 可执行性与默认浏览器 bundle 支持；实际 open 会再次校验并 fail-closed。
 - 托管 Chromium、隔离 Profile、Firefox 和 Windows 未实现；不能从 macOS Chrome 烟测外推。
 
-本轮完成证据见 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。
+本轮完成证据见 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)、
+[2026-08-28 live gate](evidence/bcu-003-live-input-2026-08-28.md) 与
+[Browser Bridge foundation](evidence/bcu-003-browser-bridge-foundation-2026-08-28.md)。
 
 ## 3. 目标边界
 
@@ -375,7 +387,10 @@ V2 模型合同不再包含 `selector`、原始 DOM/HTML、本机 `path` 或任�
 | `packages/tool-sdk/src/policy.ts` | 增加后端安全下限、observation、目标、敏感输入、接管和高影响风险映射 |
 | `packages/tool-sdk/src/host-adapter.ts` | 继续解析 PersonalFile；只有支持 controlled file 的后端可接收，且不暴露模型路径 |
 | `packages/app-service/src/tool-app-service.ts` | 分别汇总后端和 semantic/visual control path readiness，并由用户设置解析 effectiveBackend |
-| `apps/desktop/src/main/browser-computer-use/system-default-adapter.ts` | 默认浏览器探测、Browser Bridge/标签页绑定、Accessibility fallback、detach/close 所有权策略 |
+| `apps/desktop/src/main/browser-computer-use/browser-bridge-protocol.ts` | Bridge 闭合协议、消息上限、精确 tab/document 绑定和受约束动作 |
+| `apps/desktop/src/main/browser-computer-use/browser-bridge-grant-registry.ts` | 扩展 origin/启动 nonce、一次性授权、TTL、防重放、撤销和断连状态机 |
+| `apps/desktop/src/main/browser-computer-use/connected-browser-bridge-driver.ts` | Bridge Observation/语义动作映射、敏感字段接管和零坐标 fallback |
+| `apps/desktop/src/main/browser-computer-use/system-default-browser-adapter.ts` | 默认浏览器 Bridge/Accessibility 双 control-path、detach/close 所有权策略 |
 | `apps/desktop/src/main/browser-computer-use/managed-chromium-adapter.ts` | Electron BrowserWindow、Chromium 语义 Adapter、Session/Profile、导航、权限和文件桥 |
 | `apps/desktop/src/main/browser-computer-use/` | 共用 Session、UIObservationRegistry、Semantic、Capture、AX、Action 和接管状态机 |
 | `apps/desktop/src/main/tool-capability-host.ts` | 只做能力路由；移除模型 selector 和任意 Browser 脚本执行实现 |
@@ -424,18 +439,21 @@ HTML fixture 全程走语义 elementRef，Canvas fixture 才允许受约束坐�
 
 ### BCU-003：macOS 系统默认浏览器优先纵向切片
 
-实现状态（2026-08-27）：`LOCAL AX + NATIVE ACTION MATRIX + INPUT MONITOR + TRUSTED TAKEOVER UI IMPLEMENTED / PHASE PARTIAL`。
+实现状态（2026-08-28）：`LOCAL AX LIVE GATES PASS + BRIDGE SECURITY FOUNDATION IMPLEMENTED / SIGNED TRANSPORT PENDING`。
 当前默认启用
 `browser_computer_use_v2`，可用 `OPENERX_BROWSER_COMPUTER_USE_V2=0|false` 回滚到冻结的
 `legacy_dom_v1`。macOS 已实现默认浏览器发现、OpenerX 专用顶层窗口、PID + `CGWindowID` + bounds
 精确绑定、原生 AX 语义观察/动作、精确窗口截图和敏感区域像素遮罩；Main Host 与 Pi 投影已经接通，
 真实默认 Chrome 已通过“百度搜索 phonescloud”语义烟测，以及 `Backspace`、滚动、前进/后退和刷新
 原生动作矩阵，并只关闭专用窗口。日期化命令、结果、截图摘要与本地包证据见
-[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。
+[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。Bridge 的闭合协议、固定 origin + 启动 nonce、
+一次性五分钟授权引用、精确标签页/文档/原生窗口组合绑定、单调序列、断连/跨域撤销、敏感字段接管、
+无 selector/DOM/脚本动作以及 Adapter 路由已经由确定性 fixture 覆盖，见
+[Browser Bridge foundation](evidence/bcu-003-browser-bridge-foundation-2026-08-28.md)。
 
-本阶段尚未完成 Browser Bridge、真实输入事件与原生 Tool Center 联调门禁、签名安装后权限保持和
-Firefox/Windows 支持；真实通用 key 只验证代表性 `Backspace`，因此不能把本地 AX 切片标记为
-BCU-003 全部完成。
+本阶段尚未完成 MV3 扩展、Native Messaging Host、Main owner-only 传输、可信连接 UI、真实 Bridge
+烟测、签名安装后权限保持和 Firefox/Windows 支持；真实通用 key 只验证代表性 `Backspace`，因此
+不能把本地 AX 或 Bridge 基础切片标记为 BCU-003 全部完成。
 
 - 识别系统当前默认 HTTP(S) 浏览器和支持状态；优先连接用户授权的 Browser Bridge 并绑定精确 tabId。
 - 无 Bridge 时通过 `shell.openExternal()`/OS URL handler 打开 URL，创建或确认专用顶层窗口，并绑定
@@ -580,7 +598,9 @@ OpenerX 数据的情况下恢复旧版本。
 
 `BCU-001`、`BCU-002` 已完成，BCU-003 的本地 OS Accessibility 纵向切片、Host/Pi 接线、真实
 “百度搜索 phonescloud”烟测、代表性原生动作矩阵和本地 arm64 包内 helper 验证已经完成并有日期化
-证据。用户输入 monitor、自动暂停和可信 Tool Center fresh-baseline 恢复已实现；下一任务仍只做
-BCU-003 closure：在解锁机器上通过真实输入 runner 和原生 Tool Center 联调，实现签名 Browser
-Bridge 精确标签页授权，以及签名安装包的 Accessibility/Screen Recording 权限验证。上述边界被
-接受前不启动 BCU-004 托管 Chromium，也不删除 `legacy_dom_v1` 回滚路径。
+证据。用户输入 monitor、自动暂停和可信 Tool Center fresh-baseline 恢复已实现并通过 live gates；
+Browser Bridge 的安全协议、一次性精确标签页授权状态机、Driver 和 Adapter 路由已经完成。下一任务
+仍只做 BCU-003 closure：实现最小权限 MV3 扩展、固定 `allowed_origins` 的 Native Messaging Host、
+owner-only Main 本地通道与原生窗口关联、可信连接/撤销 UI，再执行真实标签页烟测和签名安装包的
+Accessibility/Screen Recording/扩展权限保持验证。上述边界完成前不启动 BCU-004 托管 Chromium，
+也不删除 `legacy_dom_v1` 回滚路径。

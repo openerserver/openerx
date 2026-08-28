@@ -22,6 +22,18 @@ const outputDirectory = path.resolve(
     path.join(desktopDirectory, ".vite", "browser-takeover", "evidence"),
 );
 const helperPath = path.join(desktopDirectory, ".vite", "native", "openerx-browser-accessibility");
+const defaultInputTimeoutMs = 120_000;
+
+function inputTimeoutMs(): number {
+  const configured = process.env.OPENERX_BCU_TAKEOVER_TIMEOUT_MS;
+  if (!configured) return defaultInputTimeoutMs;
+
+  const value = Number(configured);
+  if (!Number.isSafeInteger(value) || value < 10_000 || value > 600_000) {
+    throw new Error("BCU_TAKEOVER_TIMEOUT_INVALID");
+  }
+  return value;
+}
 
 function observation(result: NormalizedToolResult): Omit<BrowserObservation, "image"> {
   const value = result.data as { observation?: Omit<BrowserObservation, "image"> };
@@ -47,7 +59,8 @@ async function fixtureServer(): Promise<{ server: Server; url: string }> {
 <body>
   <main aria-label="Takeover target">
     <h1>User input takeover fixture</h1>
-    <p>Click inside this blue panel to verify immediate automation pause.</p>
+    <p>Use a physical mouse or trackpad to click inside this blue panel.</p>
+    <p>Automation-generated Computer Use input does not satisfy this human takeover gate.</p>
   </main>
 </body>
 </html>`);
@@ -72,8 +85,9 @@ async function closeServer(server: Server): Promise<void> {
 async function waitForPause(
   adapter: SystemDefaultBrowserAdapter,
   sessionId: string,
+  timeoutMs: number,
 ): Promise<void> {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (adapter.descriptor(sessionId).state === "paused_for_user") return;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -105,6 +119,7 @@ class TrackingMacSystemBrowserDriver extends ElectronMacSystemBrowserDriver {
 
 async function run(): Promise<void> {
   console.log("BCU_TAKEOVER_READY");
+  const timeoutMs = inputTimeoutMs();
   mkdirSync(outputDirectory, { recursive: true });
   const fixture = await fixtureServer();
   const driver = new TrackingMacSystemBrowserDriver(helperPath);
@@ -123,11 +138,16 @@ async function run(): Promise<void> {
     );
     const opened = observation(openedResult);
     console.log(
-      `BCU_TAKEOVER_WAITING:${JSON.stringify({ nativeWindowId: opened.nativeWindowId })}`,
+      `BCU_TAKEOVER_WAITING:${JSON.stringify({
+        nativeWindowId: opened.nativeWindowId,
+        requiredInput: "physical_pointer_or_keyboard",
+        target: "exact_dedicated_window",
+        timeoutMs,
+      })}`,
     );
 
     stage = "wait-user-input";
-    await waitForPause(adapter, opened.sessionId);
+    await waitForPause(adapter, opened.sessionId, timeoutMs);
     const pausedAt = new Date().toISOString();
     stage = "assert-paused-observe";
     await expectedError(
@@ -196,6 +216,8 @@ async function run(): Promise<void> {
       backend: resumed.backend,
       controlPath: resumed.controlPath,
       nativeWindowId: resumed.nativeWindowId,
+      inputGate: "physical_exact_window_event",
+      inputTimeoutMs: timeoutMs,
       pausedAt,
       pausedState: "paused_for_user",
       pausedObserveRejected: true,

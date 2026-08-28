@@ -127,7 +127,13 @@ computer-use 操作面方案记录在
 OS Accessibility 完成真实“百度搜索 phonescloud”烟测；本地实现与打包证据见
 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)，并已补齐代表性 `Backspace`、滚动、前进/
 后退和刷新原生动作矩阵，并实现只报告事件存在性的精确窗口输入 monitor、自动暂停、受信
-fresh-baseline 恢复，以及不嵌网页的可信 Tool Center 接管/恢复 UI。真实输入与原生 UI runner 因
-当前机器锁屏尚无 PASS 证据；该阶段仍是局部完成：Browser Bridge、签名安装权限、托管 Chromium
-和 Windows 尚无完成证据；
+fresh-baseline 恢复，以及不嵌网页的可信 Tool Center 接管/恢复 UI。Computer Use 合成事件不会进入
+真人接管 monitor；2026-08-28 已用物理输入通过精确窗口暂停、拒绝、
+恢复和关窗门禁，并用真实 Main/Preload/Renderer/Pi 链路通过 Tool Center 接管/恢复/关窗联调，
+详见 [live gates PASS](evidence/bcu-003-live-input-2026-08-28.md)。Browser Bridge 已增加固定扩展
+origin + Main 启动 nonce、五分钟一次性精确标签页引用、tab/document/origin/原生窗口组合绑定、
+递增序列防重放、导航/断连撤销、敏感字段接管和无 selector/脚本的 Adapter 确定性基础，见
+[Bridge foundation](evidence/bcu-003-browser-bridge-foundation-2026-08-28.md)。该阶段仍是局部完成：
+MV3 扩展、Native Messaging/Main owner-only 传输、可信连接 UI、真实 Bridge 烟测、签名安装权限、
+托管 Chromium 和 Windows 尚无完成证据；
 `legacy_dom_v1` 仅作为显式 feature flag 回滚路径保留。

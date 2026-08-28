@@ -25,7 +25,11 @@ export interface SystemBrowserBinding {
   descriptor: BrowserSessionDescriptor;
 }
 
-export type SystemBrowserControlEvent = { kind: "user_input" } | { kind: "monitor_lost" };
+export type SystemBrowserControlEvent =
+  | { kind: "user_input" }
+  | { kind: "navigation" }
+  | { kind: "bridge_disconnected" }
+  | { kind: "monitor_lost" };
 
 export interface SystemBrowserUserInputMonitor {
   close(): void;
@@ -35,11 +39,10 @@ export interface SystemBrowserDriverObservation {
   surface: BrowserSurfaceState;
   title: string;
   elements: readonly BrowserSemanticSourceElement[];
-  image: BrowserObservationImageInput;
+  image?: BrowserObservationImageInput;
 }
 
-export interface SystemDefaultBrowserDriver {
-  openDedicatedWindow(url: string, signal: AbortSignal): Promise<SystemBrowserBinding>;
+export interface SystemBrowserSessionDriver {
   startUserInputMonitoring(
     binding: SystemBrowserBinding,
     listener: (event: SystemBrowserControlEvent) => void,
@@ -69,8 +72,24 @@ export interface SystemDefaultBrowserDriver {
   closeOwnedWindow(binding: SystemBrowserBinding, signal: AbortSignal): Promise<void>;
 }
 
+export interface SystemDefaultBrowserDriver extends SystemBrowserSessionDriver {
+  openDedicatedWindow(url: string, signal: AbortSignal): Promise<SystemBrowserBinding>;
+}
+
+export interface ConnectedBrowserBridgeDriver extends SystemBrowserSessionDriver {
+  openAuthorizedTab(
+    browserContextRef: string,
+    expectedUrl: string,
+    signal: AbortSignal,
+  ): Promise<SystemBrowserBinding>;
+  releaseAuthorizedTab(binding: SystemBrowserBinding): void;
+  close(): void;
+}
+
 interface SystemBrowserSession {
   binding: SystemBrowserBinding;
+  driver: SystemBrowserSessionDriver;
+  kind: "bridge" | "dedicated_window";
   surface: BrowserSurfaceState;
   monitor: SystemBrowserUserInputMonitor | null;
   stateEpoch: number;
@@ -137,6 +156,7 @@ export class SystemDefaultBrowserAdapter {
     private readonly driver: SystemDefaultBrowserDriver,
     observations = new UIObservationRegistry(),
     dispatcher = new BrowserActionDispatcher(observations),
+    private readonly bridgeDriver: ConnectedBrowserBridgeDriver | null = null,
   ) {
     this.#observations = observations;
     this.#dispatcher = dispatcher;
@@ -154,7 +174,11 @@ export class SystemDefaultBrowserAdapter {
     const session = this.#requiredSession(operation.sessionId);
     if (operation.action === "observe") {
       const observation = await this.#recordObservation(session, "final", null, signal);
-      return observationResult("已观察系统浏览器专用窗口", observation, false);
+      return observationResult(
+        session.kind === "bridge" ? "已观察 Browser Bridge 授权标签页" : "已观察系统浏览器专用窗口",
+        observation,
+        false,
+      );
     }
     if (operation.action === "upload" || operation.action === "download") {
       this.#pauseForUser(session);
@@ -170,16 +194,26 @@ export class SystemDefaultBrowserAdapter {
 
     const actionAdapter: BrowserActionAdapter = {
       performSemantic: async (action, actionSignal) =>
-        await this.driver.performSemantic(session.binding, session.surface, action, actionSignal),
+        await session.driver.performSemantic(
+          session.binding,
+          session.surface,
+          action,
+          actionSignal,
+        ),
       performNativeInput: async (action, actionSignal) =>
-        await this.driver.performNativeInput(
+        await session.driver.performNativeInput(
           session.binding,
           session.surface,
           action,
           actionSignal,
         ),
       performCoordinate: async (action, actionSignal) =>
-        await this.driver.performCoordinate(session.binding, session.surface, action, actionSignal),
+        await session.driver.performCoordinate(
+          session.binding,
+          session.surface,
+          action,
+          actionSignal,
+        ),
     };
     let executed: BrowserActionExecutionResult;
     try {
@@ -194,18 +228,25 @@ export class SystemDefaultBrowserAdapter {
       throw error;
     }
     const observation = await this.#recordObservation(session, "final", executed.path, signal);
-    return observationResult(`系统浏览器操作已执行：${operation.action}`, observation, true, {
-      actionPath: executed.path,
-      audit: executed.audit,
-    });
+    return observationResult(
+      `${session.kind === "bridge" ? "Browser Bridge" : "系统浏览器"}操作已执行：${operation.action}`,
+      observation,
+      true,
+      {
+        actionPath: executed.path,
+        audit: executed.audit,
+      },
+    );
   }
 
   close(): void {
     for (const [sessionId, session] of this.#sessions) {
       session.monitor?.close();
+      if (session.kind === "bridge") this.bridgeDriver?.releaseAuthorizedTab(session.binding);
       this.#observations.endSession(sessionId, "detached");
     }
     this.#sessions.clear();
+    this.bridgeDriver?.close();
     this.#observations.clear();
   }
 
@@ -235,7 +276,7 @@ export class SystemDefaultBrowserAdapter {
     this.#stopUserInputMonitor(session);
     const epoch = await this.#armUserInputMonitor(session);
     try {
-      const snapshot = await this.driver.observe(session.binding, signal);
+      const snapshot = await session.driver.observe(session.binding, signal);
       throwIfAborted(signal);
       if (session.stateEpoch !== epoch) {
         throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
@@ -265,7 +306,7 @@ export class SystemDefaultBrowserAdapter {
       throw new BrowserObservationError("BROWSER_BACKEND_UNAVAILABLE");
     }
     if (operation.browserContextRef) {
-      throw new BrowserObservationError("BROWSER_BRIDGE_DISCONNECTED");
+      return await this.#openBridge(operation, signal);
     }
     const binding = await this.driver.openDedicatedWindow(operation.url, signal);
     if (
@@ -280,6 +321,8 @@ export class SystemDefaultBrowserAdapter {
     this.#observations.registerSession(binding.descriptor);
     const session: SystemBrowserSession = {
       binding,
+      driver: this.driver,
+      kind: "dedicated_window",
       surface: {
         identity: {
           backend: binding.descriptor.backend,
@@ -328,12 +371,103 @@ export class SystemDefaultBrowserAdapter {
     }
   }
 
+  async #openBridge(
+    operation: Extract<BrowserComputerUseOperationV2, { action: "open" }>,
+    signal: AbortSignal,
+  ): Promise<NormalizedToolResult> {
+    const bridge = this.bridgeDriver;
+    if (!bridge || !operation.browserContextRef) {
+      throw new BrowserObservationError("BROWSER_BRIDGE_DISCONNECTED");
+    }
+    const binding = await bridge.openAuthorizedTab(
+      operation.browserContextRef,
+      operation.url,
+      signal,
+    );
+    if (
+      binding.descriptor.backend !== "system_default" ||
+      binding.descriptor.controlPath !== "connected_browser_bridge" ||
+      binding.descriptor.surfaceKind !== "tab" ||
+      binding.descriptor.ownership !== "external_user" ||
+      binding.descriptor.profilePersistence !== "browser_owned" ||
+      !binding.descriptor.capabilities.semanticObserve ||
+      !binding.descriptor.capabilities.semanticAction ||
+      !binding.descriptor.capabilities.visualCapture ||
+      binding.descriptor.capabilities.coordinateFallback ||
+      binding.descriptor.capabilities.closeOwnedWindow
+    ) {
+      bridge.releaseAuthorizedTab(binding);
+      throw new BrowserObservationError("BROWSER_SURFACE_MISMATCH");
+    }
+    try {
+      this.#observations.registerSession(binding.descriptor);
+    } catch (error) {
+      bridge.releaseAuthorizedTab(binding);
+      throw error;
+    }
+    const session: SystemBrowserSession = {
+      binding,
+      driver: bridge,
+      kind: "bridge",
+      surface: {
+        identity: {
+          backend: binding.descriptor.backend,
+          controlPath: binding.descriptor.controlPath,
+          applicationId: binding.descriptor.applicationId,
+          nativeProcessId: binding.descriptor.nativeProcessId,
+          nativeWindowId: binding.descriptor.nativeWindowId,
+          surfaceKind: binding.descriptor.surfaceKind,
+          surfaceId: binding.descriptor.surfaceId,
+          ownership: binding.descriptor.ownership,
+          profilePersistence: binding.descriptor.profilePersistence,
+        },
+        url: operation.url,
+        pageRevision: "bridge_opening",
+        viewport: { width: 1, height: 1, scaleFactor: 1 },
+        surfaceBounds: { x: 0, y: 0, width: 1, height: 1 },
+      },
+      monitor: null,
+      stateEpoch: 0,
+    };
+    this.#sessions.set(binding.descriptor.sessionId, session);
+    try {
+      const epoch = await this.#armUserInputMonitor(session);
+      const observation = await this.#recordObservation(session, "baseline", null, signal);
+      if (session.stateEpoch !== epoch) {
+        throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
+      }
+      return observationResult("已连接用户授权的系统浏览器标签页", observation, false, {
+        session: this.#observations.descriptor(binding.descriptor.sessionId),
+      });
+    } catch (error) {
+      if (this.#observations.descriptor(binding.descriptor.sessionId).state === "paused_for_user") {
+        return lifecycleResult(
+          "用户已接管授权标签页，Browser Bridge 自动操作已暂停",
+          this.#observations.descriptor(binding.descriptor.sessionId),
+          false,
+        );
+      }
+      session.monitor?.close();
+      this.#sessions.delete(binding.descriptor.sessionId);
+      this.#observations.endSession(binding.descriptor.sessionId, "detached");
+      bridge.releaseAuthorizedTab(binding);
+      throw error;
+    }
+  }
+
   #detach(sessionId: string): NormalizedToolResult {
     const session = this.#requiredSession(sessionId);
     session.monitor?.close();
+    if (session.kind === "bridge") this.bridgeDriver?.releaseAuthorizedTab(session.binding);
     const descriptor = this.#observations.endSession(sessionId, "detached");
     this.#sessions.delete(sessionId);
-    return lifecycleResult("已解除系统浏览器控制，窗口和浏览器资料保持不变", descriptor, false);
+    return lifecycleResult(
+      session.kind === "bridge"
+        ? "已解除 Browser Bridge 标签页授权，标签页和浏览器资料保持不变"
+        : "已解除系统浏览器控制，窗口和浏览器资料保持不变",
+      descriptor,
+      false,
+    );
   }
 
   async #close(
@@ -352,7 +486,7 @@ export class SystemDefaultBrowserAdapter {
       observationId: operation.observationId,
       surface: session.surface,
     });
-    await this.driver.closeOwnedWindow(session.binding, signal);
+    await session.driver.closeOwnedWindow(session.binding, signal);
     session.monitor?.close();
     const descriptor = this.#observations.endSession(operation.sessionId, "closed");
     this.#sessions.delete(operation.sessionId);
@@ -367,7 +501,7 @@ export class SystemDefaultBrowserAdapter {
   ): Promise<BrowserObservation> {
     throwIfAborted(signal);
     this.#assertAutomationActive(session);
-    const snapshot = await this.driver.observe(session.binding, signal);
+    const snapshot = await session.driver.observe(session.binding, signal);
     throwIfAborted(signal);
     this.#assertAutomationActive(session);
     session.surface = snapshot.surface;
@@ -385,8 +519,7 @@ export class SystemDefaultBrowserAdapter {
       surface: snapshot.surface,
       title: snapshot.title,
       elements: snapshot.elements,
-      image: snapshot.image,
-      imageReason,
+      ...(snapshot.image ? { image: snapshot.image, imageReason } : {}),
       actionPath,
     });
   }
@@ -394,14 +527,22 @@ export class SystemDefaultBrowserAdapter {
   async #armUserInputMonitor(session: SystemBrowserSession): Promise<number> {
     this.#stopUserInputMonitor(session);
     const epoch = session.stateEpoch;
-    const monitor = await this.driver.startUserInputMonitoring(session.binding, (event) => {
+    const monitor = await session.driver.startUserInputMonitoring(session.binding, (event) => {
       if (this.#sessions.get(session.binding.descriptor.sessionId) !== session) return;
+      if (event.kind === "navigation") {
+        this.#observations.invalidateSession(session.binding.descriptor.sessionId, "navigation");
+        return;
+      }
       session.stateEpoch += 1;
       session.monitor?.close();
       session.monitor = null;
       this.#observations.invalidateSession(
         session.binding.descriptor.sessionId,
-        event.kind === "user_input" ? "user_takeover" : "host_disconnected",
+        event.kind === "user_input"
+          ? "user_takeover"
+          : event.kind === "bridge_disconnected"
+            ? "bridge_disconnected"
+            : "host_disconnected",
       );
     });
     const attached = this.#sessions.get(session.binding.descriptor.sessionId) === session;

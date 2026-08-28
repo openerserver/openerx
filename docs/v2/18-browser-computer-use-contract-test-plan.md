@@ -1,8 +1,8 @@
 # Browser Computer-Use Contract Test Plan
 
-- Status: BCU-001/002 implemented; BCU-003 local AX/action, deterministic input-monitor and trusted
-  Tool Center suites implemented, with live input/UI gate blocked by a locked validation machine
-- Date: 2026-08-27 (Asia/Shanghai)
+- Status: BCU-001/002 implemented; BCU-003 local AX live gates passed and deterministic Browser Bridge
+  security foundation implemented; signed extension/native-host transport remains pending
+- Date: 2026-08-27; live gate updated 2026-08-28 (Asia/Shanghai)
 - Normative decision: [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md)
 - Implementation plan: [17-browser-computer-use-plan.md](17-browser-computer-use-plan.md)
 
@@ -11,8 +11,9 @@
 This plan turns the browser decision into staged, repeatable gates. BCU-001 proves that the versioned
 contract is strict and internally consistent. BCU-002 proves the in-memory Observation and action-ordering
 kernel against deterministic fakes. BCU-003 separately proves the current local macOS AX Adapter, native
-action matrix, deterministic takeover lifecycle and trusted Renderer control path; it does not prove a
-Browser Bridge, a signed installed build, managed Chromium or the still-blocked live input-event/UI runner.
+action matrix, deterministic takeover lifecycle and trusted Renderer control path. It now also proves the
+Bridge grant/protocol/Adapter state machine against a closed fake endpoint; it does not prove an installed
+MV3 extension, Native Messaging transport, signed build or managed Chromium.
 
 ## 2. BCU-001 contract matrix
 
@@ -64,15 +65,43 @@ npm run test --workspace @openerx/desktop -- --run tests/browser-computer-use-ke
 
 ## 4. BCU-003 system-browser fixtures
 
-The system-browser suite must run in two explicit modes:
+The system-browser suite has two explicit modes:
 
-- Signed Browser Bridge fixture: user-authorized exact tab ID and native window identity.
+- Deterministic Browser Bridge security fixture: implemented for one-time exact-tab grant and bounded
+  request/response behavior; signed installed transport remains pending.
 - OS Accessibility fixture: OpenerX-created or confirmed dedicated top-level window.
 
 A randomized standard HTML fixture changes DOM IDs/classes on every run. Search, form input, selection and
 navigation must complete with semantic `elementRef` actions and no coordinates. A separate Canvas fixture
 must require visual fallback and prove viewport, scale and TTL enforcement. Neither fixture may expose
 Cookie, password-store, extension, history, full-DOM or local-path data.
+
+The deterministic Bridge fixture lives in
+`apps/desktop/tests/browser-computer-use-browser-bridge.test.ts` and must prove:
+
+1. Exact extension origin and per-launch Main nonce are both required; no wildcard origin is accepted.
+2. `browserContextRef` is random, expires in at most five minutes, matches one exact URL and can be claimed
+   once. Duplicate authorization IDs and user changes before claim invalidate it.
+3. Main-supplied application/PID/native-window identity is combined with one browser window, tab, document
+   and origin. Pi output contains neither raw tab ID nor browser-window ID.
+4. Every response/event has a strictly increasing sequence. Replay, malformed sensitive data, wrong tab,
+   cross-origin navigation, tab close/deactivation, explicit revoke or channel loss fails closed before a
+   later action.
+5. Same-origin navigation invalidates the old Observation. Sensitive-field text pauses for user takeover
+   before any endpoint request.
+6. Requests contain only the versioned observe/action union and source node references; no selector, XPath,
+   DOM/HTML, arbitrary JavaScript, Cookie/history or generic DevTools command exists. Bridge sessions have
+   no coordinate fallback and cannot close a user-owned tab.
+
+Run it together with the existing system-browser regression:
+
+```bash
+npm test --workspace @openerx/desktop -- tests/browser-computer-use-browser-bridge.test.ts tests/browser-computer-use-system-default.test.ts
+```
+
+Passing this fixture is a protocol/state-machine checkpoint only. Promotion still requires the packaged
+MV3 extension, exact `allowed_origins` Native Messaging manifest, caller-origin validation, owner-only Main
+transport, trusted connection/revoke UI, real exact-tab smoke test and signed-install persistence.
 
 The OS Accessibility fixture additionally requires a one-shot input monitor that emits no key, text or
 coordinate payload. Tests must prove exact-window pointer filtering, exact focused-window keyboard
@@ -83,7 +112,22 @@ same-surface trusted resume with a fresh baseline, and fail-closed monitor loss.
 npm run test:e2e:browser:takeover:macos --workspace @openerx/desktop
 ```
 
-A locked desktop or unavailable Computer Use session is an environment block, never a pass.
+The runner prints the exact native window ID and waits up to 120 seconds by default; the timeout can be set
+from 10 seconds through 10 minutes with `OPENERX_BCU_TAKEOVER_TIMEOUT_MS`. It must be satisfied with a
+physical mouse, trackpad or keyboard event in the exact dedicated window. Agent-generated Accessibility or
+synthetic Computer Use input is intentionally not accepted as human takeover evidence. A locked desktop,
+missing physical input or timeout is an environment block, never a pass.
+
+The 2026-08-28 physical-input run passed and produced
+[`bcu-003-live-input-2026-08-28.md`](evidence/bcu-003-live-input-2026-08-28.md). This does not replace the
+separate native Tool Center UI-to-browser gate, which is run with:
+
+```bash
+npm run test:e2e:browser:tool-center:macos --workspace @openerx/desktop
+```
+
+That gate also passed on 2026-08-28 through the production Main/Preload/Renderer/Pi path and is recorded in
+the same dated evidence file.
 
 The trusted Renderer fixture must list only session metadata, invoke pause/resume with an opaque session ID,
 render no iframe/page content, and keep these controls out of the Pi operation contract. Deterministic UI

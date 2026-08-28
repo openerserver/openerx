@@ -1,6 +1,7 @@
 # ADR-V2-017: Browser Computer-Use Host and versioned contract
 
-- Status: Accepted; BCU-002 deterministic Host kernel implemented, runtime migration pending
+- Status: Accepted; BCU-003 AX runtime and Browser Bridge security foundation implemented, signed
+  Bridge transport pending
 - Date: 2026-08-27
 - Owners: Desktop, App Service, Pi Host and Security
 - Supersedes: the browser automation decision in ADR-V2-012
@@ -38,6 +39,51 @@ content is never embedded in the chat Renderer.
 Every Session descriptor binds backend, control path, application identity, native window identity,
 surface kind and ID, ownership, profile persistence, state and capabilities. A missing or changed identity
 fails closed; the Host never falls back to the current foreground browser or the whole screen.
+
+### Chrome-first Browser Bridge transport and grant state
+
+The first Bridge transport targets Chromium Manifest V3. The extension requests only `activeTab`,
+`scripting` and `nativeMessaging`; it does not request `<all_urls>`, `cookies`, `history`, `debugger` or a
+global tab-enumeration capability. The user must click the OpenerX extension action in the exact target tab.
+Chrome documents `activeTab` as a temporary grant created by a user gesture and revoked on cross-origin
+navigation or tab close ([activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab)).
+
+Only the extension service worker may open the native channel. A content script cannot call Native
+Messaging directly; it must send a validated, bounded message to the service worker. The native-host
+manifest pins one exact extension origin in `allowed_origins`, and the host also verifies Chrome's caller
+origin argument before forwarding anything to Main
+([Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)).
+Content-script messages remain untrusted and are parsed against closed schemas before any privileged
+operation ([message security](https://developer.chrome.com/docs/extensions/develop/concepts/messaging));
+script injection requires the temporary `activeTab` grant plus `scripting`
+([chrome.scripting](https://developer.chrome.com/docs/extensions/reference/api/scripting)).
+
+The Bridge authority chain is:
+
+1. The packaged native host discovers the running Main endpoint through an owner-only endpoint record and
+   authenticates with a per-launch nonce. The Native Messaging manifest and caller-origin check bind the
+   connection to the expected extension ID. The endpoint record, Unix-domain socket and packaged host are
+   the next transport slice; the current implementation already rejects a wrong origin or launch nonce.
+2. Trusted Main code, not extension payload, resolves `applicationId`, PID and native window ID. The
+   extension supplies only its current Chromium `browserWindowId`, `tabId`, `documentId`, URL and canonical
+   origin. Main combines both identities into one grant.
+3. Main sends a `grant_accepted` message immediately, then returns a random one-time
+   `browserContextRef` only to trusted UI. The reference expires after at most five minutes, matches one
+   exact URL, can be claimed once and never gives Pi a tab list, raw tab ID or browser-window ID.
+4. Every observation and action replays the exact grant ID and tab/document binding with a strictly
+   increasing sequence number. Same-origin navigation invalidates the current Observation; tab switch,
+   tab close, cross-origin navigation, authorization revocation, sequence replay, malformed data or channel
+   loss revokes the grant and permits zero later action.
+5. The Bridge accepts only versioned observe and bounded semantic/browser commands. It has no selector,
+   XPath, arbitrary script, DOM dump, Cookie, password-store, history or generic DevTools operation.
+   Sensitive field values must be absent; attempting to write one enters user takeover before a Bridge
+   command is sent.
+
+The local security state machine and Adapter integration live in
+`apps/desktop/src/main/browser-computer-use/browser-bridge-*.ts`,
+`connected-browser-bridge-driver.ts` and `system-default-browser-adapter.ts`. This does not count as a
+signed Bridge installation: the MV3 extension, packaged native host, owner-only Main transport, trusted UI
+connection flow and signed-install persistence remain explicit BCU-003 gates.
 
 ### Semantic-first, visually verified actions
 
@@ -109,14 +155,15 @@ control paths.
   risk; managed Chromium provides a clear isolation upgrade.
 - The Host and Browser Bridge require more identity, invalidation and redaction logic than the M5 selector
   slice.
-- BCU-001/002 are not backend runtime proof. The current executable browser path remains legacy until later
-  exit gates pass, and contract or deterministic kernel tests must not be reported as a successful browser
-  smoke test.
+- BCU-001/002 and the Browser Bridge security fixture are not signed-install runtime proof. The current
+  executable Browser Bridge path remains unavailable until its extension/native-host transport and trusted
+  UI are connected; deterministic kernel tests must not be reported as a successful Bridge smoke test.
 
 ## Migration and rollback
 
-- The new contract and BCU-002 pure kernel are additive and not imported by the active Host, so rollback can
-  remove their future consumers while leaving historical ToolCalls and `legacy_dom_v1` readable.
+- The new contract, BCU-002 kernel and optional Bridge driver are additive. With no authenticated Bridge
+  driver injected, `browserContextRef` fails closed while the current AX path remains unchanged; rollback
+  leaves historical ToolCalls and `legacy_dom_v1` readable.
 - Later adapters are enabled independently by backend/control-path flags. Rollback disables new Session
   creation, lets no in-flight Session hot-migrate, and restores the previous signed application version.
 - Removal of `legacy_dom_v1` occurs only after persisted-call readers, dual-backend tests and rollback drills
@@ -136,5 +183,6 @@ control paths.
 - [Browser Computer-Use contract test plan](../18-browser-computer-use-contract-test-plan.md)
 - `packages/contracts/tests/browser-computer-use.test.ts`
 - `apps/desktop/tests/browser-computer-use-kernel.test.ts`
+- `apps/desktop/tests/browser-computer-use-browser-bridge.test.ts`
 - [BCU-001 implementation evidence](../evidence/bcu-001-2026-08-27.md)
 - [BCU-002 implementation evidence](../evidence/bcu-002-2026-08-27.md)

@@ -13,6 +13,7 @@ import {
 } from "@openerx/contracts";
 import { BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
 import { ElectronMacSystemBrowserDriver } from "./browser-computer-use/electron-mac-system-browser-driver";
+import type { ConnectedBrowserBridgeDriver } from "./browser-computer-use/system-default-browser-adapter";
 import { SystemDefaultBrowserAdapter } from "./browser-computer-use/system-default-browser-adapter";
 import type { ToolCredentialVault } from "./credential-vault";
 import { type DesktopCaptureRecord, DesktopCaptureRegistry } from "./desktop-capture-registry";
@@ -89,9 +90,7 @@ function inside(root: string, target: string): boolean {
 export class ElectronToolCapabilityHost {
   readonly #profileDirectory: string;
   readonly #browserSessions = new Map<string, BrowserSession>();
-  readonly #browserComputerUse = new SystemDefaultBrowserAdapter(
-    new ElectronMacSystemBrowserDriver(),
-  );
+  readonly #browserComputerUse: SystemDefaultBrowserAdapter;
   readonly #desktopCaptures = new DesktopCaptureRegistry();
   readonly #oauth: OAuthLoopbackController;
 
@@ -99,9 +98,16 @@ export class ElectronToolCapabilityHost {
     profileDirectory: string,
     private readonly credentials: ToolCredentialVault,
     oauth = new OAuthLoopbackController(async (url) => await shell.openExternal(url)),
+    browserBridgeDriver: ConnectedBrowserBridgeDriver | null = null,
   ) {
     this.#profileDirectory = profileDirectory;
     this.#oauth = oauth;
+    this.#browserComputerUse = new SystemDefaultBrowserAdapter(
+      new ElectronMacSystemBrowserDriver(),
+      undefined,
+      undefined,
+      browserBridgeDriver,
+    );
   }
 
   async execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult> {

@@ -706,6 +706,7 @@ export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDrive
     validation: "semantic" | "state" | "visual",
   ): Promise<SystemBrowserDriverObservation> {
     const current = await this.observe(binding, signal);
+    if (!current.image) throw new Error("BROWSER_OBSERVATION_REQUIRED");
     const currentScreenshotDigest = createHash("sha256")
       .update(current.image.content.data, "utf8")
       .digest("hex");

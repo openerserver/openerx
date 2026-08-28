@@ -24,6 +24,24 @@ function contentText(content: unknown): string {
     .join("");
 }
 
+function toolResultData(message: unknown): Record<string, unknown> {
+  if (!message || typeof message !== "object" || !("details" in message)) return {};
+  const details = message.details;
+  if (!details || typeof details !== "object" || !("data" in details)) return {};
+  return details.data && typeof details.data === "object"
+    ? (details.data as Record<string, unknown>)
+    : {};
+}
+
+function toolResultSafeSummary(message: unknown): { dataKeys: string[]; text: string } {
+  const content =
+    message && typeof message === "object" && "content" in message ? message.content : null;
+  return {
+    dataKeys: Object.keys(toolResultData(message)).sort(),
+    text: contentText(content).slice(0, 500),
+  };
+}
+
 function responseFor(context: Context): AssistantMessage {
   const userMessages = context.messages.filter(({ role }) => role === "user");
   const latestUser = contentText(userMessages.at(-1)?.content);
@@ -37,6 +55,68 @@ function responseFor(context: Context): AssistantMessage {
   const toolResults = context.messages
     .slice(lastUserIndex + 1)
     .filter(({ role }) => role === "toolResult");
+  if (latestUser.includes("[PI_TEST_BROWSER_COMPUTER_USE_OPEN]")) {
+    const url = latestUser.match(/https?:\/\/\S+/u)?.[0];
+    if (!url) return fauxAssistantMessage("缺少系统浏览器测试 URL。");
+    if (toolResults.length === 0) {
+      return fauxAssistantMessage(
+        fauxToolCall("openerx_browser", { action: "open", url }, { id: "browser-v2-open" }),
+        { stopReason: "toolUse" },
+      );
+    }
+    const observation = toolResultData(toolResults[0]).observation;
+    const sessionId =
+      observation && typeof observation === "object" && "sessionId" in observation
+        ? observation.sessionId
+        : null;
+    if (typeof sessionId !== "string") {
+      console.error(
+        `PI_TEST_BCU_OPEN_PARSE_FAILED:${JSON.stringify(toolResultSafeSummary(toolResults[0]))}`,
+      );
+      return fauxAssistantMessage("系统浏览器没有返回可控制的 Session。");
+    }
+    return fauxAssistantMessage(`系统浏览器会话已打开。SESSION_ID=${sessionId}`);
+  }
+  if (latestUser.includes("[PI_TEST_BROWSER_COMPUTER_USE_CLOSE]")) {
+    const sessionId = latestUser.match(/SESSION_ID=([0-9a-f-]{36})/u)?.[1];
+    if (!sessionId) return fauxAssistantMessage("缺少待关闭的系统浏览器 Session。");
+    if (toolResults.length === 0) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "openerx_browser",
+          { action: "observe", sessionId },
+          { id: "browser-v2-observe-before-close" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    const observation = toolResultData(toolResults[0]).observation;
+    const observationId =
+      observation && typeof observation === "object" && "observationId" in observation
+        ? observation.observationId
+        : null;
+    if (typeof observationId !== "string") {
+      return fauxAssistantMessage("关闭前没有取得 fresh Observation。");
+    }
+    if (toolResults.length === 1) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "openerx_browser",
+          { action: "close", sessionId, observationId },
+          { id: "browser-v2-close" },
+        ),
+        { stopReason: "toolUse" },
+      );
+    }
+    const closedSession = toolResultData(toolResults[1]).session;
+    const state =
+      closedSession && typeof closedSession === "object" && "state" in closedSession
+        ? closedSession.state
+        : null;
+    return fauxAssistantMessage(
+      state === "closed" ? "系统浏览器会话已关闭。" : "系统浏览器关闭状态未确认。",
+    );
+  }
   if (latestUser.includes("[PI_TEST_SKILL]") || latestUser.includes("[PI_TEST_SKILL_AUTO]")) {
     const automatic = latestUser.includes("[PI_TEST_SKILL_AUTO]");
     const skillContext = automatic ? `${latestUser}\n${context.systemPrompt}` : latestUser;

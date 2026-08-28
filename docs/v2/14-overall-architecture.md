@@ -314,7 +314,8 @@ flowchart LR
   BROKER --> HOST[Browser Computer-Use Host<br/>exact surface / Observation registry]
   HOST --> SYSTEM[SystemDefaultBrowserAdapter]
   SYSTEM --> AX[OS Accessibility<br/>dedicated window]
-  SYSTEM -. BCU-003 pending .-> BRIDGE[Signed Browser Bridge<br/>authorized exact tab]
+  SYSTEM -. deterministic foundation implemented .-> BRIDGECORE[Bridge protocol + grant registry<br/>one-time exact-tab claim]
+  BRIDGECORE -. signed transport pending .-> BRIDGE[MV3 extension + Native Messaging<br/>authorized exact tab]
   HOST -. BCU-004 pending .-> MANAGED[ManagedChromiumAdapter<br/>isolated Profile]
   HOST --> OBS[Semantic snapshot + optional image<br/>fresh observationId]
   HOST -. explicit flag rollback .-> LEGACY[legacy_dom_v1<br/>frozen]
@@ -325,9 +326,14 @@ flowchart LR
 并完成代表性 `Backspace`、滚动、前进/后退和刷新原生动作矩阵；精确窗口输入 monitor、自动暂停和
 可信 Tool Center fresh-baseline 恢复也已通过确定性测试，且 Renderer 不接收 URL、标题、截图、
 Observation 或网页元素，证据见
-[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。真实输入 runner 因当前机器锁屏尚未通过；这
-不证明原生 UI-to-browser 联调、虚线 Bridge、托管 Chromium、签名安装权限或 Windows 已完成，
-这些仍须经 BCU-003 closure 至 BCU-006 单独验证。
+[BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)。2026-08-28 已确认 Computer Use 合成事件不会
+被真人接管 monitor 接受，并用物理点击通过精确窗口暂停/恢复门禁，见
+[live gates PASS](evidence/bcu-003-live-input-2026-08-28.md)；真实 Main/Preload/Renderer/Pi Tool
+Center 接管/恢复/关窗也已联调通过。虚线 Bridge、托管 Chromium、签名安装权限和 Windows 仍须经
+BCU-003 closure 至 BCU-006 单独验证。Bridge 虚线中的协议/授权内核已有确定性测试，但 MV3 扩展、
+Native Messaging/Main owner-only 传输、可信连接 UI 和真实标签页烟测尚未接通，不能视为运行时
+Bridge 可用；证据边界见
+[Bridge foundation](evidence/bcu-003-browser-bridge-foundation-2026-08-28.md)。
 
 ### 2.6 M6 当前本地已实现拓扑
 

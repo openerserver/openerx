@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:e2e:account": "node scripts/e2e-account.mjs",
     "test:e2e:browser:actions:macos": "node scripts/build-macos-browser-helper.mjs && vite build --config vite.browser-computer-use-actions.config.mts --logLevel error && electron .vite/browser-actions",
+    "test:e2e:browser:tool-center:macos": "npm run package -- --arch=$(node -p process.arch) && node scripts/build-macos-browser-helper.mjs && vite build --config vite.pi-host-test.config.mts --logLevel error && node scripts/e2e-browser-computer-use-tool-center.mjs",
     "test:e2e:browser:takeover:macos": "node scripts/build-macos-browser-helper.mjs && vite build --config vite.browser-computer-use-takeover.config.mts --logLevel error && electron .vite/browser-takeover",
     "test:e2e:browser:macos": "node scripts/build-macos-browser-helper.mjs && vite build --config vite.browser-computer-use-smoke.config.mts --logLevel error && electron .vite/browser-smoke",
     "test:e2e:d3:macos": "vite build --config vite.platform-alpha-test.config.mts --logLevel error && node scripts/e2e-macos-lifecycle.mjs",
