@@ -2439,6 +2439,16 @@ h1 {
   border-top: 1px solid var(--workspace-border);
 }
 
+.tool-catalog-grid .tool-runtime-details {
+  display: grid;
+  gap: 3px;
+  margin: 2px 0 0;
+  padding: 6px 0 0 16px;
+  color: var(--workspace-muted);
+  font-size: 10px;
+  border-top: 1px solid var(--workspace-border);
+}
+
 .tool-catalog-grid .tool-runtime-action {
   justify-self: start;
   margin-top: 4px;

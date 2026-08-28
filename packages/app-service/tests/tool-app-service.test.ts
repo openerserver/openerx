@@ -539,7 +539,12 @@ describe("ToolAppService", () => {
           platformConfigured: false,
         })
       ).find(({ capability }) => capability === "shell"),
-    ).toMatchObject({ status: "available", reason: null });
+    ).toMatchObject({
+      status: "available",
+      reason: null,
+      availableToolNames: ["openerx_shell", "openerx_shell_process"],
+      details: ["回滚路径：openerx_shell", "同一会话不会同时暴露 brokered bash"],
+    });
 
     service.revokeWorkspace(grant.id);
     expect(
@@ -612,6 +617,12 @@ describe("ToolAppService", () => {
       status: "degraded",
       reason: "BROKERED_BASH_FAKE_RUNNER_ONLY",
       availableToolNames: ["bash"],
+      details: expect.arrayContaining([
+        "阶段：Local Alpha",
+        "Runner：fake",
+        "环境：core（Secret 过滤）",
+        "网络：默认拒绝",
+      ]),
     });
     chat.close();
     await service.close();
@@ -1045,6 +1056,11 @@ describe("ToolAppService", () => {
       status: "unavailable",
       reason: "BROKERED_BASH_CAPABILITY_PROBE_FAILED",
       availableToolNames: [],
+      details: expect.arrayContaining([
+        "阶段：Local Alpha",
+        "Runner：macos",
+        "Sandbox：unavailable",
+      ]),
     });
     expect(platform.execute).not.toHaveBeenCalled();
     chat.close();

@@ -688,11 +688,13 @@ export class ToolAppService {
       status: ToolRuntimeStatus,
       reason: string | null,
       availableToolNames: string[],
+      details: string[] = [],
     ): ToolRuntimeReadiness => ({
       capability,
       status,
       reason,
       availableToolNames,
+      ...(details.length > 0 ? { details } : {}),
       checkedAt,
     });
     const onlineStatus: ToolRuntimeStatus = !input.platformConfigured
@@ -790,6 +792,16 @@ export class ToolAppService {
           : shellHostAvailable && writableWorkspaceAvailable
             ? ["openerx_shell", "openerx_shell_process"]
             : [],
+        this.#brokeredBashV1
+          ? [
+              "阶段：Local Alpha",
+              `Runner：${brokeredBashRuntime.mode ?? "unavailable"}`,
+              `Sandbox：${brokeredBashRuntime.sandboxPolicyVersion ?? "unavailable"}`,
+              "环境：core（Secret 过滤）",
+              "网络：默认拒绝",
+              `工作区：${executionWorkspaceGrants.length} 个有效授权`,
+            ]
+          : ["回滚路径：openerx_shell", "同一会话不会同时暴露 brokered bash"],
       ),
       readiness(
         "desktop",

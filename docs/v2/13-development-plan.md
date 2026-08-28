@@ -328,7 +328,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-### 10.1 当前执行切片：PBASH-006 本机完成，PBASH-007 下一步
+### 10.1 当前执行切片：PBASH-007 本机确定性完成，PBASH-008 下一步
 
 用户已接受 [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)，并已完成
 [PBASH 实施计划](20-pbash-implementation-plan.md) 的 PBASH-001 至 PBASH-003：严格
@@ -350,9 +350,12 @@ Service 的 Remote attended/unattended 来源冻结进 Bash 上下文，完成�
 [PBASH-005 检查点](evidence/pbash-005-2026-08-28.md)。PBASH-006 已实现可摘要绑定的
 `none/core/all + include/exclude/set`、Secret canary、默认断网与基于域名代理的受控 HTTP(S) egress；
 Remote 继续固定 core + deny，私网、metadata、重定向新目标和 DNS rebinding 均有负向测试，证据见
-[PBASH-006 检查点](evidence/pbash-006-2026-08-28.md)。下一切片 PBASH-007 进行 Golden A/B、渐进启用与
-回滚演练。当前
-`sandbox-exec` 后端已被 macOS 标记 deprecated，签名包、
+[PBASH-006 检查点](evidence/pbash-006-2026-08-28.md)。PBASH-007 已完成相同工作区与默认断网下的
+9 类确定性 Runner A/B：旧路径 8/9、Brokered 路径 9/9，安全越界与未解释回归均为 0；同时完成
+Local Alpha/Runner/policy/环境/网络/工作区 UI、单工具投影和 fail-closed 回滚演练。真实模型轮次、
+Token 与 Provider 成本未运行，明确保留为外部门禁；证据见
+[PBASH-007 检查点](evidence/pbash-007-2026-08-28.md)。下一切片 PBASH-008 收口本机平台支持矩阵。当前
+`sandbox-exec` 后端已被 macOS 标记 deprecated，Developer ID 签名/公证包、
 支持 OS 矩阵、替代后端评估、Linux 和 Windows 仍不得宣称完成。
 
 ### 10.2 既有外部门禁

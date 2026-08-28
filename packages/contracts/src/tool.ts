@@ -53,6 +53,7 @@ export const toolRuntimeReadinessSchema = z
     status: toolRuntimeStatusSchema,
     reason: z.string().min(1).max(500).nullable(),
     availableToolNames: z.array(z.string().min(1).max(200)).max(2_000),
+    details: z.array(z.string().min(1).max(200)).max(20).optional(),
     checkedAt: timestampSchema,
   })
   .strict();

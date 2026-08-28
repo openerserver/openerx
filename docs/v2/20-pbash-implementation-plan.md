@@ -1,10 +1,10 @@
 # PBASH 实施计划
 
-- 状态：`PBASH-001/PBASH-002/PBASH-003/PBASH-004/PBASH-005/PBASH-006 LOCAL COMPLETE / PBASH-007 NEXT`
+- 状态：`PBASH-001..PBASH-006 LOCAL COMPLETE / PBASH-007 LOCAL DETERMINISTIC COMPLETE / PBASH-008 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 架构依据：[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)
-- 当前目标：PBASH-006 已完成环境 policy、Secret canary 与受控 HTTP(S) egress；下一切片 PBASH-007
-  进行 Golden A/B、渐进启用、工具可用性 UI 与回滚演练
+- 当前目标：PBASH-007 已完成本机确定性 Golden A/B、渐进启用、工具可用性 UI 与回滚演练；真实模型
+  A/B 保留为外部门禁，下一切片 PBASH-008 收口签名构建与平台支持矩阵
 
 ## 1. 实施原则
 
@@ -26,7 +26,7 @@
 | PBASH-004 | 直接写变更证据与高隔离 working copy | LOCAL COMPLETE | diff/conflict、CoW change set、审阅/应用/丢弃/撤销和不降级门禁通过 |
 | PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | LOCAL COMPLETE | 至少一次投递不重复副作用；Remote 不扩大权限 |
 | PBASH-006 | 环境与 egress policy | LOCAL COMPLETE | 默认离线、Secret canary、私网/metadata/DNS rebinding 阻断通过 |
-| PBASH-007 | Golden A/B 与渐进启用 | PENDING | 安全零越界、核心 Coding 任务无未解释回归 |
+| PBASH-007 | Golden A/B 与渐进启用 | LOCAL DETERMINISTIC COMPLETE | 9 类 Runner A/B 零越界、无未解释回归；模型 A/B 外部待办 |
 | PBASH-008 | 签名构建与平台矩阵 | PENDING | 支持平台通过，其他平台 fail-closed |
 
 ## 3. PBASH-001 代码工作包
@@ -218,8 +218,21 @@ PBASH-004A 的实现与复现证据见
 
 实现与复现证据见 [PBASH-006 日期化证据](evidence/pbash-006-2026-08-28.md)。
 
-## 12. PBASH-007 下一切片
+## 12. PBASH-007 本机确定性完成
 
-1. 建立固定模型、提示、工作区快照和网络 policy 的 Golden A/B 任务集。
-2. 记录成功率、耗时、审批次数、越界次数和上下文成本，安全违规必须为零。
-3. 补 feature flag 渐进启用、Runner unavailable UI 和一键回滚演练，不改变 PBASH-008 发布门禁。
+1. 固定同一工作区、命令、timeout 和默认断网，对比旧 argv Shell 与 Brokered raw Bash；9 类任务中
+   旧路径 8/9、Brokered 路径 9/9，安全越界与未解释回归均为 0。
+2. 唯一差异是旧 Seatbelt profile 使 Git 无法打开 `/dev/null`，导致补丁前验证 exit 128；Brokered
+   路径成功。探索、搜索、构建、测试、lint、失败诊断、长输出和停止均对齐。
+3. 工具中心展示 Local Alpha、Runner/backend、policy、环境、网络和工作区状态；flag 关闭只显示
+   `openerx_shell` 回滚路径，打开只投影 `bash`，Runner unavailable 时不静默回退。
+4. 本轮没有调用真实模型，模型轮次、Token、无效工具调用和 Provider 成本明确为 N/A，继续保留为
+   External Beta 门禁，不用 Runner 测试冒充模型效果。
+
+实现与复现证据见 [PBASH-007 日期化证据](evidence/pbash-007-2026-08-28.md)。
+
+## 13. PBASH-008 下一切片
+
+1. 发布明确的平台支持矩阵：当前 macOS 本机 Local Alpha、Linux/WSL2/Windows unavailable。
+2. 对未支持平台、缺失 backend、probe 失败和无签名构建保持 fail-closed，并记录可重复证据。
+3. Developer ID 签名/公证包、Linux/WSL2 和 Windows 真机后端属于外部环境硬门禁，不以文档状态代替。

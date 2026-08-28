@@ -1464,6 +1464,7 @@ describe("M1 chat renderer", () => {
         status: "authorization_required",
         reason: "WORKSPACE_WRITE_GRANT_REQUIRED",
         availableToolNames: [],
+        details: ["阶段：Local Alpha", "网络：默认拒绝"],
         checkedAt: timestamp,
       },
       {
@@ -1485,6 +1486,8 @@ describe("M1 chat renderer", () => {
     expect(within(browserCard).getByText("运行时可用")).toBeTruthy();
     expect(within(shellCard).getByText("需要设置")).toBeTruthy();
     expect(within(shellCard).getByText("需先授权一个可写工作区")).toBeTruthy();
+    expect(within(shellCard).getByText("阶段：Local Alpha")).toBeTruthy();
+    expect(within(shellCard).getByText("网络：默认拒绝")).toBeTruthy();
     expect(within(desktopCard).getByText("部分可用")).toBeTruthy();
     expect(within(desktopCard).getByText("需在系统设置中允许辅助功能")).toBeTruthy();
     await user.click(within(desktopCard).getByRole("button", { name: "请求辅助功能权限" }));

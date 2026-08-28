@@ -4618,6 +4618,13 @@ function ToolCenter(): React.JSX.Element {
                 <strong>{tool.name}</strong>
                 <span>{tool.detail}</span>
                 {reason ? <span className="tool-runtime-reason">{reason}</span> : null}
+                {readiness?.details?.length ? (
+                  <ul className="tool-runtime-details">
+                    {readiness.details.map((detail) => (
+                      <li key={detail}>{detail}</li>
+                    ))}
+                  </ul>
+                ) : null}
                 {tool.capability === "desktop" &&
                 readiness?.reason === "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED" ? (
                   <button
