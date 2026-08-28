@@ -16,7 +16,7 @@ import {
 } from "./tool";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 5 as const;
+export const piHostContractVersion = 6 as const;
 
 export const piHostBootstrapSchema = z
   .object({

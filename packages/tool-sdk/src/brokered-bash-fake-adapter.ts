@@ -24,7 +24,9 @@ function sameExecutionContext(
     operation.executionOrigin === expected.executionOrigin &&
     operation.workspaceWriteMode === expected.workspaceWriteMode &&
     operation.environmentPolicyId === expected.environmentPolicyId &&
+    operation.environmentPolicyDigest === expected.environmentPolicyDigest &&
     operation.networkPolicyId === expected.networkPolicyId &&
+    operation.networkPolicyDigest === expected.networkPolicyDigest &&
     operation.sandboxPolicyVersion === expected.sandboxPolicyVersion
   );
 }

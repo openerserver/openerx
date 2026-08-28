@@ -37,8 +37,12 @@ function fixture(
   const directory = mkdtempSync(path.join(tmpdir(), "openerx-tool-service-"));
   directories.push(directory);
   const databasePath = path.join(directory, "openerx.sqlite");
-  const chat = new ChatRepository(databasePath, { ownerProfileId: "profile-a" });
-  const tools = new ToolRepository(databasePath, { ownerProfileId: "profile-a" });
+  const chat = new ChatRepository(databasePath, {
+    ownerProfileId: "profile-a",
+  });
+  const tools = new ToolRepository(databasePath, {
+    ownerProfileId: "profile-a",
+  });
   const generation = chat.createGeneration({
     text: "打开网页",
     idempotencyKey: "chat-tool-service-0001",
@@ -109,8 +113,10 @@ function platformEngine(available = true) {
       platform: "darwin" as const,
       platformRelease: "test-build",
       supportedProfiles: available ? ["read_only", "workspace_write"] : [],
-      environmentPolicyIds: available ? ["environment-core-v1"] : [],
-      networkPolicyIds: available ? ["network-deny-v1"] : [],
+      environmentPolicyIds: available
+        ? ["environment-none-v1", "environment-core-v1", "environment-all-v1"]
+        : [],
+      networkPolicyIds: available ? ["network-deny-v1", "network-controlled-egress-v1"] : [],
       capabilities: {
         filesystemBoundary: available,
         hardlinkBoundary: available,
@@ -149,7 +155,10 @@ function platformEngine(available = true) {
         platformRelease: "test-build",
         executionProfile: request.executionProfile,
         environmentPolicyId: request.environmentPolicyId,
+        environmentDigest: `sha256:${"0".repeat(64)}`,
         networkPolicyId: request.networkPolicyId,
+        networkPolicyDigest: request.networkPolicyDigest ?? `sha256:${"0".repeat(64)}`,
+        controlledEgress: request.networkPolicy?.mode === "controlled_egress",
         filesystemBoundary: true as const,
         hardlinkBoundary: true as const,
         environmentSanitized: true as const,
@@ -212,7 +221,9 @@ describe("ToolAppService", () => {
       payloadDigest: permission.payloadDigest,
     });
 
-    await expect(pending).resolves.toMatchObject({ summary: "host operation completed" });
+    await expect(pending).resolves.toMatchObject({
+      summary: "host operation completed",
+    });
     expect(host.execute).toHaveBeenCalledTimes(1);
     expect(events.map(({ type }) => type)).toEqual(
       expect.arrayContaining([
@@ -523,14 +534,20 @@ describe("ToolAppService", () => {
     });
     expect(
       (
-        await service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+        await service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        })
       ).find(({ capability }) => capability === "shell"),
     ).toMatchObject({ status: "available", reason: null });
 
     service.revokeWorkspace(grant.id);
     expect(
       (
-        await service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+        await service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        })
       ).find(({ capability }) => capability === "shell"),
     ).toMatchObject({
       status: "authorization_required",
@@ -586,7 +603,10 @@ describe("ToolAppService", () => {
     });
     expect(
       (
-        await service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+        await service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        })
       ).find(({ capability }) => capability === "shell"),
     ).toMatchObject({
       status: "degraded",
@@ -598,7 +618,9 @@ describe("ToolAppService", () => {
   });
 
   it("routes unattended remote and high-isolation writes to a non-degrading change-set mode", async () => {
-    const { chat, service, base, directory } = fixture({ brokeredBashV1: true });
+    const { chat, service, base, directory } = fixture({
+      brokeredBashV1: true,
+    });
     const grant = service.grantWorkspace({
       rootPath: directory,
       conversationId: base.conversationId,
@@ -629,6 +651,76 @@ describe("ToolAppService", () => {
       requiresHighIsolation: true,
     });
     expect(highRisk.brokeredBashExecution?.workspaceWriteMode).toBe("isolated_change_set");
+    chat.close();
+    await service.close();
+  });
+
+  it("freezes trusted environment and egress policies while refusing all and Remote egress", async () => {
+    const platform = platformEngine();
+    const { chat, service, base, directory } = fixture({
+      brokeredBashV1: true,
+      brokeredBashRunnerMode: "macos",
+      platformSandboxEngine: platform.engine,
+    });
+    const grant = service.grantWorkspace({
+      rootPath: directory,
+      conversationId: base.conversationId,
+      access: "read_write",
+      allowNetwork: true,
+      expiresAt: null,
+    });
+    const local = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "使用受控网络运行命令",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+      environmentPolicy: {
+        mode: "none",
+        include: ["SAFE_BUILD_FLAG"],
+        exclude: [],
+        set: { BUILD_MODE: "verification" },
+      },
+      networkPolicy: {
+        mode: "controlled_egress",
+        allowedDomains: ["registry.npmjs.org"],
+      },
+    });
+    expect(local.brokeredBashExecution).toMatchObject({
+      environmentPolicyId: "environment-none-v1",
+      environmentPolicyDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+      networkPolicyId: "network-controlled-egress-v1",
+      networkPolicyDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+    });
+
+    const remote = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "远程使用受控网络",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+      executionOrigin: "remote_attended",
+      networkPolicy: {
+        mode: "controlled_egress",
+        allowedDomains: ["registry.npmjs.org"],
+      },
+    });
+    expect(remote.brokeredBashExecution).toBeUndefined();
+    expect(remote.availableToolNames).not.toContain("bash");
+
+    const all = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "继承全部环境",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      activeExecutionGrantId: grant.id,
+      environmentPolicy: { mode: "all", include: [], exclude: [], set: {} },
+    });
+    expect(all.brokeredBashExecution).toBeUndefined();
+    expect(all.availableToolNames).not.toContain("bash");
     chat.close();
     await service.close();
   });
@@ -672,9 +764,16 @@ describe("ToolAppService", () => {
     });
     expect(
       (
-        await service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+        await service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        })
       ).find(({ capability }) => capability === "shell"),
-    ).toMatchObject({ status: "available", reason: null, availableToolNames: ["bash"] });
+    ).toMatchObject({
+      status: "available",
+      reason: null,
+      availableToolNames: ["bash"],
+    });
 
     service.startGeneration({
       generationId: base.generationId,
@@ -727,7 +826,10 @@ describe("ToolAppService", () => {
     );
     expect(platform.execute).toHaveBeenCalledWith(
       expect.objectContaining({
-        activeRoot: expect.objectContaining({ grantId: grant.id, rootPath: grant.rootPath }),
+        activeRoot: expect.objectContaining({
+          grantId: grant.id,
+          rootPath: grant.rootPath,
+        }),
         command: "npm test",
       }),
     );
@@ -739,7 +841,9 @@ describe("ToolAppService", () => {
   it("executes the full AppService to Broker path through the live macOS sandbox", async () => {
     if (!liveMacOSSandbox) return;
     const platformSandboxEngine = new MacOSSandboxExecEngine();
-    await expect(platformSandboxEngine.probe()).resolves.toMatchObject({ available: true });
+    await expect(platformSandboxEngine.probe()).resolves.toMatchObject({
+      available: true,
+    });
     const { chat, service, base, directory } = fixture({
       brokeredBashV1: true,
       brokeredBashRunnerMode: "macos",
@@ -880,7 +984,10 @@ describe("ToolAppService", () => {
     });
     const sets = service.repository().listWorkspaceChangeSets(grant.id);
     expect(sets).toHaveLength(1);
-    expect(sets[0]).toMatchObject({ status: "pending_review", workspaceGrantId: grant.id });
+    expect(sets[0]).toMatchObject({
+      status: "pending_review",
+      workspaceGrantId: grant.id,
+    });
     expect(sets[0]?.entries[0]).toMatchObject({
       relativePath: "isolated-result.txt",
       kind: "created",
@@ -929,7 +1036,10 @@ describe("ToolAppService", () => {
     expect(prepared.brokeredBashExecution).toBeUndefined();
     expect(
       (
-        await service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+        await service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        })
       ).find(({ capability }) => capability === "shell"),
     ).toMatchObject({
       status: "unavailable",
@@ -1022,7 +1132,9 @@ describe("ToolAppService", () => {
   });
 
   it("runs the complete Broker path through a deterministic fake without touching the filesystem", async () => {
-    const { chat, tools, service, base, directory } = fixture({ brokeredBashV1: true });
+    const { chat, tools, service, base, directory } = fixture({
+      brokeredBashV1: true,
+    });
     const grant = service.grantWorkspace({
       rootPath: directory,
       conversationId: base.conversationId,
@@ -1061,7 +1173,10 @@ describe("ToolAppService", () => {
         availableToolNames: prepared.availableToolNames,
         skillInstallationIds: [],
         instructionSources: prepared.instructionSources,
-        brokeredBashExecution: { ...execution, sandboxPolicyVersion: "pbash-fake-v2" },
+        brokeredBashExecution: {
+          ...execution,
+          sandboxPolicyVersion: "pbash-fake-v2",
+        },
       }),
     ).toThrow("RUN_CONFIGURATION_ALREADY_FROZEN");
     const canaryPath = path.join(directory, "pbash-fake-must-not-exist");

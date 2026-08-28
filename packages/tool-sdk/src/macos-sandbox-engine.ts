@@ -13,10 +13,26 @@ import { homedir, release, tmpdir } from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import {
+  BROKERED_BASH_ALL_ENVIRONMENT_POLICY_ID,
+  BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID,
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   BROKERED_BASH_MACOS_SANDBOX_POLICY_VERSION,
+  BROKERED_BASH_NONE_ENVIRONMENT_POLICY_ID,
 } from "@openerx/contracts";
+import {
+  BrokeredBashControlledEgressProxy,
+  type BrokeredBashNetworkPolicy,
+  brokeredBashNetworkPolicyDigest,
+} from "./brokered-bash-egress";
+import {
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+  type BrokeredBashEnvironmentPolicy,
+  brokeredBashEnvironmentDigest,
+  brokeredBashEnvironmentPolicyDigest,
+  brokeredBashEnvironmentPolicyId,
+  resolveBrokeredBashEnvironment,
+} from "./brokered-bash-environment";
 import { BrokeredBashOutputSanitizer, type OutputReplacement } from "./brokered-bash-output";
 import {
   PLATFORM_SANDBOX_ENGINE_VERSION,
@@ -65,6 +81,7 @@ const DEFAULT_SYSTEM_READ_ROOTS = [
   "/Library/Developer",
   "/Library/Java",
   "/Applications/Xcode.app",
+  "/etc/ssl",
   "/private/etc/ssl",
   "/private/var/db/dyld",
   "/private/var/select",
@@ -103,6 +120,7 @@ export interface MacOSSandboxProfileInput {
   roots: Array<{ rootPath: string; writable: boolean }>;
   runnerTempRoot: string;
   systemReadRoots: string[];
+  egressProxyPort?: number;
 }
 
 class BoundedBuffer {
@@ -175,7 +193,9 @@ function existingCanonicalRoots(values: string[]): string[] {
   return unique(
     values.flatMap((value) => {
       try {
-        return lstatSync(value).isDirectory() ? [realpathSync(value)] : [];
+        return lstatSync(realpathSync(value)).isDirectory()
+          ? [path.resolve(value), realpathSync(value)]
+          : [];
       } catch {
         return [];
       }
@@ -224,6 +244,9 @@ export function compileMacOSSandboxProfile(input: MacOSSandboxProfileInput): str
       : []),
     "(deny file-link file-clone)",
     "(deny network*)",
+    ...(input.egressProxyPort
+      ? [`(allow network-outbound (remote tcp "localhost:${input.egressProxyPort}"))`]
+      : []),
   ].join("\n");
   if (Buffer.byteLength(profile, "utf8") > MAX_PROFILE_BYTES) {
     throw new Error("BROKERED_BASH_SANDBOX_PROFILE_TOO_LARGE");
@@ -364,7 +387,10 @@ function excludedWorkingCopyPath(relativePath: string): boolean {
 }
 
 function assertSafeHardlinkBoundary(roots: CanonicalRoot[]): void {
-  const pending = roots.map(({ rootPath, writable }) => ({ directory: rootPath, writable }));
+  const pending = roots.map(({ rootPath, writable }) => ({
+    directory: rootPath,
+    writable,
+  }));
   const observations = new Map<string, HardlinkObservation>();
   let visitedEntries = 0;
   try {
@@ -419,6 +445,8 @@ function makeRunnerEnvironment(
   runnerTempRoot: string,
   roots: CanonicalRoot[] = [],
   bashExecutable = DEFAULT_BASH_EXECUTABLE,
+  policy: BrokeredBashEnvironmentPolicy = BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+  runnerEnvironment: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
   const home = path.join(runnerTempRoot, "home");
   const temp = path.join(runnerTempRoot, "tmp");
@@ -451,33 +479,24 @@ function makeRunnerEnvironment(
     "/usr/sbin",
     "/sbin",
   ].filter(existsSync);
-  return {
-    PATH: pathEntries.join(path.delimiter),
-    HOME: home,
-    TMPDIR: temp,
-    TMP: temp,
-    TEMP: temp,
-    XDG_CONFIG_HOME: config,
-    XDG_CACHE_HOME: cache,
-    LANG: "en_US.UTF-8",
-    LC_ALL: "en_US.UTF-8",
-    SHELL: bashExecutable,
-    TERM: "dumb",
-    NO_COLOR: "1",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_TERMINAL_PROMPT: "0",
-    NPM_CONFIG_USERCONFIG: "/dev/null",
-    NPM_CONFIG_CACHE: path.join(cache, "npm"),
-    NPM_CONFIG_UPDATE_NOTIFIER: "false",
-    NPM_CONFIG_AUDIT: "false",
-    NPM_CONFIG_FUND: "false",
-    PIP_CONFIG_FILE: "/dev/null",
-    PIP_CACHE_DIR: path.join(cache, "pip"),
-    OPENSSL_CONF: "/dev/null",
-    OPENERX_WORKSPACE: ".",
-    ...additionalRootEnvironment,
-  };
+  return resolveBrokeredBashEnvironment({
+    policy,
+    hostEnvironment: process.env,
+    runtime: {
+      runnerTempRoot,
+      bashExecutable,
+      pathEntries,
+      additional: {
+        OPENERX_RUNNER: "brokered-bash",
+        OPENERX_WORKSPACE: ".",
+        ...additionalRootEnvironment,
+        ...runnerEnvironment,
+      },
+    },
+    // The current contract has no danger_full_access profile. Keep `all` implemented but
+    // unreachable until that separately reviewed profile exists.
+    allowAll: false,
+  });
 }
 
 function outputReplacements(roots: CanonicalRoot[], runnerTempRoot: string): OutputReplacement[] {
@@ -575,9 +594,19 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
     if (!capability.available) {
       throw new Error(capability.reason ?? "BROKERED_BASH_RUNNER_UNAVAILABLE");
     }
+    const environmentPolicy = request.environmentPolicy ?? BROKERED_BASH_CORE_ENVIRONMENT_POLICY;
+    const networkPolicy: BrokeredBashNetworkPolicy = request.networkPolicy ?? {
+      mode: "deny",
+    };
+    const expectedNetworkPolicyId =
+      networkPolicy.mode === "deny"
+        ? BROKERED_BASH_DENY_NETWORK_POLICY_ID
+        : BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID;
     if (
-      request.environmentPolicyId !== BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID ||
-      request.networkPolicyId !== BROKERED_BASH_DENY_NETWORK_POLICY_ID
+      request.environmentPolicyId !== brokeredBashEnvironmentPolicyId(environmentPolicy) ||
+      request.environmentPolicyDigest !== brokeredBashEnvironmentPolicyDigest(environmentPolicy) ||
+      request.networkPolicyId !== expectedNetworkPolicyId ||
+      request.networkPolicyDigest !== brokeredBashNetworkPolicyDigest(networkPolicy)
     ) {
       throw new Error("BROKERED_BASH_POLICY_MISMATCH");
     }
@@ -599,6 +628,10 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
     const roots = [active, ...additional];
     assertSafeHardlinkBoundary(roots);
     const runnerTempRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "openerx-pbash-runner-")));
+    const egressProxy =
+      networkPolicy.mode === "controlled_egress"
+        ? new BrokeredBashControlledEgressProxy(networkPolicy)
+        : null;
     let executionRoots = roots;
     try {
       if (request.workspaceWriteMode === "isolated_change_set") {
@@ -685,15 +718,31 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
     let abort: (() => void) | undefined;
     let record: ActiveProcess | undefined;
     try {
+      const egressEndpoint = egressProxy ? await egressProxy.start() : null;
       const environment = makeRunnerEnvironment(
         runnerTempRoot,
         executionRoots,
         this.#bashExecutable,
+        environmentPolicy,
+        egressEndpoint
+          ? {
+              HTTP_PROXY: egressEndpoint.url,
+              HTTPS_PROXY: egressEndpoint.url,
+              http_proxy: egressEndpoint.url,
+              https_proxy: egressEndpoint.url,
+              NO_PROXY: "",
+              no_proxy: "",
+            }
+          : {},
       );
       const profile = compileMacOSSandboxProfile({
-        roots: executionRoots.map(({ rootPath, writable }) => ({ rootPath, writable })),
+        roots: executionRoots.map(({ rootPath, writable }) => ({
+          rootPath,
+          writable,
+        })),
         runnerTempRoot,
         systemReadRoots: this.#systemReadRoots,
+        ...(egressEndpoint ? { egressProxyPort: egressEndpoint.port } : {}),
       });
       const cpuSeconds = Math.max(1, Math.ceil(request.timeoutMs / 1_000) + 5);
       const absoluteProcessLimit = absoluteUserProcessLimit(request.resourceLimits.maxProcesses);
@@ -750,12 +799,13 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
       timeout = setTimeout(() => void terminate("timeout"), request.timeoutMs);
       abort = () => void terminate("cancelled");
       request.signal.addEventListener("abort", abort, { once: true });
-      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolveExit, reject) => {
-          child.once("error", reject);
-          child.once("exit", (code, signal) => resolveExit({ code, signal }));
-        },
-      );
+      const exit = await new Promise<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      }>((resolveExit, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolveExit({ code, signal }));
+      });
       clearTimeout(timeout);
       request.signal.removeEventListener("abort", abort);
       const destructionStatus = await terminate("natural");
@@ -822,7 +872,10 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
           platformRelease: this.#platformRelease,
           executionProfile: request.executionProfile,
           environmentPolicyId: request.environmentPolicyId,
+          environmentDigest: brokeredBashEnvironmentDigest(environment),
           networkPolicyId: request.networkPolicyId,
+          networkPolicyDigest: brokeredBashNetworkPolicyDigest(networkPolicy),
+          controlledEgress: networkPolicy.mode === "controlled_egress",
           filesystemBoundary: true,
           hardlinkBoundary: true,
           environmentSanitized: true,
@@ -841,6 +894,7 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
       if (timeout) clearTimeout(timeout);
       if (abort) request.signal.removeEventListener("abort", abort);
       this.#active.delete(request.identity.toolCallId);
+      await egressProxy?.close();
       rmSync(runnerTempRoot, { recursive: true, force: true });
     }
   }
@@ -885,7 +939,12 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
       const positive = spawnSync(
         this.#sandboxExecutable,
         ["-p", profile, this.#bashExecutable, "--noprofile", "--norc", "-c", "printf probe-ok"],
-        { cwd: allowedRoot, env: environment, encoding: "utf8", timeout: 5_000 },
+        {
+          cwd: allowedRoot,
+          env: environment,
+          encoding: "utf8",
+          timeout: 5_000,
+        },
       );
       const denied = spawnSync(
         this.#sandboxExecutable,
@@ -900,7 +959,12 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
           "openerx-probe",
           outsideCanary,
         ],
-        { cwd: allowedRoot, env: environment, encoding: "utf8", timeout: 5_000 },
+        {
+          cwd: allowedRoot,
+          env: environment,
+          encoding: "utf8",
+          timeout: 5_000,
+        },
       );
       if (
         positive.status !== 0 ||
@@ -931,8 +995,16 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
       platform: this.#platform,
       platformRelease: this.#platformRelease,
       supportedProfiles: available ? ["read_only", "workspace_write"] : [],
-      environmentPolicyIds: available ? [BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID] : [],
-      networkPolicyIds: available ? [BROKERED_BASH_DENY_NETWORK_POLICY_ID] : [],
+      environmentPolicyIds: available
+        ? [
+            BROKERED_BASH_NONE_ENVIRONMENT_POLICY_ID,
+            BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+            BROKERED_BASH_ALL_ENVIRONMENT_POLICY_ID,
+          ]
+        : [],
+      networkPolicyIds: available
+        ? [BROKERED_BASH_DENY_NETWORK_POLICY_ID, BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID]
+        : [],
       capabilities: available
         ? {
             filesystemBoundary: true,

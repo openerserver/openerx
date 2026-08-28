@@ -29,6 +29,7 @@ import type {
 } from "@openerx/contracts";
 import {
   BROKERED_BASH_CONTRACT_VERSION,
+  BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID,
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
@@ -41,10 +42,16 @@ import {
 } from "@openerx/contracts";
 import type { ToolRepository } from "@openerx/storage";
 import {
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
   BrokeredBashAdapter,
+  type BrokeredBashEnvironmentPolicy,
   BrokeredBashFakeAdapter,
   type BrokeredBashLogArtifactWriter,
+  type BrokeredBashNetworkPolicy,
   BuiltinToolAdapter,
+  brokeredBashEnvironmentPolicyDigest,
+  brokeredBashEnvironmentPolicyId,
+  brokeredBashNetworkPolicyDigest,
   type CapabilityAvailabilityHost,
   CapabilityBroker,
   type CapabilityHost,
@@ -52,6 +59,7 @@ import {
   type CredentialStore,
   capabilityRequirement,
   DesktopMcpOAuthProvider,
+  freezeBrokeredBashEnvironmentPolicy,
   HostCapabilityAdapter,
   HttpPlatformImageGenerationTransport,
   HttpPlatformWebSearchTransport,
@@ -128,9 +136,17 @@ function fileOperationSummary(frame: PiFileToolRequestFrame): {
 } {
   switch (frame.request.operation) {
     case "list":
-      return { input: "列出已附加文件", target: frame.conversationId, risk: "L1" };
+      return {
+        input: "列出已附加文件",
+        target: frame.conversationId,
+        risk: "L1",
+      };
     case "search":
-      return { input: frame.request.input.query, target: "已附加文件", risk: "L1" };
+      return {
+        input: frame.request.input.query,
+        target: "已附加文件",
+        risk: "L1",
+      };
     case "read":
       return {
         input: "读取已附加文件",
@@ -298,6 +314,11 @@ export class ToolAppService {
   readonly #projectionByGeneration = new Map<string, ActiveProjection>();
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
   readonly #brokeredBashExecutionByGeneration = new Map<string, BrokeredBashExecutionContext>();
+  readonly #brokeredBashEnvironmentPolicyByDigest = new Map<
+    string,
+    BrokeredBashEnvironmentPolicy
+  >();
+  readonly #brokeredBashNetworkPolicyByDigest = new Map<string, BrokeredBashNetworkPolicy>();
   readonly #abortByGeneration = new Map<string, AbortController>();
   readonly #generationByRequest = new Map<string, string>();
   readonly #mcp: McpToolAdapter;
@@ -323,6 +344,13 @@ export class ToolAppService {
       this.#brokeredBashV1 && this.#brokeredBashRunnerMode === "macos"
         ? (options.platformSandboxEngine ?? new MacOSSandboxExecEngine())
         : undefined;
+    this.#brokeredBashEnvironmentPolicyByDigest.set(
+      brokeredBashEnvironmentPolicyDigest(BROKERED_BASH_CORE_ENVIRONMENT_POLICY),
+      BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+    );
+    this.#brokeredBashNetworkPolicyByDigest.set(brokeredBashNetworkPolicyDigest({ mode: "deny" }), {
+      mode: "deny",
+    });
     const oauth = options.oauth;
     this.#mcp = new McpToolAdapter(
       options.host,
@@ -373,6 +401,20 @@ export class ToolAppService {
                 this.#platformSandboxEngine,
                 options.writeBrokeredBashLogArtifact,
                 (input) => this.#repository.createWorkspaceChangeSet(input),
+                (generationId) => {
+                  const digest =
+                    this.#brokeredBashExecutionByGeneration.get(
+                      generationId,
+                    )?.environmentPolicyDigest;
+                  return digest
+                    ? this.#brokeredBashEnvironmentPolicyByDigest.get(digest)
+                    : undefined;
+                },
+                (generationId) => {
+                  const digest =
+                    this.#brokeredBashExecutionByGeneration.get(generationId)?.networkPolicyDigest;
+                  return digest ? this.#brokeredBashNetworkPolicyByDigest.get(digest) : undefined;
+                },
               ),
             ]
           : []),
@@ -474,6 +516,8 @@ export class ToolAppService {
     additionalExecutionGrantIds?: string[];
     executionOrigin?: "local_interactive" | "remote_attended" | "remote_unattended";
     requiresHighIsolation?: boolean;
+    environmentPolicy?: BrokeredBashEnvironmentPolicy;
+    networkPolicy?: BrokeredBashNetworkPolicy;
   }): Promise<PreparedGenerationTools> {
     const workspaceGrants = this.#repository
       .listWorkspaceGrants(input.conversationId)
@@ -942,7 +986,10 @@ export class ToolAppService {
         },
         (permission) => {
           const call = this.#repository.toolCall(permission.toolCallId);
-          this.#emit("permission.required", frame, projection, { permission, toolCall: call });
+          this.#emit("permission.required", frame, projection, {
+            permission,
+            toolCall: call,
+          });
         },
       );
       const call = this.#repository.toolCallByPiRef(projection.run.id, frame.piToolCallId);
@@ -1028,7 +1075,10 @@ export class ToolAppService {
       const call = this.#repository.markToolCall(projected.toolCall.id, "failed", {
         errorCode: code,
       });
-      this.#emit("tool.failed", frame, projection, { toolCall: call, reason: code });
+      this.#emit("tool.failed", frame, projection, {
+        toolCall: call,
+        reason: code,
+      });
       throw error;
     }
   }
@@ -1266,6 +1316,8 @@ export class ToolAppService {
       additionalExecutionGrantIds?: string[];
       executionOrigin?: "local_interactive" | "remote_attended" | "remote_unattended";
       requiresHighIsolation?: boolean;
+      environmentPolicy?: BrokeredBashEnvironmentPolicy;
+      networkPolicy?: BrokeredBashNetworkPolicy;
     },
     runtime: BrokeredBashRuntimeAvailability,
   ): BrokeredBashExecutionContext | undefined {
@@ -1290,20 +1342,57 @@ export class ToolAppService {
     const requiresIsolatedChangeSet =
       active.access === "read_write" &&
       (input.executionOrigin === "remote_unattended" || input.requiresHighIsolation === true);
+    const environmentPolicy = freezeBrokeredBashEnvironmentPolicy(
+      input.environmentPolicy ?? BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+      process.env,
+    );
+    const environmentPolicyDigest = brokeredBashEnvironmentPolicyDigest(environmentPolicy);
+    const networkPolicy = input.networkPolicy ?? ({ mode: "deny" } as const);
+    const networkPolicyDigest = brokeredBashNetworkPolicyDigest(networkPolicy);
+    const networkPolicyId =
+      networkPolicy.mode === "deny"
+        ? BROKERED_BASH_DENY_NETWORK_POLICY_ID
+        : BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID;
+    if (environmentPolicy.mode === "all") return undefined;
+    const executionOrigin = input.executionOrigin ?? "local_interactive";
+    if (
+      executionOrigin !== "local_interactive" &&
+      (environmentPolicyDigest !==
+        brokeredBashEnvironmentPolicyDigest(BROKERED_BASH_CORE_ENVIRONMENT_POLICY) ||
+        networkPolicy.mode !== "deny")
+    ) {
+      return undefined;
+    }
+    if (
+      runtime.mode === "fake" &&
+      (environmentPolicy.mode !== "core" || networkPolicy.mode !== "deny")
+    ) {
+      return undefined;
+    }
+    if (
+      networkPolicy.mode === "controlled_egress" &&
+      (!active.allowNetwork || executionOrigin !== "local_interactive")
+    ) {
+      return undefined;
+    }
+    this.#brokeredBashEnvironmentPolicyByDigest.set(environmentPolicyDigest, environmentPolicy);
+    this.#brokeredBashNetworkPolicyByDigest.set(networkPolicyDigest, networkPolicy);
     return {
       contractVersion: BROKERED_BASH_CONTRACT_VERSION,
       activeExecutionGrantId: active.id,
       additionalExecutionGrantIds: additionalIds,
       executionProfile: active.access === "read_write" ? "workspace_write" : "read_only",
-      executionOrigin: input.executionOrigin ?? "local_interactive",
+      executionOrigin,
       workspaceWriteMode:
         active.access !== "read_write"
           ? "none"
           : requiresIsolatedChangeSet
             ? "isolated_change_set"
             : "direct_workspace",
-      environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
-      networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+      environmentPolicyId: brokeredBashEnvironmentPolicyId(environmentPolicy),
+      environmentPolicyDigest,
+      networkPolicyId,
+      networkPolicyDigest,
       sandboxPolicyVersion: runtime.sandboxPolicyVersion,
     };
   }

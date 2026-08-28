@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { PiToolRequestFrame } from "@openerx/contracts";
+import { type PiToolRequestFrame, piHostContractVersion } from "@openerx/contracts";
 import type { MessagePortMain } from "electron";
 import { describe, expect, it, vi } from "vitest";
 import { MessagePortPiHostClient } from "../src/pi-host-client";
@@ -49,7 +49,11 @@ describe("MessagePortPiHostClient tool progress", () => {
   it("sequences progress and ignores updates after the response settles", async () => {
     const port = new FakeMessagePort();
     const client = new MessagePortPiHostClient(port as unknown as MessagePortMain, "a".repeat(64));
-    port.receive({ kind: "pi-host.ready", contractVersion: 5, nonce: "a".repeat(64) });
+    port.receive({
+      kind: "pi-host.ready",
+      contractVersion: piHostContractVersion,
+      nonce: "a".repeat(64),
+    });
     await client.ready();
     let lateProgress: (() => void) | undefined;
     client.onToolRequest(async (_frame, onProgress) => {
@@ -89,7 +93,11 @@ describe("MessagePortPiHostClient tool progress", () => {
     const disconnected = vi.fn();
     client.onToolCancel?.(cancelled);
     client.onDisconnect?.(disconnected);
-    port.receive({ kind: "pi-host.ready", contractVersion: 5, nonce: "b".repeat(64) });
+    port.receive({
+      kind: "pi-host.ready",
+      contractVersion: piHostContractVersion,
+      nonce: "b".repeat(64),
+    });
     await client.ready();
     port.receive({
       kind: "pi.tool.cancel",

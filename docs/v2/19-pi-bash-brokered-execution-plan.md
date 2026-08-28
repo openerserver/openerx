@@ -1,6 +1,6 @@
 # OpenerX Pi Bash Broker 化执行方案
 
-- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002/PBASH-003/PBASH-004/PBASH-005 LOCAL COMPLETE / PBASH-006 NEXT`
+- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002/PBASH-003/PBASH-004/PBASH-005/PBASH-006 LOCAL COMPLETE / PBASH-007 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 范围：Desktop Pi Host、App Service Capability Broker、Platform Sandbox Engine、Workspace Scope、Remote
 - 依赖：[ADR-V2-007](adr/007-pi-harness-boundary.md)、
@@ -715,5 +715,7 @@ manifest、diff/conflict、明确的无通用 Undo 投影，以及 `isolated_cha
 持久化 `WorkspaceChangeSet`、review/apply/discard/undo、冲突与崩溃恢复，见
 [PBASH-004B 检查点](evidence/pbash-004b-2026-08-28.md)。PBASH-005 已把实际 Remote 命令来源接入冻结
 执行上下文，并完成控制器绑定审批、operation digest 幂等、崩溃后 `outcome_unknown` 与加密对账事件，见
-[PBASH-005 检查点](evidence/pbash-005-2026-08-28.md)。下一项 **PBASH-006** 完成环境继承与受控 egress
-policy。真机/生产 Remote、签名包、OS 支持矩阵和 deprecated 后端替代评估仍是后续发布门禁。
+[PBASH-005 检查点](evidence/pbash-005-2026-08-28.md)。PBASH-006 已完成 `none/core/all`、
+`include/exclude/set`、冻结摘要、Secret canary 与受控 HTTP(S) egress proxy，证据见
+[PBASH-006 检查点](evidence/pbash-006-2026-08-28.md)。下一项 **PBASH-007** 完成 Golden A/B、渐进启用
+和回滚演练。真机/生产 Remote、签名包、OS 支持矩阵和 deprecated 后端替代评估仍是后续发布门禁。

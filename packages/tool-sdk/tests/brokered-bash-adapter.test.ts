@@ -12,7 +12,10 @@ import {
 } from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
   BrokeredBashAdapter,
+  brokeredBashEnvironmentPolicyDigest,
+  brokeredBashNetworkPolicyDigest,
   PLATFORM_SANDBOX_ENGINE_VERSION,
   type PlatformSandboxCapability,
   type PlatformSandboxEngine,
@@ -76,7 +79,10 @@ class FakePlatformSandboxEngine implements PlatformSandboxEngine {
       platformRelease: "test-build",
       executionProfile: "workspace_write",
       environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+      environmentDigest: `sha256:${"0".repeat(64)}`,
       networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+      networkPolicyDigest: brokeredBashNetworkPolicyDigest({ mode: "deny" }),
+      controlledEgress: false,
       filesystemBoundary: true,
       hardlinkBoundary: true,
       environmentSanitized: true,
@@ -99,7 +105,10 @@ class FakePlatformSandboxEngine implements PlatformSandboxEngine {
     });
     return {
       ...this.result,
-      proof: { ...this.result.proof, executionProfile: request.executionProfile },
+      proof: {
+        ...this.result.proof,
+        executionProfile: request.executionProfile,
+      },
     };
   }
 
@@ -119,7 +128,11 @@ function fixture() {
     executionOrigin: "local_interactive",
     workspaceWriteMode: "direct_workspace",
     environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+    environmentPolicyDigest: brokeredBashEnvironmentPolicyDigest(
+      BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+    ),
     networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+    networkPolicyDigest: brokeredBashNetworkPolicyDigest({ mode: "deny" }),
     sandboxPolicyVersion: BROKERED_BASH_MACOS_SANDBOX_POLICY_VERSION,
   };
   const grant: WorkspaceGrant = {
@@ -254,7 +267,10 @@ describe("BrokeredBashAdapter", () => {
       },
       artifacts: ["88888888-8888-4888-8888-888888888888"],
       content: expect.arrayContaining([
-        { type: "artifact", artifactId: "88888888-8888-4888-8888-888888888888" },
+        {
+          type: "artifact",
+          artifactId: "88888888-8888-4888-8888-888888888888",
+        },
         expect.objectContaining({
           type: "diff",
           relativePath: "workspace/created.txt",
@@ -304,6 +320,57 @@ describe("BrokeredBashAdapter", () => {
       "BROKERED_BASH_WORKSPACE_GRANT_INVALID",
     );
     expect(engine.requests).toHaveLength(0);
+  });
+
+  it("binds trusted non-default environment and controlled egress policies", async () => {
+    const { context, execution, grant, engine, resolve } = fixture();
+    const environmentPolicy = {
+      mode: "none" as const,
+      include: ["SAFE_BUILD_FLAG"],
+      exclude: [],
+      set: { BUILD_MODE: "verification" },
+    };
+    const networkPolicy = {
+      mode: "controlled_egress" as const,
+      allowedDomains: ["registry.npmjs.org"],
+    };
+    const boundExecution = {
+      ...execution,
+      environmentPolicyId: "environment-none-v1",
+      environmentPolicyDigest: brokeredBashEnvironmentPolicyDigest(environmentPolicy),
+      networkPolicyId: "network-controlled-egress-v1",
+      networkPolicyDigest: brokeredBashNetworkPolicyDigest(networkPolicy),
+    };
+    engine.capability.environmentPolicyIds.push("environment-none-v1");
+    engine.capability.networkPolicyIds.push("network-controlled-egress-v1");
+    const adapter = new BrokeredBashAdapter(
+      resolve,
+      () => boundExecution,
+      engine,
+      undefined,
+      undefined,
+      () => environmentPolicy,
+      () => networkPolicy,
+    );
+    const operation = {
+      operation: "shell_command_execute" as const,
+      idempotencyKey: "pbash-custom-policy-0001",
+      ...boundExecution,
+      shell: "bash" as const,
+      command: "npm test",
+      timeoutMs: 120_000,
+    };
+    await expect(adapter.execute(operation, context)).resolves.toMatchObject({
+      data: {
+        environmentPolicyId: "environment-none-v1",
+        networkPolicyId: "network-controlled-egress-v1",
+      },
+    });
+    expect(engine.requests[0]).toMatchObject({
+      environmentPolicy,
+      networkPolicy,
+      activeRoot: { grantId: grant.id },
+    });
   });
 
   it("persists isolated change-set requests without directly committing host writes", async () => {
@@ -420,10 +487,17 @@ describe("BrokeredBashAdapter", () => {
       expect((error as ToolAdapterError).code).toBe("BROKERED_BASH_COMMAND_FAILED");
     }
 
-    engine.result = { ...engine.result, exitCode: 0, destructionStatus: "uncertain" };
+    engine.result = {
+      ...engine.result,
+      exitCode: 0,
+      destructionStatus: "uncertain",
+    };
     await expect(
       adapter.execute(
-        { ...operation, idempotencyKey: "pbash-platform-adapter-uncertain-0003" },
+        {
+          ...operation,
+          idempotencyKey: "pbash-platform-adapter-uncertain-0003",
+        },
         context,
       ),
     ).rejects.toMatchObject({ code: "BROKERED_BASH_DESTRUCTION_UNCERTAIN" });
@@ -440,7 +514,10 @@ describe("BrokeredBashAdapter", () => {
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     expect(Buffer.byteLength(text, "utf8")).toBe(50 * 1_024);
     expect(result.summary).toHaveLength(8_000);
-    expect(result.data).toMatchObject({ contextTruncated: true, outputTruncated: false });
+    expect(result.data).toMatchObject({
+      contextTruncated: true,
+      outputTruncated: false,
+    });
   });
 
   it("forwards ordered progress and caps model context by line count", async () => {

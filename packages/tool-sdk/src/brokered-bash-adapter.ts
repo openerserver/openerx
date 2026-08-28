@@ -1,11 +1,21 @@
 import {
-  BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+  BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID,
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   type BrokeredBashExecutionContext,
   type NormalizedToolResult,
   type ToolOperation,
   type WorkspaceGrant,
 } from "@openerx/contracts";
+import {
+  type BrokeredBashNetworkPolicy,
+  brokeredBashNetworkPolicyDigest,
+} from "./brokered-bash-egress";
+import {
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+  type BrokeredBashEnvironmentPolicy,
+  brokeredBashEnvironmentPolicyDigest,
+  brokeredBashEnvironmentPolicyId,
+} from "./brokered-bash-environment";
 import {
   defaultPlatformSandboxResourceLimits,
   type PlatformSandboxEngine,
@@ -33,7 +43,9 @@ function sameExecutionContext(
     operation.executionOrigin === expected.executionOrigin &&
     operation.workspaceWriteMode === expected.workspaceWriteMode &&
     operation.environmentPolicyId === expected.environmentPolicyId &&
+    operation.environmentPolicyDigest === expected.environmentPolicyDigest &&
     operation.networkPolicyId === expected.networkPolicyId &&
+    operation.networkPolicyDigest === expected.networkPolicyDigest &&
     operation.sandboxPolicyVersion === expected.sandboxPolicyVersion
   );
 }
@@ -173,6 +185,12 @@ export class BrokeredBashAdapter implements ToolAdapter {
     private readonly engine: PlatformSandboxEngine,
     private readonly writeLogArtifact?: BrokeredBashLogArtifactWriter,
     private readonly writeWorkspaceChangeSet?: BrokeredBashWorkspaceChangeSetWriter,
+    private readonly environmentPolicy: (
+      generationId: string,
+    ) => BrokeredBashEnvironmentPolicy | undefined = () => BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+    private readonly networkPolicy: (
+      generationId: string,
+    ) => BrokeredBashNetworkPolicy | undefined = () => ({ mode: "deny" }),
   ) {}
 
   async execute(
@@ -189,9 +207,21 @@ export class BrokeredBashAdapter implements ToolAdapter {
     if (!sameExecutionContext(operation, expected)) {
       throw new Error("BROKERED_BASH_EXECUTION_CONTEXT_MISMATCH");
     }
+    const environmentPolicy = this.environmentPolicy(projection.generationId);
+    if (!environmentPolicy) throw new Error("BROKERED_BASH_EXECUTION_CONTEXT_REQUIRED");
+    const environmentPolicyDigest = brokeredBashEnvironmentPolicyDigest(environmentPolicy);
+    const networkPolicy = this.networkPolicy(projection.generationId);
+    if (!networkPolicy) throw new Error("BROKERED_BASH_EXECUTION_CONTEXT_REQUIRED");
+    const networkPolicyDigest = brokeredBashNetworkPolicyDigest(networkPolicy);
+    const networkPolicyId =
+      networkPolicy.mode === "deny"
+        ? BROKERED_BASH_DENY_NETWORK_POLICY_ID
+        : BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID;
     if (
-      operation.environmentPolicyId !== BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID ||
-      operation.networkPolicyId !== BROKERED_BASH_DENY_NETWORK_POLICY_ID ||
+      operation.environmentPolicyId !== brokeredBashEnvironmentPolicyId(environmentPolicy) ||
+      operation.environmentPolicyDigest !== environmentPolicyDigest ||
+      operation.networkPolicyId !== networkPolicyId ||
+      operation.networkPolicyDigest !== networkPolicyDigest ||
       operation.sandboxPolicyVersion !== this.engine.policyVersion
     ) {
       throw new Error("BROKERED_BASH_POLICY_MISMATCH");
@@ -237,7 +267,11 @@ export class BrokeredBashAdapter implements ToolAdapter {
         executionProfile: operation.executionProfile,
         workspaceWriteMode: operation.workspaceWriteMode,
         environmentPolicyId: operation.environmentPolicyId,
+        environmentPolicyDigest,
+        environmentPolicy,
         networkPolicyId: operation.networkPolicyId,
+        networkPolicyDigest,
+        networkPolicy,
         activeRoot: {
           grantId: activeGrant.id,
           logicalName: "workspace",

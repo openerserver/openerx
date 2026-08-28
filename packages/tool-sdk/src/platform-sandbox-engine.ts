@@ -3,6 +3,8 @@ import type {
   BrokeredBashWorkspaceWriteMode,
   WorkspaceGrant,
 } from "@openerx/contracts";
+import type { BrokeredBashNetworkPolicy } from "./brokered-bash-egress";
+import type { BrokeredBashEnvironmentPolicy } from "./brokered-bash-environment";
 
 export const PLATFORM_SANDBOX_ENGINE_VERSION = "platform-sandbox-v1" as const;
 export const PLATFORM_SANDBOX_DEFAULT_MAX_OUTPUT_BYTES = 2_000_000;
@@ -65,7 +67,11 @@ export interface PlatformSandboxExecutionRequest {
   executionProfile: BrokeredBashExecutionProfile;
   workspaceWriteMode: BrokeredBashWorkspaceWriteMode;
   environmentPolicyId: string;
+  environmentPolicyDigest?: string;
+  environmentPolicy?: BrokeredBashEnvironmentPolicy;
   networkPolicyId: string;
+  networkPolicyDigest?: string;
+  networkPolicy?: BrokeredBashNetworkPolicy;
   activeRoot: PlatformSandboxRoot;
   additionalRoots: PlatformSandboxRoot[];
   resourceLimits: PlatformSandboxResourceLimits;
@@ -88,7 +94,10 @@ export interface PlatformSandboxProof {
   platformRelease: string;
   executionProfile: BrokeredBashExecutionProfile;
   environmentPolicyId: string;
+  environmentDigest: string;
   networkPolicyId: string;
+  networkPolicyDigest: string;
+  controlledEgress: boolean;
   filesystemBoundary: true;
   hardlinkBoundary: true;
   environmentSanitized: true;

@@ -12,7 +12,10 @@ import {
 } from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
   BrokeredBashFakeAdapter,
+  brokeredBashEnvironmentPolicyDigest,
+  brokeredBashNetworkPolicyDigest,
   capabilityRequirement,
   hasUncertainExternalSideEffect,
   operationDigest,
@@ -35,7 +38,11 @@ function fixture(access: WorkspaceGrant["access"] = "read_write") {
     executionOrigin: "local_interactive",
     workspaceWriteMode: access === "read_write" ? "direct_workspace" : "none",
     environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+    environmentPolicyDigest: brokeredBashEnvironmentPolicyDigest(
+      BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+    ),
     networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+    networkPolicyDigest: brokeredBashNetworkPolicyDigest({ mode: "deny" }),
     sandboxPolicyVersion: BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION,
   };
   const grant: WorkspaceGrant = {
@@ -138,7 +145,10 @@ describe("PBASH-001 fake adapter and policy", () => {
     for (const changed of [
       { ...operation, command: "pwd" },
       { ...operation, timeoutMs: 121_000 },
-      { ...operation, activeExecutionGrantId: "77777777-7777-4777-8777-777777777777" },
+      {
+        ...operation,
+        activeExecutionGrantId: "77777777-7777-4777-8777-777777777777",
+      },
       {
         ...operation,
         additionalExecutionGrantIds: ["88888888-8888-4888-8888-888888888888"],
@@ -147,7 +157,9 @@ describe("PBASH-001 fake adapter and policy", () => {
       { ...operation, executionOrigin: "remote_attended" as const },
       { ...operation, workspaceWriteMode: "isolated_change_set" as const },
       { ...operation, environmentPolicyId: "environment-core-v2" },
+      { ...operation, environmentPolicyDigest: `sha256:${"1".repeat(64)}` },
       { ...operation, networkPolicyId: "network-allow-v1" },
+      { ...operation, networkPolicyDigest: `sha256:${"2".repeat(64)}` },
       { ...operation, sandboxPolicyVersion: "pbash-fake-v2" },
     ]) {
       expect(operationDigest(changed)).not.toBe(digest);
@@ -157,7 +169,10 @@ describe("PBASH-001 fake adapter and policy", () => {
   it("requires per-call approval for attended Remote writes", () => {
     const { operation } = fixture("read_write");
     expect(
-      capabilityRequirement({ ...operation, executionOrigin: "remote_attended" }),
+      capabilityRequirement({
+        ...operation,
+        executionOrigin: "remote_attended",
+      }),
     ).toMatchObject({ risk: "L3", approval: "per_call" });
     expect(
       capabilityRequirement({

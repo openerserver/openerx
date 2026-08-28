@@ -1,10 +1,10 @@
 # PBASH 实施计划
 
-- 状态：`PBASH-001/PBASH-002/PBASH-003/PBASH-004/PBASH-005 LOCAL COMPLETE / PBASH-006 NEXT`
+- 状态：`PBASH-001/PBASH-002/PBASH-003/PBASH-004/PBASH-005/PBASH-006 LOCAL COMPLETE / PBASH-007 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 架构依据：[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)
-- 当前目标：PBASH-005 已把真实 Remote 命令链接入 Bash 冻结上下文、精确审批、幂等 journal 与
-  `outcome_unknown` 对账投影；下一切片 PBASH-006 完成环境继承和受控 egress policy
+- 当前目标：PBASH-006 已完成环境 policy、Secret canary 与受控 HTTP(S) egress；下一切片 PBASH-007
+  进行 Golden A/B、渐进启用、工具可用性 UI 与回滚演练
 
 ## 1. 实施原则
 
@@ -25,7 +25,7 @@
 | PBASH-003 | 流式进度、取消和完整日志 Artifact | LOCAL COMPLETE | 顺序、截断、取消、断连测试通过 |
 | PBASH-004 | 直接写变更证据与高隔离 working copy | LOCAL COMPLETE | diff/conflict、CoW change set、审阅/应用/丢弃/撤销和不降级门禁通过 |
 | PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | LOCAL COMPLETE | 至少一次投递不重复副作用；Remote 不扩大权限 |
-| PBASH-006 | 环境与 egress policy | PENDING | 默认离线、Secret canary、私网/metadata 阻断通过 |
+| PBASH-006 | 环境与 egress policy | LOCAL COMPLETE | 默认离线、Secret canary、私网/metadata/DNS rebinding 阻断通过 |
 | PBASH-007 | Golden A/B 与渐进启用 | PENDING | 安全零越界、核心 Coding 任务无未解释回归 |
 | PBASH-008 | 签名构建与平台矩阵 | PENDING | 支持平台通过，其他平台 fail-closed |
 
@@ -202,8 +202,24 @@ PBASH-004A 的实现与复现证据见
 
 实现与复现证据见 [PBASH-005 日期化证据](evidence/pbash-005-2026-08-28.md)。
 
-## 11. PBASH-006 下一切片
+## 11. PBASH-006 本机完成
 
-1. 把 `none/core/all + include/exclude/set` 环境 policy 从架构合同落到 Runner；Remote 禁止 `all`。
-2. 增加 Secret canary，验证 SSH Agent、Git/npm/pip/cloud 凭证和代理变量不继承。
-3. 为显式受控网络实现 egress domain/proxy policy，并阻断重定向、回环、私网、metadata 与 DNS rebinding。
+1. Runner 已实现 `none/core/all + include/exclude/set`：`core` 继续默认，`include` 宿主值在 App Service
+   冻结后进入 policy digest，最终展开环境另存 SHA-256 证明；当前合同没有 `danger_full_access`，因此
+   `all` 保持实现但不可达，Remote 只接受未修改的 `core`。
+2. Secret 名称和值双重 canary 已覆盖 SSH Agent、Git、npm、pip、AWS/GCP/Azure、GitHub、Pi/Codex、
+   数据库和宿主代理；Runner 自有 HOME/TMP、Git/npm/pip hardening 与短生命周期代理值在过滤后注入。
+3. 显式 `allowNetwork` grant 可为 Local generation 冻结 domain allowlist；Shell 仍由 Seatbelt 拒绝全部
+   直连，只能访问 Runner 的单端口代理。代理逐 HTTP 请求和 HTTPS CONNECT 重新校验域名、80/443
+   端口与 DNS 全部答案，并使用已验证 IP 拨号，阻断回环、私网、链路本地、CGNAT、metadata、混合
+   DNS rebinding、重定向新目标和任意代理隧道；HTTPS CONNECT 还要求 ClientHello SNI 与批准域名一致。
+4. 本机真实测试证明 allowlist 中的 `example.com` 可经代理访问，而 `--noproxy` 直连失败；默认 deny、
+   Unix/本机网络边界和所有既有 PBASH-002 门禁保持不变。
+
+实现与复现证据见 [PBASH-006 日期化证据](evidence/pbash-006-2026-08-28.md)。
+
+## 12. PBASH-007 下一切片
+
+1. 建立固定模型、提示、工作区快照和网络 policy 的 Golden A/B 任务集。
+2. 记录成功率、耗时、审批次数、越界次数和上下文成本，安全违规必须为零。
+3. 补 feature flag 渐进启用、Runner unavailable UI 和一键回滚演练，不改变 PBASH-008 发布门禁。

@@ -5,7 +5,11 @@ export const BROKERED_BASH_CONTRACT_VERSION = "brokered_bash_v1" as const;
 export const BROKERED_BASH_V1_FEATURE_FLAG = "OPENERX_BROKERED_BASH_V1" as const;
 export const BROKERED_BASH_RUNNER_MODE_ENV = "OPENERX_BROKERED_BASH_RUNNER" as const;
 export const BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID = "environment-core-v1" as const;
+export const BROKERED_BASH_NONE_ENVIRONMENT_POLICY_ID = "environment-none-v1" as const;
+export const BROKERED_BASH_ALL_ENVIRONMENT_POLICY_ID = "environment-all-v1" as const;
 export const BROKERED_BASH_DENY_NETWORK_POLICY_ID = "network-deny-v1" as const;
+export const BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID =
+  "network-controlled-egress-v1" as const;
 export const BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION = "pbash-fake-v1" as const;
 export const BROKERED_BASH_MACOS_SANDBOX_POLICY_VERSION = "macos-seatbelt-v1" as const;
 export const BROKERED_BASH_MAX_COMMAND_BYTES = 65_536;
@@ -52,6 +56,20 @@ export const brokeredBashErrorCodeSchema = z.enum([
   "BROKERED_BASH_EXECUTION_CONTEXT_MISMATCH",
   "BROKERED_BASH_EXECUTION_CONTEXT_REQUIRED",
   "BROKERED_BASH_EXECUTION_PROFILE_MISMATCH",
+  "BROKERED_BASH_ENVIRONMENT_ALL_DENIED",
+  "BROKERED_BASH_ENVIRONMENT_POLICY_INVALID",
+  "BROKERED_BASH_ENVIRONMENT_SECRET_BLOCKED",
+  "BROKERED_BASH_EGRESS_ADDRESS_DENIED",
+  "BROKERED_BASH_EGRESS_CREDENTIALS_DENIED",
+  "BROKERED_BASH_EGRESS_DOMAIN_DENIED",
+  "BROKERED_BASH_EGRESS_POLICY_INVALID",
+  "BROKERED_BASH_EGRESS_PORT_DENIED",
+  "BROKERED_BASH_EGRESS_PROTOCOL_DENIED",
+  "BROKERED_BASH_EGRESS_REQUEST_INVALID",
+  "BROKERED_BASH_EGRESS_TLS_INVALID",
+  "BROKERED_BASH_EGRESS_TLS_REQUIRED",
+  "BROKERED_BASH_EGRESS_TLS_SNI_DENIED",
+  "BROKERED_BASH_EGRESS_TLS_SNI_REQUIRED",
   "BROKERED_BASH_FAKE_RUNNER_ONLY",
   "BROKERED_BASH_HARDLINK_BOUNDARY_UNSAFE",
   "BROKERED_BASH_ISOLATED_CHANGE_SET_UNAVAILABLE",
@@ -92,7 +110,15 @@ const executionContextShape = {
   executionOrigin: brokeredBashExecutionOriginSchema,
   workspaceWriteMode: brokeredBashWorkspaceWriteModeSchema,
   environmentPolicyId: brokeredBashPolicyIdSchema,
+  environmentPolicyDigest: z
+    .string()
+    .regex(/^sha256:[a-f0-9]{64}$/u)
+    .optional(),
   networkPolicyId: brokeredBashPolicyIdSchema,
+  networkPolicyDigest: z
+    .string()
+    .regex(/^sha256:[a-f0-9]{64}$/u)
+    .optional(),
   sandboxPolicyVersion: brokeredBashPolicyIdSchema,
 };
 
@@ -172,7 +198,9 @@ export const brokeredBashOperationSchema = z
         (value) => new TextEncoder().encode(value).byteLength <= BROKERED_BASH_MAX_COMMAND_BYTES,
         { message: "Bash command exceeds the UTF-8 byte limit" },
       )
-      .refine((value) => !value.includes("\0"), { message: "Bash command cannot contain NUL" }),
+      .refine((value) => !value.includes("\0"), {
+        message: "Bash command cannot contain NUL",
+      }),
     timeoutMs: z.number().int().min(1_000).max(BROKERED_BASH_MAX_TIMEOUT_MS),
   })
   .strict()

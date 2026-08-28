@@ -13,12 +13,16 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
+  BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID,
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   type BrokeredBashExecutionProfile,
 } from "@openerx/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+  brokeredBashEnvironmentPolicyDigest,
+  brokeredBashEnvironmentPolicyId,
+  brokeredBashNetworkPolicyDigest,
   compileMacOSSandboxProfile,
   defaultPlatformSandboxResourceLimits,
   MacOSSandboxExecEngine,
@@ -56,6 +60,8 @@ function request(input: {
   workspaceWriteMode?: PlatformSandboxExecutionRequest["workspaceWriteMode"];
   additionalRoots?: PlatformSandboxRoot[];
   timeoutMs?: number;
+  environmentPolicy?: PlatformSandboxExecutionRequest["environmentPolicy"];
+  networkPolicy?: PlatformSandboxExecutionRequest["networkPolicy"];
   signal?: AbortSignal;
   onOutput?: PlatformSandboxExecutionRequest["onOutput"];
 }): PlatformSandboxExecutionRequest {
@@ -72,8 +78,19 @@ function request(input: {
     workspaceWriteMode:
       input.workspaceWriteMode ??
       (input.executionProfile === "workspace_write" ? "direct_workspace" : "none"),
-    environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
-    networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+    environmentPolicyId: brokeredBashEnvironmentPolicyId(
+      input.environmentPolicy ?? BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+    ),
+    environmentPolicyDigest: brokeredBashEnvironmentPolicyDigest(
+      input.environmentPolicy ?? BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
+    ),
+    ...(input.environmentPolicy ? { environmentPolicy: input.environmentPolicy } : {}),
+    networkPolicyId:
+      input.networkPolicy?.mode === "controlled_egress"
+        ? BROKERED_BASH_CONTROLLED_EGRESS_NETWORK_POLICY_ID
+        : BROKERED_BASH_DENY_NETWORK_POLICY_ID,
+    networkPolicyDigest: brokeredBashNetworkPolicyDigest(input.networkPolicy ?? { mode: "deny" }),
+    ...(input.networkPolicy ? { networkPolicy: input.networkPolicy } : {}),
     activeRoot: input.activeRoot,
     additionalRoots: input.additionalRoots ?? [],
     resourceLimits: defaultPlatformSandboxResourceLimits(),
@@ -128,6 +145,15 @@ describe("MacOSSandboxExecEngine contract", () => {
     expect(profile).not.toContain("mach-lookup");
     expect(profile).not.toContain("(allow process*)");
     expect(profile).not.toContain("(allow network");
+
+    const controlled = compileMacOSSandboxProfile({
+      roots: [{ rootPath: "/tmp/workspace-read", writable: false }],
+      runnerTempRoot: "/tmp/runner-private",
+      systemReadRoots: ["/usr", "/bin"],
+      egressProxyPort: 41_337,
+    });
+    expect(controlled).toContain('(allow network-outbound (remote tcp "localhost:41337"))');
+    expect(controlled).not.toContain("(allow network*)");
   });
 
   it("fails capability discovery closed on unsupported or missing backends", async () => {
@@ -269,6 +295,72 @@ describe("MacOSSandboxExecEngine contract", () => {
       expect(deniedSystemConfig.exitCode).not.toBe(0);
     }
     await engine.stopAll();
+  });
+
+  it("enforces none/include/exclude/set and strips live host credential canaries", async () => {
+    if (!liveMacOS) return;
+    const workspace = temporaryDirectory("openerx-pbash-environment-");
+    const canaries = {
+      SAFE_BUILD_FLAG: "safe-visible",
+      SSH_AUTH_SOCK: "/tmp/ssh-agent-canary.sock",
+      GIT_ASKPASS: "/tmp/git-askpass-canary",
+      NPM_TOKEN: "npm-token-canary",
+      PIP_INDEX_URL: "https://user:pass@pip.invalid/simple",
+      AWS_ACCESS_KEY_ID: "aws-access-canary",
+      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/gcp-canary.json",
+      AZURE_CLIENT_SECRET: "azure-secret-canary",
+      GITHUB_TOKEN: "github-token-canary",
+      PI_SESSION_TOKEN: "pi-token-canary",
+      HTTPS_PROXY: "http://user:pass@proxy.invalid",
+      SAFE_LOOKING_VALUE: "token=disguised-canary",
+    };
+    const previous = Object.fromEntries(
+      Object.keys(canaries).map((name) => [name, process.env[name]]),
+    );
+    Object.assign(process.env, canaries);
+    const engine = new MacOSSandboxExecEngine();
+    try {
+      const result = await engine.execute(
+        request({
+          activeRoot: root(workspace),
+          environmentPolicy: {
+            mode: "none",
+            include: Object.keys(canaries),
+            exclude: [],
+            set: { SAFE_SET_VALUE: "set-visible" },
+          },
+          command: "/usr/bin/env",
+        }),
+      );
+      expect(result.exitCode, result.output).toBe(0);
+      expect(result.output).toContain("SAFE_BUILD_FLAG=safe-visible");
+      expect(result.output).toContain("SAFE_SET_VALUE=set-visible");
+      expect(result.output).not.toContain("HOME=");
+      for (const value of Object.values(canaries).slice(1)) {
+        expect(result.output).not.toContain(value);
+      }
+
+      await expect(
+        engine.execute(
+          request({
+            activeRoot: root(workspace),
+            environmentPolicy: {
+              mode: "all",
+              include: [],
+              exclude: [],
+              set: {},
+            },
+            command: "/usr/bin/true",
+          }),
+        ),
+      ).rejects.toThrow("BROKERED_BASH_ENVIRONMENT_ALL_DENIED");
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await engine.stopAll();
+    }
   });
 
   it("writes only read-write roots while preserving .git and read-only additional roots", async () => {
@@ -422,8 +514,14 @@ describe("MacOSSandboxExecEngine contract", () => {
       hostWorkspaceMutated: false,
       undo: "REVIEW_REQUIRED_BEFORE_APPLY",
       manifest: expect.arrayContaining([
-        expect.objectContaining({ relativePath: "created.txt", kind: "created" }),
-        expect.objectContaining({ relativePath: "existing.txt", kind: "modified" }),
+        expect.objectContaining({
+          relativePath: "created.txt",
+          kind: "created",
+        }),
+        expect.objectContaining({
+          relativePath: "existing.txt",
+          kind: "modified",
+        }),
       ]),
       excludedPathCount: 3,
     });
@@ -457,7 +555,10 @@ describe("MacOSSandboxExecEngine contract", () => {
     ).rejects.toThrow("BROKERED_BASH_WORKSPACE_ROOT_INVALID");
     await expect(
       engine.execute(
-        request({ activeRoot: root(protectedGit, "read_write", "7"), command: "true" }),
+        request({
+          activeRoot: root(protectedGit, "read_write", "7"),
+          command: "true",
+        }),
       ),
     ).rejects.toThrow("BROKERED_BASH_PROTECTED_WORKSPACE_DENIED");
     await expect(
@@ -491,7 +592,7 @@ describe("MacOSSandboxExecEngine contract", () => {
     });
     limited.resourceLimits = { ...limited.resourceLimits, maxOutputBytes: 32 };
     const result = await engine.execute(limited);
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.output).toBe(0);
     expect(result.outputTruncated).toBe(true);
     expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(32);
     expect(Buffer.byteLength(result.output, "utf8")).toBeLessThanOrEqual(32);
@@ -502,7 +603,11 @@ describe("MacOSSandboxExecEngine contract", () => {
     if (!liveMacOS) return;
     const workspace = temporaryDirectory("openerx-pbash-progress-");
     const engine = new MacOSSandboxExecEngine();
-    const progress: Array<{ sequence: number; delta: string; truncated: boolean }> = [];
+    const progress: Array<{
+      sequence: number;
+      delta: string;
+      truncated: boolean;
+    }> = [];
     const result = await engine.execute(
       request({
         activeRoot: root(workspace),
@@ -543,13 +648,42 @@ describe("MacOSSandboxExecEngine contract", () => {
     }
   });
 
+  it("allows an explicit public domain only through the controlled proxy", async () => {
+    if (!liveMacOS) return;
+    const workspace = temporaryDirectory("openerx-pbash-egress-");
+    const engine = new MacOSSandboxExecEngine();
+    const result = await engine.execute(
+      request({
+        activeRoot: root(workspace),
+        networkPolicy: {
+          mode: "controlled_egress",
+          allowedDomains: ["example.com"],
+        },
+        command:
+          "/usr/bin/curl -fsS --max-time 15 https://example.com/ | /usr/bin/grep -q Example && ! /usr/bin/curl --noproxy '*' -fsS --max-time 3 https://example.com/ >/dev/null 2>&1",
+        timeoutMs: 25_000,
+      }),
+    );
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.proof).toMatchObject({
+      networkDenied: true,
+      controlledEgress: true,
+      networkPolicyId: "network-controlled-egress-v1",
+      networkPolicyDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+    });
+    await engine.stopAll();
+  });
+
   it("cannot signal a process outside the owned sandbox process tree", async () => {
     if (!liveMacOS) return;
     const workspace = temporaryDirectory("openerx-pbash-signal-escape-");
     const processCanary = "pbash-host-process-secret-must-not-leak";
     const outside = spawn("/bin/sleep", ["60"], {
       stdio: "ignore",
-      env: { PATH: "/usr/bin:/bin", OPENERX_HOST_PROCESS_CANARY: processCanary },
+      env: {
+        PATH: "/usr/bin:/bin",
+        OPENERX_HOST_PROCESS_CANARY: processCanary,
+      },
     });
     await new Promise<void>((resolve, reject) => {
       outside.once("spawn", resolve);
@@ -586,7 +720,10 @@ describe("MacOSSandboxExecEngine contract", () => {
       }),
     );
     const timedOutPid = Number(timedOut.stdout.trim().split(/\s+/u)[0]);
-    expect(timedOut, timedOut.output).toMatchObject({ timedOut: true, cancelled: false });
+    expect(timedOut, timedOut.output).toMatchObject({
+      timedOut: true,
+      cancelled: false,
+    });
     expect(timedOut.destructionStatus).not.toBe("uncertain");
     expect(Number.isInteger(timedOutPid) && timedOutPid > 0).toBe(true);
     expect(processExists(timedOutPid)).toBe(false);
