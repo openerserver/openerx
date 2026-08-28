@@ -1,6 +1,6 @@
 # ADR-V2-018: Brokered Bash and platform sandbox boundary
 
-- Status: Accepted; PBASH-001/PBASH-002 local implementation complete, signed release pending
+- Status: Accepted; PBASH-001/PBASH-002/PBASH-003 local implementation complete, signed release pending
 - Date: 2026-08-28
 - Owners: Desktop, App Service, Pi Host and Security
 - Supersedes: the Shell execution decision in ADR-V2-012
@@ -44,8 +44,14 @@ passes. The backend launches `/bin/bash --noprofile --norc` through the external
 `/usr/bin/sandbox-exec` process, starts from an empty environment, denies network and broad Mach/process
 access, constrains roots and resources, and owns one process group per ToolCall. A pre-spawn inode scan
 rejects hard links with aliases outside the authorized root set or across writable/read-only boundaries;
-the profile also denies creating hard links and file clones. PBASH-002 deliberately returns only bounded
-final output—streaming and complete log artifacts remain PBASH-003.
+the profile also denies creating hard links and file clones. PBASH-002 deliberately returned only bounded
+final output.
+
+PBASH-003 upgrades the private Pi IPC to v5 with ordered `pi.tool.progress` and request-scoped
+`pi.tool.cancel`. Runner output is sanitized across chunks before progress, model context or Artifact
+storage; model context is limited to 2,000 lines/50 KiB and the controlled text log to 2 MiB. Late frames,
+Abort, Pi Host disconnect and AppService close are handled by the same pending-request and Runner cleanup
+boundary.
 
 ## Consequences
 
@@ -54,14 +60,16 @@ final output—streaming and complete log artifacts remain PBASH-003.
 - App Service gains a generation-bound contract that later platform backends can implement without
   changing the model tool.
 - PBASH-001 remains contract-only evidence; PBASH-002 supplies current-host macOS process, filesystem,
-  environment, network, hard-link and process-tree evidence.
+  environment, network, hard-link and process-tree evidence; PBASH-003 supplies local ordered progress,
+  cross-chunk sanitization, cancellation and controlled-log evidence.
 - `/usr/bin/sandbox-exec` is marked deprecated by the current macOS manual. It remains a replaceable local
   backend and cannot become release evidence without signed-package and supported-OS matrix validation.
 - Linux and Windows remain unavailable; a missing or drifting backend never falls back to host Bash.
 
 ## Migration and rollback
 
-- The private Pi IPC contract increments to version 4 for the optional trusted execution context.
+- The private Pi IPC contract is version 5 after adding trusted execution context, ordered progress and
+  request-scoped cancellation.
 - The new path is creation-time gated by `OPENERX_BROKERED_BASH_V1`; existing Generations never hot-migrate.
 - Disabling the flag restores the existing `openerx_shell` projection and leaves persisted ToolCalls
   readable.

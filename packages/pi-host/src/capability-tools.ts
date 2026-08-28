@@ -10,11 +10,14 @@ import {
   type ToolOperation,
 } from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
-import { createProductBrokeredBashTool } from "./bash-tool";
+import { type BrokeredBashToolTransport, createProductBrokeredBashTool } from "./bash-tool";
 import { productToolResult } from "./tool-result";
 
 export interface PiCapabilityToolTransport {
-  request(frame: PiToolRequestFrame): Promise<unknown>;
+  request(
+    frame: PiToolRequestFrame,
+    options?: Parameters<BrokeredBashToolTransport["request"]>[1],
+  ): Promise<unknown>;
 }
 
 type OperationWithoutIdempotency = ToolOperation extends infer Operation

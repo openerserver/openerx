@@ -56,6 +56,7 @@ function request(input: {
   additionalRoots?: PlatformSandboxRoot[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  onOutput?: PlatformSandboxExecutionRequest["onOutput"];
 }): PlatformSandboxExecutionRequest {
   return {
     identity: {
@@ -73,6 +74,7 @@ function request(input: {
     additionalRoots: input.additionalRoots ?? [],
     resourceLimits: defaultPlatformSandboxResourceLimits(),
     signal: input.signal ?? new AbortController().signal,
+    ...(input.onOutput ? { onOutput: input.onOutput } : {}),
   };
 }
 
@@ -441,6 +443,26 @@ describe("MacOSSandboxExecEngine contract", () => {
     expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(32);
     expect(Buffer.byteLength(result.output, "utf8")).toBeLessThanOrEqual(32);
     await engine.stopAll();
+  });
+
+  it("streams ordered output only after cross-chunk sanitization", async () => {
+    if (!liveMacOS) return;
+    const workspace = temporaryDirectory("openerx-pbash-progress-");
+    const engine = new MacOSSandboxExecEngine();
+    const progress: Array<{ sequence: number; delta: string; truncated: boolean }> = [];
+    const result = await engine.execute(
+      request({
+        activeRoot: root(workspace),
+        command:
+          "printf '\\033[31m%s token=super' \"$PWD\"; sleep 0.05; printf '%s\\033[0m\\n' '-secret-value'",
+        onOutput: (frame) => progress.push(frame),
+      }),
+    );
+    expect(progress.map(({ sequence }) => sequence)).toEqual([1]);
+    expect(progress.map(({ delta }) => delta).join("")).toBe("<workspace> token=<redacted>\n");
+    expect(result.output).toBe("<workspace> token=<redacted>\n");
+    expect(JSON.stringify({ progress, result })).not.toContain(workspace);
+    expect(JSON.stringify({ progress, result })).not.toContain("super-secret-value");
   });
 
   it("denies loopback network access independently of command text", async () => {

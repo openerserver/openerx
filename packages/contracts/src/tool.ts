@@ -796,6 +796,24 @@ export const piToolRequestFrameSchema = z
   })
   .strict();
 
+export const piToolProgressFrameSchema = z
+  .object({
+    kind: z.literal("pi.tool.progress"),
+    requestId: entityIdSchema,
+    sequence: z.number().int().positive(),
+    delta: z.string().max(16_384),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+export const piToolCancelFrameSchema = z
+  .object({
+    kind: z.literal("pi.tool.cancel"),
+    requestId: entityIdSchema,
+    generationId: entityIdSchema,
+  })
+  .strict();
+
 export const piToolResponseFrameSchema = z.discriminatedUnion("ok", [
   z
     .object({
@@ -935,6 +953,8 @@ export type PiFileToolOperation = z.infer<typeof piFileToolOperationSchema>;
 export type ToolInput = z.infer<typeof toolInputSchema>;
 export type PiToolRequestFrame = z.infer<typeof piToolRequestFrameSchema>;
 export type PiToolResponseFrame = z.infer<typeof piToolResponseFrameSchema>;
+export type PiToolProgressFrame = z.infer<typeof piToolProgressFrameSchema>;
+export type PiToolCancelFrame = z.infer<typeof piToolCancelFrameSchema>;
 export type PiActivityEvent = z.infer<typeof piActivityEventSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
 export type McpServerAuthorizationState = z.infer<typeof mcpServerAuthorizationStateSchema>;

@@ -10,6 +10,7 @@ import {
   fauxThinking,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
+import { piHostContractVersion } from "@openerx/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { createProductPiSession, ModelRuntime } from "../src/agent-session";
 import { startPiHostProcess } from "../src/host";
@@ -60,7 +61,7 @@ describe("Pi AgentSession composition", () => {
     parentPort.emit("message", {
       data: {
         kind: "pi-host.bootstrap",
-        contractVersion: 4,
+        contractVersion: piHostContractVersion,
         nonce: "c".repeat(64),
         profileDirectory: root,
       },
@@ -139,7 +140,7 @@ describe("Pi AgentSession composition", () => {
     parentPort.emit("message", {
       data: {
         kind: "pi-host.bootstrap",
-        contractVersion: 4,
+        contractVersion: piHostContractVersion,
         nonce: "b".repeat(64),
         profileDirectory: root,
       },
@@ -294,7 +295,7 @@ describe("Pi AgentSession composition", () => {
     parentPort.emit("message", {
       data: {
         kind: "pi-host.bootstrap",
-        contractVersion: 4,
+        contractVersion: piHostContractVersion,
         nonce: "d".repeat(64),
         profileDirectory: root,
       },
@@ -347,7 +348,7 @@ describe("Pi AgentSession composition", () => {
     parentPort.emit("message", {
       data: {
         kind: "pi-host.bootstrap",
-        contractVersion: 4,
+        contractVersion: piHostContractVersion,
         nonce: "a".repeat(64),
         profileDirectory: root,
       },

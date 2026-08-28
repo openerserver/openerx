@@ -9,12 +9,14 @@ import {
   mcpToolDescriptorSchema,
   piActivityEventSchema,
   piFileToolOperationSchema,
+  piToolCancelFrameSchema,
+  piToolProgressFrameSchema,
   piToolRequestFrameSchema,
   piToolResponseFrameSchema,
 } from "./tool";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 4 as const;
+export const piHostContractVersion = 5 as const;
 
 export const piHostBootstrapSchema = z
   .object({
@@ -241,6 +243,7 @@ export const piHostRequestFrameSchema = z.union([
   piSessionControlFrameSchema,
   piFileToolResponseFrameSchema,
   piToolResponseFrameSchema,
+  piToolProgressFrameSchema,
 ]);
 
 export const piHostEventFrameSchema = z
@@ -266,6 +269,8 @@ export const piHostPortFrameSchema = z.union([
   piFileToolResponseFrameSchema,
   piToolRequestFrameSchema,
   piToolResponseFrameSchema,
+  piToolProgressFrameSchema,
+  piToolCancelFrameSchema,
   piActivityEventSchema,
 ]);
 

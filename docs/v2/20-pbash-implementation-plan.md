@@ -1,10 +1,10 @@
 # PBASH 实施计划
 
-- 状态：`PBASH-001/PBASH-002 LOCAL COMPLETE / PBASH-003 NEXT`
+- 状态：`PBASH-001/PBASH-002/PBASH-003 LOCAL COMPLETE / PBASH-004 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 架构依据：[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)
-- 当前目标：保持 PBASH-002 的真实 macOS 后端 fail-closed，下一切片实现 PBASH-003 的有序进度、
-  跨 chunk 脱敏和完整日志 Artifact
+- 当前目标：保持 PBASH-002/PBASH-003 的隔离、进度、脱敏和日志门禁，下一切片实现 PBASH-004 的
+  changed-path manifest、diff/conflict 与高隔离 working copy
 
 ## 1. 实施原则
 
@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | PBASH-001 | 严格合同、Pi 工具投影、冻结执行上下文、fake Broker/Runner | LOCAL COMPLETE | 合同、Pi Host、Broker、App Service 测试通过；无进程启动 |
 | PBASH-002 | `PlatformSandboxEngine` 与 macOS Seatbelt 后端 | LOCAL COMPLETE | 文件/网络/环境/进程树负向门禁通过；发布矩阵仍待 PBASH-008 |
-| PBASH-003 | 流式进度、取消和完整日志 Artifact | PENDING | 顺序、截断、取消、断连测试通过 |
+| PBASH-003 | 流式进度、取消和完整日志 Artifact | LOCAL COMPLETE | 顺序、截断、取消、断连测试通过 |
 | PBASH-004 | 直接写变更证据与高隔离 working copy | PENDING | diff/conflict 和无人值守 Remote 不降级门禁通过 |
 | PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | PENDING | 至少一次投递不重复副作用 |
 | PBASH-006 | 环境与 egress policy | PENDING | 默认离线、Secret canary、私网/metadata 阻断通过 |
@@ -98,7 +98,7 @@ PBASH-001 当时按边界停止，没有顺带接入 `/bin/bash`、`sandbox-exec
   运行时禁止新建 hard link/file clone。
 - 环境从空集合构造，只保留受控 PATH/locale/Runner 临时目录与显式安全配置。
 - 每次调用一个进程组；timeout、Abort、自然退出和 App Service close 后都清理残余后代。
-- 输出不返回真实 Workspace/Runner 临时路径；PBASH-003 前仅返回有界最终输出。
+- 输出不返回真实 Workspace/Runner 临时路径；PBASH-002 在 PBASH-003 完成前仅返回有界最终输出。
 
 ### 6.3 PBASH-002 验收门槛
 
@@ -114,16 +114,33 @@ PBASH-001 当时按边界停止，没有顺带接入 `/bin/bash`、`sandbox-exec
 - [x] macOS live tests、定向测试、全仓 `check:v2` 和日期化证据通过。
 
 PBASH-002 不实现 PTY、长期后台 Session、受控网络放行、SecretRef、完整日志 Artifact 或变更
-manifest；这些仍属于 PBASH-003 至 PBASH-006。
+manifest；其中进度、取消与日志已由 PBASH-003 补齐，其余仍属于 PBASH-004 至 PBASH-006。
 
 本切片实现、首次 hard-link 逃逸发现及修复、真实 macOS 负向矩阵与完整门禁见
 [PBASH-002 日期化证据](evidence/pbash-002-2026-08-28.md)。`sandbox-exec` 已由系统手册标记
 deprecated，本检查点只证明当前本机后端，不是签名发布或未来 macOS 兼容声明。
 
-## 7. PBASH-003 下一切片
+## 7. PBASH-003 本机完成
 
-1. 定义带单调序号的 `pi.tool.progress`，保持 stdout/stderr 顺序并处理迟到帧。
-2. 实现跨 chunk 的 ANSI/控制字符、路径和凭证脱敏；不能逐 chunk 独立替换。
-3. 模型上下文维持 50 KiB 上限，完整日志进入最大 2 MiB 的受控 Artifact。
-4. 将 Abort、Stop、Pi Host 断连与 App Service close 的最终状态统一投影并补竞态测试。
-5. 在这些门禁完成前，真实 Runner 只返回有界最终输出，不发送子进程实时 chunk。
+- [x] 私有 Pi IPC 升级到 v5；`pi.tool.progress` 使用请求内单调序号，Pi Host 丢弃重复、迟到和已
+      结束请求的帧，并映射到 ToolDefinition `onUpdate`。
+- [x] macOS Runner 按 stdout/stderr 到达顺序输出；跨 chunk 缓冲后统一去除 ANSI/控制字符、替换
+      授权根/Runner 临时目录/宿主 HOME，并遮蔽常见凭证形态。
+- [x] 无换行超长单行在 64 KiB 处 fail-closed 为固定脱敏标记，不跨截断边界泄露凭证片段。
+- [x] 模型结果同时限制为尾部 2,000 行和 50 KiB；已脱敏完整日志限制为 2 MiB，并通过现有
+      FileAppService/ObjectStore 创建 `text/plain` Artifact，ToolResult 返回稳定 Artifact ID。
+- [x] Pi `AbortSignal` 通过 `pi.tool.cancel` 回到 AppService；Run Stop、Pi Host 断连、AppService close、
+      timeout 和自然退出共用 Abort/Runner `stopAll`/进程组回收路径。
+- [x] AppService 响应完成后不再外发进度；Pi Host 按序号和 pending request 双重过滤迟到帧。
+- [x] Contracts、Pi Host、AppService、Tool SDK 定向测试和全仓 `check:v2` 通过。
+
+本切片实现与复现证据见
+[PBASH-003 日期化证据](evidence/pbash-003-2026-08-28.md)。
+
+## 8. PBASH-004 下一切片
+
+1. 为 `workspace_write` 收集 changed-path manifest、受控 diff 和冲突状态。
+2. 直接写路径提供明确的“无通用 Undo”投影；高隔离路径设计 CoW/worktree
+   `WorkspaceChangeSet`，支持审阅后应用或丢弃。
+3. 为写入期间的新增 hard link、rename、删除、超大 diff、二进制文件和 `.git` 保护补负向门禁。
+4. Remote 无人值守与高风险写入不得静默降级为直接工作区写入。

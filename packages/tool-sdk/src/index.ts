@@ -1,6 +1,7 @@
 export * from "./broker";
 export * from "./brokered-bash-adapter";
 export * from "./brokered-bash-fake-adapter";
+export * from "./brokered-bash-output";
 export * from "./builtin-adapter";
 export * from "./host-adapter";
 export * from "./image-generation-adapter";

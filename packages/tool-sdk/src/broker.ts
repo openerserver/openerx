@@ -100,7 +100,7 @@ export class CapabilityBroker {
     projection: ToolExecutionProjection,
     operation: ToolOperation,
     signal: AbortSignal = new AbortController().signal,
-    update: (summary: string) => void = () => undefined,
+    update: (summary: string, truncated?: boolean) => void = () => undefined,
   ): Promise<BrokerExecutionResult> {
     const uncertainAttempt = this.#repository.sideEffectAttempt(operation.idempotencyKey);
     if (
@@ -216,7 +216,7 @@ export class CapabilityBroker {
     projection: ToolExecutionProjection,
     operation: ToolOperation,
     signal: AbortSignal = new AbortController().signal,
-    update: (summary: string) => void = () => undefined,
+    update: (summary: string, truncated?: boolean) => void = () => undefined,
     onPermission: (permission: PermissionRequest) => void = () => undefined,
   ): Promise<NormalizedToolResult> {
     const initial = await this.execute(projection, operation, signal, update);

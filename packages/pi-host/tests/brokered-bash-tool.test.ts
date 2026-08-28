@@ -94,4 +94,51 @@ describe("PBASH-001 Pi bash projection", () => {
     expect(bash.description).toContain("$OPENERX_WORKSPACE_1");
     expect(bash.description).not.toContain(realExecution.activeExecutionGrantId);
   });
+
+  it("maps ordered transport progress into Pi onUpdate results", async () => {
+    const updates: unknown[] = [];
+    const { bash } = fixture();
+    if (!bash) throw new Error("brokered bash tool missing");
+    const transport = createProductCapabilityTools({
+      generationId: "33333333-3333-4333-8333-333333333333",
+      conversationId: "44444444-4444-4444-8444-444444444444",
+      branchId: "55555555-5555-4555-8555-555555555555",
+      assistantMessageId: "66666666-6666-4666-8666-666666666666",
+      brokeredBashExecution: execution,
+      transport: {
+        async request(_frame, options) {
+          options?.onProgress?.({
+            kind: "pi.tool.progress",
+            requestId: "77777777-7777-4777-8777-777777777777",
+            sequence: 1,
+            delta: "building\n",
+            truncated: false,
+          });
+          return {
+            summary: "done",
+            content: [{ type: "text", text: "done" }],
+            data: {},
+            sources: [],
+            artifacts: [],
+            sideEffectCommitted: false,
+            durationMs: 1,
+          };
+        },
+      },
+    }).find(({ name }) => name === "bash");
+    if (!transport) throw new Error("progress bash tool missing");
+    await transport.execute(
+      "pi-bash-progress",
+      { command: "printf building" },
+      undefined,
+      (update) => updates.push(update),
+      {} as never,
+    );
+    expect(updates).toEqual([
+      {
+        content: [{ type: "text", text: "building\n" }],
+        details: { sequence: 1, truncated: false },
+      },
+    ]);
+  });
 });

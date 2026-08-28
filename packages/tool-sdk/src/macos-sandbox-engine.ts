@@ -11,11 +11,13 @@ import {
 } from "node:fs";
 import { homedir, release, tmpdir } from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import {
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   BROKERED_BASH_MACOS_SANDBOX_POLICY_VERSION,
 } from "@openerx/contracts";
+import { BrokeredBashOutputSanitizer, type OutputReplacement } from "./brokered-bash-output";
 import {
   PLATFORM_SANDBOX_ENGINE_VERSION,
   type PlatformSandboxCapability,
@@ -448,22 +450,18 @@ function makeRunnerEnvironment(
   };
 }
 
-function redactor(roots: CanonicalRoot[], runnerTempRoot: string): (value: string) => string {
-  const replacements = [
+function outputReplacements(roots: CanonicalRoot[], runnerTempRoot: string): OutputReplacement[] {
+  return [
     ...roots.map(
       (root, index) =>
-        [root.rootPath, index === 0 ? "<workspace>" : `<workspace:${index}>`] as const,
+        ({
+          target: root.rootPath,
+          replacement: index === 0 ? "<workspace>" : `<workspace:${index}>`,
+        }) as const,
     ),
-    [runnerTempRoot, "<runner-temp>"] as const,
-    [homedir(), "<host-home>"] as const,
-  ].sort(([left], [right]) => right.length - left.length);
-  return (value) => {
-    let redacted = value;
-    for (const [target, replacement] of replacements) {
-      redacted = redacted.replaceAll(target, replacement);
-    }
-    return redacted;
-  };
+    { target: runnerTempRoot, replacement: "<runner-temp>" },
+    { target: homedir(), replacement: "<host-home>" },
+  ];
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -566,10 +564,47 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
     assertSafeHardlinkBoundary(roots);
     const runnerTempRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "openerx-pbash-runner-")));
     const startedAt = Date.now();
-    const redact = redactor(roots, runnerTempRoot);
+    const replacements = outputReplacements(roots, runnerTempRoot);
     const stdout = new BoundedBuffer(request.resourceLimits.maxOutputBytes);
     const stderr = new BoundedBuffer(request.resourceLimits.maxOutputBytes);
     const output = new BoundedBuffer(request.resourceLimits.maxOutputBytes);
+    const stdoutSanitizer = new BrokeredBashOutputSanitizer(replacements);
+    const stderrSanitizer = new BrokeredBashOutputSanitizer(replacements);
+    const outputSanitizer = new BrokeredBashOutputSanitizer(replacements);
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    let outputSequence = 0;
+    let truncationEmitted = false;
+    const appendOutput = (delta: string) => {
+      if (!delta) return;
+      output.append(Buffer.from(delta, "utf8"));
+      if (!output.truncated) {
+        for (let offset = 0; offset < delta.length; offset += 16_384) {
+          outputSequence += 1;
+          try {
+            request.onOutput?.({
+              sequence: outputSequence,
+              delta: delta.slice(offset, offset + 16_384),
+              truncated: false,
+            });
+          } catch {
+            // A detached progress consumer cannot change or crash Runner execution.
+          }
+        }
+      } else if (!truncationEmitted) {
+        truncationEmitted = true;
+        outputSequence += 1;
+        try {
+          request.onOutput?.({
+            sequence: outputSequence,
+            delta: `\n[output truncated at ${request.resourceLimits.maxOutputBytes} bytes]\n`,
+            truncated: true,
+          });
+        } catch {
+          // A detached progress consumer cannot change or crash Runner execution.
+        }
+      }
+    };
     let timeout: NodeJS.Timeout | undefined;
     let abort: (() => void) | undefined;
     let record: ActiveProcess | undefined;
@@ -616,12 +651,14 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
       this.#active.set(request.identity.toolCallId, record);
       child.stdin.end();
       child.stdout.on("data", (chunk: Buffer) => {
-        stdout.append(chunk);
-        output.append(chunk);
+        const decoded = stdoutDecoder.write(chunk);
+        for (const delta of stdoutSanitizer.push(decoded)) stdout.append(Buffer.from(delta));
+        for (const delta of outputSanitizer.push(decoded)) appendOutput(delta);
       });
       child.stderr.on("data", (chunk: Buffer) => {
-        stderr.append(chunk);
-        output.append(chunk);
+        const decoded = stderrDecoder.write(chunk);
+        for (const delta of stderrSanitizer.push(decoded)) stderr.append(Buffer.from(delta));
+        for (const delta of outputSanitizer.push(decoded)) appendOutput(delta);
       });
       const terminate = (cause: "timeout" | "cancelled" | "shutdown" | "natural") => {
         if (!record) return Promise.resolve<PlatformSandboxDestructionStatus>("uncertain");
@@ -642,12 +679,21 @@ export class MacOSSandboxExecEngine implements PlatformSandboxEngine {
       clearTimeout(timeout);
       request.signal.removeEventListener("abort", abort);
       const destructionStatus = await terminate("natural");
+      const stdoutTail = stdoutDecoder.end();
+      const stderrTail = stderrDecoder.end();
+      for (const delta of stdoutSanitizer.push(stdoutTail)) stdout.append(Buffer.from(delta));
+      for (const delta of outputSanitizer.push(stdoutTail)) appendOutput(delta);
+      for (const delta of stderrSanitizer.push(stderrTail)) stderr.append(Buffer.from(delta));
+      for (const delta of outputSanitizer.push(stderrTail)) appendOutput(delta);
+      for (const delta of stdoutSanitizer.finish()) stdout.append(Buffer.from(delta));
+      for (const delta of stderrSanitizer.finish()) stderr.append(Buffer.from(delta));
+      for (const delta of outputSanitizer.finish()) appendOutput(delta);
       return {
         exitCode: exit.code,
         signal: exit.signal,
-        stdout: redact(stdout.text()),
-        stderr: redact(stderr.text()),
-        output: redact(output.text()),
+        stdout: stdout.text(),
+        stderr: stderr.text(),
+        output: output.text(),
         outputTruncated: stdout.truncated || stderr.truncated || output.truncated,
         timedOut: record.timedOut,
         cancelled: record.cancelled,

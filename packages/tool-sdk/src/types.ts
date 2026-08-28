@@ -23,7 +23,7 @@ export interface ToolExecutionContext {
   signal: AbortSignal;
   toolCallId: string;
   projection?: ToolExecutionProjection;
-  update(summary: string): void;
+  update(summary: string, truncated?: boolean): void;
 }
 
 export interface ToolAdapter {

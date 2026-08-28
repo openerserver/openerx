@@ -4,12 +4,14 @@ import {
   type PiHostEventFrame,
   type PiPromptFrame,
   type PiSessionControlFrame,
+  type PiToolCancelFrame,
   type PiToolRequestFrame,
   piActivityEventSchema,
   piFileToolRequestFrameSchema,
   piHostEventFrameSchema,
   piHostReadyFrameSchema,
   piSessionControlResultFrameSchema,
+  piToolCancelFrameSchema,
   piToolRequestFrameSchema,
 } from "@openerx/contracts";
 import type { MessagePortMain } from "electron";
@@ -20,7 +22,14 @@ export interface PiHostClient {
   control(frame: PiSessionControlFrame): Promise<void>;
   onEvent(listener: (frame: PiHostEventFrame) => void): () => void;
   onFileToolRequest(listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void;
-  onToolRequest(listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void;
+  onToolRequest(
+    listener: (
+      frame: PiToolRequestFrame,
+      onProgress?: (delta: string, truncated: boolean) => void,
+    ) => Promise<unknown>,
+  ): () => void;
+  onToolCancel?(listener: (frame: PiToolCancelFrame) => void): () => void;
+  onDisconnect?(listener: () => void): () => void;
   onActivity(listener: (frame: PiActivityEvent) => void): () => void;
 }
 
@@ -28,13 +37,21 @@ export class MessagePortPiHostClient implements PiHostClient {
   readonly #port: MessagePortMain;
   readonly #listeners = new Set<(frame: PiHostEventFrame) => void>();
   readonly #fileToolListeners = new Set<(frame: PiFileToolRequestFrame) => Promise<unknown>>();
-  readonly #toolListeners = new Set<(frame: PiToolRequestFrame) => Promise<unknown>>();
+  readonly #toolListeners = new Set<
+    (
+      frame: PiToolRequestFrame,
+      onProgress?: (delta: string, truncated: boolean) => void,
+    ) => Promise<unknown>
+  >();
   readonly #activityListeners = new Set<(frame: PiActivityEvent) => void>();
+  readonly #toolCancelListeners = new Set<(frame: PiToolCancelFrame) => void>();
+  readonly #disconnectListeners = new Set<() => void>();
   readonly #pendingControls = new Map<
     string,
     { resolve(): void; reject(error: Error): void; timeout: NodeJS.Timeout }
   >();
   readonly #ready: Promise<void>;
+  #disconnected = false;
 
   constructor(port: MessagePortMain, expectedNonce: string) {
     this.#port = port;
@@ -51,6 +68,15 @@ export class MessagePortPiHostClient implements PiHostClient {
           clearTimeout(timeout);
           this.#port.off("message", onMessage);
           this.#port.on("message", (nextEvent) => this.#handleMessage(nextEvent.data));
+          this.#port.once("close", () => {
+            this.#disconnected = true;
+            for (const pending of this.#pendingControls.values()) {
+              clearTimeout(pending.timeout);
+              pending.reject(new Error("PI_HOST_DISCONNECTED"));
+            }
+            this.#pendingControls.clear();
+            for (const listener of this.#disconnectListeners) listener();
+          });
           resolve();
         }
       };
@@ -91,7 +117,12 @@ export class MessagePortPiHostClient implements PiHostClient {
     return () => this.#fileToolListeners.delete(listener);
   }
 
-  onToolRequest(listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void {
+  onToolRequest(
+    listener: (
+      frame: PiToolRequestFrame,
+      onProgress?: (delta: string, truncated: boolean) => void,
+    ) => Promise<unknown>,
+  ): () => void {
     this.#toolListeners.add(listener);
     return () => this.#toolListeners.delete(listener);
   }
@@ -101,11 +132,26 @@ export class MessagePortPiHostClient implements PiHostClient {
     return () => this.#activityListeners.delete(listener);
   }
 
+  onToolCancel(listener: (frame: PiToolCancelFrame) => void): () => void {
+    this.#toolCancelListeners.add(listener);
+    return () => this.#toolCancelListeners.delete(listener);
+  }
+
+  onDisconnect(listener: () => void): () => void {
+    this.#disconnectListeners.add(listener);
+    return () => this.#disconnectListeners.delete(listener);
+  }
+
   async ready(): Promise<void> {
     await this.#ready;
   }
 
   #handleMessage(data: unknown): void {
+    const toolCancel = piToolCancelFrameSchema.safeParse(data);
+    if (toolCancel.success) {
+      for (const listener of this.#toolCancelListeners) listener(toolCancel.data);
+      return;
+    }
     const control = piSessionControlResultFrameSchema.safeParse(data);
     if (control.success) {
       const pending = this.#pendingControls.get(control.data.requestId);
@@ -139,15 +185,33 @@ export class MessagePortPiHostClient implements PiHostClient {
         });
         return;
       }
-      void listener(toolRequest.data).then(
-        (result) =>
+      let progressSequence = 0;
+      let settled = false;
+      const onProgress = (delta: string, truncated: boolean) => {
+        if (settled || this.#disconnected) return;
+        progressSequence += 1;
+        this.#port.postMessage({
+          kind: "pi.tool.progress",
+          requestId: toolRequest.data.requestId,
+          sequence: progressSequence,
+          delta: delta.slice(0, 16_384),
+          truncated,
+        });
+      };
+      void listener(toolRequest.data, onProgress).then(
+        (result) => {
+          settled = true;
+          if (this.#disconnected) return;
           this.#port.postMessage({
             kind: "pi.tool.response",
             requestId: toolRequest.data.requestId,
             ok: true,
             data: result,
-          }),
-        (error: unknown) =>
+          });
+        },
+        (error: unknown) => {
+          settled = true;
+          if (this.#disconnected) return;
           this.#port.postMessage({
             kind: "pi.tool.response",
             requestId: toolRequest.data.requestId,
@@ -157,7 +221,8 @@ export class MessagePortPiHostClient implements PiHostClient {
                 ? (error.message.split(":", 1)[0] ?? "TOOL_FAILED")
                 : "TOOL_FAILED",
             message: error instanceof Error ? error.message : "Tool failed",
-          }),
+          });
+        },
       );
       return;
     }

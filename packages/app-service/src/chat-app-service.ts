@@ -49,7 +49,13 @@ export class ChatAppService {
     this.#piHost = piHost;
     this.#piHost.onEvent((event) => this.#handlePiEvent(event));
     this.#piHost.onFileToolRequest((request) => this.#handleFileToolRequest(request));
-    this.#piHost.onToolRequest((request) => this.#handleToolRequest(request));
+    this.#piHost.onToolRequest((request, onProgress) =>
+      this.#handleToolRequest(request, onProgress),
+    );
+    this.#piHost.onToolCancel?.((frame) =>
+      this.#tools?.cancelToolRequest(frame.requestId, frame.generationId),
+    );
+    this.#piHost.onDisconnect?.(() => void this.#tools?.handleHostDisconnect());
     this.#piHost.onActivity((event) => this.#handlePiActivity(event));
     this.#sync = sync;
     this.#files = files;
@@ -797,7 +803,10 @@ export class ChatAppService {
     });
   }
 
-  async #handleToolRequest(frame: PiToolRequestFrame): Promise<unknown> {
+  async #handleToolRequest(
+    frame: PiToolRequestFrame,
+    onProgress: (delta: string, truncated: boolean) => void = () => undefined,
+  ): Promise<unknown> {
     if (
       this.#conversationByGeneration.get(frame.generationId) !== frame.conversationId ||
       this.#branchByGeneration.get(frame.generationId) !== frame.branchId ||
@@ -824,6 +833,7 @@ export class ChatAppService {
     return await this.#requiredTools().handleRequest(
       frame,
       this.#authorizationByGeneration.get(frame.generationId),
+      onProgress,
     );
   }
 

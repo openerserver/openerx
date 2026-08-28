@@ -147,6 +147,8 @@ Pi Bash Broker 化采用“产品 raw-shell ToolDefinition → Capability Broker
 PlatformSandboxEngine”结构；架构和安全边界见
 [19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)。当前按
 [20-pbash-implementation-plan.md](20-pbash-implementation-plan.md) 已完成 PBASH-001 合同/fake Runner 与
-PBASH-002 当前 macOS 主机真实 `PlatformSandboxEngine`。本机负向门禁和边界见
-[PBASH-002 日期化证据](evidence/pbash-002-2026-08-28.md)；`sandbox-exec` 已 deprecated，当前结果不代表
-签名发布或未来 OS 支持。下一阶段是 PBASH-003 的有序进度、跨 chunk 脱敏和完整日志 Artifact。
+PBASH-002 当前 macOS 主机真实 `PlatformSandboxEngine`，并完成 PBASH-003 的有序进度、跨 chunk
+脱敏、取消与完整日志 Artifact。本机证据见
+[PBASH-002](evidence/pbash-002-2026-08-28.md) 和
+[PBASH-003](evidence/pbash-003-2026-08-28.md)；`sandbox-exec` 已 deprecated，当前结果不代表签名发布
+或未来 OS 支持。下一阶段是 PBASH-004 的变更可见、恢复边界和高隔离 working copy。

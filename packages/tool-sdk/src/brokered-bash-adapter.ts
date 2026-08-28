@@ -14,6 +14,7 @@ import {
 import { type ToolAdapter, ToolAdapterError, type ToolExecutionContext } from "./types";
 
 const MODEL_OUTPUT_LIMIT_BYTES = 50 * 1_024;
+const MODEL_OUTPUT_LIMIT_LINES = 2_000;
 
 type BrokeredBashOperation = Extract<ToolOperation, { operation: "shell_command_execute" }>;
 
@@ -40,21 +41,44 @@ function modelOutput(result: PlatformSandboxExecutionResult): {
   contextTruncated: boolean;
 } {
   const withoutNul = result.output.replaceAll(String.fromCharCode(0), "�");
-  const bytes = Buffer.from(withoutNul, "utf8");
-  if (bytes.byteLength <= MODEL_OUTPUT_LIMIT_BYTES) {
-    return { text: withoutNul, contextTruncated: false };
+  const lines = withoutNul.split("\n");
+  const lineBounded =
+    lines.length > MODEL_OUTPUT_LIMIT_LINES
+      ? lines.slice(-MODEL_OUTPUT_LIMIT_LINES).join("\n")
+      : withoutNul;
+  let byteCount = 0;
+  const characters: string[] = [];
+  for (const character of [...lineBounded].reverse()) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (byteCount + characterBytes > MODEL_OUTPUT_LIMIT_BYTES) break;
+    characters.push(character);
+    byteCount += characterBytes;
   }
+  const text = characters.reverse().join("");
   return {
-    text: bytes.subarray(bytes.byteLength - MODEL_OUTPUT_LIMIT_BYTES).toString("utf8"),
-    contextTruncated: true,
+    text,
+    contextTruncated: text !== withoutNul,
   };
 }
+
+export interface BrokeredBashLogArtifactInput {
+  displayName: string;
+  content: string;
+  truncated: boolean;
+  generationId: string;
+  toolCallId: string;
+}
+
+export type BrokeredBashLogArtifactWriter = (
+  input: BrokeredBashLogArtifactInput,
+) => Promise<string> | string;
 
 function normalizedResult(
   operation: BrokeredBashOperation,
   result: PlatformSandboxExecutionResult,
   activeGrant: WorkspaceGrant,
   additionalGrants: WorkspaceGrant[],
+  logArtifactId: string | null,
 ): NormalizedToolResult {
   const output = modelOutput(result);
   const fallback =
@@ -62,7 +86,10 @@ function normalizedResult(
   const text = output.text || fallback;
   return {
     summary: text.slice(-8_000),
-    content: [{ type: "text", text }],
+    content: [
+      { type: "text", text },
+      ...(logArtifactId ? [{ type: "artifact" as const, artifactId: logArtifactId }] : []),
+    ],
     data: {
       contractVersion: operation.contractVersion,
       executionPerformed: true,
@@ -81,12 +108,13 @@ function normalizedResult(
       cancelled: result.cancelled,
       outputTruncated: result.outputTruncated,
       contextTruncated: output.contextTruncated,
+      logArtifactId,
       destructionStatus: result.destructionStatus,
       changedPathManifestStatus: result.changedPathManifestStatus,
       proof: result.proof,
     },
     sources: [],
-    artifacts: [],
+    artifacts: logArtifactId ? [logArtifactId] : [],
     sideEffectCommitted: operation.executionProfile === "workspace_write",
     durationMs: result.durationMs,
   };
@@ -104,6 +132,7 @@ export class BrokeredBashAdapter implements ToolAdapter {
       generationId: string,
     ) => BrokeredBashExecutionContext | undefined,
     private readonly engine: PlatformSandboxEngine,
+    private readonly writeLogArtifact?: BrokeredBashLogArtifactWriter,
   ) {}
 
   async execute(
@@ -153,34 +182,58 @@ export class BrokeredBashAdapter implements ToolAdapter {
     if (operation.executionProfile === "workspace_write" && activeGrant.access !== "read_write") {
       throw new Error("BROKERED_BASH_EXECUTION_PROFILE_MISMATCH");
     }
-    const result = await this.engine.execute({
-      identity: {
-        generationId: projection.generationId,
-        toolCallId: context.toolCallId,
-        piToolCallId: projection.piToolCallId,
-      },
-      shell: operation.shell,
-      command: operation.command,
-      timeoutMs: operation.timeoutMs,
-      executionProfile: operation.executionProfile,
-      environmentPolicyId: operation.environmentPolicyId,
-      networkPolicyId: operation.networkPolicyId,
-      activeRoot: {
-        grantId: activeGrant.id,
-        logicalName: "workspace",
-        rootPath: activeGrant.rootPath,
-        access: activeGrant.access,
-      },
-      additionalRoots: additionalGrants.map((grant, index) => ({
-        grantId: grant.id,
-        logicalName: `workspace-${index + 1}`,
-        rootPath: grant.rootPath,
-        access: grant.access,
-      })),
-      resourceLimits: defaultPlatformSandboxResourceLimits(),
-      signal: context.signal,
-    });
-    const normalized = normalizedResult(operation, result, activeGrant, additionalGrants);
+    let acceptingProgress = true;
+    let result: PlatformSandboxExecutionResult;
+    try {
+      result = await this.engine.execute({
+        identity: {
+          generationId: projection.generationId,
+          toolCallId: context.toolCallId,
+          piToolCallId: projection.piToolCallId,
+        },
+        shell: operation.shell,
+        command: operation.command,
+        timeoutMs: operation.timeoutMs,
+        executionProfile: operation.executionProfile,
+        environmentPolicyId: operation.environmentPolicyId,
+        networkPolicyId: operation.networkPolicyId,
+        activeRoot: {
+          grantId: activeGrant.id,
+          logicalName: "workspace",
+          rootPath: activeGrant.rootPath,
+          access: activeGrant.access,
+        },
+        additionalRoots: additionalGrants.map((grant, index) => ({
+          grantId: grant.id,
+          logicalName: `workspace-${index + 1}`,
+          rootPath: grant.rootPath,
+          access: grant.access,
+        })),
+        resourceLimits: defaultPlatformSandboxResourceLimits(),
+        signal: context.signal,
+        onOutput: ({ delta, truncated }) => {
+          if (acceptingProgress && !context.signal.aborted) context.update(delta, truncated);
+        },
+      });
+    } finally {
+      acceptingProgress = false;
+    }
+    const logArtifactId = this.writeLogArtifact
+      ? await this.writeLogArtifact({
+          displayName: `bash-${context.toolCallId}.log.txt`,
+          content: result.output,
+          truncated: result.outputTruncated,
+          generationId: projection.generationId,
+          toolCallId: context.toolCallId,
+        })
+      : null;
+    const normalized = normalizedResult(
+      operation,
+      result,
+      activeGrant,
+      additionalGrants,
+      logArtifactId,
+    );
     if (result.destructionStatus === "uncertain") {
       throw new ToolAdapterError("BROKERED_BASH_DESTRUCTION_UNCERTAIN", normalized);
     }

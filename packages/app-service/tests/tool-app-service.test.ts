@@ -11,6 +11,7 @@ import type {
 } from "@openerx/contracts";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
 import {
+  type BrokeredBashLogArtifactWriter,
   MacOSSandboxExecEngine,
   PLATFORM_SANDBOX_ENGINE_VERSION,
   type PlatformSandboxCapability,
@@ -30,6 +31,7 @@ function fixture(
     brokeredBashV1?: boolean;
     brokeredBashRunnerMode?: BrokeredBashRunnerMode;
     platformSandboxEngine?: PlatformSandboxEngine;
+    writeBrokeredBashLogArtifact?: BrokeredBashLogArtifactWriter;
   } = {},
 ) {
   const directory = mkdtempSync(path.join(tmpdir(), "openerx-tool-service-"));
@@ -78,6 +80,9 @@ function fixture(
     ...(options.platformSandboxEngine
       ? { platformSandboxEngine: options.platformSandboxEngine }
       : {}),
+    ...(options.writeBrokeredBashLogArtifact
+      ? { writeBrokeredBashLogArtifact: options.writeBrokeredBashLogArtifact }
+      : {}),
   });
   const base = {
     kind: "pi.tool.request" as const,
@@ -119,35 +124,39 @@ function platformEngine(available = true) {
       },
     }),
   );
-  const execute = vi.fn(async (request: PlatformSandboxExecutionRequest) => ({
-    exitCode: 0,
-    signal: null,
-    stdout: "real-broker-ok",
-    stderr: "",
-    output: "real-broker-ok",
-    outputTruncated: false,
-    timedOut: false,
-    cancelled: false,
-    durationMs: 2,
-    destructionStatus: "clean" as const,
-    changedPathManifestStatus: "not_collected" as const,
-    proof: {
-      engineVersion: PLATFORM_SANDBOX_ENGINE_VERSION,
-      backendId: "test_macos_sandbox",
-      backendVersion: "test",
-      policyVersion: "macos-seatbelt-v1",
-      platform: "darwin" as const,
-      platformRelease: "test-build",
-      executionProfile: request.executionProfile,
-      environmentPolicyId: request.environmentPolicyId,
-      networkPolicyId: request.networkPolicyId,
-      filesystemBoundary: true as const,
-      hardlinkBoundary: true as const,
-      environmentSanitized: true as const,
-      networkDenied: true as const,
-      processGroupOwned: true as const,
-    },
-  }));
+  const execute = vi.fn(async (request: PlatformSandboxExecutionRequest) => {
+    request.onOutput?.({ sequence: 1, delta: "real-", truncated: false });
+    request.onOutput?.({ sequence: 2, delta: "broker-ok", truncated: false });
+    return {
+      exitCode: 0,
+      signal: null,
+      stdout: "real-broker-ok",
+      stderr: "",
+      output: "real-broker-ok",
+      outputTruncated: false,
+      timedOut: false,
+      cancelled: false,
+      durationMs: 2,
+      destructionStatus: "clean" as const,
+      changedPathManifestStatus: "not_collected" as const,
+      proof: {
+        engineVersion: PLATFORM_SANDBOX_ENGINE_VERSION,
+        backendId: "test_macos_sandbox",
+        backendVersion: "test",
+        policyVersion: "macos-seatbelt-v1",
+        platform: "darwin" as const,
+        platformRelease: "test-build",
+        executionProfile: request.executionProfile,
+        environmentPolicyId: request.environmentPolicyId,
+        networkPolicyId: request.networkPolicyId,
+        filesystemBoundary: true as const,
+        hardlinkBoundary: true as const,
+        environmentSanitized: true as const,
+        networkDenied: true as const,
+        processGroupOwned: true as const,
+      },
+    };
+  });
   const stopAll = vi.fn(async () => undefined);
   const engine: PlatformSandboxEngine = {
     engineVersion: PLATFORM_SANDBOX_ENGINE_VERSION,
@@ -588,10 +597,13 @@ describe("ToolAppService", () => {
 
   it("projects and executes real brokered Bash only after the platform capability probe passes", async () => {
     const platform = platformEngine();
+    const writeLog = vi.fn(async () => "99999999-9999-4999-8999-999999999999");
+    const progress: Array<[string, boolean]> = [];
     const { chat, service, base, directory } = fixture({
       brokeredBashV1: true,
       brokeredBashRunnerMode: "macos",
       platformSandboxEngine: platform.engine,
+      writeBrokeredBashLogArtifact: writeLog,
       shellAvailability: () => ({
         availableToolNames: ["openerx_shell", "openerx_shell_process"],
         unavailableReasons: {},
@@ -654,15 +666,27 @@ describe("ToolAppService", () => {
         timeoutMs: 120_000,
       },
     };
-    await expect(service.handleRequest(frame)).resolves.toMatchObject({
+    await expect(
+      service.handleRequest(frame, undefined, (delta, truncated) =>
+        progress.push([delta, truncated]),
+      ),
+    ).resolves.toMatchObject({
       summary: "real-broker-ok",
       sideEffectCommitted: true,
+      artifacts: ["99999999-9999-4999-8999-999999999999"],
       data: {
         executionPerformed: true,
         runner: "platform_sandbox",
         destructionStatus: "clean",
       },
     });
+    expect(progress).toEqual([
+      ["real-", false],
+      ["broker-ok", false],
+    ]);
+    expect(writeLog).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "real-broker-ok", truncated: false }),
+    );
     expect(platform.execute).toHaveBeenCalledWith(
       expect.objectContaining({
         activeRoot: expect.objectContaining({ grantId: grant.id, rootPath: grant.rootPath }),
@@ -788,6 +812,30 @@ describe("ToolAppService", () => {
       availableToolNames: [],
     });
     expect(platform.execute).not.toHaveBeenCalled();
+    chat.close();
+    await service.close();
+  });
+
+  it("projects active runs as interrupted and stops runners when Pi Host disconnects", async () => {
+    const platform = platformEngine();
+    const { chat, service, base, events } = fixture({
+      brokeredBashV1: true,
+      brokeredBashRunnerMode: "macos",
+      platformSandboxEngine: platform.engine,
+    });
+    service.startGeneration({
+      generationId: base.generationId,
+      conversationId: base.conversationId,
+      branchId: base.branchId,
+      assistantMessageId: base.assistantMessageId,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    await service.handleHostDisconnect();
+    expect(platform.stopAll).toHaveBeenCalledOnce();
+    expect(events.map(({ type }) => type)).toEqual(
+      expect.arrayContaining(["run.cancelling", "run.interrupted"]),
+    );
     chat.close();
     await service.close();
   });

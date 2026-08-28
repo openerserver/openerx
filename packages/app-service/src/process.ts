@@ -82,6 +82,13 @@ parentPort.once("message", async (bootstrapEvent) => {
       if (!file) throw new Error("BROWSER_DOWNLOAD_IMPORT_FAILED");
       return { fileId: file.id, displayName: file.displayName };
     },
+    writeBrokeredBashLogArtifact: ({ displayName, content }) =>
+      files.createArtifact({
+        displayName,
+        format: "text",
+        mediaType: "text/plain; charset=utf-8",
+        bytesBase64: Buffer.from(content, "utf8").toString("base64"),
+      }).id,
     selectedModelRef: (assistantMessageId) =>
       repository.selectedModelForMessage(assistantMessageId),
     emit: (event) => service.emitExternal(event),

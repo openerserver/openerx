@@ -10,6 +10,8 @@ import {
   brokeredBashV1Enabled,
   piHostContractVersion,
   piPromptFrameSchema,
+  piToolCancelFrameSchema,
+  piToolProgressFrameSchema,
 } from "../src";
 
 const activeGrantId = "11111111-1111-4111-8111-111111111111";
@@ -41,7 +43,35 @@ describe("brokered Bash contracts", () => {
     expect(brokeredBashV1Enabled("false")).toBe(false);
     expect(brokeredBashV1Enabled("1")).toBe(true);
     expect(brokeredBashV1Enabled("TRUE")).toBe(true);
-    expect(piHostContractVersion).toBe(4);
+    expect(piHostContractVersion).toBe(5);
+  });
+
+  it("validates ordered progress and request-scoped cancellation frames", () => {
+    expect(
+      piToolProgressFrameSchema.parse({
+        kind: "pi.tool.progress",
+        requestId: activeGrantId,
+        sequence: 1,
+        delta: "first line\n",
+        truncated: false,
+      }),
+    ).toMatchObject({ sequence: 1, truncated: false });
+    expect(
+      piToolProgressFrameSchema.safeParse({
+        kind: "pi.tool.progress",
+        requestId: activeGrantId,
+        sequence: 0,
+        delta: "invalid",
+        truncated: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      piToolCancelFrameSchema.safeParse({
+        kind: "pi.tool.cancel",
+        requestId: activeGrantId,
+        generationId: additionalGrantId,
+      }).success,
+    ).toBe(true);
   });
 
   it("selects runner mode explicitly and fails closed on invalid configuration", () => {

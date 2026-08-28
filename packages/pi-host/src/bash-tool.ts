@@ -7,13 +7,20 @@ import {
   BROKERED_BASH_MAX_TIMEOUT_MS,
   type BrokeredBashExecutionContext,
   type BrokeredBashOperation,
+  type PiToolProgressFrame,
   type PiToolRequestFrame,
 } from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
 import { productToolResult } from "./tool-result";
 
 export interface BrokeredBashToolTransport {
-  request(frame: PiToolRequestFrame): Promise<unknown>;
+  request(
+    frame: PiToolRequestFrame,
+    options?: {
+      signal?: AbortSignal;
+      onProgress?(frame: PiToolProgressFrame): void;
+    },
+  ): Promise<unknown>;
 }
 
 function idempotencyKey(generationId: string, toolCallId: string): string {
@@ -53,7 +60,7 @@ export function createProductBrokeredBashTool(input: {
       },
       { additionalProperties: false },
     ),
-    execute: async (toolCallId, params) => {
+    execute: async (toolCallId, params, signal, onUpdate) => {
       const operation: BrokeredBashOperation = {
         operation: "shell_command_execute",
         idempotencyKey: idempotencyKey(input.generationId, toolCallId),
@@ -62,17 +69,30 @@ export function createProductBrokeredBashTool(input: {
         command: params.command,
         timeoutMs: (params.timeout ?? BROKERED_BASH_DEFAULT_TIMEOUT_MS / 1_000) * 1_000,
       };
-      const result = await input.transport.request({
-        kind: "pi.tool.request",
-        requestId: randomUUID(),
-        generationId: input.generationId,
-        conversationId: input.conversationId,
-        branchId: input.branchId,
-        assistantMessageId: input.assistantMessageId,
-        piToolCallId: toolCallId,
-        toolName: "bash",
-        operation,
-      });
+      const result = await input.transport.request(
+        {
+          kind: "pi.tool.request",
+          requestId: randomUUID(),
+          generationId: input.generationId,
+          conversationId: input.conversationId,
+          branchId: input.branchId,
+          assistantMessageId: input.assistantMessageId,
+          piToolCallId: toolCallId,
+          toolName: "bash",
+          operation,
+        },
+        {
+          ...(signal ? { signal } : {}),
+          onProgress: (frame) =>
+            onUpdate?.({
+              content: [{ type: "text", text: frame.delta }],
+              details: {
+                sequence: frame.sequence,
+                truncated: frame.truncated,
+              },
+            }),
+        },
+      );
       return productToolResult(result);
     },
   });

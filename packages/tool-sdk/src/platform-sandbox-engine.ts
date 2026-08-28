@@ -65,6 +65,13 @@ export interface PlatformSandboxExecutionRequest {
   additionalRoots: PlatformSandboxRoot[];
   resourceLimits: PlatformSandboxResourceLimits;
   signal: AbortSignal;
+  onOutput?(frame: PlatformSandboxOutputFrame): void;
+}
+
+export interface PlatformSandboxOutputFrame {
+  sequence: number;
+  delta: string;
+  truncated: boolean;
 }
 
 export interface PlatformSandboxProof {

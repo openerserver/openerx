@@ -10,11 +10,13 @@ import {
   type PiHostEventFrame,
   type PiPromptFrame,
   type PiSessionControlFrame,
+  type PiToolProgressFrame,
   type PiToolRequestFrame,
   piFileToolResponseFrameSchema,
   piHostBootstrapSchema,
   piHostContractVersion,
   piHostRequestFrameSchema,
+  piToolProgressFrameSchema,
   piToolResponseFrameSchema,
   type UsageRecord,
 } from "@openerx/contracts";
@@ -47,6 +49,13 @@ interface PendingFileToolRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timeout: NodeJS.Timeout;
+}
+
+interface PendingCapabilityToolRequest extends PendingFileToolRequest {
+  lastProgressSequence: number;
+  onProgress?: (frame: PiToolProgressFrame) => void;
+  signal?: AbortSignal;
+  abort?: () => void;
 }
 
 class PiModelNotConfiguredError extends Error {}
@@ -93,7 +102,7 @@ export function startPiHostProcess(
     mkdirSync(agentDirectory, { recursive: true });
     const active = new Map<string, ActiveGeneration>();
     const pendingFileTools = new Map<string, PendingFileToolRequest>();
-    const pendingCapabilityTools = new Map<string, PendingFileToolRequest>();
+    const pendingCapabilityTools = new Map<string, PendingCapabilityToolRequest>();
     const sessionRegistry = new ProductSessionRegistry(
       bootstrap.profileDirectory,
       workspaceDirectory,
@@ -113,13 +122,50 @@ export function startPiHostProcess(
       },
     };
     const capabilityToolTransport = {
-      request: async (frame: PiToolRequestFrame): Promise<unknown> => {
+      request: async (
+        frame: PiToolRequestFrame,
+        options: {
+          signal?: AbortSignal;
+          onProgress?: PendingCapabilityToolRequest["onProgress"];
+        } = {},
+      ): Promise<unknown> => {
         return await new Promise((resolve, reject) => {
+          if (options.signal?.aborted) {
+            reject(new Error("TOOL_CANCELLED"));
+            return;
+          }
           const timeout = setTimeout(() => {
+            const pending = pendingCapabilityTools.get(frame.requestId);
+            pending?.signal?.removeEventListener("abort", pending.abort as EventListener);
             pendingCapabilityTools.delete(frame.requestId);
+            port.postMessage({
+              kind: "pi.tool.cancel",
+              requestId: frame.requestId,
+              generationId: frame.generationId,
+            });
             reject(new Error("CAPABILITY_TOOL_TIMEOUT"));
           }, 30 * 60_000);
-          pendingCapabilityTools.set(frame.requestId, { resolve, reject, timeout });
+          const abort = () => {
+            const pending = pendingCapabilityTools.get(frame.requestId);
+            if (!pending) return;
+            clearTimeout(pending.timeout);
+            pendingCapabilityTools.delete(frame.requestId);
+            port.postMessage({
+              kind: "pi.tool.cancel",
+              requestId: frame.requestId,
+              generationId: frame.generationId,
+            });
+            reject(new Error("TOOL_CANCELLED"));
+          };
+          pendingCapabilityTools.set(frame.requestId, {
+            resolve,
+            reject,
+            timeout,
+            lastProgressSequence: 0,
+            ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+            ...(options.signal ? { signal: options.signal, abort } : {}),
+          });
+          options.signal?.addEventListener("abort", abort, { once: true });
           port.postMessage(frame);
         });
       },
@@ -655,9 +701,24 @@ export function startPiHostProcess(
         const pending = pendingCapabilityTools.get(capabilityToolResponse.data.requestId);
         if (!pending) return;
         clearTimeout(pending.timeout);
+        pending.signal?.removeEventListener("abort", pending.abort as EventListener);
         pendingCapabilityTools.delete(capabilityToolResponse.data.requestId);
         if (capabilityToolResponse.data.ok) pending.resolve(capabilityToolResponse.data.data);
         else pending.reject(new Error(capabilityToolResponse.data.errorCode));
+        return;
+      }
+      const capabilityToolProgress = piToolProgressFrameSchema.safeParse(event.data);
+      if (capabilityToolProgress.success) {
+        const pending = pendingCapabilityTools.get(capabilityToolProgress.data.requestId);
+        if (!pending || capabilityToolProgress.data.sequence <= pending.lastProgressSequence) {
+          return;
+        }
+        pending.lastProgressSequence = capabilityToolProgress.data.sequence;
+        try {
+          pending.onProgress?.(capabilityToolProgress.data);
+        } catch {
+          // Rendering a progress update cannot change or crash tool execution.
+        }
         return;
       }
       const request = piHostRequestFrameSchema.safeParse(event.data);
@@ -675,6 +736,23 @@ export function startPiHostProcess(
       if (!state) return;
       state.abortRequested = true;
       if (state.session) void state.session.abort();
+    });
+    port.once("close", () => {
+      for (const pending of pendingFileTools.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error("PI_HOST_DISCONNECTED"));
+      }
+      pendingFileTools.clear();
+      for (const pending of pendingCapabilityTools.values()) {
+        clearTimeout(pending.timeout);
+        pending.signal?.removeEventListener("abort", pending.abort as EventListener);
+        pending.reject(new Error("PI_HOST_DISCONNECTED"));
+      }
+      pendingCapabilityTools.clear();
+      for (const state of active.values()) {
+        state.abortRequested = true;
+        if (state.session) void state.session.abort();
+      }
     });
     port.start();
     port.postMessage({

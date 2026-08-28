@@ -85,6 +85,7 @@ class FakePlatformSandboxEngine implements PlatformSandboxEngine {
   };
   readonly requests: PlatformSandboxExecutionRequest[] = [];
   readonly stop = vi.fn(async () => undefined);
+  progress: Array<{ delta: string; truncated: boolean }> = [];
 
   async probe(): Promise<PlatformSandboxCapability> {
     return this.capability;
@@ -92,6 +93,9 @@ class FakePlatformSandboxEngine implements PlatformSandboxEngine {
 
   async execute(request: PlatformSandboxExecutionRequest): Promise<PlatformSandboxExecutionResult> {
     this.requests.push(request);
+    this.progress.forEach((frame, index) => {
+      request.onOutput?.({ sequence: index + 1, ...frame });
+    });
     return {
       ...this.result,
       proof: { ...this.result.proof, executionProfile: request.executionProfile },
@@ -138,6 +142,7 @@ function fixture() {
     resolve,
     (requestedGenerationId) => (requestedGenerationId === generationId ? execution : undefined),
     engine,
+    vi.fn(async () => "88888888-8888-4888-8888-888888888888"),
   );
   const operation: BrokeredBashOperation = {
     operation: "shell_command_execute",
@@ -188,6 +193,10 @@ describe("BrokeredBashAdapter", () => {
           networkDenied: true,
         },
       },
+      artifacts: ["88888888-8888-4888-8888-888888888888"],
+      content: expect.arrayContaining([
+        { type: "artifact", artifactId: "88888888-8888-4888-8888-888888888888" },
+      ]),
     });
     expect(engine.requests[0]).toMatchObject({
       identity: {
@@ -297,6 +306,29 @@ describe("BrokeredBashAdapter", () => {
     expect(Buffer.byteLength(text, "utf8")).toBe(50 * 1_024);
     expect(result.summary).toHaveLength(8_000);
     expect(result.data).toMatchObject({ contextTruncated: true, outputTruncated: false });
+  });
+
+  it("forwards ordered progress and caps model context by line count", async () => {
+    const { adapter, context, engine, operation, update } = fixture();
+    engine.progress = [
+      { delta: "first\n", truncated: false },
+      { delta: "second\n", truncated: true },
+    ];
+    engine.result = {
+      ...engine.result,
+      stdout: Array.from({ length: 2_100 }, (_, index) => `line-${index}`).join("\n"),
+      output: Array.from({ length: 2_100 }, (_, index) => `line-${index}`).join("\n"),
+    };
+    const result = await adapter.execute(operation, context);
+    expect(update.mock.calls).toEqual([
+      ["first\n", false],
+      ["second\n", true],
+    ]);
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text.split("\n")).toHaveLength(2_000);
+    expect(text).not.toContain("line-99\n");
+    expect(text).toContain("line-2099");
+    expect(result.data).toMatchObject({ contextTruncated: true });
   });
 
   it("forwards shutdown to the platform engine", async () => {

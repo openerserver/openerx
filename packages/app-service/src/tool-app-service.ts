@@ -43,6 +43,7 @@ import type { ToolRepository } from "@openerx/storage";
 import {
   BrokeredBashAdapter,
   BrokeredBashFakeAdapter,
+  type BrokeredBashLogArtifactWriter,
   BuiltinToolAdapter,
   type CapabilityAvailabilityHost,
   CapabilityBroker,
@@ -215,6 +216,7 @@ export interface ToolAppServiceOptions {
   brokeredBashV1?: boolean;
   brokeredBashRunnerMode?: BrokeredBashRunnerMode;
   platformSandboxEngine?: PlatformSandboxEngine;
+  writeBrokeredBashLogArtifact?: BrokeredBashLogArtifactWriter;
 }
 
 interface BrokeredBashRuntimeAvailability {
@@ -247,6 +249,7 @@ export class ToolAppService {
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
   readonly #brokeredBashExecutionByGeneration = new Map<string, BrokeredBashExecutionContext>();
   readonly #abortByGeneration = new Map<string, AbortController>();
+  readonly #generationByRequest = new Map<string, string>();
   readonly #mcp: McpToolAdapter;
   readonly #workspace: WorkspaceToolAdapter;
   readonly #host: CapabilityAvailabilityHost;
@@ -318,6 +321,7 @@ export class ToolAppService {
                   options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
                 (generationId) => this.#brokeredBashExecutionByGeneration.get(generationId),
                 this.#platformSandboxEngine,
+                options.writeBrokeredBashLogArtifact,
               ),
             ]
           : []),
@@ -823,6 +827,7 @@ export class ToolAppService {
   async handleRequest(
     frame: PiToolRequestFrame,
     authorization?: AppServiceAuthorization,
+    onProgress: (delta: string, truncated: boolean) => void = () => undefined,
   ): Promise<NormalizedToolResult> {
     if (authorization) this.#authorizationByGeneration.set(frame.generationId, authorization);
     const projection = this.#ensureProjection(frame);
@@ -851,6 +856,7 @@ export class ToolAppService {
     });
     const controller = this.#abortByGeneration.get(frame.generationId) ?? new AbortController();
     this.#abortByGeneration.set(frame.generationId, controller);
+    this.#generationByRequest.set(frame.requestId, frame.generationId);
     try {
       const result = await this.#broker.executeAwaitingPermission(
         {
@@ -864,13 +870,14 @@ export class ToolAppService {
         },
         frame.operation,
         controller.signal,
-        (summary) => {
+        (summary, truncated = false) => {
           const call = this.#repository.toolCallByPiRef(projection.run.id, frame.piToolCallId);
           if (call)
             this.#emit("tool.progressed", frame, projection, {
               toolCall: call,
               reason: summary.slice(0, 2_000),
             });
+          onProgress(summary, truncated);
         },
         (permission) => {
           const call = this.#repository.toolCall(permission.toolCallId);
@@ -889,7 +896,14 @@ export class ToolAppService {
         });
       }
       throw error;
+    } finally {
+      this.#generationByRequest.delete(frame.requestId);
     }
+  }
+
+  cancelToolRequest(requestId: string, generationId: string): void {
+    if (this.#generationByRequest.get(requestId) !== generationId) return;
+    this.requestCancellation(generationId);
   }
 
   async handleFileRequest(
@@ -1120,6 +1134,9 @@ export class ToolAppService {
     }
     this.#abortByGeneration.get(generationId)?.abort();
     this.#abortByGeneration.delete(generationId);
+    for (const [requestId, requestGenerationId] of this.#generationByRequest) {
+      if (requestGenerationId === generationId) this.#generationByRequest.delete(requestId);
+    }
     this.#authorizationByGeneration.delete(generationId);
     this.#brokeredBashExecutionByGeneration.delete(generationId);
     this.#projectionByGeneration.delete(generationId);
@@ -1149,6 +1166,17 @@ export class ToolAppService {
     await this.#broker.stopAll();
     this.#brokeredBashExecutionByGeneration.clear();
     this.#repository.close();
+  }
+
+  async handleHostDisconnect(): Promise<void> {
+    const generationIds = [...this.#projectionByGeneration.keys()];
+    for (const generationId of generationIds) this.requestCancellation(generationId);
+    await this.#broker.stopAll();
+    for (const generationId of generationIds) {
+      if (this.#projectionByGeneration.has(generationId)) {
+        this.completeGeneration(generationId, "interrupted", "PI_HOST_DISCONNECTED");
+      }
+    }
   }
 
   #prepareBrokeredBashExecution(
