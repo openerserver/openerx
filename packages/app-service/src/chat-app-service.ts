@@ -20,6 +20,12 @@ import type { PiHostClient } from "./pi-host-client";
 import type { SyncCoordinator } from "./sync-coordinator";
 import type { ToolAppService } from "./tool-app-service";
 
+interface RemoteExecutionAuthority {
+  pairingId: string;
+  controllerDeviceId: string;
+  hostDeviceId: string;
+}
+
 export class ChatAppService {
   readonly #repository: ChatRepository;
   readonly #piHost: PiHostClient;
@@ -29,6 +35,7 @@ export class ChatAppService {
   readonly #conversationByGeneration = new Map<string, string>();
   readonly #branchByGeneration = new Map<string, string>();
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
+  readonly #remoteAuthorityByMessage = new Map<string, RemoteExecutionAuthority>();
   readonly #sync: SyncCoordinator | null;
   readonly #files: FileAppService | null;
   readonly #tools: ToolAppService | null;
@@ -419,18 +426,28 @@ export class ChatAppService {
     }
     switch (payload.kind) {
       case "task.start":
-      case "session.prompt":
-        return await this.handle(
-          {
-            command: "chat.send",
-            input: {
-              conversationId: command.conversationId,
-              text: payload.text,
-              idempotencyKey: command.commandId,
-            },
-          },
+      case "session.prompt": {
+        const draft = this.#repository.createGeneration({
+          conversationId: command.conversationId,
+          text: payload.text,
+          idempotencyKey: command.commandId,
+        });
+        await this.#launch(
+          draft,
           authorization,
+          this.#skills?.mounts("default") ?? [],
+          undefined,
+          [],
+          payload.executionMode === "attended" ? "remote_attended" : "remote_unattended",
+          {
+            pairingId: command.pairingId,
+            controllerDeviceId: command.controllerDeviceId,
+            hostDeviceId: command.hostDeviceId,
+          },
         );
+        await this.#syncIfAuthorized(authorization);
+        return draft.receipt;
+      }
       case "session.steer":
         await this.#remotePiControl(command, "steer", payload.text);
         return { action: "steer" };
@@ -464,6 +481,15 @@ export class ChatAppService {
         const workItem = this.#requiredToolsRepository().workItem(permission.workItemId);
         if (workItem.conversationId !== command.conversationId) {
           throw new Error("REMOTE_PERMISSION_SCOPE_VIOLATION");
+        }
+        const authority = this.#remoteAuthorityByMessage.get(workItem.messageId);
+        if (!authority) throw new Error("REMOTE_PERMISSION_ORIGIN_REQUIRED");
+        if (
+          authority.pairingId !== command.pairingId ||
+          authority.controllerDeviceId !== command.controllerDeviceId ||
+          authority.hostDeviceId !== command.hostDeviceId
+        ) {
+          throw new Error("REMOTE_PERMISSION_CONTROLLER_MISMATCH");
         }
         const risk = Number(permission.risk.slice(1));
         if (risk >= 3 && !payload.deviceUnlocked) throw new Error("REMOTE_DEVICE_UNLOCK_REQUIRED");
@@ -560,6 +586,11 @@ export class ChatAppService {
     skillMounts = this.#skills?.mounts("default") ?? [],
     selectedSkillInstallationId?: string,
     personalFileIds: string[] = [],
+    executionOrigin:
+      | "local_interactive"
+      | "remote_attended"
+      | "remote_unattended" = "local_interactive",
+    remoteAuthority?: RemoteExecutionAuthority,
   ): Promise<void> {
     for (const event of draft.events) this.#emit(event);
     if (!draft.created) return;
@@ -589,6 +620,10 @@ export class ChatAppService {
     this.#messageByGeneration.set(generationId, draft.receipt.assistantMessageId);
     this.#conversationByGeneration.set(generationId, draft.receipt.conversationId);
     this.#branchByGeneration.set(generationId, draft.receipt.branchId);
+    if (executionOrigin !== "local_interactive") {
+      if (!remoteAuthority) throw new Error("REMOTE_EXECUTION_AUTHORITY_REQUIRED");
+      this.#remoteAuthorityByMessage.set(draft.receipt.assistantMessageId, remoteAuthority);
+    }
     if (authorization) this.#authorizationByGeneration.set(generationId, authorization);
     try {
       this.#tools?.startGeneration({
@@ -619,6 +654,7 @@ export class ChatAppService {
             hasFiles: (attachedFiles?.length ?? 0) > 0,
             skillInstallationIds: skillMounts.map(({ installationId }) => installationId),
             authenticated: Boolean(authorization),
+            executionOrigin,
           })
         : undefined;
       if (preparedTools) {
@@ -851,7 +887,10 @@ export class ChatAppService {
     this.#conversationByGeneration.delete(generationId);
     this.#branchByGeneration.delete(generationId);
     this.#authorizationByGeneration.delete(generationId);
-    if (messageId) this.#generationByMessage.delete(messageId);
+    if (messageId) {
+      this.#generationByMessage.delete(messageId);
+      this.#remoteAuthorityByMessage.delete(messageId);
+    }
   }
 
   async #syncIfAuthorized(authorization: AppServiceAuthorization | undefined): Promise<void> {

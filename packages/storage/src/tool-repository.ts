@@ -66,6 +66,7 @@ export interface ToolCallDraft {
 export interface SideEffectAttempt {
   idempotencyKey: string;
   toolCallId: string;
+  operationDigest: string;
   status: "executing" | "committed" | "outcome_unknown";
   result: NormalizedToolResult | null;
   startedAt: string;
@@ -1051,21 +1052,30 @@ export class ToolRepository {
     return this.run(runId);
   }
 
-  sideEffect(idempotencyKey: string): NormalizedToolResult | null {
+  sideEffect(idempotencyKey: string, operationDigest?: string): NormalizedToolResult | null {
     const row = this.#database
-      .prepare("SELECT result_json FROM tool_side_effects WHERE idempotency_key = ?")
-      .get(idempotencyKey) as { result_json: string } | undefined;
+      .prepare(
+        "SELECT result_json, operation_digest FROM tool_side_effects WHERE idempotency_key = ?",
+      )
+      .get(idempotencyKey) as { result_json: string; operation_digest: string } | undefined;
+    if (row && operationDigest !== undefined && row.operation_digest !== operationDigest) {
+      throw new Error("SIDE_EFFECT_IDEMPOTENCY_CONFLICT");
+    }
     return row ? normalizedToolResultSchema.parse(JSON.parse(row.result_json)) : null;
   }
 
-  sideEffectAttempt(idempotencyKey: string): SideEffectAttempt | null {
+  sideEffectAttempt(idempotencyKey: string, operationDigest?: string): SideEffectAttempt | null {
     const row = this.#database
       .prepare("SELECT * FROM tool_side_effect_attempts WHERE idempotency_key = ?")
       .get(idempotencyKey) as SqlRow | undefined;
     if (!row) return null;
+    if (operationDigest !== undefined && String(row.operation_digest) !== operationDigest) {
+      throw new Error("SIDE_EFFECT_IDEMPOTENCY_CONFLICT");
+    }
     return {
       idempotencyKey: String(row.idempotency_key),
       toolCallId: String(row.tool_call_id),
+      operationDigest: String(row.operation_digest),
       status: String(row.status) as SideEffectAttempt["status"],
       result:
         row.result_json === null
@@ -1076,8 +1086,8 @@ export class ToolRepository {
     };
   }
 
-  beginSideEffectAttempt(idempotencyKey: string, toolCallId: string): void {
-    const existing = this.sideEffectAttempt(idempotencyKey);
+  beginSideEffectAttempt(idempotencyKey: string, toolCallId: string, operationDigest = ""): void {
+    const existing = this.sideEffectAttempt(idempotencyKey, operationDigest);
     if (existing) {
       if (existing.status === "committed") return;
       throw new Error("SIDE_EFFECT_OUTCOME_UNKNOWN");
@@ -1086,16 +1096,18 @@ export class ToolRepository {
     this.#database
       .prepare(
         `INSERT INTO tool_side_effect_attempts
-         (idempotency_key, tool_call_id, status, result_json, started_at, updated_at)
-         VALUES (?, ?, 'executing', NULL, ?, ?)`,
+         (idempotency_key, tool_call_id, status, result_json, started_at, updated_at,
+          operation_digest)
+         VALUES (?, ?, 'executing', NULL, ?, ?, ?)`,
       )
-      .run(idempotencyKey, toolCallId, now, now);
+      .run(idempotencyKey, toolCallId, now, now, operationDigest);
   }
 
   commitSideEffectAttempt(
     idempotencyKey: string,
     toolCallId: string,
     result: NormalizedToolResult,
+    operationDigest = "",
   ): void {
     this.#transaction(() => {
       const now = this.#now();
@@ -1103,36 +1115,50 @@ export class ToolRepository {
         .prepare(
           `UPDATE tool_side_effect_attempts
            SET status = 'committed', result_json = ?, updated_at = ?
-           WHERE idempotency_key = ? AND tool_call_id = ? AND status = 'executing'`,
+           WHERE idempotency_key = ? AND tool_call_id = ? AND status = 'executing'
+             AND operation_digest = ?`,
         )
-        .run(JSON.stringify(result), now, idempotencyKey, toolCallId);
+        .run(JSON.stringify(result), now, idempotencyKey, toolCallId, operationDigest);
       if (updated.changes !== 1) throw new Error("SIDE_EFFECT_ATTEMPT_NOT_EXECUTING");
       this.#database
         .prepare(
           `INSERT OR IGNORE INTO tool_side_effects
-           (idempotency_key, tool_call_id, result_json, committed_at) VALUES (?, ?, ?, ?)`,
+           (idempotency_key, tool_call_id, result_json, committed_at, operation_digest)
+           VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(idempotencyKey, toolCallId, JSON.stringify(result), now);
+        .run(idempotencyKey, toolCallId, JSON.stringify(result), now, operationDigest);
     });
   }
 
-  markSideEffectOutcomeUnknown(idempotencyKey: string, toolCallId: string): void {
+  markSideEffectOutcomeUnknown(
+    idempotencyKey: string,
+    toolCallId: string,
+    operationDigest = "",
+  ): void {
     this.#database
       .prepare(
         `UPDATE tool_side_effect_attempts
          SET status = 'outcome_unknown', updated_at = ?
-         WHERE idempotency_key = ? AND tool_call_id = ? AND status = 'executing'`,
+         WHERE idempotency_key = ? AND tool_call_id = ? AND status = 'executing'
+           AND operation_digest = ?`,
       )
-      .run(this.#now(), idempotencyKey, toolCallId);
+      .run(this.#now(), idempotencyKey, toolCallId, operationDigest);
   }
 
-  commitSideEffect(idempotencyKey: string, toolCallId: string, result: NormalizedToolResult): void {
+  commitSideEffect(
+    idempotencyKey: string,
+    toolCallId: string,
+    result: NormalizedToolResult,
+    operationDigest = "",
+  ): void {
     this.#database
       .prepare(
         `INSERT OR IGNORE INTO tool_side_effects
-         (idempotency_key, tool_call_id, result_json, committed_at) VALUES (?, ?, ?, ?)`,
+         (idempotency_key, tool_call_id, result_json, committed_at, operation_digest)
+         VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(idempotencyKey, toolCallId, JSON.stringify(result), this.#now());
+      .run(idempotencyKey, toolCallId, JSON.stringify(result), this.#now(), operationDigest);
+    this.sideEffect(idempotencyKey, operationDigest);
   }
 
   recoverInterrupted(): { toolCalls: number; runs: number; scopes: number; permissions: number } {

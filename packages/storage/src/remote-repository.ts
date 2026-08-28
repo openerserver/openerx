@@ -24,6 +24,12 @@ export class RemoteRepository {
     this.#database = new DatabaseSync(databasePath);
     this.#now = options.now ?? (() => new Date().toISOString());
     migrateDatabase(this.#database);
+    this.#database
+      .prepare(
+        `UPDATE remote_command_applications SET status = 'outcome_unknown', updated_at = ?
+         WHERE status = 'applying' AND result_json IS NULL`,
+      )
+      .run(this.#now());
   }
 
   close(): void {
@@ -44,6 +50,7 @@ export class RemoteRepository {
       | undefined;
     if (row) {
       if (row.command_digest !== commandDigest) throw new Error("REMOTE_COMMAND_REPLAY_CONFLICT");
+      if (row.status === "outcome_unknown") throw new Error("REMOTE_COMMAND_OUTCOME_UNKNOWN");
       if (row.result_json) {
         return {
           replayed: true,

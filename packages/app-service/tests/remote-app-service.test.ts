@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
@@ -14,9 +14,9 @@ import type {
   RemoteCommandPayload,
 } from "@openerx/contracts";
 import { remoteCommandSchema } from "@openerx/contracts";
-import { ChatRepository, RemoteRepository } from "@openerx/storage";
-import { afterEach, describe, expect, it } from "vitest";
-import { ChatAppService, type PiHostClient } from "../src";
+import { ChatRepository, RemoteRepository, ToolRepository } from "@openerx/storage";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ChatAppService, type PiHostClient, ToolAppService } from "../src";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -27,6 +27,12 @@ afterEach(() => {
 class RemotePiHostClient implements PiHostClient {
   readonly prompts: PiPromptFrame[] = [];
   readonly controls: PiSessionControlFrame[] = [];
+  toolRequest:
+    | ((
+        frame: PiToolRequestFrame,
+        onProgress?: (delta: string, truncated: boolean) => void,
+      ) => Promise<unknown>)
+    | null = null;
   prompt(frame: PiPromptFrame): Promise<void> {
     this.prompts.push(frame);
     return Promise.resolve();
@@ -44,8 +50,16 @@ class RemotePiHostClient implements PiHostClient {
   onFileToolRequest(_listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void {
     return () => undefined;
   }
-  onToolRequest(_listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void {
-    return () => undefined;
+  onToolRequest(
+    listener: (
+      frame: PiToolRequestFrame,
+      onProgress?: (delta: string, truncated: boolean) => void,
+    ) => Promise<unknown>,
+  ): () => void {
+    this.toolRequest = listener;
+    return () => {
+      if (this.toolRequest === listener) this.toolRequest = null;
+    };
   }
   onActivity(_listener: (frame: PiActivityEvent) => void): () => void {
     return () => undefined;
@@ -66,15 +80,20 @@ function remoteCommand(
     generationId: string | null;
     baseRevision: number;
     sequence?: number;
+    authority?: {
+      pairingId: string;
+      controllerDeviceId: string;
+      hostDeviceId: string;
+    };
   },
 ): RemoteCommand {
   return remoteCommandSchema.parse({
     version: 1,
     commandId: randomUUID(),
     accountId: authorization.accountId,
-    pairingId: randomUUID(),
-    controllerDeviceId: randomUUID(),
-    hostDeviceId: randomUUID(),
+    pairingId: input.authority?.pairingId ?? randomUUID(),
+    controllerDeviceId: input.authority?.controllerDeviceId ?? randomUUID(),
+    hostDeviceId: input.authority?.hostDeviceId ?? randomUUID(),
     conversationId: input.conversationId,
     generationId: input.generationId,
     kind: payload.kind,
@@ -86,6 +105,34 @@ function remoteCommand(
     encryptedPayload: "E".repeat(43),
     signature: "S".repeat(86),
   });
+}
+
+function toolEnabledService(directory: string, chat: ChatRepository) {
+  const tools = new ToolRepository(path.join(directory, "profile.sqlite"));
+  const workspace = path.join(directory, "workspace");
+  mkdirSync(workspace);
+  const service = new ToolAppService({
+    repository: tools,
+    workspaceDirectory: workspace,
+    host: {
+      availability: async () => ({ availableToolNames: [], unavailableReasons: {} }),
+      execute: async () => {
+        throw new Error("HOST_TOOL_NOT_EXPECTED");
+      },
+      resolve: async () => "unused",
+      clear: async () => undefined,
+    },
+    resolveUploadPath: (fileId) => path.join(directory, "uploads", fileId),
+    ingestDownload: async (downloadPath) => ({
+      fileId: randomUUID(),
+      displayName: path.basename(downloadPath),
+    }),
+    selectedModelRef: () => "platform/auto",
+    emit: () => undefined,
+    brokeredBashV1: true,
+    brokeredBashRunnerMode: "fake",
+  });
+  return { tools, service, workspace, chat };
 }
 
 describe("ChatAppService remote Pi mapping", () => {
@@ -220,6 +267,156 @@ describe("ChatAppService remote Pi mapping", () => {
     const result = await service.applyRemoteCommand(command, payload, authorization);
     expect(result).toMatchObject({ ok: true, appliedRevision: expect.any(Number) });
     expect(service.currentRemoteRevision(null)).toBe(0);
+    service.close();
+  });
+
+  it("freezes attended and unattended Remote prompts into distinct Bash write modes", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-app-"));
+    directories.push(directory);
+    const databasePath = path.join(directory, "profile.sqlite");
+    const chat = new ChatRepository(databasePath);
+    const toolFixture = toolEnabledService(directory, chat);
+    const remote = new RemoteRepository(databasePath);
+    const pi = new RemotePiHostClient();
+    const service = new ChatAppService(chat, pi, null, null, toolFixture.service, remote);
+
+    for (const [index, executionMode] of ["attended", "unattended"].entries()) {
+      const seed = chat.createGeneration({
+        text: `seed-${executionMode}`,
+        idempotencyKey: `remote-mode-seed-${index}`,
+      });
+      toolFixture.service.grantWorkspace({
+        rootPath: toolFixture.workspace,
+        conversationId: seed.receipt.conversationId,
+        access: "read_write",
+        allowNetwork: false,
+        expiresAt: null,
+      });
+      const payload = {
+        kind: "session.prompt" as const,
+        text: `run ${executionMode}`,
+        clientOperationId: `mobile-mode-${index}`,
+        executionMode: executionMode as "attended" | "unattended",
+      };
+      const command = remoteCommand(payload, {
+        conversationId: seed.receipt.conversationId,
+        generationId: null,
+        baseRevision: service.currentRemoteRevision(seed.receipt.conversationId),
+      });
+      expect(await service.applyRemoteCommand(command, payload, authorization)).toMatchObject({
+        ok: true,
+      });
+    }
+
+    expect(pi.prompts.at(-2)?.workspace?.execution).toMatchObject({
+      executionOrigin: "remote_attended",
+      workspaceWriteMode: "direct_workspace",
+      networkPolicyId: "network-deny-v1",
+    });
+    expect(pi.prompts.at(-1)?.workspace?.execution).toMatchObject({
+      executionOrigin: "remote_unattended",
+      workspaceWriteMode: "isolated_change_set",
+      networkPolicyId: "network-deny-v1",
+    });
+    service.close();
+  });
+
+  it("allows only the originating Remote controller to resolve its Bash approval", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-app-"));
+    directories.push(directory);
+    const databasePath = path.join(directory, "profile.sqlite");
+    const chat = new ChatRepository(databasePath);
+    const toolFixture = toolEnabledService(directory, chat);
+    const remote = new RemoteRepository(databasePath);
+    const pi = new RemotePiHostClient();
+    const service = new ChatAppService(chat, pi, null, null, toolFixture.service, remote);
+    const seed = chat.createGeneration({
+      text: "seed attended Remote",
+      idempotencyKey: "remote-approval-seed-0001",
+    });
+    const grant = toolFixture.service.grantWorkspace({
+      rootPath: toolFixture.workspace,
+      conversationId: seed.receipt.conversationId,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const authority = {
+      pairingId: randomUUID(),
+      controllerDeviceId: randomUUID(),
+      hostDeviceId: randomUUID(),
+    };
+    const promptPayload = {
+      kind: "session.prompt" as const,
+      text: "write after approval",
+      clientOperationId: "mobile-approval-prompt-0001",
+      executionMode: "attended" as const,
+    };
+    const promptCommand = remoteCommand(promptPayload, {
+      conversationId: seed.receipt.conversationId,
+      generationId: null,
+      baseRevision: service.currentRemoteRevision(seed.receipt.conversationId),
+      authority,
+    });
+    await service.applyRemoteCommand(promptCommand, promptPayload, authorization);
+    const prompt = pi.prompts.at(-1);
+    const execution = prompt?.workspace?.execution;
+    if (!prompt || !execution || !pi.toolRequest) throw new Error("Remote tool context missing");
+
+    const toolExecution = pi.toolRequest({
+      kind: "pi.tool.request",
+      requestId: randomUUID(),
+      generationId: prompt.generationId,
+      conversationId: prompt.conversationId,
+      branchId: prompt.branchId,
+      assistantMessageId: prompt.assistantMessageId,
+      piToolCallId: "remote-attended-bash-0001",
+      toolName: "bash",
+      operation: {
+        operation: "shell_command_execute",
+        idempotencyKey: "remote-attended-bash-effect-0001",
+        ...execution,
+        shell: "bash",
+        command: "printf approved > result.txt",
+        timeoutMs: 120_000,
+      },
+    });
+    await vi.waitFor(() => expect(toolFixture.tools.listPermissions("pending")).toHaveLength(1));
+    const permission = toolFixture.tools.listPermissions("pending")[0];
+    if (!permission) throw new Error("Remote permission missing");
+    const decisionPayload = {
+      kind: "permission.decide" as const,
+      attentionRequestId: permission.id,
+      permissionRequestId: permission.id,
+      payloadDigest: permission.payloadDigest,
+      decision: "once" as const,
+      deviceUnlocked: true,
+      biometricVerified: true,
+      reauthenticatedAt: new Date().toISOString(),
+    };
+    const wrongController = remoteCommand(decisionPayload, {
+      conversationId: prompt.conversationId,
+      generationId: prompt.generationId,
+      baseRevision: service.currentRemoteRevision(prompt.conversationId),
+      authority: { ...authority, controllerDeviceId: randomUUID() },
+    });
+    expect(
+      await service.applyRemoteCommand(wrongController, decisionPayload, authorization),
+    ).toMatchObject({ ok: false, errorCode: "REMOTE_PERMISSION_CONTROLLER_MISMATCH" });
+    expect(toolFixture.tools.permission(permission.id).status).toBe("pending");
+
+    const correctController = remoteCommand(decisionPayload, {
+      conversationId: prompt.conversationId,
+      generationId: prompt.generationId,
+      baseRevision: service.currentRemoteRevision(prompt.conversationId),
+      authority,
+    });
+    expect(
+      await service.applyRemoteCommand(correctController, decisionPayload, authorization),
+    ).toMatchObject({ ok: true });
+    await expect(toolExecution).resolves.toMatchObject({ sideEffectCommitted: false });
+    expect(toolFixture.tools.permission(permission.id).status).toBe("approved");
+    expect(grant.id).toBe(execution.activeExecutionGrantId);
     service.close();
   });
 });

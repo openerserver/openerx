@@ -1,10 +1,10 @@
 # PBASH 实施计划
 
-- 状态：`PBASH-001/PBASH-002/PBASH-003/PBASH-004 LOCAL COMPLETE / PBASH-005 NEXT`
+- 状态：`PBASH-001/PBASH-002/PBASH-003/PBASH-004/PBASH-005 LOCAL COMPLETE / PBASH-006 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 架构依据：[19-pi-bash-brokered-execution-plan.md](19-pi-bash-brokered-execution-plan.md)
-- 当前目标：PBASH-004 已完成直接写证据与可审阅、应用、丢弃、撤销的 working-copy
-  `WorkspaceChangeSet`；下一切片 PBASH-005 接入真实 Remote 来源、审批、幂等与 `outcome_unknown` 对账
+- 当前目标：PBASH-005 已把真实 Remote 命令链接入 Bash 冻结上下文、精确审批、幂等 journal 与
+  `outcome_unknown` 对账投影；下一切片 PBASH-006 完成环境继承和受控 egress policy
 
 ## 1. 实施原则
 
@@ -24,7 +24,7 @@
 | PBASH-002 | `PlatformSandboxEngine` 与 macOS Seatbelt 后端 | LOCAL COMPLETE | 文件/网络/环境/进程树负向门禁通过；发布矩阵仍待 PBASH-008 |
 | PBASH-003 | 流式进度、取消和完整日志 Artifact | LOCAL COMPLETE | 顺序、截断、取消、断连测试通过 |
 | PBASH-004 | 直接写变更证据与高隔离 working copy | LOCAL COMPLETE | diff/conflict、CoW change set、审阅/应用/丢弃/撤销和不降级门禁通过 |
-| PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | PENDING | 至少一次投递不重复副作用 |
+| PBASH-005 | Remote、审批、幂等和 `outcome_unknown` | LOCAL COMPLETE | 至少一次投递不重复副作用；Remote 不扩大权限 |
 | PBASH-006 | 环境与 egress policy | PENDING | 默认离线、Secret canary、私网/metadata 阻断通过 |
 | PBASH-007 | Golden A/B 与渐进启用 | PENDING | 安全零越界、核心 Coding 任务无未解释回归 |
 | PBASH-008 | 签名构建与平台矩阵 | PENDING | 支持平台通过，其他平台 fail-closed |
@@ -177,8 +177,33 @@ PBASH-004A 的实现与复现证据见
 
 实现与复现证据见 [PBASH-004B 日期化证据](evidence/pbash-004b-2026-08-28.md)。
 
-## 10. PBASH-005 下一切片
+## 10. PBASH-005 本机完成
 
-1. 把真实 Remote attended/unattended 来源接入已冻结的 `workspaceWriteMode` 路由。
-2. 完成审批响应绑定、command ID/幂等去重和断线重放。
-3. 将外部副作用与 change-set apply 的 `outcome_unknown` 对账投影到 Remote/UI。
+- [x] Remote prompt 合同加入 `attended / unattended`：手机现有会话发送标记 attended，新任务标记
+      unattended；旧客户端未提供时按 unattended 处理。
+- [x] App Service 把来源冻结为模型不可修改的 `executionOrigin`，并纳入
+      `BrokeredBashExecutionContext`、operation digest、Pi Host 回传匹配和审计结果。
+- [x] `remote_unattended + workspace_write` 在合同层只能使用 `isolated_change_set`；Remote 同时强制
+      `environment-core-v1 + network-deny-v1`，不能选择新 Workspace、额外根或网络。
+- [x] `remote_attended + workspace_write` 的每个 Bash 调用使用 L3 per-call 审批；生成审批的 message/run
+      绑定原 `pairingId + controllerDeviceId + hostDeviceId`，其他控制器即使同会话也不能解除等待。
+- [x] Remote 审批继续校验 permission ID、attention ID、payload digest、会话、设备解锁、新鲜重认证和
+      L5 生物识别；审批不能改变 grant、命令、timeout 或 policy。
+- [x] Gateway 的 command ID、pairing idempotency key、base revision、session sequence 和 TTL，与
+      Connector/App Service durable replay 共同覆盖至少一次投递；同键不同 payload 稳定拒绝。
+- [x] SQLite v15 为所有 Tool side-effect journal 保存 operation digest；完成结果、执行中 attempt 和
+      `outcome_unknown` 都拒绝 payload substitution，不会回放旧结果给新操作。
+- [x] App Service 重启时未完成 Remote application 从 `applying` 转为 `outcome_unknown`；同命令重投
+      返回 `REMOTE_COMMAND_OUTCOME_UNKNOWN`，Connector 生成加密 `review.available` 对账事件而不重跑。
+- [x] Tool side effect 和 WorkspaceChangeSet 的 pending/blocked/apply-failed/outcome-unknown 状态通过
+      受限 reconciliation 元数据投影到 Remote 收件箱；不传 before/after 材料或宿主路径。
+- [x] 本机测试覆盖 attended/unattended 路由、错误控制器审批、正确控制器恢复同一 Pi 调用、Relay
+      重投、App Service response 丢失、payload digest 冲突、重启恢复和加密对账事件。
+
+实现与复现证据见 [PBASH-005 日期化证据](evidence/pbash-005-2026-08-28.md)。
+
+## 11. PBASH-006 下一切片
+
+1. 把 `none/core/all + include/exclude/set` 环境 policy 从架构合同落到 Runner；Remote 禁止 `all`。
+2. 增加 Secret canary，验证 SSH Agent、Git/npm/pip/cloud 凭证和代理变量不继承。
+3. 为显式受控网络实现 egress domain/proxy policy，并阻断重定向、回环、私网、metadata 与 DNS rebinding。

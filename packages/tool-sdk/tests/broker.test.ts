@@ -116,6 +116,27 @@ describe("CapabilityBroker", () => {
     repository.close();
   });
 
+  it("rejects payload substitution under a completed side-effect idempotency key", async () => {
+    const { chat, repository, projection } = fixture();
+    const adapter = new BuiltinToolAdapter();
+    const execute = vi.spyOn(adapter, "execute");
+    const broker = new CapabilityBroker(repository, [adapter]);
+    const first = {
+      operation: "compute" as const,
+      expression: "2 + 2",
+      idempotencyKey: "compute-payload-conflict-0001",
+    };
+    await expect(broker.execute(projection, first)).resolves.toMatchObject({
+      status: "completed",
+    });
+    await expect(
+      broker.execute(projection, { ...first, expression: "3 + 3" }),
+    ).rejects.toMatchObject({ code: "SIDE_EFFECT_IDEMPOTENCY_CONFLICT" });
+    expect(execute).toHaveBeenCalledTimes(1);
+    chat.close();
+    repository.close();
+  });
+
   it("does not ask again for a patch inside an explicitly granted workspace", async () => {
     const { chat, directory, repository, projection } = fixture();
     const workspace = path.join(directory, "workspace");

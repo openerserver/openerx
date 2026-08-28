@@ -102,7 +102,18 @@ export class CapabilityBroker {
     signal: AbortSignal = new AbortController().signal,
     update: (summary: string, truncated?: boolean) => void = () => undefined,
   ): Promise<BrokerExecutionResult> {
-    const uncertainAttempt = this.#repository.sideEffectAttempt(operation.idempotencyKey);
+    const digest = operationDigest(operation);
+    let uncertainAttempt: ReturnType<ToolRepository["sideEffectAttempt"]>;
+    let replay: ReturnType<ToolRepository["sideEffect"]>;
+    try {
+      uncertainAttempt = this.#repository.sideEffectAttempt(operation.idempotencyKey, digest);
+      replay = this.#repository.sideEffect(operation.idempotencyKey, digest);
+    } catch (error) {
+      if (error instanceof Error && error.message === "SIDE_EFFECT_IDEMPOTENCY_CONFLICT") {
+        throw new ToolBrokerError("SIDE_EFFECT_IDEMPOTENCY_CONFLICT");
+      }
+      throw error;
+    }
     if (
       uncertainAttempt?.status === "executing" ||
       uncertainAttempt?.status === "outcome_unknown"
@@ -112,7 +123,6 @@ export class CapabilityBroker {
         "The prior external action may have completed; reconcile it before retrying.",
       );
     }
-    const replay = this.#repository.sideEffect(operation.idempotencyKey);
     if (replay) return { status: "completed", result: replay, replayed: true };
 
     const adapter = this.#adapters.get(operation.operation);
@@ -156,7 +166,7 @@ export class CapabilityBroker {
         resource: requirement.resource,
         actions: requirement.actions,
         reason: requirement.reason,
-        payloadDigest: operationDigest(operation),
+        payloadDigest: digest,
       });
       if (permission.status !== "approved") return { status: "permission_required", permission };
     }
@@ -166,7 +176,7 @@ export class CapabilityBroker {
     const startedAt = Date.now();
     try {
       if (uncertainSideEffect) {
-        this.#repository.beginSideEffectAttempt(operation.idempotencyKey, toolCall.id);
+        this.#repository.beginSideEffectAttempt(operation.idempotencyKey, toolCall.id, digest);
       }
       const result = await adapter.execute(operation, {
         signal,
@@ -179,9 +189,19 @@ export class CapabilityBroker {
         durationMs: Math.max(result.durationMs, Date.now() - startedAt),
       });
       if (uncertainSideEffect) {
-        this.#repository.commitSideEffectAttempt(operation.idempotencyKey, toolCall.id, normalized);
+        this.#repository.commitSideEffectAttempt(
+          operation.idempotencyKey,
+          toolCall.id,
+          normalized,
+          digest,
+        );
       } else {
-        this.#repository.commitSideEffect(operation.idempotencyKey, toolCall.id, normalized);
+        this.#repository.commitSideEffect(
+          operation.idempotencyKey,
+          toolCall.id,
+          normalized,
+          digest,
+        );
       }
       this.#repository.markToolCall(toolCall.id, "completed", {
         resultSummary: normalized.summary,
@@ -191,7 +211,11 @@ export class CapabilityBroker {
       return { status: "completed", result: normalized, replayed: false };
     } catch (error) {
       if (uncertainSideEffect) {
-        this.#repository.markSideEffectOutcomeUnknown(operation.idempotencyKey, toolCall.id);
+        this.#repository.markSideEffectOutcomeUnknown(
+          operation.idempotencyKey,
+          toolCall.id,
+          digest,
+        );
       }
       const code = signal.aborted
         ? "TOOL_CANCELLED"

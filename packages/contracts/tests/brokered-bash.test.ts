@@ -22,6 +22,7 @@ const execution = {
   activeExecutionGrantId: activeGrantId,
   additionalExecutionGrantIds: [additionalGrantId],
   executionProfile: "workspace_write" as const,
+  executionOrigin: "local_interactive" as const,
   workspaceWriteMode: "direct_workspace" as const,
   environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
   networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
@@ -150,6 +151,27 @@ describe("brokered Bash contracts", () => {
         workspaceWriteMode: "isolated_change_set",
       }).success,
     ).toBe(true);
+    expect(
+      brokeredBashOperationSchema.safeParse({
+        ...operation,
+        executionOrigin: "remote_unattended",
+        workspaceWriteMode: "direct_workspace",
+      }).success,
+    ).toBe(false);
+    expect(
+      brokeredBashOperationSchema.safeParse({
+        ...operation,
+        executionOrigin: "remote_unattended",
+        workspaceWriteMode: "isolated_change_set",
+      }).success,
+    ).toBe(true);
+    expect(
+      brokeredBashOperationSchema.safeParse({
+        ...operation,
+        executionOrigin: "remote_attended",
+        networkPolicyId: "network-allow-v1",
+      }).success,
+    ).toBe(false);
   });
 
   it("binds prompt execution context to grants present in the trusted workspace frame", () => {

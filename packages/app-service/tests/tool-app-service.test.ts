@@ -815,7 +815,7 @@ describe("ToolAppService", () => {
   it("persists a live isolated Bash change set without mutating the host workspace", async () => {
     if (!liveMacOSSandbox) return;
     const platformSandboxEngine = new MacOSSandboxExecEngine();
-    const { chat, service, base, directory } = fixture({
+    const { chat, service, base, directory, events } = fixture({
       brokeredBashV1: true,
       brokeredBashRunnerMode: "macos",
       platformSandboxEngine,
@@ -887,6 +887,14 @@ describe("ToolAppService", () => {
       afterText: "isolated-result",
       applySupported: true,
     });
+    expect(events.find(({ type }) => type === "tool.completed")?.payload.reconciliation).toEqual([
+      {
+        kind: "workspace_change_set",
+        targetId: sets[0]?.id,
+        status: "pending_review",
+        actionRequired: true,
+      },
+    ]);
     chat.close();
     await service.close();
   });

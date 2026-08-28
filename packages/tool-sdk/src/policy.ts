@@ -84,7 +84,11 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resource: operation.activeExecutionGrantId,
         actions: networkDenied ? ["execute"] : ["execute", "external_write"],
         reason: `在已冻结工作区执行 Brokered Bash：${operation.command.slice(0, 500)}`,
-        approval: "automatic",
+        approval:
+          operation.executionOrigin === "remote_attended" &&
+          operation.executionProfile === "workspace_write"
+            ? "per_call"
+            : "automatic",
       };
     }
     case "workspace_list":

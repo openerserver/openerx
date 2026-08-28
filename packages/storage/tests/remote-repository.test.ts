@@ -49,4 +49,41 @@ describe("RemoteRepository", () => {
     );
     repository.close();
   });
+
+  it("marks an interrupted application outcome unknown and refuses blind replay", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-repository-"));
+    directories.push(directory);
+    const databasePath = path.join(directory, "profile.sqlite");
+    const command = remoteCommandSchema.parse({
+      version: 1,
+      commandId: randomUUID(),
+      accountId: randomUUID(),
+      pairingId: randomUUID(),
+      controllerDeviceId: randomUUID(),
+      hostDeviceId: randomUUID(),
+      conversationId: randomUUID(),
+      generationId: null,
+      kind: "session.prompt",
+      baseRevision: 2,
+      sessionSequence: 1,
+      issuedAt: "2026-08-26T10:00:00.000Z",
+      expiresAt: "2026-08-26T10:01:00.000Z",
+      idempotencyKey: "remote-repository-crash-0001",
+      encryptedPayload: "E".repeat(43),
+      signature: "S".repeat(86),
+    });
+    const payload = {
+      kind: "session.prompt" as const,
+      text: "apply reviewed changes",
+      clientOperationId: "mobile-crash-0001",
+      executionMode: "attended" as const,
+    };
+    const first = new RemoteRepository(databasePath);
+    expect(first.begin(command, payload)).toEqual({ replayed: false, result: null });
+    first.close();
+
+    const recovered = new RemoteRepository(databasePath);
+    expect(() => recovered.begin(command, payload)).toThrow("REMOTE_COMMAND_OUTCOME_UNKNOWN");
+    recovered.close();
+  });
 });

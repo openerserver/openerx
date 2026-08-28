@@ -34,6 +34,7 @@ const request: PiToolRequestFrame = {
     activeExecutionGrantId: "66666666-6666-4666-8666-666666666666",
     additionalExecutionGrantIds: [],
     executionProfile: "read_only",
+    executionOrigin: "local_interactive",
     workspaceWriteMode: "none",
     environmentPolicyId: "environment-core-v1",
     networkPolicyId: "network-deny-v1",

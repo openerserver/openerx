@@ -328,7 +328,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-### 10.1 当前执行切片：PBASH-004 本机完成，PBASH-005 下一步
+### 10.1 当前执行切片：PBASH-005 本机完成，PBASH-006 下一步
 
 用户已接受 [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)，并已完成
 [PBASH 实施计划](20-pbash-implementation-plan.md) 的 PBASH-001 至 PBASH-003：严格
@@ -344,8 +344,11 @@ PBASH-004A 已加入直接写 pre/post revision、Git dirty/conflict、创建/�
 有界 diff 和明确的 `NO GENERAL UNDO` 投影；PBASH-004B 进一步完成 APFS CoW working copy、SQLite
 change-set 持久化、review/apply/discard/undo、L3 单次审批、全量 hash 冲突检查、多文件回滚和崩溃
 `outcome_unknown` 恢复。证据见 [PBASH-004A 检查点](evidence/pbash-004a-2026-08-28.md) 与
-[PBASH-004B 检查点](evidence/pbash-004b-2026-08-28.md)。下一切片 PBASH-005 接真正 Remote 来源、
-审批响应、幂等与断线对账。当前
+[PBASH-004B 检查点](evidence/pbash-004b-2026-08-28.md)。PBASH-005 进一步把 Gateway→Connector→App
+Service 的 Remote attended/unattended 来源冻结进 Bash 上下文，完成同控制器审批绑定、operation digest
+幂等、崩溃后 `outcome_unknown` 和 Remote 加密对账投影；证据见
+[PBASH-005 检查点](evidence/pbash-005-2026-08-28.md)。下一切片 PBASH-006 完成环境继承与受控 egress
+policy。当前
 `sandbox-exec` 后端已被 macOS 标记 deprecated，签名包、
 支持 OS 矩阵、替代后端评估、Linux 和 Windows 仍不得宣称完成。
 

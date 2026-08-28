@@ -38,9 +38,11 @@ export function createProductBrokeredBashTool(input: {
   const fakeRunner =
     input.execution.sandboxPolicyVersion === BROKERED_BASH_FAKE_SANDBOX_POLICY_VERSION;
   const accessDescription =
-    input.execution.executionProfile === "workspace_write"
-      ? "The active workspace is writable, except protected repository metadata such as .git. Direct writes return bounded change evidence and do not provide general Undo."
-      : "The active workspace is read-only.";
+    input.execution.workspaceWriteMode === "isolated_change_set"
+      ? "Writes occur in an isolated working copy and return a WorkspaceChangeSet for review; the host workspace is not changed until that set is explicitly applied."
+      : input.execution.executionProfile === "workspace_write"
+        ? "The active workspace is writable, except protected repository metadata such as .git. Direct writes return bounded change evidence and do not provide general Undo."
+        : "The active workspace is read-only.";
   return defineTool({
     name: "bash",
     label: fakeRunner ? "Validate shell command contract" : "Run Bash in workspace sandbox",

@@ -30,7 +30,10 @@ export function projectChatEventForRemote(event: ChatEvent): {
   occurredAt: string;
   payload: Record<string, unknown>;
 } | null {
-  const kind = eventKind[event.type];
+  const reconciliation = event.payload.reconciliation ?? [];
+  const kind = reconciliation.some(({ actionRequired }) => actionRequired)
+    ? "review.available"
+    : eventKind[event.type];
   if (!kind) return null;
   return {
     kind,
@@ -70,6 +73,7 @@ export function projectChatEventForRemote(event: ChatEvent): {
             payloadDigest: event.payload.permission.payloadDigest,
             expiresAt: event.payload.permission.expiresAt,
           }),
+      ...(reconciliation.length === 0 ? {} : { reconciliation }),
     },
   };
 }

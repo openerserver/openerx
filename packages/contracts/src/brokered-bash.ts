@@ -28,6 +28,11 @@ export function brokeredBashRunnerMode(
 }
 
 export const brokeredBashExecutionProfileSchema = z.enum(["read_only", "workspace_write"]);
+export const brokeredBashExecutionOriginSchema = z.enum([
+  "local_interactive",
+  "remote_attended",
+  "remote_unattended",
+]);
 export const brokeredBashWorkspaceWriteModeSchema = z.enum([
   "none",
   "direct_workspace",
@@ -84,6 +89,7 @@ const executionContextShape = {
   activeExecutionGrantId: entityIdSchema,
   additionalExecutionGrantIds: additionalExecutionGrantIdsSchema,
   executionProfile: brokeredBashExecutionProfileSchema,
+  executionOrigin: brokeredBashExecutionOriginSchema,
   workspaceWriteMode: brokeredBashWorkspaceWriteModeSchema,
   environmentPolicyId: brokeredBashPolicyIdSchema,
   networkPolicyId: brokeredBashPolicyIdSchema,
@@ -95,7 +101,10 @@ function rejectActiveGrantDuplication(
     activeExecutionGrantId: string;
     additionalExecutionGrantIds: string[];
     executionProfile: z.infer<typeof brokeredBashExecutionProfileSchema>;
+    executionOrigin: z.infer<typeof brokeredBashExecutionOriginSchema>;
     workspaceWriteMode: z.infer<typeof brokeredBashWorkspaceWriteModeSchema>;
+    environmentPolicyId: string;
+    networkPolicyId: string;
   },
   context: z.RefinementCtx,
 ): void {
@@ -118,6 +127,28 @@ function rejectActiveGrantDuplication(
       code: "custom",
       message: "workspace_write execution requires an explicit write mode",
       path: ["workspaceWriteMode"],
+    });
+  }
+  if (
+    value.executionOrigin === "remote_unattended" &&
+    value.executionProfile === "workspace_write" &&
+    value.workspaceWriteMode !== "isolated_change_set"
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "remote_unattended workspace writes require isolated_change_set",
+      path: ["workspaceWriteMode"],
+    });
+  }
+  if (
+    value.executionOrigin !== "local_interactive" &&
+    (value.environmentPolicyId !== BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID ||
+      value.networkPolicyId !== BROKERED_BASH_DENY_NETWORK_POLICY_ID)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "Remote Bash requires the core environment and denied network",
+      path: ["executionOrigin"],
     });
   }
 }
@@ -149,6 +180,7 @@ export const brokeredBashOperationSchema = z
 
 export type BrokeredBashExecutionContext = z.infer<typeof brokeredBashExecutionContextSchema>;
 export type BrokeredBashExecutionProfile = z.infer<typeof brokeredBashExecutionProfileSchema>;
+export type BrokeredBashExecutionOrigin = z.infer<typeof brokeredBashExecutionOriginSchema>;
 export type BrokeredBashWorkspaceWriteMode = z.infer<typeof brokeredBashWorkspaceWriteModeSchema>;
 export type BrokeredBashRunnerMode = z.infer<typeof brokeredBashRunnerModeSchema>;
 export type BrokeredBashOperation = z.infer<typeof brokeredBashOperationSchema>;

@@ -32,6 +32,7 @@ function fixture(access: WorkspaceGrant["access"] = "read_write") {
     activeExecutionGrantId: activeGrantId,
     additionalExecutionGrantIds: [],
     executionProfile: access === "read_write" ? "workspace_write" : "read_only",
+    executionOrigin: "local_interactive",
     workspaceWriteMode: access === "read_write" ? "direct_workspace" : "none",
     environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
     networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
@@ -143,6 +144,7 @@ describe("PBASH-001 fake adapter and policy", () => {
         additionalExecutionGrantIds: ["88888888-8888-4888-8888-888888888888"],
       },
       { ...operation, executionProfile: "workspace_write" as const },
+      { ...operation, executionOrigin: "remote_attended" as const },
       { ...operation, workspaceWriteMode: "isolated_change_set" as const },
       { ...operation, environmentPolicyId: "environment-core-v2" },
       { ...operation, networkPolicyId: "network-allow-v1" },
@@ -150,5 +152,19 @@ describe("PBASH-001 fake adapter and policy", () => {
     ]) {
       expect(operationDigest(changed)).not.toBe(digest);
     }
+  });
+
+  it("requires per-call approval for attended Remote writes", () => {
+    const { operation } = fixture("read_write");
+    expect(
+      capabilityRequirement({ ...operation, executionOrigin: "remote_attended" }),
+    ).toMatchObject({ risk: "L3", approval: "per_call" });
+    expect(
+      capabilityRequirement({
+        ...operation,
+        executionOrigin: "remote_unattended",
+        workspaceWriteMode: "isolated_change_set",
+      }),
+    ).toMatchObject({ risk: "L3", approval: "automatic" });
   });
 });

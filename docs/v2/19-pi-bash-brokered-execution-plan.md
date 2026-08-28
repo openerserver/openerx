@@ -1,14 +1,14 @@
 # OpenerX Pi Bash Broker 化执行方案
 
-- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002/PBASH-003/PBASH-004 LOCAL COMPLETE / PBASH-005 NEXT`
+- 状态：`ARCHITECTURE ACCEPTED / PBASH-001/PBASH-002/PBASH-003/PBASH-004/PBASH-005 LOCAL COMPLETE / PBASH-006 NEXT`
 - 日期：2026-08-28（Asia/Shanghai）
 - 范围：Desktop Pi Host、App Service Capability Broker、Platform Sandbox Engine、Workspace Scope、Remote
 - 依赖：[ADR-V2-007](adr/007-pi-harness-boundary.md)、
   [ADR-V2-012](adr/012-capability-broker-and-tool-projection.md)、
   [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)
-- 当前证据边界：PBASH-004 已完成当前 macOS 主机上的直接写 manifest/diff/conflict 与 APFS CoW
-  `WorkspaceChangeSet` 审阅、应用、丢弃、撤销；不代表签名包、未来 macOS、Linux、Windows、端到端
-  Remote 或发布门禁已经完成
+- 当前证据边界：PBASH-005 已在本机实际 Gateway→Connector→App Service→Pi/Broker 链路完成
+  attended/unattended 路由、精确 Remote 审批、至少一次投递去重与对账投影；不代表 iOS/Android 真机、
+  生产 HTTPS/WSS/推送、签名包、未来 macOS、Linux、Windows 或发布故障演练已经完成
 
 ## 1. 结论
 
@@ -537,7 +537,7 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 | PBASH-002 | Broker 与平台引擎  | 新操作、`PlatformSandboxEngine`、macOS Seatbelt backend、最小环境、网络 deny、timeout/process tree | 路径/环境/网络/进程负向测试通过；形成 backend capability 证据 |
 | PBASH-003 | 进度、取消与日志   | `pi.tool.progress`、Abort 贯通、50 KiB 结果、受控完整日志 Artifact                                 | LOCAL COMPLETE；流式顺序、截断、取消、迟到帧和断连测试通过    |
 | PBASH-004 | 变更可见与恢复     | 直接写 diff/manifest/conflict；高隔离 CoW/worktree `WorkspaceChangeSet`                            | 基础写入门禁通过；无人值守 Remote 不会降级为直接写            |
-| PBASH-005 | Remote、审批与幂等 | Remote 同链路、精确审批、重复投递、`outcome_unknown` 对账                                          | 重放不重复执行；Remote 不扩大权限                             |
+| PBASH-005 | Remote、审批与幂等 | Remote 同链路、精确审批、重复投递、`outcome_unknown` 对账                                          | LOCAL COMPLETE；重放不重复执行；Remote 不扩大权限             |
 | PBASH-006 | 网络与环境 policy  | `none/core/all`、include/exclude/set、egress proxy/domain policy、Secret canary                    | 默认离线；环境无凭证；允许网络仍不能访问本机/私网/metadata    |
 | PBASH-007 | 效果评估与渐进启用 | Golden A/B、feature flag、工具可用性 UI、回滚演练                                                  | 安全零违规，核心任务不回归，回滚结果有日期化证据              |
 | PBASH-008 | 发布与平台矩阵     | 签名 macOS、Linux/Windows 后端路线和安装包证据                                                     | 明确支持矩阵通过；不支持平台 fail-closed                      |
@@ -630,11 +630,11 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 
 - [x] Pi 原始 `createLocalBashOperations` 不可从生产会话到达。
 - [x] `bash` 只在存在有效活动 WorkspaceGrant 且 Runner 可用时出现。
-- [ ] 所有命令通过 Broker，ToolCall、Scope、审批和幂等可查询。
+- [x] 所有 Bash 命令通过 Broker，ToolCall、Scope、审批和幂等可查询。
 - [x] 工作区外读写、宿主凭证和默认网络负向测试通过。
-- [ ] timeout、Abort、Stop、Host/App Service 断连能回收整个进程树。
-- [ ] Pi 收到有序流式更新和最终 exit code；完整输出不暴露宿主路径。
-- [ ] Remote 重复投递不重复执行。
+- [x] timeout、Abort、Stop、Host/App Service 断连能回收整个进程树。
+- [x] Pi 收到有序流式更新和最终 exit code；完整输出不暴露宿主路径。
+- [x] Remote 重复投递不重复执行。
 - [x] 当前 argv Shell 可通过单一 feature flag 恢复。
 - [x] 证据明确标记 `LOCAL ALPHA / DIRECT_WORKSPACE_WRITE / NO GENERAL UNDO`。
 - [x] backend capability、policy 版本和销毁状态进入审计；初始化失败不会裸跑 Shell。
@@ -646,7 +646,7 @@ container、轻量 VM、远程隔离服务、CoW 或临时 worktree 是 `Platfor
 - [ ] 签名安装包中的文件、网络、进程、权限与销毁测试通过。
 - [x] 基础直接写具有 pre/post revision、changed-path manifest、diff 和已有 dirty overlap 冲突证据；产品不承诺任意
       Shell 变更原子 Undo。
-- [ ] 无人值守 Remote 写入已使用 working copy/CoW `WorkspaceChangeSet`，或明确限定为只读；不可用时
+- [x] 无人值守 Remote 写入已使用 working copy/CoW `WorkspaceChangeSet`，或明确限定为只读；不可用时
       不降级为直接写。
 - [ ] 凭证 canary、网络、路径逃逸、资源耗尽和崩溃恢复测试通过。
 - [ ] `core` 环境 policy 默认生效；受控 egress 的域名、重定向和私网阻断测试通过。
@@ -713,6 +713,7 @@ probe、最小环境、默认断网、hard-link 预检、资源限制和进程�
 manifest、diff/conflict、明确的无通用 Undo 投影，以及 `isolated_change_set` 不降级路由；证据见
 [PBASH-004A 检查点](evidence/pbash-004a-2026-08-28.md)。PBASH-004B 已完成 APFS CoW working copy、
 持久化 `WorkspaceChangeSet`、review/apply/discard/undo、冲突与崩溃恢复，见
-[PBASH-004B 检查点](evidence/pbash-004b-2026-08-28.md)。下一项 **PBASH-005** 接入真实 Remote 来源、
-审批响应、幂等与 `outcome_unknown` 对账。签名包、OS 支持矩阵和 deprecated 后端替代评估仍属于
-PBASH-008。
+[PBASH-004B 检查点](evidence/pbash-004b-2026-08-28.md)。PBASH-005 已把实际 Remote 命令来源接入冻结
+执行上下文，并完成控制器绑定审批、operation digest 幂等、崩溃后 `outcome_unknown` 与加密对账事件，见
+[PBASH-005 检查点](evidence/pbash-005-2026-08-28.md)。下一项 **PBASH-006** 完成环境继承与受控 egress
+policy。真机/生产 Remote、签名包、OS 支持矩阵和 deprecated 后端替代评估仍是后续发布门禁。

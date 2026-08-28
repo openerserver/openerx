@@ -231,6 +231,56 @@ interface ActiveProjection {
   run: ExecutionRun;
 }
 
+type ReconciliationItem = NonNullable<ChatEvent["payload"]["reconciliation"]>[number];
+
+const reconciliationStatuses = new Set<ReconciliationItem["status"]>([
+  "pending_review",
+  "reviewed",
+  "applied",
+  "reverted",
+  "discarded",
+  "blocked",
+  "apply_failed",
+  "outcome_unknown",
+]);
+
+function reconciliationForResult(result: NormalizedToolResult): ReconciliationItem[] {
+  if (!result.data || typeof result.data !== "object") return [];
+  const data = result.data as Record<string, unknown>;
+  const candidates: unknown[] = [];
+  if (data.workspaceChangeSet && typeof data.workspaceChangeSet === "object") {
+    candidates.push(data.workspaceChangeSet);
+  }
+  if (data.changeSet && typeof data.changeSet === "object") candidates.push(data.changeSet);
+  if (Array.isArray(data.changeSets)) candidates.push(...data.changeSets);
+  return candidates.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const record = candidate as Record<string, unknown>;
+    if (
+      typeof record.id !== "string" ||
+      typeof record.status !== "string" ||
+      !reconciliationStatuses.has(record.status as ReconciliationItem["status"])
+    ) {
+      return [];
+    }
+    const status = record.status as ReconciliationItem["status"];
+    return [
+      {
+        kind: "workspace_change_set" as const,
+        targetId: record.id,
+        status,
+        actionRequired: [
+          "pending_review",
+          "reviewed",
+          "blocked",
+          "apply_failed",
+          "outcome_unknown",
+        ].includes(status),
+      },
+    ];
+  });
+}
+
 export interface PreparedGenerationTools {
   workspaceGrants: WorkspaceGrant[];
   instructionSources: WorkspaceInstructionSource[];
@@ -896,14 +946,33 @@ export class ToolAppService {
         },
       );
       const call = this.#repository.toolCallByPiRef(projection.run.id, frame.piToolCallId);
-      if (call) this.#emit("tool.completed", frame, projection, { toolCall: call });
+      if (call) {
+        const reconciliation = reconciliationForResult(result);
+        this.#emit("tool.completed", frame, projection, {
+          toolCall: call,
+          ...(reconciliation.length > 0 ? { reconciliation } : {}),
+        });
+      }
       return result;
     } catch (error) {
       const call = this.#repository.toolCallByPiRef(projection.run.id, frame.piToolCallId);
       if (call) {
+        const code = error instanceof Error ? error.message.split(":", 1)[0] : "TOOL_FAILED";
         this.#emit("tool.failed", frame, projection, {
           toolCall: call,
           reason: error instanceof Error ? error.message : "TOOL_FAILED",
+          ...(code === "SIDE_EFFECT_OUTCOME_UNKNOWN"
+            ? {
+                reconciliation: [
+                  {
+                    kind: "tool_side_effect",
+                    targetId: frame.operation.idempotencyKey,
+                    status: "outcome_unknown",
+                    actionRequired: true,
+                  },
+                ],
+              }
+            : {}),
         });
       }
       throw error;
@@ -1226,6 +1295,7 @@ export class ToolAppService {
       activeExecutionGrantId: active.id,
       additionalExecutionGrantIds: additionalIds,
       executionProfile: active.access === "read_write" ? "workspace_write" : "read_only",
+      executionOrigin: input.executionOrigin ?? "local_interactive",
       workspaceWriteMode:
         active.access !== "read_write"
           ? "none"
@@ -1326,6 +1396,7 @@ export class ToolAppService {
       step?: RunStep;
       permission?: PermissionRequest;
       reason?: string;
+      reconciliation?: NonNullable<ChatEvent["payload"]["reconciliation"]>;
     },
   ): void {
     this.#emitEvent({

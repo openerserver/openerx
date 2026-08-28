@@ -297,6 +297,22 @@ export class RemoteHostConnector {
     try {
       const result = await this.#applier.apply(command, payload);
       if (!result.ok) {
+        if (result.errorCode === "REMOTE_COMMAND_OUTCOME_UNKNOWN") {
+          await this.publishEvent({
+            kind: "review.available",
+            conversationId: command.conversationId,
+            payload: {
+              reconciliation: [
+                {
+                  kind: "remote_command",
+                  targetId: command.commandId,
+                  status: "outcome_unknown",
+                  actionRequired: true,
+                },
+              ],
+            },
+          });
+        }
         this.#mark(command.commandId, "rejected", result.errorCode, result.currentRevision);
         await this.#transport.recordReceipt(
           this.#receipt(command, "rejected", result.errorCode, result.currentRevision),

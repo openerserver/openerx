@@ -249,6 +249,56 @@ describe("RemoteHostConnector", () => {
     state.gateway.close();
   });
 
+  it("publishes a safe reconciliation event when App Service reports an unknown outcome", async () => {
+    const state = setup();
+    const remoteCommand = state.makeCommand({ kind: "session.follow_up", text: "apply changes" });
+    state.gateway.submitCommand(state.controllerPrincipal, remoteCommand);
+    const connector = new RemoteHostConnector({
+      databasePath: path.join(state.directory, "connector.sqlite"),
+      host: state.host,
+      hostPrivateKey: state.hostKeys.privateKey,
+      transport: state.transport,
+      now: () => state.nowRef.value,
+      applier: {
+        currentRevision: async () => 4,
+        apply: async () => ({
+          kind: "remote.command.result",
+          requestId: remoteCommand.commandId,
+          ok: false,
+          errorCode: "REMOTE_COMMAND_OUTCOME_UNKNOWN",
+          currentRevision: 4,
+        }),
+      },
+    });
+    await connector.start();
+    await connector.tick();
+    const [event] = state.gateway.listEvents(state.controllerPrincipal, {
+      hostDeviceId: state.host.hostDeviceId,
+      afterCursor: null,
+    });
+    expect(event).toMatchObject({ kind: "review.available" });
+    if (!event) throw new Error("reconciliation event missing");
+    expect(
+      decryptRemoteObject(
+        event.encryptedPayload,
+        state.controllerKeys.privateKey,
+        state.hostKeys.publicKey,
+        `event:${event.eventId}:${state.pairing.pairingId}`,
+      ),
+    ).toEqual({
+      reconciliation: [
+        {
+          kind: "remote_command",
+          targetId: remoteCommand.commandId,
+          status: "outcome_unknown",
+          actionRequired: true,
+        },
+      ],
+    });
+    connector.close();
+    state.gateway.close();
+  });
+
   it("rejects stale base revisions before invoking App Service", async () => {
     const state = setup();
     const remoteCommand = state.makeCommand({

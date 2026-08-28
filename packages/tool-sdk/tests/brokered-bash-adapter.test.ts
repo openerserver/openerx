@@ -116,6 +116,7 @@ function fixture() {
     activeExecutionGrantId: activeGrantId,
     additionalExecutionGrantIds: [],
     executionProfile: "workspace_write",
+    executionOrigin: "local_interactive",
     workspaceWriteMode: "direct_workspace",
     environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
     networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,

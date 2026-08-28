@@ -924,6 +924,31 @@ const migrations: readonly Migration[] = [
         ON workspace_change_sets(run_id, created_at);
     `,
   },
+  {
+    version: 15,
+    checksum: "pbash-remote-idempotency-reconciliation-v15-20260828",
+    sql: `
+      ALTER TABLE tool_side_effects
+        ADD COLUMN operation_digest TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tool_side_effect_attempts
+        ADD COLUMN operation_digest TEXT NOT NULL DEFAULT '';
+
+      ALTER TABLE remote_command_applications RENAME TO remote_command_applications_v15;
+      CREATE TABLE remote_command_applications (
+        command_id TEXT PRIMARY KEY,
+        command_digest TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('applying', 'applied', 'rejected', 'outcome_unknown')),
+        result_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO remote_command_applications
+        (command_id, command_digest, status, result_json, created_at, updated_at)
+        SELECT command_id, command_digest, status, result_json, created_at, updated_at
+          FROM remote_command_applications_v15;
+      DROP TABLE remote_command_applications_v15;
+    `,
+  },
 ];
 
 export function migrateDatabase(

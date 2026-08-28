@@ -44,4 +44,39 @@ describe("remote event projection", () => {
       }),
     ).toBeNull();
   });
+
+  it("projects reconciliation metadata without exposing internal change material", () => {
+    const event: ChatEvent = {
+      eventId: "00000000-0000-4000-8000-000000000105",
+      type: "tool.completed",
+      conversationId: "00000000-0000-4000-8000-000000000106",
+      messageId: "00000000-0000-4000-8000-000000000107",
+      sequence: 0,
+      occurredAt: "2026-08-28T09:00:00.000Z",
+      payloadVersion: 1,
+      payload: {
+        reconciliation: [
+          {
+            kind: "workspace_change_set",
+            targetId: "00000000-0000-4000-8000-000000000108",
+            status: "outcome_unknown",
+            actionRequired: true,
+          },
+        ],
+      },
+    };
+    expect(projectChatEventForRemote(event)).toMatchObject({
+      kind: "review.available",
+      payload: {
+        reconciliation: [
+          {
+            kind: "workspace_change_set",
+            targetId: "00000000-0000-4000-8000-000000000108",
+            status: "outcome_unknown",
+            actionRequired: true,
+          },
+        ],
+      },
+    });
+  });
 });

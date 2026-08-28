@@ -376,6 +376,7 @@ function TasksScreen({
                 kind: conversationId ? "session.prompt" : "task.start",
                 text: text.trim(),
                 clientOperationId: `mobile:${Date.now()}`,
+                executionMode: conversationId ? "attended" : "unattended",
               })
             }
           />
@@ -469,14 +470,26 @@ function InboxScreen({
           typeof item.payload.permissionRequestId === "string"
             ? item.payload.permissionRequestId
             : null;
+        const reconciliation = Array.isArray(item.payload.reconciliation)
+          ? (item.payload.reconciliation[0] as
+              | { targetId?: unknown; status?: unknown; actionRequired?: unknown }
+              | undefined)
+          : undefined;
         return (
           <View style={styles.card}>
             <Text style={styles.eventKind}>{item.envelope.kind}</Text>
             <Text style={styles.cardTitle}>
-              {String(item.payload.target ?? item.payload.type ?? "任务状态")}
+              {String(
+                reconciliation?.targetId ?? item.payload.target ?? item.payload.type ?? "任务状态",
+              )}
             </Text>
             <Text style={styles.cardMeta}>
-              {String(item.payload.actions ?? item.payload.reason ?? item.envelope.occurredAt)}
+              {String(
+                reconciliation?.status ??
+                  item.payload.actions ??
+                  item.payload.reason ??
+                  item.envelope.occurredAt,
+              )}
             </Text>
             {permissionId ? (
               <View style={styles.chipRow}>

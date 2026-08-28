@@ -435,6 +435,28 @@ export const chatEventSchema = z
         step: runStepSchema.optional(),
         toolCall: toolCallSchema.optional(),
         permission: permissionRequestSchema.optional(),
+        reconciliation: z
+          .array(
+            z
+              .object({
+                kind: z.enum(["remote_command", "tool_side_effect", "workspace_change_set"]),
+                targetId: z.string().min(1).max(240),
+                status: z.enum([
+                  "pending_review",
+                  "reviewed",
+                  "applied",
+                  "reverted",
+                  "discarded",
+                  "blocked",
+                  "apply_failed",
+                  "outcome_unknown",
+                ]),
+                actionRequired: z.boolean(),
+              })
+              .strict(),
+          )
+          .max(100)
+          .optional(),
       })
       .strict(),
   })

@@ -30,6 +30,7 @@ function sameExecutionContext(
       (grantId, index) => grantId === expected.additionalExecutionGrantIds[index],
     ) &&
     operation.executionProfile === expected.executionProfile &&
+    operation.executionOrigin === expected.executionOrigin &&
     operation.workspaceWriteMode === expected.workspaceWriteMode &&
     operation.environmentPolicyId === expected.environmentPolicyId &&
     operation.networkPolicyId === expected.networkPolicyId &&
@@ -133,6 +134,7 @@ function normalizedResult(
       activeExecutionGrantId: activeGrant.id,
       additionalExecutionGrantIds: additionalGrants.map(({ id }) => id),
       executionProfile: operation.executionProfile,
+      executionOrigin: operation.executionOrigin,
       workspaceWriteMode: operation.workspaceWriteMode,
       environmentPolicyId: operation.environmentPolicyId,
       networkPolicyId: operation.networkPolicyId,

@@ -139,6 +139,7 @@ describe("Pi native Broker tools", () => {
         activeExecutionGrantId: randomUUID(),
         additionalExecutionGrantIds: [],
         executionProfile: "read_only",
+        executionOrigin: "local_interactive",
         workspaceWriteMode: "none",
         environmentPolicyId: BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
         networkPolicyId: BROKERED_BASH_DENY_NETWORK_POLICY_ID,
