@@ -1,11 +1,12 @@
 # OpenerX Browser Computer-Use 重构方案
 
-- 状态：`ACCEPTED / BCU-003 AX LIVE GATES PASS + BRIDGE SECURITY FOUNDATION IMPLEMENTED / SIGNED TRANSPORT PENDING`
-- 日期：2026-08-27；live gate 更新于 2026-08-28（Asia/Shanghai）
+- 状态：`ACCEPTED / BCU-003 MACOS AX + WINDOWS EDGE UIA LIVE PASS / BRIDGE SIGNED TRANSPORT PENDING`
+- 日期：2026-08-27；live gate 更新于 2026-08-29（Asia/Shanghai）
 - 范围：桌面端 Browser Capability；BCU-003 已接通 macOS 系统默认浏览器本地 AX 纵向切片、原生
   动作矩阵、用户输入暂停后端和可信工具中心接管/恢复 UI；真实物理输入与原生 Tool Center runners
   已在解锁机器 PASS；Bridge 协议、一次性标签页授权状态机和 Adapter 接入已实现，MV3 扩展、Native
-  Messaging Host、可信连接 UI、签名安装门禁和托管 Chromium 尚未完成，不改变当前发布状态
+  Messaging Host、可信连接 UI、签名安装门禁和托管 Chromium 尚未完成；2026-08-29 当前 Windows 11
+  默认 Edge 的 UIA/原生输入/截图/接管 monitor/关窗纵向切片及未签名 x64 包已 PASS，不改变签名发布状态
 - 最新产品决定：浏览器必须是独立可见的操作面，不嵌入聊天页面；默认优先使用机器上的系统默认
   浏览器以复用用户已有账号状态，用户可切换到 Electron 自带 Chromium 的托管浏览器以提高隔离和
   安全等级；两种后端都采用“语义优先 -> 视觉验证 -> 坐标兜底”的混合 computer-use，不向模型暴露
@@ -30,8 +31,9 @@
    JavaScript、读取隐藏 DOM/Cookie/密码，或操作 observation 中不可见、不可交互的元素。
 6. Pi 继续是唯一 Agent Loop，App Service 的 Capability Broker 继续拥有后端选择策略、Scope、
    审批、审计、取消和幂等；Browser Host 只负责观察和执行，不增加第二套规划器。
-7. 桌面优先：先完成 macOS 的系统默认浏览器纵向切片，再完成托管 Chromium；Windows 在原生捕获/
-   UI Automation 和支持矩阵完成前 fail-closed，不用脚本注入作为降级路径。
+7. 桌面优先：macOS 系统默认浏览器与当前 Windows 11 默认 Edge 纵向切片已完成，再推进托管
+   Chromium；Windows 其他浏览器/OS/DPI/多屏组合在原生捕获/UI Automation 支持矩阵完成前
+   fail-closed，不用脚本注入作为降级路径。
 
 即使选择系统默认浏览器，也仍通过独立的 `openerx_browser` capability 和
 `SystemDefaultBrowserAdapter` 执行，而不是让通用 `openerx_desktop` 任意操作浏览器。Browser
@@ -87,7 +89,9 @@ M5 的 Electron `BrowserWindow` + selector 实现仍以 `legacy_dom_v1` 冻结�
   接管，drag 明确拒绝。
 - readiness 已检查平台、Screen Recording、Accessibility 和 OS automation，但尚未在展示工具前探测
   helper 可执行性与默认浏览器 bundle 支持；实际 open 会再次校验并 fail-closed。
-- 托管 Chromium、隔离 Profile、Firefox 和 Windows 未实现；不能从 macOS Chrome 烟测外推。
+- 托管 Chromium、隔离 Profile 和 Firefox 未实现；Windows 当前只完成本机 Windows 11 x64 默认 Edge
+  UIA 纵向切片、原生动作矩阵及未签名包，不能外推到 Chrome 默认浏览器、其他 Windows/DPI/多屏矩阵
+  或签名安装生命周期。证据见 [Windows system browser](evidence/bcu-003-windows-system-browser-2026-08-29.md)。
 
 本轮完成证据见 [BCU-003 checkpoint](evidence/bcu-003-2026-08-27.md)、
 [2026-08-28 live gate](evidence/bcu-003-live-input-2026-08-28.md) 与
@@ -452,7 +456,8 @@ HTML fixture 全程走语义 elementRef，Canvas fixture 才允许受约束坐�
 [Browser Bridge foundation](evidence/bcu-003-browser-bridge-foundation-2026-08-28.md)。
 
 本阶段尚未完成 MV3 扩展、Native Messaging Host、Main owner-only 传输、可信连接 UI、真实 Bridge
-烟测、签名安装后权限保持和 Firefox/Windows 支持；真实通用 key 只验证代表性 `Backspace`，因此
+烟测、签名安装后权限保持、Firefox 和完整 Windows 支持矩阵；当前 Windows 11 默认 Edge 已验证
+`Backspace`、滚动、刷新及语义搜索，因此
 不能把本地 AX 或 Bridge 基础切片标记为 BCU-003 全部完成。
 
 - 识别系统当前默认 HTTP(S) 浏览器和支持状态；优先连接用户授权的 Browser Bridge 并绑定精确 tabId。
@@ -499,7 +504,8 @@ CAPTCHA 和安全警告只能用户接管。
 - 在确定性本地 E2E、双后端真实站点烟测和签名 macOS 包验证通过后，停止向模型暴露 legacy tool。
 - 删除模型 selector、通用 `executeJavaScript/evaluate` 和任意 CDP DOM 操作；保留经过审计的语义
   Adapter、签名 Browser Bridge、Accessibility 接口和历史记录解析器。
-- Windows 在原生 Graphics Capture/UI Automation 和默认浏览器支持矩阵通过前保持 unavailable。
+- Windows 已在当前 Windows 11 x64 默认 Edge 完成精确 HWND Capture/UI Automation 纵向切片；其他默认
+  浏览器、OS/DPI/多屏和签名包矩阵通过前继续按 readiness fail-closed，不外推发布支持。
 
 退出条件：完整 `check:v2` 通过，签名 macOS 安装态通过，回滚演练可在不迁移/损坏用户浏览器或
 OpenerX 数据的情况下恢复旧版本。

@@ -13,7 +13,11 @@ import {
 } from "@openerx/contracts";
 import { BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
 import { ElectronMacSystemBrowserDriver } from "./browser-computer-use/electron-mac-system-browser-driver";
-import type { ConnectedBrowserBridgeDriver } from "./browser-computer-use/system-default-browser-adapter";
+import { ElectronWindowsSystemBrowserDriver } from "./browser-computer-use/electron-windows-system-browser-driver";
+import type {
+  ConnectedBrowserBridgeDriver,
+  SystemDefaultBrowserDriver,
+} from "./browser-computer-use/system-default-browser-adapter";
 import { SystemDefaultBrowserAdapter } from "./browser-computer-use/system-default-browser-adapter";
 import type { ToolCredentialVault } from "./credential-vault";
 import { type DesktopCaptureRecord, DesktopCaptureRegistry } from "./desktop-capture-registry";
@@ -91,6 +95,7 @@ export class ElectronToolCapabilityHost {
   readonly #profileDirectory: string;
   readonly #browserSessions = new Map<string, BrowserSession>();
   readonly #browserComputerUse: SystemDefaultBrowserAdapter;
+  readonly #browserComputerUseDriver: SystemDefaultBrowserDriver;
   readonly #desktopCaptures = new DesktopCaptureRegistry();
   readonly #oauth: OAuthLoopbackController;
 
@@ -102,8 +107,12 @@ export class ElectronToolCapabilityHost {
   ) {
     this.#profileDirectory = profileDirectory;
     this.#oauth = oauth;
+    this.#browserComputerUseDriver =
+      process.platform === "win32"
+        ? new ElectronWindowsSystemBrowserDriver()
+        : new ElectronMacSystemBrowserDriver();
     this.#browserComputerUse = new SystemDefaultBrowserAdapter(
-      new ElectronMacSystemBrowserDriver(),
+      this.#browserComputerUseDriver,
       undefined,
       undefined,
       browserBridgeDriver,
@@ -145,10 +154,14 @@ export class ElectronToolCapabilityHost {
       process.env[BROWSER_COMPUTER_USE_V2_FEATURE_FLAG],
     );
     const browserAvailable = browserV2Enabled
-      ? platform === "darwin" &&
-        screenCaptureStatus === "granted" &&
-        accessibilityTrusted &&
-        automationAvailable
+      ? (platform === "darwin" &&
+          screenCaptureStatus === "granted" &&
+          accessibilityTrusted &&
+          automationAvailable) ||
+        (platform === "win32" &&
+          automationAvailable &&
+          this.#browserComputerUseDriver instanceof ElectronWindowsSystemBrowserDriver &&
+          (await this.#browserComputerUseDriver.probeAvailability()))
       : true;
     return desktopHostToolAvailability({
       platform,

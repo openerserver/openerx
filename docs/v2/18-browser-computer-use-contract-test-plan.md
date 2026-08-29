@@ -1,8 +1,8 @@
 # Browser Computer-Use Contract Test Plan
 
-- Status: BCU-001/002 implemented; BCU-003 local AX live gates passed and deterministic Browser Bridge
-  security foundation implemented; signed extension/native-host transport remains pending
-- Date: 2026-08-27; live gate updated 2026-08-28 (Asia/Shanghai)
+- Status: BCU-001/002 implemented; BCU-003 macOS AX and Windows default Edge UIA local live gates passed and
+  deterministic Browser Bridge security foundation implemented; signed extension/native-host transport remains pending
+- Date: 2026-08-27; live gate updated 2026-08-29 (Asia/Shanghai)
 - Normative decision: [ADR-V2-017](adr/017-browser-computer-use-host-and-contract.md)
 - Implementation plan: [17-browser-computer-use-plan.md](17-browser-computer-use-plan.md)
 

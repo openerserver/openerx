@@ -25,6 +25,11 @@ const macBrowserHelperBuildScript = path.join(
   "scripts",
   "build-macos-browser-helper.mjs",
 );
+const windowsBrowserHelperSource = path.join(
+  desktopDirectory,
+  "native",
+  "windows-browser-accessibility.ps1",
+);
 
 const resvgNativePackages: Record<string, string> = {
   "darwin-arm64": "@resvg/resvg-js-darwin-arm64",
@@ -114,7 +119,9 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
 
 const config: ForgeConfig = {
   packagerConfig: {
-    asar: { unpack: "**/{*.node,openerx-browser-accessibility}" },
+    asar: {
+      unpack: "**/{*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1}",
+    },
     appBundleId: "com.openerx.desktop",
     appCategoryType: "public.app-category-type.productivity",
     appCopyright: "Copyright © 2026 OpenerX",
@@ -139,6 +146,14 @@ const config: ForgeConfig = {
             arch,
           ],
           { stdio: "inherit" },
+        );
+      }
+      if (platform === "win32") {
+        const nativeDirectory = path.join(buildPath, "native");
+        mkdirSync(nativeDirectory, { recursive: true });
+        cpSync(
+          windowsBrowserHelperSource,
+          path.join(nativeDirectory, "windows-browser-accessibility.ps1"),
         );
       }
       const resvgNativePackage = resvgNativePackages[`${platform}-${arch}`];
