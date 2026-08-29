@@ -6,12 +6,14 @@ import type {
   BrokeredBashRunnerMode,
   ChatEvent,
   HostToolAvailability,
+  LocalWebSearchPolicy,
   PiActivityEvent,
   PiToolRequestFrame,
 } from "@openerx/contracts";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
 import {
   type BrokeredBashLogArtifactWriter,
+  type LocalSearchProvider,
   MacOSSandboxExecEngine,
   PLATFORM_SANDBOX_ENGINE_VERSION,
   type PlatformSandboxCapability,
@@ -32,6 +34,9 @@ function fixture(
     brokeredBashRunnerMode?: BrokeredBashRunnerMode;
     platformSandboxEngine?: PlatformSandboxEngine;
     writeBrokeredBashLogArtifact?: BrokeredBashLogArtifactWriter;
+    localWebSearchV2?: boolean;
+    localWebSearchPolicy?: LocalWebSearchPolicy;
+    localWebSearchProviders?: LocalSearchProvider[];
   } = {},
 ) {
   const directory = mkdtempSync(path.join(tmpdir(), "openerx-tool-service-"));
@@ -78,6 +83,11 @@ function fixture(
     emit: (event) => events.push(event),
     ...(options.shellAvailability ? { shellAvailability: options.shellAvailability } : {}),
     brokeredBashV1: options.brokeredBashV1 ?? false,
+    localWebSearchV2: options.localWebSearchV2 ?? false,
+    ...(options.localWebSearchPolicy ? { localWebSearchPolicy: options.localWebSearchPolicy } : {}),
+    ...(options.localWebSearchProviders
+      ? { localWebSearchProviders: options.localWebSearchProviders }
+      : {}),
     ...(options.brokeredBashRunnerMode
       ? { brokeredBashRunnerMode: options.brokeredBashRunnerMode }
       : {}),
@@ -514,6 +524,166 @@ describe("ToolAppService", () => {
       status: "authorization_required",
       reason: "MCP_SERVER_CONFIGURATION_REQUIRED",
     });
+    chat.close();
+    await service.close();
+  });
+
+  it("freezes and executes local Web Search without account authentication", async () => {
+    const search = vi.fn<LocalSearchProvider["search"]>(async () => ({
+      providerId: "direct:baidu-json",
+      candidates: [
+        {
+          title: "OpenERX local search",
+          url: "https://example.com/openerx#overview",
+          excerpt: "Lightweight local source",
+          publishedAt: null,
+        },
+      ],
+      recencyApplied: false,
+      executionPerformed: true,
+      responseBytes: 512,
+      durationMs: 12,
+    }));
+    const provider: LocalSearchProvider = {
+      descriptor: {
+        providerId: "direct:baidu-json",
+        displayName: "Fixture Baidu JSON",
+        transport: "json",
+        stability: "unofficial",
+        releaseEligible: false,
+        requiresDailyProbe: true,
+      },
+      search,
+    };
+    const { chat, service, base } = fixture({
+      localWebSearchV2: true,
+      localWebSearchProviders: [provider],
+    });
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "搜索网络上的 OpenERX 最新信息",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+    });
+    expect(prepared.availableToolNames).toContain("openerx_web_search");
+    expect(prepared.initialToolNames).toContain("openerx_web_search");
+    expect(prepared.localWebSearchConfiguration).toMatchObject({
+      policy: { providerOrder: ["direct:baidu-json"] },
+      policyDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+    });
+    expect(
+      (
+        await service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        })
+      ).find(({ capability }) => capability === "web.search"),
+    ).toMatchObject({
+      status: "available",
+      reason: null,
+      availableToolNames: ["openerx_web_search"],
+      details: expect.arrayContaining([
+        "阶段：Desktop Local Alpha",
+        "执行：本机 App Service",
+        "Provider：direct:baidu-json",
+        "浏览器：不使用",
+      ]),
+    });
+
+    service.startGeneration({
+      generationId: base.generationId,
+      conversationId: base.conversationId,
+      branchId: base.branchId,
+      assistantMessageId: base.assistantMessageId,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    if (!prepared.localWebSearchConfiguration) throw new Error("local search policy missing");
+    service.freezeGenerationConfiguration(base.generationId, {
+      initialToolNames: prepared.initialToolNames,
+      availableToolNames: prepared.availableToolNames,
+      skillInstallationIds: [],
+      instructionSources: prepared.instructionSources,
+      localWebSearchConfiguration: prepared.localWebSearchConfiguration,
+    });
+    const result = await service.handleRequest({
+      ...base,
+      piToolCallId: "pi-local-search-call",
+      toolName: "openerx_web_search",
+      operation: {
+        operation: "web_search",
+        query: "OpenERX",
+        idempotencyKey: "local-web-search-app-service-0001",
+      },
+    });
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(result.sources).toEqual([
+      {
+        title: "OpenERX local search",
+        url: "https://example.com/openerx",
+        excerpt: "Lightweight local source",
+        publishedAt: null,
+        retrievedAt: expect.any(String),
+      },
+    ]);
+    expect(result.content).toEqual(
+      expect.arrayContaining([{ type: "source", source: result.sources[0] }]),
+    );
+    expect(result.data).toMatchObject({
+      executionPerformed: true,
+      providerId: "direct:baidu-json",
+    });
+    service.completeGeneration(base.generationId, "completed");
+    chat.close();
+    await service.close();
+  });
+
+  it("fails local Web Search closed before a Generation policy is frozen", async () => {
+    const provider: LocalSearchProvider = {
+      descriptor: {
+        providerId: "direct:baidu-json",
+        displayName: "Fixture Baidu JSON",
+        transport: "json",
+        stability: "unofficial",
+        releaseEligible: false,
+        requiresDailyProbe: true,
+      },
+      search: vi.fn(async () => ({
+        providerId: "direct:baidu-json" as const,
+        candidates: [],
+        recencyApplied: false,
+        executionPerformed: true,
+        responseBytes: 0,
+        durationMs: 0,
+      })),
+    };
+    const { chat, service, base } = fixture({
+      localWebSearchV2: true,
+      localWebSearchProviders: [provider],
+    });
+    service.startGeneration({
+      generationId: base.generationId,
+      conversationId: base.conversationId,
+      branchId: base.branchId,
+      assistantMessageId: base.assistantMessageId,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    await expect(
+      service.handleRequest({
+        ...base,
+        piToolCallId: "pi-local-search-unfrozen",
+        toolName: "openerx_web_search",
+        operation: {
+          operation: "web_search",
+          query: "OpenERX",
+          idempotencyKey: "local-web-search-unfrozen-0001",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "LOCAL_SEARCH_POLICY_MISMATCH" });
+    expect(provider.search).not.toHaveBeenCalled();
+    service.completeGeneration(base.generationId, "failed", "LOCAL_SEARCH_POLICY_MISMATCH");
     chat.close();
     await service.close();
   });

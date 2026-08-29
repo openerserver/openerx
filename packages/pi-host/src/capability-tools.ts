@@ -304,7 +304,7 @@ export function createProductCapabilityTools(input: {
       name: "openerx_web_search",
       label: "Search the Web",
       description:
-        "Search current Web information through the OpenerX first-party search service with sources.",
+        "Search current Web information through the configured local OpenerX search provider with sources.",
       parameters: Type.Object(
         {
           query: Type.String({ minLength: 1, maxLength: 1_000 }),

@@ -1,3 +1,4 @@
+export * from "./baidu-json-search-provider";
 export * from "./broker";
 export * from "./brokered-bash-adapter";
 export * from "./brokered-bash-egress";
@@ -7,6 +8,9 @@ export * from "./brokered-bash-output";
 export * from "./builtin-adapter";
 export * from "./host-adapter";
 export * from "./image-generation-adapter";
+export * from "./local-web-search";
+export * from "./local-web-search-fake-provider";
+export * from "./local-web-search-http";
 export * from "./macos-sandbox-engine";
 export * from "./mcp-adapter";
 export * from "./mcp-oauth-provider";

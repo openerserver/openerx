@@ -7,6 +7,7 @@ import type {
   ChatEvent,
   ExecutionRun,
   HostToolAvailability,
+  LocalWebSearchPolicy,
   McpServerAuthorizationState,
   McpServerConfig,
   McpToolDescriptor,
@@ -38,10 +39,14 @@ import {
   type BrokeredBashRunnerMode,
   brokeredBashRunnerMode,
   brokeredBashV1Enabled,
+  defaultLocalWebSearchPolicy,
+  LOCAL_WEB_SEARCH_V2_FEATURE_FLAG,
+  localWebSearchV2Enabled,
   piHostContractVersion,
 } from "@openerx/contracts";
 import type { ToolRepository } from "@openerx/storage";
 import {
+  BaiduJsonSearchProvider,
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
   BrokeredBashAdapter,
   type BrokeredBashEnvironmentPolicy,
@@ -59,10 +64,15 @@ import {
   type CredentialStore,
   capabilityRequirement,
   DesktopMcpOAuthProvider,
+  type FrozenLocalWebSearchConfiguration,
   freezeBrokeredBashEnvironmentPolicy,
+  freezeLocalWebSearchPolicy,
   HostCapabilityAdapter,
   HttpPlatformImageGenerationTransport,
   HttpPlatformWebSearchTransport,
+  type LocalSearchProvider,
+  LocalWebSearchCoordinator,
+  LocalWebSearchError,
   MacOSSandboxExecEngine,
   McpToolAdapter,
   type OAuthInteractionHost,
@@ -78,6 +88,11 @@ import {
 class GenerationWebSearchAdapter implements ToolAdapter {
   readonly operations = ["web_search"] as const;
   constructor(
+    private readonly localWebSearchV2: boolean,
+    private readonly localConfiguration: (
+      generationId: string,
+    ) => FrozenLocalWebSearchConfiguration | undefined,
+    private readonly localCoordinator: LocalWebSearchCoordinator,
     private readonly authorization: (generationId: string) => AppServiceAuthorization | undefined,
   ) {}
 
@@ -87,6 +102,19 @@ class GenerationWebSearchAdapter implements ToolAdapter {
   ): Promise<NormalizedToolResult> {
     if (operation.operation !== "web_search") throw new Error("WEB_SEARCH_OPERATION_NOT_SUPPORTED");
     const generationId = context.projection?.generationId;
+    if (this.localWebSearchV2) {
+      if (!generationId) throw new LocalWebSearchError("LOCAL_SEARCH_POLICY_MISMATCH");
+      const configuration = this.localConfiguration(generationId);
+      if (!configuration) throw new LocalWebSearchError("LOCAL_SEARCH_POLICY_MISMATCH");
+      return await this.localCoordinator.search({
+        generationId,
+        query: operation.query,
+        ...(operation.recencyDays === undefined ? {} : { recencyDays: operation.recencyDays }),
+        ...(operation.domains === undefined ? {} : { domains: operation.domains }),
+        configuration,
+        signal: context.signal,
+      });
+    }
     const authorization = generationId ? this.authorization(generationId) : undefined;
     if (!authorization) throw new Error("AUTHENTICATION_REQUIRED");
     return await new HttpPlatformWebSearchTransport(
@@ -233,6 +261,9 @@ export interface ToolAppServiceOptions {
   brokeredBashRunnerMode?: BrokeredBashRunnerMode;
   platformSandboxEngine?: PlatformSandboxEngine;
   writeBrokeredBashLogArtifact?: BrokeredBashLogArtifactWriter;
+  localWebSearchV2?: boolean;
+  localWebSearchPolicy?: LocalWebSearchPolicy;
+  localWebSearchProviders?: LocalSearchProvider[];
 }
 
 interface BrokeredBashRuntimeAvailability {
@@ -306,6 +337,7 @@ export interface PreparedGenerationTools {
   initialToolNames: string[];
   availableToolNames: string[];
   brokeredBashExecution?: BrokeredBashExecutionContext;
+  localWebSearchConfiguration?: FrozenLocalWebSearchConfiguration;
 }
 
 export class ToolAppService {
@@ -315,6 +347,10 @@ export class ToolAppService {
   readonly #selectedModelRef: (assistantMessageId: string) => string;
   readonly #projectionByGeneration = new Map<string, ActiveProjection>();
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
+  readonly #localWebSearchConfigurationByGeneration = new Map<
+    string,
+    FrozenLocalWebSearchConfiguration
+  >();
   readonly #brokeredBashExecutionByGeneration = new Map<string, BrokeredBashExecutionContext>();
   readonly #brokeredBashEnvironmentPolicyByDigest = new Map<
     string,
@@ -328,6 +364,9 @@ export class ToolAppService {
   readonly #host: CapabilityAvailabilityHost;
   readonly #shellAvailability: () => HostToolAvailability;
   readonly #brokeredBashV1: boolean;
+  readonly #localWebSearchV2: boolean;
+  readonly #localWebSearchConfiguration: FrozenLocalWebSearchConfiguration;
+  readonly #localWebSearchCoordinator: LocalWebSearchCoordinator;
   readonly #brokeredBashRunnerMode: BrokeredBashRunnerMode | null;
   readonly #platformSandboxEngine?: PlatformSandboxEngine;
 
@@ -339,6 +378,15 @@ export class ToolAppService {
     this.#shellAvailability = options.shellAvailability ?? shellToolAvailability;
     this.#brokeredBashV1 =
       options.brokeredBashV1 ?? brokeredBashV1Enabled(process.env[BROKERED_BASH_V1_FEATURE_FLAG]);
+    this.#localWebSearchV2 =
+      options.localWebSearchV2 ??
+      localWebSearchV2Enabled(process.env[LOCAL_WEB_SEARCH_V2_FEATURE_FLAG]);
+    this.#localWebSearchConfiguration = freezeLocalWebSearchPolicy(
+      options.localWebSearchPolicy ?? defaultLocalWebSearchPolicy(),
+    );
+    this.#localWebSearchCoordinator = new LocalWebSearchCoordinator(
+      options.localWebSearchProviders ?? [new BaiduJsonSearchProvider()],
+    );
     this.#brokeredBashRunnerMode =
       options.brokeredBashRunnerMode ??
       brokeredBashRunnerMode(process.env[BROKERED_BASH_RUNNER_MODE_ENV]);
@@ -375,8 +423,11 @@ export class ToolAppService {
     );
     this.#broker = new CapabilityBroker(options.repository, [
       new BuiltinToolAdapter(),
-      new GenerationWebSearchAdapter((generationId) =>
-        this.#authorizationByGeneration.get(generationId),
+      new GenerationWebSearchAdapter(
+        this.#localWebSearchV2,
+        (generationId) => this.#localWebSearchConfigurationByGeneration.get(generationId),
+        this.#localWebSearchCoordinator,
+        (generationId) => this.#authorizationByGeneration.get(generationId),
       ),
       new GenerationImageGenerationAdapter((generationId) =>
         this.#authorizationByGeneration.get(generationId),
@@ -545,6 +596,9 @@ export class ToolAppService {
       input,
       brokeredBashRuntime,
     );
+    const localWebSearchReadiness = this.#localWebSearchV2
+      ? this.#localWebSearchCoordinator.readiness(this.#localWebSearchConfiguration)
+      : null;
     let mcpTools: McpToolDescriptor[] = [];
     try {
       mcpTools = await this.#mcp.discoverEnabledTools();
@@ -561,7 +615,14 @@ export class ToolAppService {
       "openerx_office_artifact",
       "openerx_calculate",
       "openerx_structured_data",
-      ...(input.authenticated ? ["openerx_web_search", "openerx_image_generate"] : []),
+      ...(this.#localWebSearchV2
+        ? localWebSearchReadiness?.available
+          ? ["openerx_web_search"]
+          : []
+        : input.authenticated
+          ? ["openerx_web_search"]
+          : []),
+      ...(input.authenticated ? ["openerx_image_generate"] : []),
       ...(hostAvailability.availableToolNames.includes("openerx_browser")
         ? ["openerx_browser"]
         : []),
@@ -674,6 +735,9 @@ export class ToolAppService {
       initialToolNames: ["openerx_tool_search", ...selected],
       availableToolNames,
       ...(brokeredBashExecution ? { brokeredBashExecution } : {}),
+      ...(this.#localWebSearchV2
+        ? { localWebSearchConfiguration: this.#localWebSearchConfiguration }
+        : {}),
     };
   }
 
@@ -709,6 +773,9 @@ export class ToolAppService {
       : input.authenticated
         ? null
         : "AUTHENTICATION_REQUIRED";
+    const localSearch = this.#localWebSearchV2
+      ? this.#localWebSearchCoordinator.readiness(this.#localWebSearchConfiguration)
+      : null;
     const browserAvailable = hostAvailability.availableToolNames.includes("openerx_browser");
     const desktopAvailable = hostAvailability.availableToolNames.includes("openerx_desktop");
     const desktopInteractionReason =
@@ -739,9 +806,17 @@ export class ToolAppService {
       ]),
       readiness(
         "web.search",
-        onlineStatus,
-        onlineReason,
-        onlineStatus === "available" ? ["openerx_web_search"] : [],
+        localSearch ? (localSearch.available ? "available" : "unavailable") : onlineStatus,
+        localSearch ? localSearch.reason : onlineReason,
+        (localSearch?.available ?? onlineStatus === "available") ? ["openerx_web_search"] : [],
+        localSearch
+          ? [
+              "阶段：Desktop Local Alpha",
+              "执行：本机 App Service",
+              `Provider：${localSearch.providerIds.join(", ") || "unavailable"}`,
+              "浏览器：不使用",
+            ]
+          : [],
       ),
       readiness(
         "image.generate",
@@ -911,12 +986,28 @@ export class ToolAppService {
     generationId: string,
     input: Pick<
       PreparedGenerationTools,
-      "initialToolNames" | "availableToolNames" | "instructionSources" | "brokeredBashExecution"
+      | "initialToolNames"
+      | "availableToolNames"
+      | "instructionSources"
+      | "brokeredBashExecution"
+      | "localWebSearchConfiguration"
     > & { skillInstallationIds: string[] },
   ): ExecutionRun {
     const projection = this.#projectionByGeneration.get(generationId);
     if (!projection) throw new Error("GENERATION_RUN_NOT_FOUND");
-    const run = this.#repository.freezeRunConfiguration(projection.run.id, input);
+    const { localWebSearchConfiguration, ...runConfiguration } = input;
+    if (this.#localWebSearchV2) {
+      if (!localWebSearchConfiguration) {
+        throw new LocalWebSearchError("LOCAL_SEARCH_POLICY_MISMATCH");
+      }
+      this.#localWebSearchCoordinator.readiness(localWebSearchConfiguration);
+    } else if (localWebSearchConfiguration) {
+      throw new LocalWebSearchError("LOCAL_SEARCH_POLICY_MISMATCH");
+    }
+    const run = this.#repository.freezeRunConfiguration(projection.run.id, runConfiguration);
+    if (localWebSearchConfiguration) {
+      this.#localWebSearchConfigurationByGeneration.set(generationId, localWebSearchConfiguration);
+    }
     if (input.brokeredBashExecution) {
       this.#brokeredBashExecutionByGeneration.set(generationId, input.brokeredBashExecution);
     } else {
@@ -1284,6 +1375,8 @@ export class ToolAppService {
       if (requestGenerationId === generationId) this.#generationByRequest.delete(requestId);
     }
     this.#authorizationByGeneration.delete(generationId);
+    this.#localWebSearchConfigurationByGeneration.delete(generationId);
+    this.#localWebSearchCoordinator.clearGeneration(generationId);
     this.#brokeredBashExecutionByGeneration.delete(generationId);
     this.#projectionByGeneration.delete(generationId);
   }

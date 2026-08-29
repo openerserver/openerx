@@ -9,6 +9,7 @@ export * from "./desktop-remote";
 export * from "./diagnostics";
 export * from "./errors";
 export * from "./file";
+export * from "./local-web-search";
 export * from "./model";
 export * from "./pi";
 export * from "./platform";

@@ -664,6 +664,7 @@ export class ChatAppService {
           skillInstallationIds: skillMounts.map(({ installationId }) => installationId),
           instructionSources: preparedTools.instructionSources,
           brokeredBashExecution: preparedTools.brokeredBashExecution,
+          localWebSearchConfiguration: preparedTools.localWebSearchConfiguration,
         });
       }
       const currentUserMessageId = draft.receipt.userMessageId ?? history.at(-1)?.messageId;

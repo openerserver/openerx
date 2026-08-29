@@ -1,15 +1,16 @@
 # OpenerX V2 轻量本地 Web Search 实施方案
 
-- 状态：`PROPOSED / PLAN ONLY / NO IMPLEMENTATION EVIDENCE`
+- 状态：`LWS-001 + LWS-002 IMPLEMENTED / LOCAL VERIFIED / NOT RELEASE READY`
 - 修订日期：2026-08-29（Asia/Shanghai）
 - 范围：V2 Desktop-first Web Search；不包含 `v1-backup`
 - 产品决定：用本机进程内的轻量 HTTP Search Gateway 替换云端第一方 Web Search
-- 默认实现：百度 JSON Adapter；Bing 服务端 HTML Adapter
+- 当前实现：百度 JSON Adapter；Bing 服务端 HTML Adapter 仍为 LWS-003
 - 明确排除：浏览器自动化、Chromium sidecar、默认捆绑 SearXNG、通用 Shell 抓取
 - 依赖：[ADR-V2-012 Capability Broker](adr/012-capability-broker-and-tool-projection.md)、
   [V2 平台/Pi 合同](05-platform-and-pi-contract.md)、
   [V2 验收合同](08-acceptance-contract.md)、
   [PBASH 实施计划](20-pbash-implementation-plan.md)
+- 实现证据：[LWS-001/002 2026-08-29](evidence/lws-002-2026-08-29.md)
 
 ## 1. 结论
 
@@ -371,6 +372,9 @@ normalized query + provider + locale + domains + recency + safe-search + policy 
 | LWS-005 | 可选 SearXNG/正式 API Provider | 分别 feature flag、凭证和 readiness 门禁 |
 | LWS-006 | Stop、性能、多日 Golden、平台/发布矩阵 | 明确 Local Alpha 与 Release 证据边界 |
 
+当前进度：LWS-001、LWS-002 已完成本地实现和真实百度冒烟；LWS-004 中的 Turn cache 已提前
+完成。Bing、Provider UI/退避、多日稳定性与发布矩阵尚未完成。
+
 ### 9.1 LWS-001：先建立可逆边界
 
 - 新增 `local-web-search-policy-v2`、Provider descriptor/result/attempt/error schema；
@@ -474,8 +478,8 @@ git diff --check
 7. 默认不 fallback，不重复请求，不打开结果页；
 8. Desktop Local Alpha 先行；Release 需要额外条款和多日稳定性证据。
 
-下一项可执行任务仍是 **LWS-001：合同、冻结策略、Fake Provider 和 fail-closed readiness**。通过后，
-LWS-002 直接实现百度 JSON HTTP Adapter，不再实现 Browser Search Adapter。
+下一项可执行任务是 **LWS-003：独立实现 Bing HTML Provider 和锁定的 HTML parser**。它仍只允许
+用户显式选择，不成为百度失败后的自动 fallback；同时应开始 LWS-006 的连续多日真实探测。
 
 ## 14. 外部依据
 
