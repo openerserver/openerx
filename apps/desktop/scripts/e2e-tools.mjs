@@ -39,6 +39,7 @@ try {
     cwd: desktopDirectory,
     env: {
       ...process.env,
+      OPENERX_BROWSER_COMPUTER_USE_V2: "0",
       OPENERX_E2E: "1",
       OPENERX_E2E_PROFILE_DIR: profileDirectory,
     },

@@ -65,11 +65,11 @@ try {
   const runningMessage = page.locator(".message-assistant").last();
   await runningMessage.locator(".status-streaming").waitFor();
   await runningMessage.getByRole("button", { name: "停止" }).dispatchEvent("click");
-  await page.locator(".message-assistant[data-message-status='stopped']").last().waitFor();
+  await page.locator(".message-assistant[data-message-status='interrupted']").last().waitFor();
 
-  const stoppedMessage = page.locator(".message-assistant").last();
-  await stoppedMessage.hover();
-  await stoppedMessage.getByRole("button", { name: "重新生成" }).click();
+  const interruptedMessage = page.locator(".message-assistant").last();
+  await interruptedMessage.hover();
+  await interruptedMessage.getByRole("button", { name: "重新生成" }).click();
   try {
     await page.locator(".message-assistant").last().locator(".status-completed").waitFor();
   } catch (error) {

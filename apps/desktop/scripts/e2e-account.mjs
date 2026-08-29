@@ -156,8 +156,10 @@ try {
     .getByLabel("对话消息")
     .getByText(/平台 platform\/standard 已回答：账户模型测试/)
     .waitFor();
-  await page.getByLabel("消息 Token 用量").waitFor();
-  await page.getByText(/总计 35/).waitFor();
+  await page
+    .getByLabel("消息 Token 用量")
+    .getByText(/总计 35/)
+    .waitFor();
   await page.getByLabel("消息模型执行详情").getByText("选择 platform/auto").waitFor();
   await page.getByLabel("消息模型执行详情").getByText("实际 platform/standard").waitFor();
   await page.getByLabel("后续消息模型").selectOption("platform/tools");
