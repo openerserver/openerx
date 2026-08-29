@@ -1,14 +1,15 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type {
-  BrokeredBashOperation,
-  BrokeredBashRunnerMode,
-  ChatEvent,
-  HostToolAvailability,
-  LocalWebSearchPolicy,
-  PiActivityEvent,
-  PiToolRequestFrame,
+import {
+  type BrokeredBashOperation,
+  type BrokeredBashRunnerMode,
+  type ChatEvent,
+  defaultLocalWebSearchPolicy,
+  type HostToolAvailability,
+  type LocalWebSearchPolicy,
+  type PiActivityEvent,
+  type PiToolRequestFrame,
 } from "@openerx/contracts";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
 import {
@@ -635,6 +636,47 @@ describe("ToolAppService", () => {
       providerId: "direct:baidu-json",
     });
     service.completeGeneration(base.generationId, "completed");
+    chat.close();
+    await service.close();
+  });
+
+  it("registers Bing locally only when the trusted policy explicitly selects it", async () => {
+    const { chat, service, base } = fixture({
+      localWebSearchV2: true,
+      localWebSearchPolicy: {
+        ...defaultLocalWebSearchPolicy(),
+        providerOrder: ["direct:bing-html"],
+        allowProviderFallback: false,
+        locale: "zh-CN",
+      },
+    });
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "使用 Bing 搜索 OpenERX",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+    });
+    expect(prepared.availableToolNames).toContain("openerx_web_search");
+    expect(prepared.localWebSearchConfiguration).toMatchObject({
+      policy: {
+        providerOrder: ["direct:bing-html"],
+        allowProviderFallback: false,
+        locale: "zh-CN",
+      },
+    });
+    expect(
+      (
+        await service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        })
+      ).find(({ capability }) => capability === "web.search"),
+    ).toMatchObject({
+      status: "available",
+      reason: null,
+      details: expect.arrayContaining(["Provider：direct:bing-html", "浏览器：不使用"]),
+    });
     chat.close();
     await service.close();
   });

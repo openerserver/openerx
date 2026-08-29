@@ -1,4 +1,5 @@
 export * from "./baidu-json-search-provider";
+export * from "./bing-html-search-provider";
 export * from "./broker";
 export * from "./brokered-bash-adapter";
 export * from "./brokered-bash-egress";

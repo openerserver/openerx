@@ -16,7 +16,8 @@
     "@modelcontextprotocol/client": "^2.0.0",
     "@openerx/contracts": "0.0.0",
     "@openerx/domain": "0.0.0",
-    "@openerx/storage": "0.0.0"
+    "@openerx/storage": "0.0.0",
+    "parse5": "8.0.1"
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "^2.0.0",

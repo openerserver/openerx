@@ -63,6 +63,8 @@ function canonicalPolicy(policy: LocalWebSearchPolicy): string {
     enabled: policy.enabled,
     providerOrder: policy.providerOrder,
     allowProviderFallback: policy.allowProviderFallback,
+    locale: policy.locale,
+    safeSearch: policy.safeSearch,
     maxCallsPerTurn: policy.maxCallsPerTurn,
     maxResultsPerCall: policy.maxResultsPerCall,
     requestTimeoutMs: policy.requestTimeoutMs,
@@ -281,6 +283,8 @@ function turnCacheKey(
     query: query.query,
     recencyDays: query.recencyDays ?? null,
     domains: query.domains,
+    locale: configuration.policy.locale,
+    safeSearch: configuration.policy.safeSearch,
   });
 }
 

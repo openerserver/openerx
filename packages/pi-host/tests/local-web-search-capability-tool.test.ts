@@ -47,7 +47,7 @@ describe("local Web Search Pi projection", () => {
     expect(schema).toContain("query");
     expect(schema).toContain("recencyDays");
     expect(schema).toContain("domains");
-    expect(schema).not.toMatch(/provider|url|headers|cookie|proxy/iu);
+    expect(schema).not.toMatch(/provider|url|headers|cookie|proxy|locale|safeSearch/iu);
 
     const result = await search.execute(
       "local-search-call",

@@ -93,6 +93,12 @@ describe("lightweight local Web Search", () => {
     expect(Object.isFrozen(configuration)).toBe(true);
     expect(Object.isFrozen(configuration.policy)).toBe(true);
     expect(Object.isFrozen(configuration.policy.providerOrder)).toBe(true);
+    expect(localWebSearchPolicyDigest(policy({ locale: "en-US" }))).not.toBe(
+      configuration.policyDigest,
+    );
+    expect(localWebSearchPolicyDigest(policy({ safeSearch: "strict" }))).not.toBe(
+      configuration.policyDigest,
+    );
   });
 
   it("rejects arbitrary origins and paths before network execution", () => {
@@ -185,6 +191,37 @@ describe("lightweight local Web Search", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toMatchObject({ code: "LOCAL_SEARCH_CONTENT_TYPE_INVALID" });
+  });
+
+  it("does not follow search redirects and preserves rate-limit failures", async () => {
+    const request = async (statusCode: number) => {
+      const fixture = requestFixture({
+        statusCode,
+        headers: {
+          "content-type": "text/html;charset=utf-8",
+          location: "https://cn.bing.com/search?q=fixture",
+        },
+      });
+      const client = new NodeControlledSearchHttpClient({
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+        request: fixture.request,
+      });
+      return client.get({
+        url: new URL("https://www.bing.com/search?q=fixture"),
+        allowedOrigins: ["https://www.bing.com"],
+        allowedPaths: ["/search"],
+        headers: { accept: "text/html" },
+        acceptedContentTypes: ["text/html"],
+        maxResponseBytes: 1_024,
+        timeoutMs: 1_000,
+        signal: new AbortController().signal,
+      });
+    };
+
+    await expect(request(302)).rejects.toMatchObject({
+      code: "LOCAL_SEARCH_PROVIDER_CHALLENGE",
+    });
+    await expect(request(429)).rejects.toMatchObject({ code: "LOCAL_SEARCH_RATE_LIMITED" });
   });
 
   it("bounds DNS resolution with the same timeout and AbortSignal", async () => {

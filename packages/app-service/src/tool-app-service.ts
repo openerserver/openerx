@@ -47,6 +47,7 @@ import {
 import type { ToolRepository } from "@openerx/storage";
 import {
   BaiduJsonSearchProvider,
+  BingHtmlSearchProvider,
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY,
   BrokeredBashAdapter,
   type BrokeredBashEnvironmentPolicy,
@@ -385,7 +386,10 @@ export class ToolAppService {
       options.localWebSearchPolicy ?? defaultLocalWebSearchPolicy(),
     );
     this.#localWebSearchCoordinator = new LocalWebSearchCoordinator(
-      options.localWebSearchProviders ?? [new BaiduJsonSearchProvider()],
+      options.localWebSearchProviders ?? [
+        new BaiduJsonSearchProvider(),
+        new BingHtmlSearchProvider(),
+      ],
     );
     this.#brokeredBashRunnerMode =
       options.brokeredBashRunnerMode ??

@@ -1,16 +1,17 @@
 # OpenerX V2 轻量本地 Web Search 实施方案
 
-- 状态：`LWS-001 + LWS-002 IMPLEMENTED / LOCAL VERIFIED / NOT RELEASE READY`
+- 状态：`LWS-001 + LWS-002 + LWS-003 IMPLEMENTED / LOCAL VERIFIED / NOT RELEASE READY`
 - 修订日期：2026-08-29（Asia/Shanghai）
 - 范围：V2 Desktop-first Web Search；不包含 `v1-backup`
 - 产品决定：用本机进程内的轻量 HTTP Search Gateway 替换云端第一方 Web Search
-- 当前实现：百度 JSON Adapter；Bing 服务端 HTML Adapter 仍为 LWS-003
+- 当前实现：百度 JSON Adapter + Bing 服务端 HTML Adapter；默认仍为百度且禁止自动 fallback
 - 明确排除：浏览器自动化、Chromium sidecar、默认捆绑 SearXNG、通用 Shell 抓取
 - 依赖：[ADR-V2-012 Capability Broker](adr/012-capability-broker-and-tool-projection.md)、
   [V2 平台/Pi 合同](05-platform-and-pi-contract.md)、
   [V2 验收合同](08-acceptance-contract.md)、
   [PBASH 实施计划](20-pbash-implementation-plan.md)
 - 实现证据：[LWS-001/002 2026-08-29](evidence/lws-002-2026-08-29.md)
+- Bing 证据：[LWS-003 2026-08-29](evidence/lws-003-2026-08-29.md)
 
 ## 1. 结论
 
@@ -265,6 +266,8 @@ interface LocalWebSearchPolicy {
     | `api:${string}`
   >;
   allowProviderFallback: boolean;
+  locale: string;
+  safeSearch: "off" | "moderate" | "strict";
   maxCallsPerTurn: number;
   maxResultsPerCall: number;
   requestTimeoutMs: number;
@@ -372,8 +375,8 @@ normalized query + provider + locale + domains + recency + safe-search + policy 
 | LWS-005 | 可选 SearXNG/正式 API Provider | 分别 feature flag、凭证和 readiness 门禁 |
 | LWS-006 | Stop、性能、多日 Golden、平台/发布矩阵 | 明确 Local Alpha 与 Release 证据边界 |
 
-当前进度：LWS-001、LWS-002 已完成本地实现和真实百度冒烟；LWS-004 中的 Turn cache 已提前
-完成。Bing、Provider UI/退避、多日稳定性与发布矩阵尚未完成。
+当前进度：LWS-001、LWS-002、LWS-003 已完成本地实现和百度/Bing 真实冒烟；LWS-004 中的
+Source 一致性与 Turn cache 已提前完成。Provider UI/退避、多日稳定性与发布矩阵尚未完成。
 
 ### 9.1 LWS-001：先建立可逆边界
 
@@ -446,7 +449,8 @@ git diff --check
 1. LWS-001 加入 V2 feature flag，默认不改变现有路径。
 2. LWS-002 仅在 Desktop Local Alpha 启用百度直连。
 3. 百度门禁通过后，本地 Adapter 成为开发默认，旧云端 Transport 默认关闭。
-4. LWS-003 加入用户可选 Bing，不自动 fallback。
+4. LWS-003 加入可信策略显式选择的 Bing，不自动 fallback。（已完成代码与本机验证；设置 UI
+   归 LWS-004。）
 5. LWS-004 完成后移除 `authenticated` 对本地 `openerx_web_search` 的约束。
 6. 完成一个发布周期的回滚观察后，再删除 `/v1/tools/web-search` 客户端代码。
 7. 本地 Provider 失败时只返回稳定错误；不回退云端、不启动浏览器、不调用通用 Shell。
@@ -478,8 +482,8 @@ git diff --check
 7. 默认不 fallback，不重复请求，不打开结果页；
 8. Desktop Local Alpha 先行；Release 需要额外条款和多日稳定性证据。
 
-下一项可执行任务是 **LWS-003：独立实现 Bing HTML Provider 和锁定的 HTML parser**。它仍只允许
-用户显式选择，不成为百度失败后的自动 fallback；同时应开始 LWS-006 的连续多日真实探测。
+下一项可执行任务是 **LWS-004：Provider 设置、readiness 退避和 UI 证据闭环**。应让用户在可信
+设置中显式选择百度或 Bing，但仍不向模型暴露 Provider；同时开始 LWS-006 的连续多日真实探测。
 
 ## 14. 外部依据
 

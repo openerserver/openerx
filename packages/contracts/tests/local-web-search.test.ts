@@ -21,6 +21,8 @@ describe("local Web Search contracts", () => {
       enabled: true,
       providerOrder: ["direct:baidu-json"],
       allowProviderFallback: false,
+      locale: "zh-CN",
+      safeSearch: "moderate",
       maxCallsPerTurn: 3,
       maxResultsPerCall: 8,
       requestTimeoutMs: 4_000,
@@ -48,6 +50,9 @@ describe("local Web Search contracts", () => {
     expect(localWebSearchPolicySchema.safeParse({ ...policy, arbitraryUrl: true }).success).toBe(
       false,
     );
+    expect(
+      localWebSearchPolicySchema.safeParse({ ...policy, locale: "invalid_locale" }).success,
+    ).toBe(false);
   });
 
   it("keeps local failures on stable machine-readable codes", () => {
