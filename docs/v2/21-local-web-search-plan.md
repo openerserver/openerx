@@ -1,6 +1,6 @@
 # OpenerX V2 轻量本地 Web Search 实施方案
 
-- 状态：`LWS-001 + LWS-002 + LWS-003 + LWS-004 IMPLEMENTED / LOCAL VERIFIED / NOT RELEASE READY`
+- 状态：`LWS-001..004 IMPLEMENTED / LWS-006 PROBE+GATE IMPLEMENTED / HISTORY 1 OF 7 / NOT RELEASE READY`
 - 修订日期：2026-08-29（Asia/Shanghai）
 - 范围：V2 Desktop-first Web Search；不包含 `v1-backup`
 - 产品决定：用本机进程内的轻量 HTTP Search Gateway 替换云端第一方 Web Search
@@ -13,6 +13,7 @@
 - 实现证据：[LWS-001/002 2026-08-29](evidence/lws-002-2026-08-29.md)
 - Bing 证据：[LWS-003 2026-08-29](evidence/lws-003-2026-08-29.md)
 - 设置与退避证据：[LWS-004 2026-08-29](evidence/lws-004-2026-08-29.md)
+- 连续探测门禁证据：[LWS-006 2026-08-29](evidence/lws-006-2026-08-29.md)
 
 ## 1. 结论
 
@@ -376,9 +377,10 @@ normalized query + provider + locale + domains + recency + safe-search + policy 
 | LWS-005 | 可选 SearXNG/正式 API Provider | 分别 feature flag、凭证和 readiness 门禁 |
 | LWS-006 | Stop、性能、多日 Golden、平台/发布矩阵 | 明确 Local Alpha 与 Release 证据边界 |
 
-当前进度：LWS-001 至 LWS-004 已完成本地实现和日期化验证。可信 Desktop 设置、SQLite profile
-持久化、Provider readiness、连续失败退避、schema 漂移锁定、Turn cache 和运行状态 UI 均已闭环。
-多日稳定性、Provider 条款和发布矩阵仍未完成。
+当前进度：LWS-001 至 LWS-004 已完成本地实现和日期化验证。LWS-006 已实现 Stop 资源回收、Parser
+性能测试、每日固定 6 次真实探测、7 个不同日期汇总门禁和平台/发布证据矩阵；2026-08-29 第 1 日为
+4/6 成功，状态保持 `insufficient_history (1/7)`。Provider 条款、Source 可打开性、跨平台签名包和
+其余 6 个真实日期仍未完成。
 
 ### 9.1 LWS-001：先建立可逆边界
 
@@ -491,9 +493,9 @@ git diff --check
 7. 默认不 fallback，不重复请求，不打开结果页；
 8. Desktop Local Alpha 先行；Release 需要额外条款和多日稳定性证据。
 
-下一项可执行任务是 **LWS-006：连续多日真实探测和平台/发布矩阵**。应按日记录百度/Bing 的成功、
-challenge、429、schema 漂移、P95 和 Source 相关性；LWS-005 的 SearXNG/正式 API 保持可选，不能
-阻塞当前轻量直连路径。
+下一项可执行任务是 **LWS-006 第 2 个不同日期真实探测**。继续按日记录百度/Bing 的成功、challenge、
+429、schema 漂移、P95 和 Source 相关性；不得复制或改写第 1 日产物来凑齐 7 日。LWS-005 的
+SearXNG/正式 API 保持可选，不能阻塞当前轻量直连路径。
 
 ## 14. 外部依据
 

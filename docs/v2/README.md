@@ -86,6 +86,8 @@
 35. [evidence/pbash-001-2026-08-28.md](evidence/pbash-001-2026-08-28.md)：PBASH-001 严格合同、Pi 投影、冻结执行上下文和 fake Runner 的日期化证据。
 36. [evidence/pbash-002-2026-08-28.md](evidence/pbash-002-2026-08-28.md)：PBASH-002 真实 macOS 平台沙盒、hard-link 防线、断网和进程组回收的本机证据。
 37. [evidence/pbash-007-model-ab-2026-08-28.md](evidence/pbash-007-model-ab-2026-08-28.md)：PBASH-007 固定 DeepSeek 模型、9 类任务、3 次配对的真实 Golden A/B 证据。
+38. [21-local-web-search-plan.md](21-local-web-search-plan.md)：百度 JSON/Bing HTML 的进程内轻量本地 Web Search、可信设置、退避和连续探测方案。
+39. [evidence/lws-006-2026-08-29.md](evidence/lws-006-2026-08-29.md)：Stop 资源回收、Parser 性能、每日 6 次真实探测与 7 日/平台发布矩阵证据。
 
 ## 5. V1 与未来方向边界
 

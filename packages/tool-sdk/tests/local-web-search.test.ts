@@ -248,6 +248,59 @@ describe("lightweight local Web Search", () => {
     await expect(pending).rejects.toMatchObject({ code: "LOCAL_SEARCH_CANCELLED" });
   });
 
+  it("destroys an in-flight response and cannot commit late data after Stop", async () => {
+    const response = new Readable({ read: () => undefined }) as IncomingMessage;
+    response.statusCode = 200;
+    response.headers = { "content-type": "application/json" };
+    let responseStarted: (() => void) | null = null;
+    const started = new Promise<void>((resolve) => {
+      responseStarted = resolve;
+    });
+    const requestEmitter = new EventEmitter() as EventEmitter & {
+      setTimeout: ReturnType<typeof vi.fn>;
+      end: ReturnType<typeof vi.fn>;
+      destroy: ReturnType<typeof vi.fn>;
+    };
+    requestEmitter.setTimeout = vi.fn(() => requestEmitter);
+    requestEmitter.destroy = vi.fn(() => {
+      requestEmitter.emit("error", new Error("socket destroyed"));
+      return requestEmitter;
+    });
+    requestEmitter.end = vi.fn(() => {
+      queueMicrotask(() => {
+        callback?.(response);
+        responseStarted?.();
+      });
+      return requestEmitter;
+    });
+    let callback: ((incoming: IncomingMessage) => void) | null = null;
+    const client = new NodeControlledSearchHttpClient({
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      request: (_options, incomingCallback) => {
+        callback = incomingCallback;
+        return requestEmitter as unknown as ClientRequest;
+      },
+    });
+    const controller = new AbortController();
+    const pending = client.get({
+      url: new URL("https://www.baidu.com/s?wd=fixture&tn=json"),
+      allowedOrigins: ["https://www.baidu.com"],
+      allowedPaths: ["/s"],
+      headers: { accept: "application/json" },
+      acceptedContentTypes: ["application/json"],
+      maxResponseBytes: 1_024,
+      timeoutMs: 1_000,
+      signal: controller.signal,
+    });
+
+    await started;
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: "LOCAL_SEARCH_CANCELLED" });
+    expect(requestEmitter.destroy).toHaveBeenCalledTimes(1);
+    expect(response.destroyed).toBe(true);
+    expect(response.push('{"feed":{"entry":[]}}')).toBe(false);
+  });
+
   it("executes one Baidu JSON request and projects identical model/UI sources", async () => {
     const get = vi.fn<ControlledSearchHttpClient["get"]>(async (_request) => ({
       statusCode: 200,

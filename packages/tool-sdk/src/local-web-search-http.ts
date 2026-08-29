@@ -181,6 +181,7 @@ export class NodeControlledSearchHttpClient implements ControlledSearchHttpClien
     return await new Promise<ControlledSearchHttpResponse>((resolve, reject) => {
       let settled = false;
       let request: ClientRequest | null = null;
+      let response: IncomingMessage | null = null;
       const finish = (result: ControlledSearchHttpResponse) => {
         if (settled) return;
         settled = true;
@@ -198,8 +199,9 @@ export class NodeControlledSearchHttpClient implements ControlledSearchHttpClien
         );
       };
       const onAbort = () => {
-        request?.destroy();
         fail(new LocalWebSearchError("LOCAL_SEARCH_CANCELLED"));
+        response?.destroy();
+        request?.destroy();
       };
       request = this.#request(
         {
@@ -212,44 +214,49 @@ export class NodeControlledSearchHttpClient implements ControlledSearchHttpClien
           servername: target.hostname,
           rejectUnauthorized: true,
         },
-        (response) => {
-          const statusCode = response.statusCode ?? 0;
-          if (statusCode < 200 || statusCode >= 300) {
-            response.resume();
-            fail(responseError(statusCode));
+        (incomingResponse) => {
+          response = incomingResponse;
+          if (settled) {
+            incomingResponse.destroy();
             return;
           }
-          const contentType = contentTypeValue(response);
+          const statusCode = incomingResponse.statusCode ?? 0;
+          if (statusCode < 200 || statusCode >= 300) {
+            fail(responseError(statusCode));
+            incomingResponse.destroy();
+            return;
+          }
+          const contentType = contentTypeValue(incomingResponse);
           const mediaType = contentType.split(";", 1)[0]?.trim() ?? "";
           if (!input.acceptedContentTypes.some((accepted) => mediaType === accepted)) {
-            response.resume();
             fail(new LocalWebSearchError("LOCAL_SEARCH_CONTENT_TYPE_INVALID"));
+            incomingResponse.destroy();
             return;
           }
-          const declaredLength = contentLengthValue(response);
+          const declaredLength = contentLengthValue(incomingResponse);
           if (declaredLength !== null && declaredLength > input.maxResponseBytes) {
-            response.resume();
             fail(new LocalWebSearchError("LOCAL_SEARCH_RESPONSE_TOO_LARGE"));
+            incomingResponse.destroy();
             return;
           }
           const chunks: Buffer[] = [];
           let responseBytes = 0;
-          response.on("data", (chunk: Buffer | string) => {
+          incomingResponse.on("data", (chunk: Buffer | string) => {
             if (settled) return;
             const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
             responseBytes += buffer.length;
             if (responseBytes > input.maxResponseBytes) {
-              response.destroy();
               fail(new LocalWebSearchError("LOCAL_SEARCH_RESPONSE_TOO_LARGE"));
+              incomingResponse.destroy();
               return;
             }
             chunks.push(buffer);
           });
-          response.once("aborted", () =>
+          incomingResponse.once("aborted", () =>
             fail(new LocalWebSearchError("LOCAL_SEARCH_PROVIDER_UNAVAILABLE")),
           );
-          response.once("error", fail);
-          response.once("end", () => {
+          incomingResponse.once("error", fail);
+          incomingResponse.once("end", () => {
             if (settled) return;
             try {
               const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
@@ -268,8 +275,9 @@ export class NodeControlledSearchHttpClient implements ControlledSearchHttpClien
       );
       input.signal.addEventListener("abort", onAbort, { once: true });
       request.setTimeout(remainingTimeoutMs, () => {
-        request.destroy();
         fail(new LocalWebSearchError("LOCAL_SEARCH_TIMEOUT"));
+        response?.destroy();
+        request?.destroy();
       });
       request.once("error", fail);
       request.end();

@@ -1,0 +1,185 @@
+{
+  "schemaVersion": "lws-daily-probe-v1",
+  "kind": "openerx-local-web-search-daily-probe",
+  "probeDate": "2026-08-29",
+  "timezone": "Asia/Shanghai",
+  "generatedAt": "2026-08-29T03:38:48.263Z",
+  "platform": {
+    "os": "darwin",
+    "arch": "arm64",
+    "release": "25.5.0",
+    "nodeVersion": "v24.2.0",
+    "openerxVersion": "2.0.0-alpha.0"
+  },
+  "network": {
+    "egressClass": "direct_system_network",
+    "proxyDetailsRecorded": false
+  },
+  "guardrails": {
+    "browserUsed": false,
+    "automaticFallback": false,
+    "retriesPerQuery": 0,
+    "resultPagesOpened": false,
+    "rawQueriesRecorded": false,
+    "rawSourcesRecorded": false
+  },
+  "userAgentDigest": "sha256:d1a3e0c8bd84024271d5a04fe2fedaf5b4de2b5cf77bab783433f43306d0d352",
+  "queryCatalog": [
+    {
+      "id": "navigational-openai-codex",
+      "queryClass": "navigational",
+      "queryDigest": "sha256:92add1b35468c36098e1f82ca8937ab6c2a2c10c4132be6e5491606740fdc8c0",
+      "recencyDays": null
+    },
+    {
+      "id": "reference-typescript-docs",
+      "queryClass": "reference",
+      "queryDigest": "sha256:fd813c95f856a68cdfe73a32a5889c854524acefdb0420514834bfdf47729741",
+      "recencyDays": null
+    },
+    {
+      "id": "current-openai-news",
+      "queryClass": "current",
+      "queryDigest": "sha256:c70da1ca429171cae36801d77fa2ba2b407e828e8290d17b4607ebc9ed1c4a91",
+      "recencyDays": 7
+    }
+  ],
+  "runs": [
+    {
+      "providerId": "direct:baidu-json",
+      "queryId": "navigational-openai-codex",
+      "queryClass": "navigational",
+      "queryDigest": "sha256:92add1b35468c36098e1f82ca8937ab6c2a2c10c4132be6e5491606740fdc8c0",
+      "attemptedAt": "2026-08-29T03:38:44.469Z",
+      "status": "failed",
+      "errorCode": "LOCAL_SEARCH_PROVIDER_CHALLENGE",
+      "totalDurationMs": 491,
+      "providerDurationMs": null,
+      "responseBytes": 0,
+      "resultCount": 0,
+      "topFiveRelevantCount": null,
+      "duplicateRate": null,
+      "sourceUrlValidityRate": null,
+      "sourceOpenability": "not_verified",
+      "recencyApplied": null
+    },
+    {
+      "providerId": "direct:baidu-json",
+      "queryId": "reference-typescript-docs",
+      "queryClass": "reference",
+      "queryDigest": "sha256:fd813c95f856a68cdfe73a32a5889c854524acefdb0420514834bfdf47729741",
+      "attemptedAt": "2026-08-29T03:38:44.961Z",
+      "status": "success",
+      "errorCode": null,
+      "totalDurationMs": 793,
+      "providerDurationMs": 792,
+      "responseBytes": 9697,
+      "resultCount": 8,
+      "topFiveRelevantCount": 5,
+      "duplicateRate": 0,
+      "sourceUrlValidityRate": 1,
+      "sourceOpenability": "not_verified",
+      "recencyApplied": false
+    },
+    {
+      "providerId": "direct:baidu-json",
+      "queryId": "current-openai-news",
+      "queryClass": "current",
+      "queryDigest": "sha256:c70da1ca429171cae36801d77fa2ba2b407e828e8290d17b4607ebc9ed1c4a91",
+      "attemptedAt": "2026-08-29T03:38:45.755Z",
+      "status": "success",
+      "errorCode": null,
+      "totalDurationMs": 793,
+      "providerDurationMs": 792,
+      "responseBytes": 13709,
+      "resultCount": 8,
+      "topFiveRelevantCount": 5,
+      "duplicateRate": 0,
+      "sourceUrlValidityRate": 1,
+      "sourceOpenability": "not_verified",
+      "recencyApplied": true
+    },
+    {
+      "providerId": "direct:bing-html",
+      "queryId": "navigational-openai-codex",
+      "queryClass": "navigational",
+      "queryDigest": "sha256:92add1b35468c36098e1f82ca8937ab6c2a2c10c4132be6e5491606740fdc8c0",
+      "attemptedAt": "2026-08-29T03:38:46.548Z",
+      "status": "failed",
+      "errorCode": "LOCAL_SEARCH_PROVIDER_CHALLENGE",
+      "totalDurationMs": 1069,
+      "providerDurationMs": null,
+      "responseBytes": 0,
+      "resultCount": 0,
+      "topFiveRelevantCount": null,
+      "duplicateRate": null,
+      "sourceUrlValidityRate": null,
+      "sourceOpenability": "not_verified",
+      "recencyApplied": null
+    },
+    {
+      "providerId": "direct:bing-html",
+      "queryId": "reference-typescript-docs",
+      "queryClass": "reference",
+      "queryDigest": "sha256:fd813c95f856a68cdfe73a32a5889c854524acefdb0420514834bfdf47729741",
+      "attemptedAt": "2026-08-29T03:38:47.617Z",
+      "status": "success",
+      "errorCode": null,
+      "totalDurationMs": 429,
+      "providerDurationMs": 405,
+      "responseBytes": 101608,
+      "resultCount": 10,
+      "topFiveRelevantCount": 0,
+      "duplicateRate": 0,
+      "sourceUrlValidityRate": 1,
+      "sourceOpenability": "not_verified",
+      "recencyApplied": false
+    },
+    {
+      "providerId": "direct:bing-html",
+      "queryId": "current-openai-news",
+      "queryClass": "current",
+      "queryDigest": "sha256:c70da1ca429171cae36801d77fa2ba2b407e828e8290d17b4607ebc9ed1c4a91",
+      "attemptedAt": "2026-08-29T03:38:48.047Z",
+      "status": "success",
+      "errorCode": null,
+      "totalDurationMs": 217,
+      "providerDurationMs": 201,
+      "responseBytes": 100495,
+      "resultCount": 9,
+      "topFiveRelevantCount": 3,
+      "duplicateRate": 0,
+      "sourceUrlValidityRate": 1,
+      "sourceOpenability": "not_verified",
+      "recencyApplied": false
+    }
+  ],
+  "providers": [
+    {
+      "providerId": "direct:baidu-json",
+      "plannedRuns": 3,
+      "observedRuns": 3,
+      "successes": 2,
+      "failures": 1,
+      "successRate": 0.6667,
+      "p50DurationMs": 793,
+      "p95DurationMs": 793,
+      "errorCounts": {
+        "LOCAL_SEARCH_PROVIDER_CHALLENGE": 1
+      }
+    },
+    {
+      "providerId": "direct:bing-html",
+      "plannedRuns": 3,
+      "observedRuns": 3,
+      "successes": 2,
+      "failures": 1,
+      "successRate": 0.6667,
+      "p50DurationMs": 429,
+      "p95DurationMs": 1069,
+      "errorCounts": {
+        "LOCAL_SEARCH_PROVIDER_CHALLENGE": 1
+      }
+    }
+  ]
+}
