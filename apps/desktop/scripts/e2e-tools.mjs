@@ -40,6 +40,7 @@ try {
     env: {
       ...process.env,
       OPENERX_BROWSER_COMPUTER_USE_V2: "0",
+      OPENERX_LOCAL_WEB_SEARCH_V2: "1",
       OPENERX_E2E: "1",
       OPENERX_E2E_PROFILE_DIR: profileDirectory,
     },
@@ -111,6 +112,33 @@ try {
   await page.getByRole("link", { name: "任务与工具" }).click();
   await page.getByRole("heading", { name: "任务与工具" }).waitFor();
   await page.getByText("已完成").first().waitFor();
+  let localSearchPanel = page.getByLabel("本地 Web Search");
+  await localSearchPanel.getByText("Local Alpha 已启用", { exact: true }).waitFor();
+  await localSearchPanel.getByLabel("Web Search Provider").selectOption("direct:bing-html");
+  await localSearchPanel.getByLabel("Web Search 结果语言").selectOption("en-US");
+  await localSearchPanel.getByLabel("Web Search SafeSearch").selectOption("strict");
+  await localSearchPanel.getByRole("button", { name: "保存搜索设置" }).click();
+  await localSearchPanel
+    .getByText("搜索设置已保存；正在运行的对话仍使用启动时冻结的策略。", {
+      exact: true,
+    })
+    .waitFor();
+  await page.reload();
+  await page.getByRole("heading", { name: "任务与工具" }).waitFor();
+  localSearchPanel = page.getByLabel("本地 Web Search");
+  assert.equal(
+    await localSearchPanel.getByLabel("Web Search Provider").inputValue(),
+    "direct:bing-html",
+  );
+  assert.equal(await localSearchPanel.getByLabel("Web Search 结果语言").inputValue(), "en-US");
+  assert.equal(await localSearchPanel.getByLabel("Web Search SafeSearch").inputValue(), "strict");
+  await localSearchPanel.getByRole("button", { name: "清缓存并重置退避" }).click();
+  await localSearchPanel
+    .getByText("已清除本轮缓存并重置 Provider 退避状态。", { exact: true })
+    .waitFor();
+  console.log(
+    "E2E_LOCAL_WEB_SEARCH_SETTINGS_OK provider=direct:bing-html locale=en-US safe=strict persisted=pass reset=pass",
+  );
   await page.getByText("查看能力与运行状态", { exact: true }).click();
   const browserCard = page.getByText("隔离浏览器", { exact: true }).locator("..");
   await browserCard.getByText("运行时可用", { exact: true }).waitFor();

@@ -106,6 +106,50 @@ export const localWebSearchErrorCodeSchema = z.enum([
   "LOCAL_SEARCH_CALL_BUDGET_EXCEEDED",
 ]);
 
+export const selectableLocalWebSearchProviderIdSchema = z.enum([
+  "direct:baidu-json",
+  "direct:bing-html",
+]);
+export const localWebSearchSettingsLocaleSchema = z.enum(["zh-CN", "en-US"]);
+export const localWebSearchSettingsSelectionSchema = z
+  .object({
+    providerId: selectableLocalWebSearchProviderIdSchema,
+    locale: localWebSearchSettingsLocaleSchema,
+    safeSearch: localWebSearchPolicySchema.shape.safeSearch,
+  })
+  .strict();
+export const localWebSearchSettingsUpdateInputSchema = localWebSearchSettingsSelectionSchema;
+export const localWebSearchRuntimeResetInputSchema = z
+  .object({ providerId: selectableLocalWebSearchProviderIdSchema.optional() })
+  .strict();
+export const localWebSearchProviderRuntimeStatusSchema = z.enum([
+  "available",
+  "backed_off",
+  "schema_blocked",
+  "unavailable",
+]);
+export const localWebSearchProviderRuntimeStateSchema = z
+  .object({
+    descriptor: localWebSearchProviderDescriptorSchema,
+    selected: z.boolean(),
+    status: localWebSearchProviderRuntimeStatusSchema,
+    consecutiveThrottleFailures: z.number().int().nonnegative(),
+    backedOffUntil: timestampSchema.nullable(),
+    lastErrorCode: localWebSearchErrorCodeSchema.nullable(),
+    lastFailureAt: timestampSchema.nullable(),
+    lastSuccessAt: timestampSchema.nullable(),
+  })
+  .strict();
+export const localWebSearchSettingsStateSchema = localWebSearchSettingsSelectionSchema
+  .extend({
+    featureEnabled: z.boolean(),
+    allowProviderFallback: z.literal(false),
+    cacheMode: z.literal("turn"),
+    updatedAt: timestampSchema.nullable(),
+    providers: z.array(localWebSearchProviderRuntimeStateSchema).max(8),
+  })
+  .strict();
+
 export type LocalWebSearchPolicy = z.infer<typeof localWebSearchPolicySchema>;
 export type LocalWebSearchProviderId = z.infer<typeof localWebSearchProviderIdSchema>;
 export type LocalWebSearchProviderDescriptor = z.infer<
@@ -114,6 +158,15 @@ export type LocalWebSearchProviderDescriptor = z.infer<
 export type LocalWebSearchCandidate = z.infer<typeof localWebSearchCandidateSchema>;
 export type LocalWebSearchProviderResult = z.infer<typeof localWebSearchProviderResultSchema>;
 export type LocalWebSearchErrorCode = z.infer<typeof localWebSearchErrorCodeSchema>;
+export type SelectableLocalWebSearchProviderId = z.infer<
+  typeof selectableLocalWebSearchProviderIdSchema
+>;
+export type LocalWebSearchSettingsLocale = z.infer<typeof localWebSearchSettingsLocaleSchema>;
+export type LocalWebSearchSettingsSelection = z.infer<typeof localWebSearchSettingsSelectionSchema>;
+export type LocalWebSearchProviderRuntimeState = z.infer<
+  typeof localWebSearchProviderRuntimeStateSchema
+>;
+export type LocalWebSearchSettingsState = z.infer<typeof localWebSearchSettingsStateSchema>;
 
 export function defaultLocalWebSearchPolicy(): LocalWebSearchPolicy {
   return {

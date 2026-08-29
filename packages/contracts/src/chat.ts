@@ -27,6 +27,11 @@ import {
   type PersonalFile,
   personalFileSchema,
 } from "./file";
+import {
+  localWebSearchRuntimeResetInputSchema,
+  localWebSearchSettingsStateSchema,
+  localWebSearchSettingsUpdateInputSchema,
+} from "./local-web-search";
 import { defaultThinkingLevel, thinkingLevelSchema } from "./model";
 import {
   type SkillInstallation,
@@ -329,6 +334,19 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
       input: toolRuntimeReadinessInputSchema,
     })
     .strict(),
+  z.object({ command: z.literal("tool.webSearch.settings.get"), input: emptyInputSchema }).strict(),
+  z
+    .object({
+      command: z.literal("tool.webSearch.settings.update"),
+      input: localWebSearchSettingsUpdateInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal("tool.webSearch.runtime.reset"),
+      input: localWebSearchRuntimeResetInputSchema,
+    })
+    .strict(),
   z.object({ command: z.literal("tool.workItem.get"), input: workItemGetInputSchema }).strict(),
   z
     .object({ command: z.literal("tool.permissions.list"), input: permissionListInputSchema })
@@ -505,6 +523,9 @@ export interface ChatCommandResultMap {
   "artifact.export": z.infer<typeof artifactExportResultSchema>;
   "tool.workItems.list": z.infer<typeof workItemSchema>[];
   "tool.runtime.readiness": z.infer<typeof toolRuntimeReadinessSchema>[];
+  "tool.webSearch.settings.get": z.infer<typeof localWebSearchSettingsStateSchema>;
+  "tool.webSearch.settings.update": z.infer<typeof localWebSearchSettingsStateSchema>;
+  "tool.webSearch.runtime.reset": z.infer<typeof localWebSearchSettingsStateSchema>;
   "tool.workItem.get": z.infer<typeof workItemDetailSchema>;
   "tool.permissions.list": z.infer<typeof permissionRequestSchema>[];
   "tool.permission.resolve": z.infer<typeof permissionRequestSchema>;
@@ -610,6 +631,11 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "tool.runtime.readiness":
       parsed = z.array(toolRuntimeReadinessSchema).parse(value);
+      break;
+    case "tool.webSearch.settings.get":
+    case "tool.webSearch.settings.update":
+    case "tool.webSearch.runtime.reset":
+      parsed = localWebSearchSettingsStateSchema.parse(value);
       break;
     case "tool.workItem.get":
       parsed = workItemDetailSchema.parse(value);

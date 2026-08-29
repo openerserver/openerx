@@ -51,6 +51,8 @@ import {
   ipcChannels,
   ledgerTransactionSchema,
   localExportResultSchema,
+  localWebSearchRuntimeResetInputSchema,
+  localWebSearchSettingsSelectionSchema,
   mcpServerAuthorizationStateSchema,
   mcpServerAuthorizeInputSchema,
   mcpServerConfigSchema,
@@ -402,6 +404,20 @@ const bridge: DesktopBridge = {
   },
   listToolRuntimeReadiness: async () =>
     invokeChat(ipcChannels.toolRuntimeReadiness, "tool.runtime.readiness", {}),
+  getLocalWebSearchSettings: async () =>
+    invokeChat(ipcChannels.localWebSearchSettingsGet, "tool.webSearch.settings.get", {}),
+  updateLocalWebSearchSettings: async (input) =>
+    invokeChat(
+      ipcChannels.localWebSearchSettingsUpdate,
+      "tool.webSearch.settings.update",
+      localWebSearchSettingsSelectionSchema.parse(input),
+    ),
+  resetLocalWebSearchRuntime: async (input = {}) =>
+    invokeChat(
+      ipcChannels.localWebSearchRuntimeReset,
+      "tool.webSearch.runtime.reset",
+      localWebSearchRuntimeResetInputSchema.parse(input),
+    ),
   listWorkItems: async (input = {}) =>
     invokeChat(
       ipcChannels.toolWorkItemsList,

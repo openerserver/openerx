@@ -8,6 +8,8 @@ import type {
   ExecutionRun,
   HostToolAvailability,
   LocalWebSearchPolicy,
+  LocalWebSearchSettingsSelection,
+  LocalWebSearchSettingsState,
   McpServerAuthorizationState,
   McpServerConfig,
   McpToolDescriptor,
@@ -17,6 +19,7 @@ import type {
   PiFileToolRequestFrame,
   PiToolRequestFrame,
   RunStep,
+  SelectableLocalWebSearchProviderId,
   ThinkingLevel,
   ToolCall,
   ToolOperation,
@@ -41,6 +44,8 @@ import {
   brokeredBashV1Enabled,
   defaultLocalWebSearchPolicy,
   LOCAL_WEB_SEARCH_V2_FEATURE_FLAG,
+  localWebSearchSettingsSelectionSchema,
+  localWebSearchSettingsStateSchema,
   localWebSearchV2Enabled,
   piHostContractVersion,
 } from "@openerx/contracts";
@@ -366,7 +371,8 @@ export class ToolAppService {
   readonly #shellAvailability: () => HostToolAvailability;
   readonly #brokeredBashV1: boolean;
   readonly #localWebSearchV2: boolean;
-  readonly #localWebSearchConfiguration: FrozenLocalWebSearchConfiguration;
+  #localWebSearchConfiguration: FrozenLocalWebSearchConfiguration;
+  #localWebSearchSettingsUpdatedAt: string | null;
   readonly #localWebSearchCoordinator: LocalWebSearchCoordinator;
   readonly #brokeredBashRunnerMode: BrokeredBashRunnerMode | null;
   readonly #platformSandboxEngine?: PlatformSandboxEngine;
@@ -382,9 +388,22 @@ export class ToolAppService {
     this.#localWebSearchV2 =
       options.localWebSearchV2 ??
       localWebSearchV2Enabled(process.env[LOCAL_WEB_SEARCH_V2_FEATURE_FLAG]);
+    const persistedLocalWebSearchSettings = options.localWebSearchPolicy
+      ? null
+      : this.#repository.localWebSearchSettings();
     this.#localWebSearchConfiguration = freezeLocalWebSearchPolicy(
-      options.localWebSearchPolicy ?? defaultLocalWebSearchPolicy(),
+      options.localWebSearchPolicy ?? {
+        ...defaultLocalWebSearchPolicy(),
+        ...(persistedLocalWebSearchSettings
+          ? {
+              providerOrder: [persistedLocalWebSearchSettings.providerId],
+              locale: persistedLocalWebSearchSettings.locale,
+              safeSearch: persistedLocalWebSearchSettings.safeSearch,
+            }
+          : {}),
+      },
     );
+    this.#localWebSearchSettingsUpdatedAt = persistedLocalWebSearchSettings?.updatedAt ?? null;
     this.#localWebSearchCoordinator = new LocalWebSearchCoordinator(
       options.localWebSearchProviders ?? [
         new BaiduJsonSearchProvider(),
@@ -531,6 +550,44 @@ export class ToolAppService {
 
   repository(): ToolRepository {
     return this.#repository;
+  }
+
+  localWebSearchSettings(): LocalWebSearchSettingsState {
+    const { policy } = this.#localWebSearchConfiguration;
+    return localWebSearchSettingsStateSchema.parse({
+      providerId: policy.providerOrder[0],
+      locale: policy.locale,
+      safeSearch: policy.safeSearch,
+      featureEnabled: this.#localWebSearchV2,
+      allowProviderFallback: false,
+      cacheMode: "turn",
+      updatedAt: this.#localWebSearchSettingsUpdatedAt,
+      providers: this.#localWebSearchCoordinator.providerStates(this.#localWebSearchConfiguration),
+    });
+  }
+
+  updateLocalWebSearchSettings(
+    input: LocalWebSearchSettingsSelection,
+  ): LocalWebSearchSettingsState {
+    const selection = localWebSearchSettingsSelectionSchema.parse(input);
+    const persisted = this.#repository.saveLocalWebSearchSettings(selection);
+    this.#localWebSearchConfiguration = freezeLocalWebSearchPolicy({
+      ...this.#localWebSearchConfiguration.policy,
+      providerOrder: [selection.providerId],
+      allowProviderFallback: false,
+      locale: selection.locale,
+      safeSearch: selection.safeSearch,
+      cacheMode: "turn",
+    });
+    this.#localWebSearchSettingsUpdatedAt = persisted.updatedAt;
+    return this.localWebSearchSettings();
+  }
+
+  resetLocalWebSearchRuntime(
+    input: { providerId?: SelectableLocalWebSearchProviderId } = {},
+  ): LocalWebSearchSettingsState {
+    this.#localWebSearchCoordinator.resetRuntimeState(input.providerId);
+    return this.localWebSearchSettings();
   }
 
   grantWorkspace(input: {

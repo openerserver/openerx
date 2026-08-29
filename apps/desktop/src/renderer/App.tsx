@@ -8,6 +8,9 @@ import type {
   ConversationSummary,
   DesktopEnvironment,
   DeviceSession,
+  LocalWebSearchProviderRuntimeState,
+  LocalWebSearchSettingsSelection,
+  LocalWebSearchSettingsState,
   McpServerAuthorizationState,
   McpServerConfig,
   Message,
@@ -285,6 +288,10 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   MCP_NO_ENABLED_TOOLS: "已连接，但没有可调用工具",
   MCP_SERVER_UNREACHABLE: "已配置的 MCP 服务无法连接",
   MCP_CREDENTIAL_REQUIRED: "MCP 服务缺少本机凭证",
+  LOCAL_SEARCH_DISABLED: "本地 Web Search 策略已关闭",
+  LOCAL_SEARCH_PROVIDER_NOT_CONFIGURED: "尚未配置可用的本地搜索 Provider",
+  LOCAL_SEARCH_FAKE_PROVIDER_ONLY: "当前只有测试 Provider",
+  LOCAL_SEARCH_PROVIDER_UNAVAILABLE: "当前 Provider 正在退避或因结构漂移被锁定",
 };
 
 function toolRuntimeReason(reason: string | null): string | null {
@@ -300,6 +307,16 @@ const browserSessionStateLabels: Record<BrowserSessionDescriptor["state"], strin
   closing: "正在关闭",
   closed: "已关闭",
   failed: "连接已中断",
+};
+
+const localWebSearchProviderStatusLabels: Record<
+  LocalWebSearchProviderRuntimeState["status"],
+  string
+> = {
+  available: "可用",
+  backed_off: "退避中",
+  schema_blocked: "结构已漂移",
+  unavailable: "不可用",
 };
 
 function browserApplicationLabel(applicationId: string): string {
@@ -4365,6 +4382,12 @@ function ToolCenter(): React.JSX.Element {
   const [mcpToken, setMcpToken] = useState("");
   const [mcpOAuthClientId, setMcpOAuthClientId] = useState("");
   const [mcpOAuthScope, setMcpOAuthScope] = useState("");
+  const [localWebSearchNotice, setLocalWebSearchNotice] = useState<string | null>(null);
+  const [localWebSearchDraft, setLocalWebSearchDraft] = useState<LocalWebSearchSettingsSelection>({
+    providerId: "direct:baidu-json",
+    locale: "zh-CN",
+    safeSearch: "moderate",
+  });
   const workItems = useQuery({
     queryKey: ["tools", "work-items"],
     queryFn: () => window.openerx.listWorkItems({ limit: 100 }),
@@ -4380,6 +4403,41 @@ function ToolCenter(): React.JSX.Element {
   const runtimeReadiness = useQuery({
     queryKey: ["tools", "runtime-readiness"],
     queryFn: () => window.openerx.listToolRuntimeReadiness(),
+  });
+  const localWebSearchSettings = useQuery({
+    queryKey: ["tools", "local-web-search", "settings"],
+    queryFn: () => window.openerx.getLocalWebSearchSettings(),
+  });
+  useEffect(() => {
+    if (!localWebSearchSettings.data) return;
+    setLocalWebSearchDraft({
+      providerId: localWebSearchSettings.data.providerId,
+      locale: localWebSearchSettings.data.locale,
+      safeSearch: localWebSearchSettings.data.safeSearch,
+    });
+  }, [localWebSearchSettings.data]);
+  const saveLocalWebSearchSettings = useMutation({
+    mutationFn: (input: LocalWebSearchSettingsSelection) =>
+      window.openerx.updateLocalWebSearchSettings(input),
+    onSuccess: async (state) => {
+      queryClient.setQueryData<LocalWebSearchSettingsState>(
+        ["tools", "local-web-search", "settings"],
+        state,
+      );
+      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
+      setLocalWebSearchNotice("搜索设置已保存；正在运行的对话仍使用启动时冻结的策略。");
+    },
+  });
+  const resetLocalWebSearchRuntime = useMutation({
+    mutationFn: () => window.openerx.resetLocalWebSearchRuntime(),
+    onSuccess: async (state) => {
+      queryClient.setQueryData<LocalWebSearchSettingsState>(
+        ["tools", "local-web-search", "settings"],
+        state,
+      );
+      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
+      setLocalWebSearchNotice("已清除本轮缓存并重置 Provider 退避状态。");
+    },
   });
   const browserSessions = useQuery({
     queryKey: ["tools", "browser-computer-use", "sessions"],
@@ -4512,6 +4570,125 @@ function ToolCenter(): React.JSX.Element {
           <strong>{scopes.data?.length ?? 0}</strong>
           <span>有效授权</span>
         </div>
+      </section>
+      <section className="local-web-search-panel" aria-label="本地 Web Search">
+        <div className="local-web-search-heading">
+          <div>
+            <h2>本地 Web Search</h2>
+            <p>由本机 App Service 直连搜索结果页，不启动浏览器，也不经过云端 Web Search。</p>
+          </div>
+          <span
+            className={`local-web-search-feature ${localWebSearchSettings.data?.featureEnabled ? "is-enabled" : ""}`}
+          >
+            {localWebSearchSettings.data?.featureEnabled ? "Local Alpha 已启用" : "功能开关关闭"}
+          </span>
+        </div>
+        <form
+          className="local-web-search-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveLocalWebSearchSettings.mutate(localWebSearchDraft);
+          }}
+        >
+          <label>
+            <span>搜索引擎</span>
+            <select
+              aria-label="Web Search Provider"
+              value={localWebSearchDraft.providerId}
+              onChange={(event) =>
+                setLocalWebSearchDraft((current) => ({
+                  ...current,
+                  providerId: event.target.value as LocalWebSearchSettingsSelection["providerId"],
+                }))
+              }
+            >
+              <option value="direct:baidu-json">百度 JSON（默认）</option>
+              <option value="direct:bing-html">Bing HTML</option>
+            </select>
+          </label>
+          <label>
+            <span>结果语言</span>
+            <select
+              aria-label="Web Search 结果语言"
+              value={localWebSearchDraft.locale}
+              onChange={(event) =>
+                setLocalWebSearchDraft((current) => ({
+                  ...current,
+                  locale: event.target.value as LocalWebSearchSettingsSelection["locale"],
+                }))
+              }
+            >
+              <option value="zh-CN">简体中文</option>
+              <option value="en-US">English (US)</option>
+            </select>
+          </label>
+          <label>
+            <span>SafeSearch</span>
+            <select
+              aria-label="Web Search SafeSearch"
+              value={localWebSearchDraft.safeSearch}
+              onChange={(event) =>
+                setLocalWebSearchDraft((current) => ({
+                  ...current,
+                  safeSearch: event.target.value as LocalWebSearchSettingsSelection["safeSearch"],
+                }))
+              }
+            >
+              <option value="off">关闭</option>
+              <option value="moderate">适中（默认）</option>
+              <option value="strict">严格</option>
+            </select>
+          </label>
+          <button type="submit" disabled={saveLocalWebSearchSettings.isPending}>
+            {saveLocalWebSearchSettings.isPending ? "正在保存…" : "保存搜索设置"}
+          </button>
+        </form>
+        <div className="local-web-search-providers">
+          {localWebSearchSettings.data?.providers.map((provider) => (
+            <article key={provider.descriptor.providerId}>
+              <div>
+                <strong>{provider.descriptor.displayName}</strong>
+                {provider.selected ? <small>当前选择</small> : null}
+              </div>
+              <span className={`is-${provider.status}`}>
+                {localWebSearchProviderStatusLabels[provider.status]}
+              </span>
+              <small>
+                {provider.lastErrorCode ? `最近错误：${provider.lastErrorCode}` : "尚无运行错误"}
+                {provider.backedOffUntil
+                  ? ` · 退避至 ${new Date(provider.backedOffUntil).toLocaleTimeString()}`
+                  : ""}
+              </small>
+            </article>
+          ))}
+        </div>
+        <div className="local-web-search-footer">
+          <span>每轮缓存 · 单 Provider · 禁止自动 fallback · 模型不可选择 Provider</span>
+          <button
+            type="button"
+            disabled={resetLocalWebSearchRuntime.isPending}
+            onClick={() => resetLocalWebSearchRuntime.mutate()}
+          >
+            {resetLocalWebSearchRuntime.isPending ? "正在重置…" : "清缓存并重置退避"}
+          </button>
+        </div>
+        {localWebSearchNotice ? (
+          <p className="inline-success" role="status">
+            {localWebSearchNotice}
+          </p>
+        ) : null}
+        {localWebSearchSettings.error ||
+        saveLocalWebSearchSettings.error ||
+        resetLocalWebSearchRuntime.error ? (
+          <p className="inline-error" role="alert">
+            {userFacingError(
+              localWebSearchSettings.error ??
+                saveLocalWebSearchSettings.error ??
+                resetLocalWebSearchRuntime.error,
+              "本地搜索设置暂时不可用，请稍后重试。",
+            )}
+          </p>
+        ) : null}
       </section>
       <section className="browser-session-panel" aria-label="独立浏览器会话">
         <div className="browser-session-heading">

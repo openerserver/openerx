@@ -43,6 +43,8 @@ import {
   fileSearchInputSchema,
   ipcChannels,
   localExportResultSchema,
+  localWebSearchRuntimeResetInputSchema,
+  localWebSearchSettingsSelectionSchema,
   mcpServerAuthorizeInputSchema,
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
@@ -643,6 +645,21 @@ function registerIpcHandlers(
   registerChatHandler(ipcChannels.artifactPreview, "artifact.preview", artifactPreviewInputSchema);
   registerChatHandler(ipcChannels.toolWorkItemsList, "tool.workItems.list", toolListInputSchema);
   registerChatHandler(ipcChannels.toolWorkItemGet, "tool.workItem.get", workItemGetInputSchema);
+  registerChatHandler(
+    ipcChannels.localWebSearchSettingsGet,
+    "tool.webSearch.settings.get",
+    emptyInputSchema,
+  );
+  registerChatHandler(
+    ipcChannels.localWebSearchSettingsUpdate,
+    "tool.webSearch.settings.update",
+    localWebSearchSettingsSelectionSchema,
+  );
+  registerChatHandler(
+    ipcChannels.localWebSearchRuntimeReset,
+    "tool.webSearch.runtime.reset",
+    localWebSearchRuntimeResetInputSchema,
+  );
   registerChatHandler(
     ipcChannels.toolPermissionsList,
     "tool.permissions.list",

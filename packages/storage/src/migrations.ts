@@ -949,6 +949,21 @@ const migrations: readonly Migration[] = [
       DROP TABLE remote_command_applications_v15;
     `,
   },
+  {
+    version: 16,
+    checksum: "local-web-search-settings-v16-20260829",
+    sql: `
+      CREATE TABLE local_web_search_settings (
+        owner_profile_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL CHECK (provider_id IN (
+          'direct:baidu-json', 'direct:bing-html'
+        )),
+        locale TEXT NOT NULL CHECK (locale IN ('zh-CN', 'en-US')),
+        safe_search TEXT NOT NULL CHECK (safe_search IN ('off', 'moderate', 'strict')),
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `,
+  },
 ];
 
 export function migrateDatabase(

@@ -255,6 +255,12 @@ export class ChatAppService {
         );
       case "tool.runtime.readiness":
         return await this.#requiredTools().listRuntimeReadiness(request.input);
+      case "tool.webSearch.settings.get":
+        return this.#requiredTools().localWebSearchSettings();
+      case "tool.webSearch.settings.update":
+        return this.#requiredTools().updateLocalWebSearchSettings(request.input);
+      case "tool.webSearch.runtime.reset":
+        return this.#requiredTools().resetLocalWebSearchRuntime(request.input);
       case "tool.workItem.get":
         return this.#requiredToolsRepository().workItemDetail(
           request.input.workItemId,

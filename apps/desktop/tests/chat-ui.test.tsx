@@ -5,6 +5,7 @@ import type {
   ChatEvent,
   ConversationSnapshot,
   DesktopBridge,
+  LocalWebSearchSettingsState,
   ModelCatalogEntry,
   PersonalFile,
   SkillInstallation,
@@ -268,6 +269,53 @@ function createBridge(): DesktopBridge {
     previewArtifact: vi.fn(),
     saveArtifact: vi.fn(),
     listToolRuntimeReadiness: vi.fn().mockResolvedValue([]),
+    getLocalWebSearchSettings: vi.fn().mockResolvedValue({
+      providerId: "direct:baidu-json",
+      locale: "zh-CN",
+      safeSearch: "moderate",
+      featureEnabled: true,
+      allowProviderFallback: false,
+      cacheMode: "turn",
+      updatedAt: null,
+      providers: [
+        {
+          descriptor: {
+            providerId: "direct:baidu-json",
+            displayName: "百度 JSON（Local Alpha）",
+            transport: "json",
+            stability: "unofficial",
+            releaseEligible: false,
+            requiresDailyProbe: true,
+          },
+          selected: true,
+          status: "available",
+          consecutiveThrottleFailures: 0,
+          backedOffUntil: null,
+          lastErrorCode: null,
+          lastFailureAt: null,
+          lastSuccessAt: null,
+        },
+        {
+          descriptor: {
+            providerId: "direct:bing-html",
+            displayName: "Bing HTML（Local Alpha）",
+            transport: "html",
+            stability: "unofficial",
+            releaseEligible: false,
+            requiresDailyProbe: true,
+          },
+          selected: false,
+          status: "available",
+          consecutiveThrottleFailures: 0,
+          backedOffUntil: null,
+          lastErrorCode: null,
+          lastFailureAt: null,
+          lastSuccessAt: null,
+        },
+      ],
+    }),
+    updateLocalWebSearchSettings: vi.fn(),
+    resetLocalWebSearchRuntime: vi.fn(),
     listWorkItems: vi.fn().mockResolvedValue([]),
     getWorkItem: vi.fn(),
     listPermissionRequests: vi.fn().mockResolvedValue([]),
@@ -1500,6 +1548,85 @@ describe("M1 chat renderer", () => {
 
     await user.click(screen.getByRole("button", { name: "刷新能力状态" }));
     await waitFor(() => expect(bridge.listToolRuntimeReadiness).toHaveBeenCalledTimes(3));
+  });
+
+  it("keeps local Web Search Provider choice and runtime reset in the trusted tool center", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const initial = await bridge.getLocalWebSearchSettings();
+    const backedOff: LocalWebSearchSettingsState = {
+      ...initial,
+      providers: initial.providers.map((provider) =>
+        provider.descriptor.providerId === "direct:bing-html"
+          ? {
+              ...provider,
+              status: "backed_off",
+              consecutiveThrottleFailures: 2,
+              backedOffUntil: "2026-08-29T03:30:00.000Z",
+              lastErrorCode: "LOCAL_SEARCH_RATE_LIMITED",
+              lastFailureAt: "2026-08-29T03:00:00.000Z",
+            }
+          : provider,
+      ),
+    };
+    const updated: LocalWebSearchSettingsState = {
+      ...backedOff,
+      providerId: "direct:bing-html",
+      locale: "en-US",
+      safeSearch: "strict",
+      updatedAt: "2026-08-29T03:01:00.000Z",
+      providers: backedOff.providers.map((provider) => ({
+        ...provider,
+        selected: provider.descriptor.providerId === "direct:bing-html",
+      })),
+    };
+    vi.mocked(bridge.getLocalWebSearchSettings).mockClear();
+    vi.mocked(bridge.getLocalWebSearchSettings).mockResolvedValue(backedOff);
+    vi.mocked(bridge.updateLocalWebSearchSettings).mockResolvedValue(updated);
+    vi.mocked(bridge.resetLocalWebSearchRuntime).mockResolvedValue({
+      ...updated,
+      providers: updated.providers.map((provider) => ({
+        ...provider,
+        status: "available",
+        consecutiveThrottleFailures: 0,
+        backedOffUntil: null,
+        lastErrorCode: null,
+        lastFailureAt: null,
+      })),
+    });
+    renderApp(bridge, "/tasks");
+    const user = userEvent.setup();
+
+    const panel = (await screen.findByRole("heading", { name: "本地 Web Search" })).closest(
+      "section",
+    );
+    if (!panel) throw new Error("local Web Search panel missing");
+    expect(within(panel).getByText("退避中")).toBeTruthy();
+    expect(within(panel).getByText(/LOCAL_SEARCH_RATE_LIMITED/u)).toBeTruthy();
+    expect(within(panel).getByText(/不启动浏览器/u)).toBeTruthy();
+
+    await user.selectOptions(
+      within(panel).getByLabelText("Web Search Provider"),
+      "direct:bing-html",
+    );
+    await user.selectOptions(within(panel).getByLabelText("Web Search 结果语言"), "en-US");
+    await user.selectOptions(within(panel).getByLabelText("Web Search SafeSearch"), "strict");
+    await user.click(within(panel).getByRole("button", { name: "保存搜索设置" }));
+    await waitFor(() =>
+      expect(bridge.updateLocalWebSearchSettings).toHaveBeenCalledWith({
+        providerId: "direct:bing-html",
+        locale: "en-US",
+        safeSearch: "strict",
+      }),
+    );
+    expect(
+      await within(panel).findByText("搜索设置已保存；正在运行的对话仍使用启动时冻结的策略。"),
+    ).toBeTruthy();
+
+    await user.click(within(panel).getByRole("button", { name: "清缓存并重置退避" }));
+    await waitFor(() => expect(bridge.resetLocalWebSearchRuntime).toHaveBeenCalledWith());
+    expect(await within(panel).findByText("已清除本轮缓存并重置 Provider 退避状态。")).toBeTruthy();
+    expect(within(panel).queryByText("退避中")).toBeNull();
   });
 
   it("keeps browser takeover controls in the trusted tool center without embedding page data", async () => {

@@ -24,6 +24,36 @@ afterEach(() => {
 });
 
 describe("ToolRepository", () => {
+  it("persists trusted local Web Search settings per profile", () => {
+    const { databasePath, chat, tools } = fixture();
+    expect(tools.localWebSearchSettings()).toBeNull();
+    expect(
+      tools.saveLocalWebSearchSettings({
+        providerId: "direct:bing-html",
+        locale: "en-US",
+        safeSearch: "strict",
+      }),
+    ).toMatchObject({
+      providerId: "direct:bing-html",
+      locale: "en-US",
+      safeSearch: "strict",
+    });
+    tools.close();
+
+    const reopened = new ToolRepository(databasePath, { ownerProfileId: "profile-a" });
+    expect(reopened.localWebSearchSettings()).toMatchObject({
+      providerId: "direct:bing-html",
+      locale: "en-US",
+      safeSearch: "strict",
+    });
+    const otherProfile = new ToolRepository(databasePath, { ownerProfileId: "profile-b" });
+    expect(otherProfile.localWebSearchSettings()).toBeNull();
+
+    otherProfile.close();
+    reopened.close();
+    chat.close();
+  });
+
   it("persists Skill-origin tool calls and the matching policy vocabulary", () => {
     const { chat, tools } = fixture();
     const generation = chat.createGeneration({

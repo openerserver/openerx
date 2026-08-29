@@ -681,6 +681,68 @@ describe("ToolAppService", () => {
     await service.close();
   });
 
+  it("persists trusted search settings while keeping prepared Generation policy frozen", async () => {
+    const { chat, tools, service, base } = fixture({ localWebSearchV2: true });
+    const before = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "搜索 OpenERX",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+    });
+    expect(service.localWebSearchSettings()).toMatchObject({
+      providerId: "direct:baidu-json",
+      locale: "zh-CN",
+      safeSearch: "moderate",
+      featureEnabled: true,
+      allowProviderFallback: false,
+      cacheMode: "turn",
+    });
+
+    const updated = service.updateLocalWebSearchSettings({
+      providerId: "direct:bing-html",
+      locale: "en-US",
+      safeSearch: "strict",
+    });
+    expect(updated).toMatchObject({
+      providerId: "direct:bing-html",
+      locale: "en-US",
+      safeSearch: "strict",
+      updatedAt: expect.any(String),
+    });
+    expect(tools.localWebSearchSettings()).toMatchObject({
+      providerId: "direct:bing-html",
+      locale: "en-US",
+      safeSearch: "strict",
+    });
+    expect(before.localWebSearchConfiguration?.policy).toMatchObject({
+      providerOrder: ["direct:baidu-json"],
+      locale: "zh-CN",
+      safeSearch: "moderate",
+    });
+
+    const after = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "搜索 OpenERX",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+    });
+    expect(after.localWebSearchConfiguration?.policy).toMatchObject({
+      providerOrder: ["direct:bing-html"],
+      allowProviderFallback: false,
+      locale: "en-US",
+      safeSearch: "strict",
+      cacheMode: "turn",
+    });
+    expect(after.localWebSearchConfiguration?.policyDigest).not.toBe(
+      before.localWebSearchConfiguration?.policyDigest,
+    );
+
+    chat.close();
+    await service.close();
+  });
+
   it("fails local Web Search closed before a Generation policy is frozen", async () => {
     const provider: LocalSearchProvider = {
       descriptor: {

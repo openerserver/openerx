@@ -5,6 +5,8 @@ import {
   LOCAL_WEB_SEARCH_POLICY_VERSION,
   localWebSearchErrorCodeSchema,
   localWebSearchPolicySchema,
+  localWebSearchSettingsSelectionSchema,
+  localWebSearchSettingsStateSchema,
   localWebSearchV2Enabled,
 } from "../src";
 
@@ -66,5 +68,48 @@ describe("local Web Search contracts", () => {
       expect(localWebSearchErrorCodeSchema.safeParse(code).success).toBe(true);
     }
     expect(localWebSearchErrorCodeSchema.safeParse("LOCAL_SEARCH_HTTP_500").success).toBe(false);
+  });
+
+  it("accepts only trusted Desktop search settings and strict runtime state", () => {
+    const selection = {
+      providerId: "direct:bing-html",
+      locale: "en-US",
+      safeSearch: "strict",
+    } as const;
+    expect(localWebSearchSettingsSelectionSchema.parse(selection)).toEqual(selection);
+    expect(
+      localWebSearchSettingsSelectionSchema.safeParse({
+        ...selection,
+        providerId: "platform:cloud-web-search",
+      }).success,
+    ).toBe(false);
+    expect(
+      localWebSearchSettingsStateSchema.safeParse({
+        ...selection,
+        featureEnabled: true,
+        allowProviderFallback: false,
+        cacheMode: "turn",
+        updatedAt: "2026-08-29T01:00:00.000Z",
+        providers: [
+          {
+            descriptor: {
+              providerId: "direct:bing-html",
+              displayName: "Bing HTML（Local Alpha）",
+              transport: "html",
+              stability: "unofficial",
+              releaseEligible: false,
+              requiresDailyProbe: true,
+            },
+            selected: true,
+            status: "backed_off",
+            consecutiveThrottleFailures: 2,
+            backedOffUntil: "2026-08-29T01:30:00.000Z",
+            lastErrorCode: "LOCAL_SEARCH_RATE_LIMITED",
+            lastFailureAt: "2026-08-29T01:00:00.000Z",
+            lastSuccessAt: null,
+          },
+        ],
+      }).success,
+    ).toBe(true);
   });
 });

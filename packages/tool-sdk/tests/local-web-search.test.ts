@@ -352,10 +352,226 @@ describe("lightweight local Web Search", () => {
     expect(search).toHaveBeenCalledTimes(1);
     expect(first.data).toMatchObject({ cacheMode: "turn", cacheHit: false });
     expect(second.data).toMatchObject({ cacheMode: "turn", cacheHit: true });
+    expect(first.summary).toContain("· live ·");
+    expect(second.summary).toContain("· turn cache ·");
+    expect(second.content.find(({ type }) => type === "text")).toMatchObject({
+      text: expect.stringContaining("Execution: turn cache"),
+    });
     expect(second.sources).toEqual(first.sources);
 
     coordinator.clearGeneration(input.generationId);
     await coordinator.search(input);
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks an explicitly allowed fallback result as partial", async () => {
+    const baiduSearch = vi.fn<LocalSearchProvider["search"]>(async () => {
+      throw new LocalWebSearchError("LOCAL_SEARCH_PROVIDER_CHALLENGE");
+    });
+    const bingSearch = vi.fn<LocalSearchProvider["search"]>(async () => ({
+      providerId: "direct:bing-html",
+      candidates: [
+        {
+          title: "Fallback source",
+          url: "https://example.com/fallback",
+          excerpt: "second provider",
+          publishedAt: null,
+        },
+      ],
+      recencyApplied: false,
+      executionPerformed: true,
+      responseBytes: 128,
+      durationMs: 8,
+    }));
+    const coordinator = new LocalWebSearchCoordinator([
+      {
+        descriptor: {
+          providerId: "direct:baidu-json",
+          displayName: "Baidu fixture",
+          transport: "json",
+          stability: "unofficial",
+          releaseEligible: false,
+          requiresDailyProbe: true,
+        },
+        search: baiduSearch,
+      },
+      {
+        descriptor: {
+          providerId: "direct:bing-html",
+          displayName: "Bing fixture",
+          transport: "html",
+          stability: "unofficial",
+          releaseEligible: false,
+          requiresDailyProbe: true,
+        },
+        search: bingSearch,
+      },
+    ]);
+    const configuration = freezeLocalWebSearchPolicy(
+      policy({
+        providerOrder: ["direct:baidu-json", "direct:bing-html"],
+        allowProviderFallback: true,
+      }),
+    );
+    const result = await coordinator.search({
+      generationId: "generation-explicit-fallback",
+      query: "OpenERX",
+      configuration,
+      signal: new AbortController().signal,
+    });
+
+    expect(baiduSearch).toHaveBeenCalledTimes(1);
+    expect(bingSearch).toHaveBeenCalledTimes(1);
+    expect(result.summary).toContain("· partial");
+    expect(result.data).toMatchObject({
+      providerId: "direct:bing-html",
+      executionMode: "live",
+      partial: true,
+      attempts: [
+        { providerId: "direct:baidu-json", status: "failed" },
+        { providerId: "direct:bing-html", status: "completed" },
+      ],
+    });
+  });
+
+  it("backs off after consecutive throttle failures and recovers after the window", async () => {
+    let now = Date.parse("2026-08-29T02:00:00.000Z");
+    const search = vi
+      .fn<LocalSearchProvider["search"]>()
+      .mockRejectedValueOnce(new LocalWebSearchError("LOCAL_SEARCH_PROVIDER_CHALLENGE"))
+      .mockRejectedValueOnce(new LocalWebSearchError("LOCAL_SEARCH_RATE_LIMITED"))
+      .mockResolvedValue({
+        providerId: "direct:baidu-json",
+        candidates: [
+          {
+            title: "Recovered source",
+            url: "https://example.com/recovered",
+            excerpt: "provider recovered",
+            publishedAt: null,
+          },
+        ],
+        recencyApplied: false,
+        executionPerformed: true,
+        responseBytes: 100,
+        durationMs: 5,
+      });
+    const provider: LocalSearchProvider = {
+      descriptor: {
+        providerId: "direct:baidu-json",
+        displayName: "backoff fixture",
+        transport: "json",
+        stability: "unofficial",
+        releaseEligible: false,
+        requiresDailyProbe: true,
+      },
+      search,
+    };
+    const coordinator = new LocalWebSearchCoordinator([provider], {
+      now: () => now,
+      backoffMs: 30 * 60 * 1_000,
+    });
+    const configuration = freezeLocalWebSearchPolicy(policy());
+    const execute = (generationId: string) =>
+      coordinator.search({
+        generationId,
+        query: "OpenERX",
+        configuration,
+        signal: new AbortController().signal,
+      });
+
+    await expect(execute("generation-throttle-1")).rejects.toMatchObject({
+      code: "LOCAL_SEARCH_PROVIDER_CHALLENGE",
+    });
+    expect(coordinator.providerStates(configuration)[0]).toMatchObject({
+      status: "available",
+      consecutiveThrottleFailures: 1,
+    });
+    await expect(execute("generation-throttle-2")).rejects.toMatchObject({
+      code: "LOCAL_SEARCH_RATE_LIMITED",
+    });
+    expect(coordinator.providerStates(configuration)[0]).toMatchObject({
+      status: "backed_off",
+      consecutiveThrottleFailures: 2,
+      lastErrorCode: "LOCAL_SEARCH_RATE_LIMITED",
+    });
+    expect(coordinator.readiness(configuration)).toMatchObject({
+      available: false,
+      reason: "LOCAL_SEARCH_PROVIDER_UNAVAILABLE",
+    });
+    await expect(execute("generation-throttle-3")).rejects.toMatchObject({
+      code: "LOCAL_SEARCH_PROVIDER_UNAVAILABLE",
+    });
+    expect(search).toHaveBeenCalledTimes(2);
+
+    now += 30 * 60 * 1_000 + 1;
+    expect(coordinator.readiness(configuration).available).toBe(true);
+    await expect(execute("generation-throttle-4")).resolves.toMatchObject({
+      data: { executionMode: "live", partial: false },
+    });
+    expect(coordinator.providerStates(configuration)[0]).toMatchObject({
+      status: "available",
+      consecutiveThrottleFailures: 0,
+      lastErrorCode: null,
+      lastSuccessAt: new Date(now).toISOString(),
+    });
+  });
+
+  it("blocks a drifted result surface until the trusted runtime reset", async () => {
+    const search = vi
+      .fn<LocalSearchProvider["search"]>()
+      .mockRejectedValueOnce(new LocalWebSearchError("LOCAL_SEARCH_RESULT_SURFACE_UNRECOGNIZED"))
+      .mockResolvedValue({
+        providerId: "direct:baidu-json",
+        candidates: [
+          {
+            title: "Reset source",
+            url: "https://example.com/reset",
+            excerpt: "manual reset",
+            publishedAt: null,
+          },
+        ],
+        recencyApplied: false,
+        executionPerformed: true,
+        responseBytes: 100,
+        durationMs: 5,
+      });
+    const provider: LocalSearchProvider = {
+      descriptor: {
+        providerId: "direct:baidu-json",
+        displayName: "schema fixture",
+        transport: "json",
+        stability: "unofficial",
+        releaseEligible: false,
+        requiresDailyProbe: true,
+      },
+      search,
+    };
+    const coordinator = new LocalWebSearchCoordinator([provider]);
+    const configuration = freezeLocalWebSearchPolicy(policy());
+    const execute = (generationId: string) =>
+      coordinator.search({
+        generationId,
+        query: "OpenERX",
+        configuration,
+        signal: new AbortController().signal,
+      });
+
+    await expect(execute("generation-schema-1")).rejects.toMatchObject({
+      code: "LOCAL_SEARCH_RESULT_SURFACE_UNRECOGNIZED",
+    });
+    expect(coordinator.providerStates(configuration)[0]).toMatchObject({
+      status: "schema_blocked",
+    });
+    await expect(execute("generation-schema-2")).rejects.toMatchObject({
+      code: "LOCAL_SEARCH_PROVIDER_UNAVAILABLE",
+    });
+    expect(search).toHaveBeenCalledTimes(1);
+
+    coordinator.resetRuntimeState("direct:baidu-json");
+    expect(coordinator.providerStates(configuration)[0]).toMatchObject({ status: "available" });
+    await expect(execute("generation-schema-3")).resolves.toMatchObject({
+      data: { executionMode: "live" },
+    });
     expect(search).toHaveBeenCalledTimes(2);
   });
 

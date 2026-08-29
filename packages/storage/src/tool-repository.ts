@@ -6,6 +6,8 @@ import {
   capabilityScopeSchema,
   type ExecutionRun,
   executionRunSchema,
+  type LocalWebSearchSettingsSelection,
+  localWebSearchSettingsSelectionSchema,
   type McpServerConfig,
   mcpServerConfigSchema,
   type NormalizedToolResult,
@@ -79,6 +81,10 @@ export interface WorkspaceChangeRecord extends WorkspaceChange {
 }
 
 export type WorkspaceChangeSetRecord = WorkspaceChangeSet;
+
+export type StoredLocalWebSearchSettings = LocalWebSearchSettingsSelection & {
+  updatedAt: string;
+};
 
 export class ToolRepository {
   readonly #database: DatabaseSync;
@@ -1257,6 +1263,49 @@ export class ToolRepository {
         )
         .all(this.#ownerProfileId) as Array<{ config_json: string }>
     ).map(({ config_json }) => mcpServerConfigSchema.parse(JSON.parse(config_json)));
+  }
+
+  localWebSearchSettings(): StoredLocalWebSearchSettings | null {
+    const row = this.#database
+      .prepare(
+        `SELECT provider_id, locale, safe_search, updated_at
+         FROM local_web_search_settings WHERE owner_profile_id = ?`,
+      )
+      .get(this.#ownerProfileId) as
+      | {
+          provider_id: string;
+          locale: string;
+          safe_search: string;
+          updated_at: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      ...localWebSearchSettingsSelectionSchema.parse({
+        providerId: row.provider_id,
+        locale: row.locale,
+        safeSearch: row.safe_search,
+      }),
+      updatedAt: row.updated_at,
+    };
+  }
+
+  saveLocalWebSearchSettings(input: LocalWebSearchSettingsSelection): StoredLocalWebSearchSettings {
+    const parsed = localWebSearchSettingsSelectionSchema.parse(input);
+    const updatedAt = this.#now();
+    this.#database
+      .prepare(
+        `INSERT INTO local_web_search_settings
+         (owner_profile_id, provider_id, locale, safe_search, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(owner_profile_id) DO UPDATE SET
+           provider_id = excluded.provider_id,
+           locale = excluded.locale,
+           safe_search = excluded.safe_search,
+           updated_at = excluded.updated_at`,
+      )
+      .run(this.#ownerProfileId, parsed.providerId, parsed.locale, parsed.safeSearch, updatedAt);
+    return { ...parsed, updatedAt };
   }
 
   upsertMcpServer(config: McpServerConfig): McpServerConfig {

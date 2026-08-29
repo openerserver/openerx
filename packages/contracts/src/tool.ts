@@ -3,6 +3,11 @@ import { brokeredBashOperationSchema } from "./brokered-bash";
 import { browserComputerUseOperationV2Schema } from "./browser-computer-use";
 import { entityIdSchema, timestampSchema } from "./common";
 import { officeArtifactWriteInputSchema } from "./file";
+import type {
+  LocalWebSearchSettingsSelection,
+  LocalWebSearchSettingsState,
+  SelectableLocalWebSearchProviderId,
+} from "./local-web-search";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
@@ -997,6 +1002,13 @@ export type WorkItemDetail = z.infer<typeof workItemDetailSchema>;
 
 export interface ToolBridge {
   listToolRuntimeReadiness(): Promise<ToolRuntimeReadiness[]>;
+  getLocalWebSearchSettings(): Promise<LocalWebSearchSettingsState>;
+  updateLocalWebSearchSettings(
+    input: LocalWebSearchSettingsSelection,
+  ): Promise<LocalWebSearchSettingsState>;
+  resetLocalWebSearchRuntime(input?: {
+    providerId?: SelectableLocalWebSearchProviderId;
+  }): Promise<LocalWebSearchSettingsState>;
   listWorkItems(input?: z.input<typeof toolListInputSchema>): Promise<WorkItem[]>;
   getWorkItem(input: z.input<typeof workItemGetInputSchema>): Promise<WorkItemDetail>;
   listPermissionRequests(
