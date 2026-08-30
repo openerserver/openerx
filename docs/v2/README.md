@@ -92,6 +92,8 @@
 41. [23-codex-style-memory-plan.md](23-codex-style-memory-plan.md)：Pi 会话能力与 OpenerX 账户级长期记忆的边界、对话级控制、显式记忆 Phase A 和后续自动学习门禁。
 42. [evidence/memory-phase-a-mvp-2026-08-30.md](evidence/memory-phase-a-mvp-2026-08-30.md)：Memory Phase A 的管理/来源删除/同步实现、类型检查、专项测试与剩余 Beta 门禁证据。
 43. [evidence/memory-phase-b-extraction-foundation-2026-08-30.md](evidence/memory-phase-b-extraction-foundation-2026-08-30.md)：Memory Phase B 的持久化空闲任务、Pi 无工具结构化抽取、外部上下文/低余额门禁与 usage 锁定证据。
+44. [25-pi-runtime-remote-update-plan.md](25-pi-runtime-remote-update-plan.md)：Pi Runtime 从应用整包依赖演进为签名、版本化、可灰度和可自动回滚的独立远程升级方案，以及 `0.84.3 → 0.84.4` 专项门禁。
+45. [evidence/pi-0.84.4-upgrade-2026-08-30.md](evidence/pi-0.84.4-upgrade-2026-08-30.md)：Pi `0.84.4` 普通依赖升级、实际模块加载、Session 兼容、生产 Bundle、真实 DeepSeek 和本地门禁例外证据。
 
 ## 5. V1 与未来方向边界
 

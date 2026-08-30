@@ -1964,7 +1964,7 @@ describe("M1 chat renderer", () => {
       workItemId,
       attempt,
       status: "completed" as const,
-      piPackageVersion: "0.84.3",
+      piPackageVersion: "0.84.4",
       piHostContractVersion: 2,
       selectedModelRef: "platform/auto",
       effectiveModelRef: "platform/standard",

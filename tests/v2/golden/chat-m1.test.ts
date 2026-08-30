@@ -85,7 +85,7 @@ function responseFor(context: Context): AssistantMessage {
         "",
         "| 项目 | 状态 | 版本 |",
         "| --- | --- | --- |",
-        "| Pi AgentSession | ready | 0.84.3 |",
+        "| Pi AgentSession | ready | 0.84.4 |",
       ].join("\n"),
     );
   }

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { VERSION as PI_CODING_AGENT_VERSION } from "@earendil-works/pi-coding-agent";
 import {
   BROKERED_BASH_CONTRACT_VERSION,
   BROKERED_BASH_CORE_ENVIRONMENT_POLICY_ID,
@@ -57,6 +58,12 @@ afterEach(() => {
   }
 });
 
+describe("Pi runtime dependency", () => {
+  it("loads the pinned 0.84.4 coding-agent runtime", () => {
+    expect(PI_CODING_AGENT_VERSION).toBe("0.84.4");
+  });
+});
+
 describe("Pi persistent SessionManager boundary", () => {
   it("restores the same append-only conversation session after process reconstruction", async () => {
     const { root, cwd } = directories();
@@ -77,6 +84,35 @@ describe("Pi persistent SessionManager boundary", () => {
         expect.objectContaining({ role: "assistant" }),
       ]),
     );
+  });
+
+  it("repairs a pre-upgrade session file whose final entry has no trailing newline", async () => {
+    const { root, cwd } = directories();
+    const conversationId = randomUUID();
+    const branchId = randomUUID();
+    const first = await new ProductSessionRegistry(root, cwd).sessionManager(
+      conversationId,
+      branchId,
+    );
+    first.appendMessage({ role: "user", content: "before upgrade", timestamp: 1 });
+    appendAssistant(first, "persisted before upgrade");
+    const sessionFile = first.getSessionFile();
+    if (!sessionFile) throw new Error("persistent Pi session file was not created");
+    const persisted = readFileSync(sessionFile, "utf8");
+    writeFileSync(sessionFile, persisted.replace(/\n$/, ""));
+
+    const restored = await new ProductSessionRegistry(root, cwd).sessionManager(
+      conversationId,
+      branchId,
+    );
+
+    expect(restored.buildSessionContext().messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", content: "before upgrade" }),
+        expect.objectContaining({ role: "assistant" }),
+      ]),
+    );
+    expect(readFileSync(sessionFile, "utf8").endsWith("\n")).toBe(true);
   });
 
   it("recovers a damaged registry from Pi session headers and honors compaction context", async () => {

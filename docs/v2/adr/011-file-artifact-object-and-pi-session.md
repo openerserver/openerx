@@ -53,7 +53,7 @@ cloud object IDs. They must not contain `rootPath`, absolute/local paths, `sourc
 
 ### Pi integration and recovery
 
-Pi Host continues to use Pi 0.84.3 as the only agent harness. It registers four product tools—file
+Pi Host continues to use Pi 0.84.4 as the only agent harness. It registers four product tools—file
 list, search, cited read and artifact write—and disables Pi's raw built-in filesystem tools for this
 surface. Tool calls use stable file/artifact IDs over a private protocol to App Service, where account,
 attachment and Broker checks are applied.

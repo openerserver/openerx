@@ -527,7 +527,7 @@ export class ToolAppService {
       title: "对话轮次",
       selectedModelRef: input.selectedModelRef,
       thinkingLevel: input.thinkingLevel,
-      piPackageVersion: "0.84.3",
+      piPackageVersion: "0.84.4",
       piHostContractVersion,
       piSessionRef: `branch:${input.branchId}`,
       initialToolNames: input.initialToolNames,
@@ -1647,7 +1647,7 @@ export class ToolAppService {
       title: "对话轮次",
       selectedModelRef: this.#selectedModelRef(frame.assistantMessageId),
       thinkingLevel: "medium",
-      piPackageVersion: "0.84.3",
+      piPackageVersion: "0.84.4",
       piHostContractVersion,
       piSessionRef: `branch:${frame.branchId}`,
     });
