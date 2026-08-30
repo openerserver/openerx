@@ -79,7 +79,7 @@ export class PiMemoryExtractor implements MemoryExtractor {
       jobId: request.job.id,
       conversationId: request.job.conversationId,
       sourceAssistantMessageId: request.job.sourceAssistantMessageId,
-      thinkingLevel: "low",
+      thinkingLevel: "medium",
       messages: request.messages,
       existingMemories: request.existingMemories,
       ...(authorization

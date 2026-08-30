@@ -2,12 +2,16 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { PiMemoryExtractFrame } from "@openerx/contracts";
 import { ChatRepository, MemoryRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type MemoryExtractionRequest,
   MemoryExtractionScheduler,
   type MemoryExtractor,
+  PiMemoryExtractor,
 } from "../src/memory-extraction-scheduler";
+import type { PiHostClient } from "../src/pi-host-client";
 
 const directories: string[] = [];
 
@@ -50,6 +54,46 @@ function twoTurnConversation(repository: ChatRepository, now: string) {
 }
 
 describe("MemoryExtractionScheduler", () => {
+  it("uses a supported medium-thinking platform request for extraction", async () => {
+    const extractMemories = vi.fn(async (frame: PiMemoryExtractFrame) => ({
+      kind: "pi.memory.extract-result" as const,
+      requestId: frame.requestId,
+      ok: true as const,
+      output: { candidates: [] },
+      usageRecords: [],
+    }));
+    const extractor = new PiMemoryExtractor(
+      { extractMemories } as unknown as PiHostClient,
+      async () => ({
+        authorization: {
+          accountId: randomUUID(),
+          accessToken: "t".repeat(32),
+          accessTokenExpiresAt: "2026-08-31T00:00:00.000Z",
+          platformBaseUrl: "https://platform.example.test",
+        },
+      }),
+    );
+    const conversationId = randomUUID();
+    const jobId = randomUUID();
+    await expect(
+      extractor.extract({
+        job: { id: jobId, conversationId, sourceAssistantMessageId: randomUUID() },
+        snapshot: { conversation: { selectedModelRef: "platform/auto" } },
+        messages: [],
+        existingMemories: [],
+      } as unknown as MemoryExtractionRequest),
+    ).resolves.toEqual({ candidates: [] });
+    expect(extractMemories).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "pi.memory.extract",
+        jobId,
+        conversationId,
+        thinkingLevel: "medium",
+        platform: expect.objectContaining({ selectedModelRef: "platform/auto" }),
+      }),
+    );
+  });
+
   it("extracts completed user messages after idle and commits safe automatic memories", async () => {
     const file = databasePath();
     let now = "2026-08-30T00:00:00.000Z";

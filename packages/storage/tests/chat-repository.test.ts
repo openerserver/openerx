@@ -209,4 +209,26 @@ describe("ChatRepository", () => {
     expect(names.join(" ")).not.toMatch(/credential|password|secret|token/i);
     database.close();
   });
+
+  it("removes local semantic-cluster cursor state when clearing the local cache", () => {
+    const file = databasePath();
+    const repository = new ChatRepository(file);
+    const database = new DatabaseSync(file);
+    database
+      .prepare(
+        `INSERT INTO memory_semantic_cluster_state
+         (owner_profile_id, next_pair_index, completed_cycles, updated_at, revision)
+         VALUES ('local-default', 3, 1, '2026-08-30T00:00:00.000Z', 4)`,
+      )
+      .run();
+    database.close();
+
+    repository.clearLocalCache();
+    repository.close();
+    const verification = new DatabaseSync(file, { readOnly: true });
+    expect(
+      verification.prepare("SELECT COUNT(*) AS count FROM memory_semantic_cluster_state").get(),
+    ).toEqual({ count: 0 });
+    verification.close();
+  });
 });

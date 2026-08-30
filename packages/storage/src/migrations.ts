@@ -1302,6 +1302,19 @@ const migrations: readonly Migration[] = [
         WHERE proposal_memory_id IS NOT NULL;
     `,
   },
+  {
+    version: 27,
+    checksum: "memory-semantic-cluster-rotation-v27-20260830",
+    sql: `
+      CREATE TABLE memory_semantic_cluster_state (
+        owner_profile_id TEXT PRIMARY KEY,
+        next_pair_index INTEGER NOT NULL DEFAULT 0 CHECK (next_pair_index >= 0),
+        completed_cycles INTEGER NOT NULL DEFAULT 0 CHECK (completed_cycles >= 0),
+        updated_at TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0)
+      ) STRICT;
+    `,
+  },
 ];
 
 export function migrateDatabase(

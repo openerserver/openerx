@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ChatRepository, FileRepository } from "@openerx/storage";
+import { ChatRepository, FileRepository, MemoryRepository } from "@openerx/storage";
 import { strFromU8, unzipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
 import { DiagnosticsService, PerformanceBudgetTracker, PersonalDataExporter } from "../src";
@@ -99,6 +99,17 @@ describe("M8 observability boundary", () => {
       type: "completed",
     });
     chat.close();
+    const memories = new MemoryRepository(databasePath);
+    memories.updateSettings({ memoriesEnabled: true });
+    for (const [index, content] of ["用户偏好中文。", "用户偏好简体中文。"].entries()) {
+      memories.upsert({
+        kind: "preference",
+        content,
+        idempotencyKey: `m8-memory-export-${index}`,
+      });
+    }
+    expect(memories.nextSemanticClusterBatch()).not.toBeNull();
+    memories.close();
     const objectRef = `objects/sha256/aa/${"a".repeat(64)}`;
     const objectPath = path.join(root, objectRef);
     mkdirSync(path.dirname(objectPath), { recursive: true });
@@ -137,6 +148,9 @@ describe("M8 observability boundary", () => {
     });
     expect(JSON.stringify(payload)).not.toContain("objectRef");
     expect(JSON.stringify(payload)).not.toContain("credentialRef");
+    expect(payload.memorySemanticClusterState).toEqual([
+      expect.objectContaining({ nextPairIndex: 0, completedCycles: 0, revision: 1 }),
+    ]);
     const exportedObject = Object.entries(unzipSync(readFileSync(output))).find(([name]) =>
       name.startsWith("files/"),
     )?.[1];

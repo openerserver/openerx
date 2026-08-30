@@ -22,6 +22,7 @@
     "dev:desktop": "npm run start --workspace @openerx/desktop",
     "dev:v2": "npm run dev:deepseek",
     "eval:pbash:model": "vite build --config scripts/pbash/vite.model-ab.config.mts --logLevel error && node --env-file-if-exists=.env .vite/pbash-model-ab/pbash-model-ab.mjs",
+    "eval:memory:model": "vite build --config scripts/memory/vite.model-golden.config.mts --logLevel error && node --env-file-if-exists=.env .vite/memory-model-golden/memory-model-golden.mjs",
     "probe:lws:v2": "node scripts/lws/run-daily-probe.mjs",
     "lint:v2": "biome check apps packages services scripts tests package.json tsconfig.base.json",
     "lint:v2:fix": "biome check --write apps packages services scripts tests package.json tsconfig.base.json",

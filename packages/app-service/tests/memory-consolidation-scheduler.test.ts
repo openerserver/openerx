@@ -5,6 +5,7 @@ import type { PiMemoryClusterFrame } from "@openerx/contracts";
 import { MemoryRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type MemoryClusterRequest,
   MemoryConsolidationScheduler,
   PiMemoryClusterer,
 } from "../src/memory-consolidation-scheduler";
@@ -47,6 +48,7 @@ describe("MemoryConsolidationScheduler", () => {
     const runId = randomUUID();
     await expect(
       clusterer.cluster({
+        batchKey: "7-3",
         run: {
           id: runId,
           ownerProfileId: "local-default",
@@ -69,9 +71,10 @@ describe("MemoryConsolidationScheduler", () => {
     expect(clusterMemories).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "pi.memory.cluster",
+        thinkingLevel: "medium",
         platform: expect.objectContaining({
           selectedModelRef: "platform/auto",
-          requestDedupeKey: `memory-cluster:${runId}`,
+          requestDedupeKey: `memory-cluster:${runId}:7-3`,
         }),
       }),
     );
@@ -161,6 +164,33 @@ describe("MemoryConsolidationScheduler", () => {
     repository.close();
   });
 
+  it("advances two persisted block pairs per run without repeating a completed cycle", async () => {
+    const repository = new MemoryRepository(databasePath());
+    repository.updateSettings({ memoriesEnabled: true });
+    for (let index = 0; index < 45; index += 1) {
+      repository.upsert({
+        kind: "preference",
+        content: `用户偏好编号 ${index}。`,
+        idempotencyKey: `memory-cluster-batch-${index}-0001`,
+      });
+    }
+    const cluster = vi.fn(async (_request: MemoryClusterRequest) => ({ proposals: [] }));
+    const scheduler = new MemoryConsolidationScheduler({
+      repository,
+      clusterer: { cluster },
+    });
+
+    await expect(scheduler.tick()).resolves.toMatchObject({ status: "completed" });
+    expect(cluster).toHaveBeenCalledTimes(2);
+    expect(cluster.mock.calls.map(([request]) => request.memories.length)).toEqual([20, 40]);
+    expect(repository.nextSemanticClusterBatch()).toMatchObject({
+      cursor: 2,
+      pairCount: 6,
+      stateRevision: 3,
+    });
+    repository.close();
+  });
+
   it("keeps a completed deterministic run when optional semantic clustering fails", async () => {
     const repository = new MemoryRepository(databasePath());
     repository.updateSettings({ memoriesEnabled: true });
@@ -186,6 +216,10 @@ describe("MemoryConsolidationScheduler", () => {
     expect(repository.listConsolidationRuns()).toEqual([
       expect.objectContaining({ status: "completed", lastErrorCode: null }),
     ]);
+    expect(repository.nextSemanticClusterBatch()).toMatchObject({
+      cursor: 0,
+      stateRevision: 1,
+    });
     repository.close();
   });
 });

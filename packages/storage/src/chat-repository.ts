@@ -780,6 +780,7 @@ export class ChatRepository {
     this.#transaction(() => {
       this.#database.exec(`
         DELETE FROM memory_merge_reviews;
+        DELETE FROM memory_semantic_cluster_state;
         DELETE FROM memory_consolidation_runs;
         DELETE FROM memory_extraction_jobs;
         DELETE FROM memory_conversation_context;

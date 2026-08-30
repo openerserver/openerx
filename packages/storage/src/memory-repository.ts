@@ -60,6 +60,13 @@ export interface MemoryConsolidationClaimOptions {
   staleAfterMs?: number;
 }
 
+export interface MemorySemanticClusterBatch {
+  cursor: number;
+  pairCount: number;
+  stateRevision: number;
+  memories: Array<Pick<MemoryEntry, "id" | "kind" | "content">>;
+}
+
 export interface AutomaticMemoryIngestResult {
   memory: MemoryEntry | null;
   review: MemoryMergeReview | null;
@@ -1125,6 +1132,104 @@ export class MemoryRepository {
       )
       .all(this.#ownerProfileId, Math.max(1, Math.min(limit, 100))) as SqlRow[];
     return rows.map((row) => this.#consolidationRunFromRow(row));
+  }
+
+  nextSemanticClusterBatch(blockSize = 20): MemorySemanticClusterBatch | null {
+    const boundedBlockSize = Math.max(2, Math.min(blockSize, 20));
+    return this.#transaction(() => {
+      const entries = (
+        this.#database
+          .prepare(
+            `SELECT * FROM memory_entries
+             WHERE owner_profile_id = ? AND status = 'active' AND conflict_key IS NULL
+             ORDER BY kind, created_at, id`,
+          )
+          .all(this.#ownerProfileId) as SqlRow[]
+      ).map((row) => this.#entryFromRow(row));
+      const entriesByKind = new Map<MemoryKind, MemoryEntry[]>();
+      for (const entry of entries) {
+        const group = entriesByKind.get(entry.kind) ?? [];
+        group.push(entry);
+        entriesByKind.set(entry.kind, group);
+      }
+      const pairs: MemoryEntry[][] = [];
+      const kinds: MemoryKind[] = ["profile", "preference", "workflow", "ongoing_context"];
+      for (const kind of kinds) {
+        const group = entriesByKind.get(kind) ?? [];
+        if (group.length < 2) continue;
+        const blocks: MemoryEntry[][] = [];
+        for (let offset = 0; offset < group.length; offset += boundedBlockSize) {
+          blocks.push(group.slice(offset, offset + boundedBlockSize));
+        }
+        for (let leftIndex = 0; leftIndex < blocks.length; leftIndex += 1) {
+          for (let rightIndex = leftIndex; rightIndex < blocks.length; rightIndex += 1) {
+            const left = blocks[leftIndex] ?? [];
+            const right = blocks[rightIndex] ?? [];
+            const pair = leftIndex === rightIndex ? left : [...left, ...right];
+            if (pair.length >= 2) pairs.push(pair);
+          }
+        }
+      }
+      if (pairs.length === 0) return null;
+      const now = this.#now();
+      let state = this.#database
+        .prepare(
+          `SELECT next_pair_index, completed_cycles, revision
+           FROM memory_semantic_cluster_state WHERE owner_profile_id = ?`,
+        )
+        .get(this.#ownerProfileId) as
+        | { next_pair_index: number; completed_cycles: number; revision: number }
+        | undefined;
+      if (!state) {
+        this.#database
+          .prepare(
+            `INSERT INTO memory_semantic_cluster_state
+             (owner_profile_id, next_pair_index, completed_cycles, updated_at, revision)
+             VALUES (?, 0, 0, ?, 1)`,
+          )
+          .run(this.#ownerProfileId, now);
+        state = { next_pair_index: 0, completed_cycles: 0, revision: 1 };
+      }
+      const cursor = Number(state.next_pair_index) % pairs.length;
+      return {
+        cursor,
+        pairCount: pairs.length,
+        stateRevision: Number(state.revision),
+        memories: (pairs[cursor] ?? []).map(({ id, kind, content }) => ({ id, kind, content })),
+      };
+    });
+  }
+
+  completeSemanticClusterBatch(batch: MemorySemanticClusterBatch): void {
+    this.#transaction(() => {
+      const state = this.#database
+        .prepare(
+          `SELECT next_pair_index, completed_cycles, revision
+           FROM memory_semantic_cluster_state WHERE owner_profile_id = ?`,
+        )
+        .get(this.#ownerProfileId) as
+        | { next_pair_index: number; completed_cycles: number; revision: number }
+        | undefined;
+      if (
+        !state ||
+        Number(state.revision) !== batch.stateRevision ||
+        batch.pairCount < 1 ||
+        Number(state.next_pair_index) % batch.pairCount !== batch.cursor
+      ) {
+        throw new Error("MEMORY_CLUSTER_CURSOR_STALE");
+      }
+      const nextPairIndex = (batch.cursor + 1) % batch.pairCount;
+      const completedCycles = Number(state.completed_cycles) + (nextPairIndex === 0 ? 1 : 0);
+      const now = this.#now();
+      const result = this.#database
+        .prepare(
+          `UPDATE memory_semantic_cluster_state
+           SET next_pair_index = ?, completed_cycles = ?, updated_at = ?, revision = revision + 1
+           WHERE owner_profile_id = ? AND revision = ?`,
+        )
+        .run(nextPairIndex, completedCycles, now, this.#ownerProfileId, batch.stateRevision);
+      if (Number(result.changes) !== 1) throw new Error("MEMORY_CLUSTER_CURSOR_STALE");
+    });
   }
 
   scheduleExtraction(

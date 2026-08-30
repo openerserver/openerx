@@ -247,6 +247,12 @@ export class PersonalDataExporter {
                 updated_at AS updatedAt, resolved_at AS resolvedAt
          FROM memory_merge_reviews ORDER BY created_at, id`,
       ),
+      memorySemanticClusterState: rows(
+        database,
+        `SELECT next_pair_index AS nextPairIndex, completed_cycles AS completedCycles,
+                updated_at AS updatedAt, revision
+         FROM memory_semantic_cluster_state ORDER BY owner_profile_id`,
+      ),
       memoryConversationContext: rows(
         database,
         `SELECT conversation_id AS conversationId,
@@ -300,6 +306,7 @@ export class PersonalDataExporter {
       memoryExtractionJobs: [],
       memoryConsolidationRuns: [],
       memoryMergeReviews: [],
+      memorySemanticClusterState: [],
       memoryConversationContext: [],
       memorySourceLinks: [],
       memories: [],

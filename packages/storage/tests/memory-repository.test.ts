@@ -591,6 +591,66 @@ describe("MemoryRepository", () => {
     repository.close();
   });
 
+  it("persists a block-pair cursor that eventually covers an active memory catalog", () => {
+    const file = databasePath();
+    let repository = new MemoryRepository(file, { idFactory: ids() });
+    repository.updateSettings({ memoriesEnabled: true });
+    const memoryIds = new Set<string>();
+    for (let index = 0; index < 45; index += 1) {
+      const memory = repository.upsert({
+        kind: "preference",
+        content: `用户偏好设置编号 ${index}。`,
+        idempotencyKey: `memory-cluster-rotation-${index}-0001`,
+      });
+      memoryIds.add(memory.id);
+    }
+
+    const covered = new Set<string>();
+    const batchSizes: number[] = [];
+    const first = repository.nextSemanticClusterBatch();
+    expect(first).toMatchObject({ cursor: 0, pairCount: 6, stateRevision: 1 });
+    expect(first?.memories).toHaveLength(20);
+    batchSizes.push(first?.memories.length ?? 0);
+    for (const memory of first?.memories ?? []) covered.add(memory.id);
+    if (!first) throw new Error("semantic cluster batch missing");
+    repository.completeSemanticClusterBatch(first);
+    expect(() => repository.completeSemanticClusterBatch(first)).toThrow(
+      "MEMORY_CLUSTER_CURSOR_STALE",
+    );
+    repository.close();
+
+    repository = new MemoryRepository(file);
+    const second = repository.nextSemanticClusterBatch();
+    expect(second).toMatchObject({ cursor: 1, pairCount: 6, stateRevision: 2 });
+    expect(second?.memories).toHaveLength(40);
+    for (let index = 0; index < 5; index += 1) {
+      const batch = repository.nextSemanticClusterBatch();
+      if (!batch) throw new Error("semantic cluster batch missing");
+      batchSizes.push(batch.memories.length);
+      for (const memory of batch.memories) covered.add(memory.id);
+      repository.completeSemanticClusterBatch(batch);
+    }
+    expect(covered).toEqual(memoryIds);
+    expect(batchSizes).toEqual([20, 40, 25, 20, 25, 5]);
+    expect(repository.nextSemanticClusterBatch()).toMatchObject({
+      cursor: 0,
+      pairCount: 6,
+      stateRevision: 7,
+    });
+    repository.close();
+
+    const database = new DatabaseSync(file);
+    expect(
+      database
+        .prepare(
+          `SELECT next_pair_index AS nextPairIndex, completed_cycles AS completedCycles
+           FROM memory_semantic_cluster_state WHERE owner_profile_id = 'local-default'`,
+        )
+        .get(),
+    ).toEqual({ nextPairIndex: 0, completedCycles: 1 });
+    database.close();
+  });
+
   it("rejects stale semantic reviews and removes pending proposals with a forgotten source", () => {
     const file = databasePath();
     const chat = new ChatRepository(file);

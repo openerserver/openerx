@@ -49,6 +49,13 @@ describe("database migrations", () => {
         )
         .get(),
     ).toEqual({ name: "memory_merge_reviews_proposal_idx" });
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_semantic_cluster_state'",
+        )
+        .get(),
+    ).toEqual({ name: "memory_semantic_cluster_state" });
     database.close();
   });
 

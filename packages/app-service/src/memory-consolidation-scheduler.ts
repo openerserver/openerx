@@ -15,6 +15,7 @@ import type { PiHostClient } from "./pi-host-client";
 
 export interface MemoryClusterRequest {
   run: MemoryConsolidationRun;
+  batchKey: string;
   memories: Array<Pick<MemoryEntry, "id" | "kind" | "content">>;
 }
 
@@ -49,7 +50,7 @@ export class PiMemoryClusterer implements MemoryClusterer {
       kind: "pi.memory.cluster",
       requestId: randomUUID(),
       runId: request.run.id,
-      thinkingLevel: "low",
+      thinkingLevel: "medium",
       memories: request.memories,
       ...(authorization
         ? {
@@ -59,7 +60,7 @@ export class PiMemoryClusterer implements MemoryClusterer {
               platformBaseUrl: authorization.platformBaseUrl,
               selectedModelRef: "platform/auto",
               approvedFallbackModelRef: null,
-              requestDedupeKey: `memory-cluster:${request.run.id}`,
+              requestDedupeKey: `memory-cluster:${request.run.id}:${request.batchKey}`,
             },
           }
         : {}),
@@ -77,6 +78,7 @@ export interface MemoryConsolidationSchedulerOptions {
   intervalMs?: number;
   consolidationIntervalMs?: number;
   activeLimit?: number;
+  semanticBatchesPerRun?: number;
   staleAfterMs?: number;
   onRunChanged?: (run: MemoryConsolidationRun) => void;
   onError?: (error: unknown, run: MemoryConsolidationRun) => void;
@@ -88,6 +90,7 @@ export class MemoryConsolidationScheduler {
   readonly #intervalMs: number;
   readonly #consolidationIntervalMs: number;
   readonly #activeLimit: number;
+  readonly #semanticBatchesPerRun: number;
   readonly #staleAfterMs: number;
   readonly #onRunChanged: NonNullable<MemoryConsolidationSchedulerOptions["onRunChanged"]>;
   readonly #onError: NonNullable<MemoryConsolidationSchedulerOptions["onError"]>;
@@ -103,6 +106,7 @@ export class MemoryConsolidationScheduler {
       options.consolidationIntervalMs ?? 24 * 60 * 60_000,
     );
     this.#activeLimit = Math.max(1, options.activeLimit ?? 200);
+    this.#semanticBatchesPerRun = Math.max(1, Math.min(options.semanticBatchesPerRun ?? 2, 4));
     this.#staleAfterMs = Math.max(60_000, options.staleAfterMs ?? 10 * 60_000);
     this.#onRunChanged = options.onRunChanged ?? (() => undefined);
     this.#onError = options.onError ?? (() => undefined);
@@ -136,17 +140,22 @@ export class MemoryConsolidationScheduler {
       const completed = this.#repository.runConsolidation(run.id);
       this.#onRunChanged(completed);
       if (this.#clusterer && this.#repository.settings().memoriesEnabled) {
-        const memories = this.#repository
-          .list({ status: "active", limit: 40 })
-          .filter(({ conflictKey }) => conflictKey === null)
-          .map(({ id, kind, content }) => ({ id, kind, content }));
-        if (memories.length >= 2) {
+        for (let index = 0; index < this.#semanticBatchesPerRun; index += 1) {
+          const batch = this.#repository.nextSemanticClusterBatch();
+          if (!batch) break;
           try {
-            const output = await this.#clusterer.cluster({ run: completed, memories });
+            const output = await this.#clusterer.cluster({
+              run: completed,
+              batchKey: `${batch.stateRevision}-${batch.cursor}`,
+              memories: batch.memories,
+            });
             this.#repository.stageHistoricalMergeReviews(output.proposals);
+            this.#repository.completeSemanticClusterBatch(batch);
           } catch (error) {
             this.#onError(error, completed);
+            break;
           }
+          if ((batch.cursor + 1) % batch.pairCount === 0) break;
         }
       }
       return completed;

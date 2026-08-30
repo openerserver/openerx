@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/agent-session.ts",
     "./host": "./src/host.ts",
+    "./memory-background": "./src/memory-background.ts",
     "./platform-provider": "./src/platform-provider.ts",
     "./process": "./src/process.ts"
   },
