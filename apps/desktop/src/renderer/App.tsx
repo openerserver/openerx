@@ -2997,6 +2997,7 @@ function ChatPage({
   const messageListRef = useRef<HTMLElement>(null);
   const messageListContentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(true);
+  const lastMessageListScrollTopRef = useRef(0);
   const previousConversationIdRef = useRef(conversationId);
   const [following, setFollowing] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
@@ -3024,6 +3025,7 @@ function ChatPage({
     if (previousConversationIdRef.current === conversationId) return;
     previousConversationIdRef.current = conversationId;
     followingRef.current = true;
+    lastMessageListScrollTopRef.current = 0;
     setFollowing(true);
   }, [conversationId]);
   useEffect(() => {
@@ -3031,14 +3033,18 @@ function ChatPage({
     const messageList = messageListRef.current;
     if (!messageList) return;
     const updateFollowing = (): void => {
-      const distanceFromBottom =
-        messageList.scrollHeight - (messageList.scrollTop + messageList.clientHeight);
-      const next = distanceFromBottom <= 140;
+      const scrollTop = messageList.scrollTop;
+      const distanceFromBottom = messageList.scrollHeight - (scrollTop + messageList.clientHeight);
+      const movedUp = scrollTop < lastMessageListScrollTopRef.current - 1;
+      let next = followingRef.current;
+      if (movedUp) next = false;
+      else if (distanceFromBottom <= 140) next = true;
+      lastMessageListScrollTopRef.current = scrollTop;
       followingRef.current = next;
       setFollowing((current) => (current === next ? current : next));
     };
+    lastMessageListScrollTopRef.current = messageList.scrollTop;
     messageList.addEventListener("scroll", updateFollowing, { passive: true });
-    updateFollowing();
     return () => messageList.removeEventListener("scroll", updateFollowing);
   }, [ready]);
   useEffect(() => {
@@ -3052,7 +3058,10 @@ function ChatPage({
       if (scheduledFrame !== null) return;
       scheduledFrame = window.requestAnimationFrame(() => {
         scheduledFrame = null;
-        if (followingRef.current) scrollMessageListToEnd(messageList);
+        if (followingRef.current) {
+          scrollMessageListToEnd(messageList);
+          lastMessageListScrollTopRef.current = messageList.scrollTop;
+        }
       });
     };
     const resizeObserver =

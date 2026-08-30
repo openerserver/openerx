@@ -467,8 +467,19 @@ describe("M1 chat renderer", () => {
     expect(assistant?.querySelector(".response-waterfall .stream-tail")).toBeTruthy();
     const messageList = screen.getByRole("region", { name: "对话消息" });
     const messageListContent = messageList.querySelector(".message-list-content");
-    const scrollTo = vi.fn();
-    Object.defineProperty(messageList, "scrollHeight", { configurable: true, value: 960 });
+    let scrollHeight = 960;
+    const clientHeight = 400;
+    const scrollTo = vi.fn(({ top }: ScrollToOptions) => {
+      messageList.scrollTop = Math.max(0, Number(top) - clientHeight);
+    });
+    Object.defineProperty(messageList, "scrollHeight", {
+      configurable: true,
+      get: () => scrollHeight,
+    });
+    Object.defineProperty(messageList, "clientHeight", {
+      configurable: true,
+      value: clientHeight,
+    });
     Object.defineProperty(messageList, "scrollTo", { configurable: true, value: scrollTo });
     expect(observe).toHaveBeenCalledWith(messageListContent);
 
@@ -494,6 +505,22 @@ describe("M1 chat renderer", () => {
 
     expect(await screen.findByText("第一段第二段")).toBeTruthy();
     await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 960, behavior: "auto" }));
+
+    scrollHeight = 1_200;
+    act(() => messageList.dispatchEvent(new Event("scroll")));
+    act(() => resizeCallback?.([], {} as ResizeObserver));
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 1_200, behavior: "auto" }),
+    );
+
+    const followCallCount = scrollTo.mock.calls.length;
+    act(() => messageList.dispatchEvent(new Event("scroll")));
+    messageList.scrollTop = 600;
+    act(() => messageList.dispatchEvent(new Event("scroll")));
+    expect(await screen.findByRole("button", { name: /回到最新回复/u })).toBeTruthy();
+    scrollHeight = 1_440;
+    act(() => resizeCallback?.([], {} as ResizeObserver));
+    expect(scrollTo).toHaveBeenCalledTimes(followCallCount);
     expect(bridge.getConversation).toHaveBeenCalledTimes(1);
     cleanup();
     vi.unstubAllGlobals();
