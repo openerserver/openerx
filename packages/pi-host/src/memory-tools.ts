@@ -94,7 +94,7 @@ export function createProductMemoryTools(input: {
       name: "openerx_memory_remember",
       label: "Remember for later",
       description:
-        "Save a durable personal memory only when the user explicitly asks to remember, save, or keep something for future conversations. To update an existing memory, search first and pass its memoryId. Never store credentials, tokens, passwords, verification codes, cookies, private keys, medical records, financial account numbers, or third-party private data.",
+        "Save a durable personal memory only when the user explicitly asks to remember, save, or keep something for future conversations. To update an existing memory, search first and pass its memoryId. For a mutually exclusive fact or preference, pass a stable conflictKey such as response.language so the prior value can be replaced and restored. Never store credentials, tokens, passwords, verification codes, cookies, private keys, medical records, financial account numbers, or third-party private data.",
       parameters: Type.Object(
         {
           memoryId: Type.Optional(Type.String({ format: "uuid" })),
@@ -102,6 +102,13 @@ export function createProductMemoryTools(input: {
           content: Type.String({ minLength: 1, maxLength: 2_000 }),
           retrievalKeys: Type.Optional(
             Type.Array(Type.String({ minLength: 1, maxLength: 120 }), { maxItems: 50 }),
+          ),
+          conflictKey: Type.Optional(
+            Type.String({
+              minLength: 3,
+              maxLength: 120,
+              pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$",
+            }),
           ),
         },
         { additionalProperties: false },
@@ -113,6 +120,7 @@ export function createProductMemoryTools(input: {
           kind: params.kind,
           content: params.content,
           ...(params.retrievalKeys ? { retrievalKeys: params.retrievalKeys } : {}),
+          ...(params.conflictKey ? { conflictKey: params.conflictKey } : {}),
         }),
     }),
     defineTool({

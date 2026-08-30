@@ -16,6 +16,7 @@ const event: AutomaticMemoryCreatedEvent = {
       content: "这段正文不应出现在系统通知中。",
       retrievalKeys: [],
       canonicalKey: "preference:notification",
+      conflictKey: null,
       origin: "automatic",
       confidence: 0.9,
       status: "active",

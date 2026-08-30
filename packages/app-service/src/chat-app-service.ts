@@ -1017,6 +1017,9 @@ export class ChatAppService {
             ...(frame.operation.retrievalKeys
               ? { retrievalKeys: frame.operation.retrievalKeys }
               : {}),
+            ...(frame.operation.conflictKey
+              ? { conflictKey: frame.operation.conflictKey }
+              : {}),
             sourceConversationId: frame.conversationId,
             idempotencyKey: frame.operation.idempotencyKey,
           });

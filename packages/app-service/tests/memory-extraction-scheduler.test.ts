@@ -68,6 +68,7 @@ describe("MemoryExtractionScheduler", () => {
             kind: "preference" as const,
             content: "用户希望技术方案先给结论。",
             retrievalKeys: ["技术方案", "结论"],
+            conflictKey: null,
             confidence: 0.94,
             sourceMessageId: first.receipt.userMessageId ?? "",
           },
@@ -75,6 +76,7 @@ describe("MemoryExtractionScheduler", () => {
             kind: "profile" as const,
             content: "api_key=sk-abcdefghijklmnop",
             retrievalKeys: [],
+            conflictKey: null,
             confidence: 0.99,
             sourceMessageId: first.receipt.userMessageId ?? "",
           },
@@ -176,6 +178,7 @@ describe("MemoryExtractionScheduler", () => {
         kind: "preference",
         content: "用户希望技术方案先给结论。",
         retrievalKeys: ["技术方案", "结论"],
+        conflictKey: null,
         confidence: 0.94,
         sourceMessageId: original.receipt.userMessageId ?? "",
       },
@@ -190,6 +193,7 @@ describe("MemoryExtractionScheduler", () => {
             kind: "preference" as const,
             content: "用户希望技术方案先给结论。",
             retrievalKeys: ["技术方案", "结论"],
+            conflictKey: null,
             confidence: 0.91,
             sourceMessageId: later.first.receipt.userMessageId ?? "",
           },
@@ -215,6 +219,76 @@ describe("MemoryExtractionScheduler", () => {
         expect.objectContaining({ conversationId: original.receipt.conversationId }),
         expect.objectContaining({ conversationId: later.first.receipt.conversationId }),
       ]),
+    );
+    memories.close();
+    chat.close();
+  });
+
+  it("protects explicit conflicts and notifies only the final active automatic value", async () => {
+    const file = databasePath();
+    let now = "2026-08-30T00:00:00.000Z";
+    const chat = new ChatRepository(file, { now: () => now });
+    const memories = new MemoryRepository(file, { now: () => now });
+    memories.updateSettings({
+      memoriesEnabled: true,
+      generateMemories: true,
+      idleDelayMinutes: 1,
+    });
+    const explicit = memories.upsert({
+      kind: "preference",
+      content: "用户明确要求使用中文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-scheduler-explicit-0001",
+    });
+    const conversation = twoTurnConversation(chat, now);
+    const sourceMessageId = conversation.first.receipt.userMessageId ?? "";
+    const extractor: MemoryExtractor = {
+      extract: vi.fn(async () => ({
+        candidates: [
+          {
+            kind: "preference" as const,
+            content: "用户偏好使用英文回复。",
+            retrievalKeys: ["英文"],
+            conflictKey: "response.language",
+            confidence: 0.97,
+            sourceMessageId,
+          },
+          {
+            kind: "preference" as const,
+            content: "用户偏好简短回答。",
+            retrievalKeys: ["简短"],
+            conflictKey: "response.detail",
+            confidence: 0.9,
+            sourceMessageId,
+          },
+          {
+            kind: "preference" as const,
+            content: "用户偏好详细回答。",
+            retrievalKeys: ["详细"],
+            conflictKey: "response.detail",
+            confidence: 0.93,
+            sourceMessageId,
+          },
+        ],
+      })),
+    };
+    const created = vi.fn();
+    const scheduler = new MemoryExtractionScheduler({
+      chatRepository: chat,
+      memoryRepository: memories,
+      extractor,
+      onMemoriesCreated: created,
+    });
+    scheduler.handleChatEvent(conversation.event);
+
+    now = "2026-08-30T00:02:00.000Z";
+    await expect(scheduler.tick()).resolves.toEqual([
+      expect.objectContaining({ status: "completed", candidateCount: 1 }),
+    ]);
+    expect(memories.get(explicit.id).status).toBe("active");
+    expect(created).toHaveBeenCalledWith(
+      [expect.objectContaining({ content: "用户偏好详细回答。", status: "active" })],
+      expect.objectContaining({ status: "completed", candidateCount: 1 }),
     );
     memories.close();
     chat.close();

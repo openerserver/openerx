@@ -8,7 +8,7 @@ import type {
   LocalWebSearchSettingsState,
   SelectableLocalWebSearchProviderId,
 } from "./local-web-search";
-import { memoryKindSchema } from "./memory";
+import { memoryConflictKeySchema, memoryKindSchema } from "./memory";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
@@ -636,6 +636,7 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
       kind: memoryKindSchema,
       content: z.string().trim().min(1).max(2_000),
       retrievalKeys: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
+      conflictKey: memoryConflictKeySchema.optional(),
     })
     .strict(),
   z

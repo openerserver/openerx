@@ -4666,6 +4666,11 @@ function MemorySettingsPanel(): React.JSX.Element {
               <small>
                 更新于 {new Date(memory.updatedAt).toLocaleString()}
               </small>
+              {memory.supersedesMemoryId ? (
+                <small className="memory-supersede-note">
+                  已替代上一版本；删除此条将恢复上一版本。
+                </small>
+              ) : null}
               <MemorySourceDetails memory={memory} />
             </div>
             <div className="memory-row-actions">
@@ -4684,11 +4689,11 @@ function MemorySettingsPanel(): React.JSX.Element {
               </button>
               <button
                 type="button"
-                aria-label={`删除记忆：${memory.content}`}
+                aria-label={`${memory.supersedesMemoryId ? "撤销替代" : "删除记忆"}：${memory.content}`}
                 disabled={deleteMemory.isPending}
                 onClick={() => deleteMemory.mutate(memory.id)}
               >
-                删除
+                {memory.supersedesMemoryId ? "撤销替代" : "删除"}
               </button>
             </div>
           </article>

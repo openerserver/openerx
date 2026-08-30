@@ -59,6 +59,7 @@ describe("Pi AgentSession composition", () => {
               kind: "preference",
               content: "用户希望先给结论。",
               retrievalKeys: ["结论"],
+              conflictKey: "response.structure",
               confidence: 0.93,
               sourceMessageId,
             },

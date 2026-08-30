@@ -1274,12 +1274,57 @@ export class ChatRepository {
           .run(this.#now(), this.#now(), objectId, this.#ownerProfileId);
       }
       if (objectType === "memory_entry") {
+        const now = this.#now();
+        const existing = this.#database
+          .prepare(
+            `SELECT kind, conflict_key, supersedes_memory_id, status
+             FROM memory_entries WHERE id = ? AND owner_profile_id = ?`,
+          )
+          .get(objectId, this.#ownerProfileId) as
+          | {
+              kind: string;
+              conflict_key: string | null;
+              supersedes_memory_id: string | null;
+              status: string;
+            }
+          | undefined;
         this.#database
           .prepare(
             `UPDATE memory_entries SET status = 'deleted', updated_at = ?, revision = revision + 1
              WHERE id = ? AND owner_profile_id = ?`,
           )
-          .run(this.#now(), objectId, this.#ownerProfileId);
+          .run(now, objectId, this.#ownerProfileId);
+        if (
+          existing?.status === "active" &&
+          existing.conflict_key &&
+          existing.supersedes_memory_id
+        ) {
+          const active = this.#database
+            .prepare(
+              `SELECT id FROM memory_entries
+               WHERE owner_profile_id = ? AND kind = ? AND conflict_key = ?
+                 AND status = 'active' LIMIT 1`,
+            )
+            .get(this.#ownerProfileId, existing.kind, existing.conflict_key) as
+            | { id: string }
+            | undefined;
+          if (!active) {
+            this.#database
+              .prepare(
+                `UPDATE memory_entries
+                 SET status = 'active', updated_at = ?, revision = revision + 1
+                 WHERE id = ? AND owner_profile_id = ? AND kind = ? AND conflict_key = ?
+                   AND status = 'superseded'`,
+              )
+              .run(
+                now,
+                existing.supersedes_memory_id,
+                this.#ownerProfileId,
+                existing.kind,
+                existing.conflict_key,
+              );
+          }
+        }
       }
       if (objectType === "memory_settings") {
         this.#database
@@ -1335,30 +1380,69 @@ export class ChatRepository {
       return;
     }
     if (objectType === "memory_entry") {
-      const memory = memoryEntrySchema.parse(payload);
+      const receivedMemory = memoryEntrySchema.parse(payload);
+      let memory = receivedMemory;
       if (memory.ownerProfileId !== this.#ownerProfileId || memory.id !== objectId) {
         throw new Error("ACCOUNT_SCOPE_VIOLATION");
       }
-      if (memory.status === "active" && memory.canonicalKey !== null) {
+      const protectedExplicit =
+        memory.status === "active" && memory.origin === "automatic"
+          ? (this.#database
+              .prepare(
+                `SELECT id FROM memory_entries
+                 WHERE owner_profile_id = ? AND kind = ? AND status = 'active'
+                   AND origin = 'explicit' AND id != ?
+                   AND ((? IS NOT NULL AND canonical_key = ?)
+                     OR (? IS NOT NULL AND conflict_key = ?))
+                 LIMIT 1`,
+              )
+              .get(
+                this.#ownerProfileId,
+                memory.kind,
+                memory.id,
+                memory.canonicalKey,
+                memory.canonicalKey,
+                memory.conflictKey,
+                memory.conflictKey,
+              ) as { id: string } | undefined)
+          : undefined;
+      if (protectedExplicit) {
+        memory = memoryEntrySchema.parse({ ...receivedMemory, status: "superseded" });
+      } else if (
+        memory.status === "active" &&
+        (memory.canonicalKey !== null || memory.conflictKey !== null)
+      ) {
         this.#database
           .prepare(
-            `UPDATE memory_entries SET status = 'superseded', updated_at = ?
-             WHERE owner_profile_id = ? AND kind = ? AND canonical_key = ?
-               AND status = 'active' AND id != ?`,
+            `UPDATE memory_entries
+             SET status = 'superseded', updated_at = ?, revision = revision + 1
+             WHERE owner_profile_id = ? AND kind = ? AND status = 'active' AND id != ?
+               AND ((? IS NOT NULL AND canonical_key = ?)
+                 OR (? IS NOT NULL AND conflict_key = ?))`,
           )
-          .run(memory.updatedAt, this.#ownerProfileId, memory.kind, memory.canonicalKey, memory.id);
+          .run(
+            memory.updatedAt,
+            this.#ownerProfileId,
+            memory.kind,
+            memory.id,
+            memory.canonicalKey,
+            memory.canonicalKey,
+            memory.conflictKey,
+            memory.conflictKey,
+          );
       }
       this.#database
         .prepare(
           `INSERT INTO memory_entries
-           (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key,
-            origin, confidence, status, source_conversation_id, source_message_id,
-            supersedes_memory_id, expires_at, created_at, updated_at, revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key, conflict_key,
+             origin, confidence, status, source_conversation_id, source_message_id,
+             supersedes_memory_id, expires_at, created_at, updated_at, revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              scope = excluded.scope, kind = excluded.kind, content = excluded.content,
              retrieval_keys_json = excluded.retrieval_keys_json,
-             canonical_key = excluded.canonical_key, origin = excluded.origin,
+              canonical_key = excluded.canonical_key, conflict_key = excluded.conflict_key,
+              origin = excluded.origin,
              confidence = excluded.confidence, status = excluded.status,
              source_conversation_id = excluded.source_conversation_id,
              source_message_id = excluded.source_message_id,
@@ -1375,6 +1459,7 @@ export class ChatRepository {
           memory.content,
           JSON.stringify(memory.retrievalKeys),
           memory.canonicalKey,
+          memory.conflictKey,
           memory.origin,
           memory.confidence,
           memory.status,

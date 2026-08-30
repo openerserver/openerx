@@ -45,7 +45,7 @@ describe("brokered Bash contracts", () => {
     expect(brokeredBashV1Enabled("false")).toBe(false);
     expect(brokeredBashV1Enabled("1")).toBe(true);
     expect(brokeredBashV1Enabled("TRUE")).toBe(true);
-    expect(piHostContractVersion).toBe(7);
+    expect(piHostContractVersion).toBe(8);
   });
 
   it("validates ordered progress and request-scoped cancellation frames", () => {

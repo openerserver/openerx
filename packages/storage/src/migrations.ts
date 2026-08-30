@@ -1184,6 +1184,16 @@ const migrations: readonly Migration[] = [
       WHERE source_conversation_id IS NOT NULL;
     `,
   },
+  {
+    version: 23,
+    checksum: "memory-conflict-keys-v23-20260830",
+    sql: `
+      ALTER TABLE memory_entries ADD COLUMN conflict_key TEXT;
+      CREATE UNIQUE INDEX memory_entries_active_conflict_idx
+        ON memory_entries(owner_profile_id, kind, conflict_key)
+        WHERE status = 'active' AND conflict_key IS NOT NULL;
+    `,
+  },
 ];
 
 export function migrateDatabase(

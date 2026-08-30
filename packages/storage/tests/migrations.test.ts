@@ -14,6 +14,28 @@ afterEach(() => {
 });
 
 describe("database migrations", () => {
+  it("adds a nullable conflict slot with one active value per kind", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-conflict-migration-"));
+    directories.push(directory);
+    const database = new DatabaseSync(path.join(directory, "openerx.sqlite"));
+    migrateDatabase(database, { throughVersion: 22 });
+    migrateDatabase(database);
+
+    expect(
+      database
+        .prepare("SELECT name FROM pragma_table_info('memory_entries') WHERE name = 'conflict_key'")
+        .get(),
+    ).toEqual({ name: "conflict_key" });
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'memory_entries_active_conflict_idx'",
+        )
+        .get(),
+    ).toEqual({ name: "memory_entries_active_conflict_idx" });
+    database.close();
+  });
+
   it("backfills primary memory provenance into multi-source links", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-source-migration-"));
     directories.push(directory);

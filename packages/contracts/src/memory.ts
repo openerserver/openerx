@@ -5,6 +5,12 @@ export const memoryKindSchema = z.enum(["profile", "preference", "workflow", "on
 
 export const memoryOriginSchema = z.enum(["explicit", "automatic", "consolidated"]);
 export const memoryStatusSchema = z.enum(["active", "superseded", "deleted"]);
+export const memoryConflictKeySchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(120)
+  .regex(/^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$/u);
 
 export const memoryEntrySchema = z
   .object({
@@ -15,6 +21,7 @@ export const memoryEntrySchema = z
     content: z.string().trim().min(1).max(2_000),
     retrievalKeys: z.array(z.string().trim().min(1).max(120)).max(50),
     canonicalKey: z.string().trim().min(1).max(240).nullable(),
+    conflictKey: memoryConflictKeySchema.nullable().default(null),
     origin: memoryOriginSchema,
     confidence: z.number().min(0).max(1),
     status: memoryStatusSchema,
@@ -100,6 +107,7 @@ export const memoryUpsertInputSchema = z
     content: z.string().trim().min(1).max(2_000),
     retrievalKeys: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
     canonicalKey: z.string().trim().min(1).max(240).nullable().optional(),
+    conflictKey: memoryConflictKeySchema.nullable().optional(),
     sourceConversationId: entityIdSchema.nullable().optional(),
     sourceMessageId: entityIdSchema.nullable().optional(),
     expiresAt: timestampSchema.nullable().optional(),
@@ -151,6 +159,7 @@ export const automaticMemoryCandidateSchema = z
     kind: memoryKindSchema,
     content: z.string().trim().min(1).max(500),
     retrievalKeys: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
+    conflictKey: memoryConflictKeySchema.nullable().default(null),
     confidence: z.number().min(0).max(1),
     sourceMessageId: entityIdSchema,
   })

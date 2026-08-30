@@ -337,7 +337,8 @@ export class MemoryRepository {
   upsert(input: MemoryUpsertInput): MemoryEntry {
     assertSafeMemoryContent(input.content);
     return this.#idempotent("memory.upsert", input.idempotencyKey, memoryEntrySchema, () => {
-      if (!this.settings().memoriesEnabled) throw new Error("MEMORY_DISABLED");
+      const settings = this.settings();
+      if (!settings.memoriesEnabled) throw new Error("MEMORY_DISABLED");
       const now = this.#now();
       const key = input.canonicalKey ?? canonicalKey(input.kind, input.content);
       const requested = input.id
@@ -357,6 +358,11 @@ export class MemoryRepository {
       }
       const existingEntry = existing ? this.#entryFromRow(existing) : undefined;
       const id = existing ? String(existing.id) : (input.id ?? this.#idFactory());
+      const conflictKey =
+        input.conflictKey === undefined ? (existingEntry?.conflictKey ?? null) : input.conflictKey;
+      const conflict = conflictKey
+        ? this.#activeConflict(input.kind, conflictKey, id)
+        : undefined;
       const createdAt = existingEntry?.createdAt ?? now;
       const revision = existingEntry ? existingEntry.revision + 1 : 1;
       const entry = memoryEntrySchema.parse({
@@ -370,6 +376,7 @@ export class MemoryRepository {
             ? [...new Set(input.retrievalKeys.map(normalize))]
             : tokens(input.content),
         canonicalKey: key,
+        conflictKey,
         origin: "explicit",
         confidence: 1,
         status: "active",
@@ -381,27 +388,30 @@ export class MemoryRepository {
           input.sourceMessageId === undefined
             ? (existingEntry?.sourceMessageId ?? null)
             : input.sourceMessageId,
-        supersedesMemoryId: null,
+        supersedesMemoryId: conflict?.id ?? existingEntry?.supersedesMemoryId ?? null,
         expiresAt:
           input.expiresAt === undefined ? (existingEntry?.expiresAt ?? null) : input.expiresAt,
         createdAt,
         updatedAt: now,
         revision,
       });
+      const superseded = conflict ? this.#markSuperseded(conflict, now) : undefined;
       this.#database
         .prepare(
           `INSERT INTO memory_entries
-             (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key,
+             (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key, conflict_key,
               origin, confidence, status, source_conversation_id, source_message_id,
               supersedes_memory_id, expires_at, created_at, updated_at, revision)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                kind = excluded.kind, content = excluded.content,
                retrieval_keys_json = excluded.retrieval_keys_json,
-               canonical_key = excluded.canonical_key, origin = excluded.origin,
+               canonical_key = excluded.canonical_key, conflict_key = excluded.conflict_key,
+               origin = excluded.origin,
                confidence = excluded.confidence, status = excluded.status,
                source_conversation_id = excluded.source_conversation_id,
                source_message_id = excluded.source_message_id,
+               supersedes_memory_id = excluded.supersedes_memory_id,
                expires_at = excluded.expires_at, updated_at = excluded.updated_at,
                revision = excluded.revision
              WHERE owner_profile_id = excluded.owner_profile_id`,
@@ -414,6 +424,7 @@ export class MemoryRepository {
           entry.content,
           JSON.stringify(entry.retrievalKeys),
           entry.canonicalKey,
+          entry.conflictKey,
           entry.origin,
           entry.confidence,
           entry.status,
@@ -435,7 +446,10 @@ export class MemoryRepository {
           createdAt: now,
         });
       }
-      if (this.settings().syncMemories) {
+      if (settings.syncMemories) {
+        if (superseded) {
+          this.#queueSync("memory_entry", superseded.id, "upsert", superseded, now);
+        }
         this.#queueSync("memory_entry", entry.id, "upsert", entry, now);
       }
       return entry;
@@ -454,8 +468,12 @@ export class MemoryRepository {
         )
         .run(now, input.memoryId, this.#ownerProfileId);
       const deleted = this.get(input.memoryId);
+      const restored = this.#restoreSupersededEntry(entry, now);
       if (this.settings().syncMemories) {
         this.#queueSync("memory_entry", deleted.id, "delete", null, now);
+        if (restored) {
+          this.#queueSync("memory_entry", restored.id, "upsert", restored, now);
+        }
       }
       return deleted;
     });
@@ -546,7 +564,7 @@ export class MemoryRepository {
             this.#queueSync("memory_entry", updated.id, "upsert", updated, now);
           }
         }
-        this.#deleteEntries(deleted, now);
+        this.#deleteEntries(deleted, now, true);
         return memoryClearResultSchema.parse({ deleted: deleted.length, clearedAt: now });
       },
     );
@@ -805,6 +823,12 @@ export class MemoryRepository {
           });
           return entry;
         }
+        const conflict = candidate.conflictKey
+          ? this.#activeConflict(candidate.kind, candidate.conflictKey)
+          : undefined;
+        if (conflict?.origin === "explicit") {
+          throw new Error("MEMORY_CANDIDATE_CONFLICTS_EXPLICIT");
+        }
         const expiresAt =
           candidate.kind === "ongoing_context"
             ? new Date(Date.parse(now) + 90 * 86_400_000).toISOString()
@@ -820,24 +844,26 @@ export class MemoryRepository {
               ? [...new Set(candidate.retrievalKeys.map(normalize))]
               : tokens(candidate.content),
           canonicalKey: key,
+          conflictKey: candidate.conflictKey,
           origin: "automatic",
           confidence: candidate.confidence,
           status: "active",
           sourceConversationId: input.conversationId,
           sourceMessageId: candidate.sourceMessageId,
-          supersedesMemoryId: null,
+          supersedesMemoryId: conflict?.id ?? null,
           expiresAt,
           createdAt: now,
           updatedAt: now,
           revision: 1,
         });
+        const superseded = conflict ? this.#markSuperseded(conflict, now) : undefined;
         this.#database
           .prepare(
             `INSERT INTO memory_entries
-             (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key,
+             (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key, conflict_key,
               origin, confidence, status, source_conversation_id, source_message_id,
               supersedes_memory_id, expires_at, created_at, updated_at, revision)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             entry.id,
@@ -847,6 +873,7 @@ export class MemoryRepository {
             entry.content,
             JSON.stringify(entry.retrievalKeys),
             entry.canonicalKey,
+            entry.conflictKey,
             entry.origin,
             entry.confidence,
             entry.status,
@@ -867,6 +894,9 @@ export class MemoryRepository {
           createdAt: now,
         });
         if (settings.syncMemories) {
+          if (superseded) {
+            this.#queueSync("memory_entry", superseded.id, "upsert", superseded, now);
+          }
           this.#queueSync("memory_entry", entry.id, "upsert", entry, now);
         }
         return entry;
@@ -951,7 +981,64 @@ export class MemoryRepository {
     }
   }
 
-  #deleteEntries(entries: MemoryEntry[], now: string): void {
+  #activeConflict(
+    kind: MemoryKind,
+    conflictKey: string,
+    excludedMemoryId?: string,
+  ): MemoryEntry | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM memory_entries
+         WHERE owner_profile_id = ? AND kind = ? AND conflict_key = ? AND status = 'active'
+           AND (? IS NULL OR id != ?)
+         ORDER BY updated_at DESC, id LIMIT 1`,
+      )
+      .get(
+        this.#ownerProfileId,
+        kind,
+        conflictKey,
+        excludedMemoryId ?? null,
+        excludedMemoryId ?? null,
+      ) as SqlRow | undefined;
+    return row ? this.#entryFromRow(row) : undefined;
+  }
+
+  #markSuperseded(entry: MemoryEntry, now: string): MemoryEntry {
+    this.#database
+      .prepare(
+        `UPDATE memory_entries
+         SET status = 'superseded', updated_at = ?, revision = revision + 1
+         WHERE id = ? AND owner_profile_id = ? AND status = 'active'`,
+      )
+      .run(now, entry.id, this.#ownerProfileId);
+    return this.get(entry.id);
+  }
+
+  #restoreSupersededEntry(entry: MemoryEntry, now: string): MemoryEntry | undefined {
+    if (entry.status !== "active" || !entry.conflictKey || !entry.supersedesMemoryId) {
+      return undefined;
+    }
+    if (this.#activeConflict(entry.kind, entry.conflictKey)) return undefined;
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM memory_entries
+         WHERE id = ? AND owner_profile_id = ? AND status = 'superseded'`,
+      )
+      .get(entry.supersedesMemoryId, this.#ownerProfileId) as SqlRow | undefined;
+    if (!row) return undefined;
+    const previous = this.#entryFromRow(row);
+    if (previous.kind !== entry.kind || previous.conflictKey !== entry.conflictKey) return undefined;
+    this.#database
+      .prepare(
+        `UPDATE memory_entries
+         SET status = 'active', updated_at = ?, revision = revision + 1
+         WHERE id = ? AND owner_profile_id = ? AND status = 'superseded'`,
+      )
+      .run(now, previous.id, this.#ownerProfileId);
+    return this.get(previous.id);
+  }
+
+  #deleteEntries(entries: MemoryEntry[], now: string, restoreSuperseded = false): void {
     const syncMemories = this.settings().syncMemories;
     const statement = this.#database.prepare(
       `UPDATE memory_entries SET status = 'deleted', updated_at = ?, revision = revision + 1
@@ -959,7 +1046,15 @@ export class MemoryRepository {
     );
     for (const entry of entries) {
       statement.run(now, entry.id, this.#ownerProfileId);
-      if (syncMemories) this.#queueSync("memory_entry", entry.id, "delete", null, now);
+      const restored = restoreSuperseded
+        ? this.#restoreSupersededEntry(entry, now)
+        : undefined;
+      if (syncMemories) {
+        this.#queueSync("memory_entry", entry.id, "delete", null, now);
+        if (restored) {
+          this.#queueSync("memory_entry", restored.id, "upsert", restored, now);
+        }
+      }
     }
   }
 
@@ -1046,6 +1141,7 @@ export class MemoryRepository {
       content: row.content,
       retrievalKeys: JSON.parse(String(row.retrieval_keys_json)),
       canonicalKey: row.canonical_key,
+      conflictKey: row.conflict_key ?? null,
       origin: row.origin,
       confidence: Number(row.confidence),
       status: row.status,

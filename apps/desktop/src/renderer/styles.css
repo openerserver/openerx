@@ -5121,6 +5121,12 @@ summary:focus-visible {
   gap: 5px;
 }
 
+.memory-supersede-note {
+  display: block;
+  color: #8a6530;
+  margin-top: 4px;
+}
+
 .memory-row button.memory-source-toggle {
   padding: 0;
   color: var(--workspace-accent-strong);

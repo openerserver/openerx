@@ -112,6 +112,7 @@ const rejectedCandidateCodes = new Set([
   "MEMORY_SENSITIVE_CONTENT_REJECTED",
   "MEMORY_CANDIDATE_LOW_CONFIDENCE",
   "MEMORY_CANDIDATE_SOURCE_INVALID",
+  "MEMORY_CANDIDATE_CONFLICTS_EXPLICIT",
 ]);
 
 export class MemoryExtractionScheduler {
@@ -244,8 +245,16 @@ export class MemoryExtractionScheduler {
           if (!rejectedCandidateCodes.has(this.#errorCode(error))) throw error;
         }
       }
-      const completed = this.#memoryRepository.completeExtractionJob(job.id, createdById.size);
-      if (createdById.size > 0) this.#onMemoriesCreated([...createdById.values()], completed);
+      const created = [...createdById.keys()]
+        .map((memoryId) => this.#memoryRepository.get(memoryId))
+        .filter(
+          (memory) =>
+            memory.status === "active" &&
+            memory.origin === "automatic" &&
+            memory.sourceConversationId === job.conversationId,
+        );
+      const completed = this.#memoryRepository.completeExtractionJob(job.id, created.length);
+      if (created.length > 0) this.#onMemoriesCreated(created, completed);
       return completed;
     } catch (error) {
       const code = this.#errorCode(error);

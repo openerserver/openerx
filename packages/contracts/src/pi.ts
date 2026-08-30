@@ -2,8 +2,8 @@ import { z } from "zod";
 import { brokeredBashExecutionContextSchema } from "./brokered-bash";
 import { entityIdSchema, timestampSchema } from "./chat";
 import { supportedFileFormatSchema } from "./file";
-import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { automaticMemoryExtractionOutputSchema, recalledMemorySchema } from "./memory";
+import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { processNonceSchema } from "./process";
 import { piSkillMountSchema } from "./skill";
 import {
@@ -17,7 +17,7 @@ import {
 } from "./tool";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 7 as const;
+export const piHostContractVersion = 8 as const;
 
 export const piHostBootstrapSchema = z
   .object({

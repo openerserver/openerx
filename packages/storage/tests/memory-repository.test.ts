@@ -162,6 +162,42 @@ describe("MemoryRepository", () => {
     repository.close();
   });
 
+  it("supersedes an exact conflict slot and restores the previous value when undone", () => {
+    const repository = new MemoryRepository(databasePath(), { idFactory: ids() });
+    repository.updateSettings({ memoriesEnabled: true, useMemories: true });
+    const chinese = repository.upsert({
+      kind: "preference",
+      content: "用户偏好使用中文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-conflict-chinese-0001",
+    });
+    const english = repository.upsert({
+      kind: "preference",
+      content: "用户偏好使用英文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-conflict-english-0001",
+    });
+
+    expect(repository.get(chinese.id).status).toBe("superseded");
+    expect(english).toMatchObject({
+      status: "active",
+      conflictKey: "response.language",
+      supersedesMemoryId: chinese.id,
+    });
+    expect(repository.list({ status: "active", limit: 50 }).map(({ id }) => id)).toEqual([
+      english.id,
+    ]);
+
+    expect(
+      repository.delete({
+        memoryId: english.id,
+        idempotencyKey: "memory-conflict-undo-0001",
+      }).status,
+    ).toBe("deleted");
+    expect(repository.get(chinese.id).status).toBe("active");
+    repository.close();
+  });
+
   it("merges duplicate automatic memories while retaining independent source conversations", () => {
     const file = databasePath();
     const chat = new ChatRepository(file);
@@ -182,6 +218,7 @@ describe("MemoryRepository", () => {
       kind: "preference" as const,
       content: "用户希望技术方案先给结论。",
       retrievalKeys: ["技术方案", "结论"],
+      conflictKey: null,
       confidence: 0.94,
       sourceMessageId: first.receipt.userMessageId ?? "",
     };
@@ -237,6 +274,80 @@ describe("MemoryRepository", () => {
       ),
     ).toMatchObject({ deleted: 1 });
     expect(repository.get(memory.id).status).toBe("deleted");
+    repository.close();
+    chat.close();
+  });
+
+  it("lets newer automatic values supersede automatic ones but never explicit memories", () => {
+    const file = databasePath();
+    const chat = new ChatRepository(file);
+    const sources = ["我偏好中文回复。", "我偏好英文回复。", "请自动记住我偏好法文回复。"].map(
+      (text, index) =>
+        chat.createGeneration({
+          text,
+          idempotencyKey: `memory-conflict-source-${index}-0001`,
+        }),
+    );
+    const repository = new MemoryRepository(file, { idFactory: ids() });
+    repository.updateSettings({ memoriesEnabled: true, generateMemories: true });
+    const automaticChinese = repository.upsertAutomatic({
+      candidate: {
+        kind: "preference",
+        content: "用户偏好使用中文回复。",
+        retrievalKeys: ["语言", "中文"],
+        conflictKey: "response.language",
+        confidence: 0.92,
+        sourceMessageId: sources[0]?.receipt.userMessageId ?? "",
+      },
+      conversationId: sources[0]?.receipt.conversationId ?? "",
+      jobId: "10000000-0000-4000-8000-000000000301",
+    });
+    const automaticEnglish = repository.upsertAutomatic({
+      candidate: {
+        kind: "preference",
+        content: "用户偏好使用英文回复。",
+        retrievalKeys: ["语言", "英文"],
+        conflictKey: "response.language",
+        confidence: 0.93,
+        sourceMessageId: sources[1]?.receipt.userMessageId ?? "",
+      },
+      conversationId: sources[1]?.receipt.conversationId ?? "",
+      jobId: "10000000-0000-4000-8000-000000000302",
+    });
+    expect(repository.get(automaticChinese.id).status).toBe("superseded");
+    expect(automaticEnglish.supersedesMemoryId).toBe(automaticChinese.id);
+    expect(
+      repository.deleteBySourceConversation(
+        sources[1]?.receipt.conversationId ?? "",
+        "memory-conflict-source-undo-0001",
+      ),
+    ).toMatchObject({ deleted: 1 });
+    expect(repository.get(automaticEnglish.id).status).toBe("deleted");
+    expect(repository.get(automaticChinese.id).status).toBe("active");
+
+    const explicit = repository.upsert({
+      kind: "preference",
+      content: "用户明确要求使用中文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-conflict-explicit-0001",
+    });
+    expect(repository.get(automaticChinese.id).status).toBe("superseded");
+    expect(explicit.supersedesMemoryId).toBe(automaticChinese.id);
+    expect(() =>
+      repository.upsertAutomatic({
+        candidate: {
+          kind: "preference",
+          content: "用户偏好使用法文回复。",
+          retrievalKeys: ["语言", "法文"],
+          conflictKey: "response.language",
+          confidence: 0.99,
+          sourceMessageId: sources[2]?.receipt.userMessageId ?? "",
+        },
+        conversationId: sources[2]?.receipt.conversationId ?? "",
+        jobId: "10000000-0000-4000-8000-000000000303",
+      }),
+    ).toThrow("MEMORY_CANDIDATE_CONFLICTS_EXPLICIT");
+    expect(repository.get(explicit.id).status).toBe("active");
     repository.close();
     chat.close();
   });

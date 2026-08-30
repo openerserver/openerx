@@ -767,6 +767,7 @@ describe("M1 chat renderer", () => {
       content: "回答时先给结论。",
       retrievalKeys: ["回答", "结论"],
       canonicalKey: "preference:回答时先给结论。",
+      conflictKey: null,
       origin: "explicit",
       confidence: 1,
       status: "active",
@@ -825,12 +826,13 @@ describe("M1 chat renderer", () => {
       content: "回答时先给结论。",
       retrievalKeys: ["结论"],
       canonicalKey: "preference:回答时先给结论。",
+      conflictKey: null,
       origin: "automatic" as const,
       confidence: 0.91,
       status: "active" as const,
       sourceConversationId: conversationId,
       sourceMessageId: userMessageId,
-      supersedesMemoryId: null,
+      supersedesMemoryId: "77777777-7777-4777-8777-777777777778",
       expiresAt: null,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -892,6 +894,8 @@ describe("M1 chat renderer", () => {
     await waitFor(() => expect(document.activeElement?.id).toBe(`memory-${memory.id}`));
     await user.click(screen.getByRole("button", { name: "查看来源" }));
     expect(await screen.findByRole("button", { name: "记忆来源对话" })).toBeTruthy();
+    expect(screen.getByText("已替代上一版本；删除此条将恢复上一版本。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /撤销替代/u })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "撤销" }));
     await waitFor(() =>
@@ -914,6 +918,7 @@ describe("M1 chat renderer", () => {
       content: "提交前运行类型检查。",
       retrievalKeys: ["类型检查"],
       canonicalKey: "workflow:类型检查",
+      conflictKey: null,
       origin: "explicit" as const,
       confidence: 1,
       status: "active" as const,

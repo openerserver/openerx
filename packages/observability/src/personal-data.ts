@@ -238,7 +238,8 @@ export class PersonalDataExporter {
       memories: rows(
         database,
         `SELECT id, kind, content, retrieval_keys_json AS retrievalKeys,
-                canonical_key AS canonicalKey, origin, confidence, status,
+                canonical_key AS canonicalKey, conflict_key AS conflictKey,
+                origin, confidence, status,
                 source_conversation_id AS sourceConversationId,
                 source_message_id AS sourceMessageId, supersedes_memory_id AS supersedesMemoryId,
                 expires_at AS expiresAt, created_at AS createdAt, updated_at AS updatedAt, revision

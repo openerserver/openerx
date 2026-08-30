@@ -1,5 +1,8 @@
 # Memory Phase B 运行时与多来源检查点（2026-08-30）
 
+> 后续进展：确定性冲突替代已在
+> [Memory Phase B conflict slot 检查点](memory-phase-b-conflict-supersede-2026-08-30.md) 完成。
+
 ## 结论
 
 自动记忆已经接入 App Service 运行时和桌面端控制面。抽取请求使用
@@ -42,7 +45,7 @@ Observability 专项共 `7 files / 32 tests` 通过；Desktop 记忆定向回归
 
 仍待完成：
 
-- 语义冲突识别及可撤销的 supersede/consolidate；
+- 模糊语义冲突聚类及 consolidation（严格 conflict slot 的可撤销 supersede 已完成）；
 - 定期 consolidation 调度和失败恢复；
 - 跨设备完整多来源同步；
 - 真实模型 Golden precision、secret canary、跨账户/崩溃恢复端到端；
