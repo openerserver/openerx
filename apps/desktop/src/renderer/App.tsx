@@ -4627,7 +4627,15 @@ function MemorySettingsPanel(): React.JSX.Element {
                 </span>
                 <small>现有记忆</small>
                 <p>{review.targetContent}</p>
-                <small>{review.relation === "duplicate" ? "合并来源" : "建议替代为"}</small>
+                <small>
+                  {review.proposalMemoryId
+                    ? review.relation === "duplicate"
+                      ? "另一条已有记忆（确认后合并）"
+                      : "较新的已有记忆（确认后替代）"
+                    : review.relation === "duplicate"
+                      ? "新发现的合并来源"
+                      : "建议替代为"}
+                </small>
                 <p>{review.proposedContent}</p>
               </div>
               <div className="memory-row-actions">

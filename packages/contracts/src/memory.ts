@@ -165,18 +165,52 @@ export const memoryMergeReviewSchema = z
     targetMemoryId: entityIdSchema,
     targetContent: z.string().trim().min(1).max(2_000),
     targetRevision: z.number().int().positive(),
-    proposedContent: z.string().trim().min(1).max(500),
+    proposalMemoryId: entityIdSchema.nullable(),
+    proposalRevision: z.number().int().positive().nullable(),
+    proposedContent: z.string().trim().min(1).max(2_000),
     proposedRetrievalKeys: z.array(z.string().trim().min(1).max(120)).max(20),
     proposedConflictKey: memoryConflictKeySchema.nullable(),
     confidence: z.number().min(0).max(1),
-    sourceConversationId: entityIdSchema,
-    sourceMessageId: entityIdSchema,
+    sourceConversationId: entityIdSchema.nullable(),
+    sourceMessageId: entityIdSchema.nullable(),
     status: memoryMergeReviewStatusSchema,
     resultMemoryId: entityIdSchema.nullable(),
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
     resolvedAt: timestampSchema.nullable(),
   })
+  .strict()
+  .superRefine((review, context) => {
+    if ((review.proposalMemoryId === null) !== (review.proposalRevision === null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["proposalRevision"],
+        message: "Proposal memory ID and revision must both be present or both be null",
+      });
+    }
+    if (review.proposalMemoryId === null && review.sourceConversationId === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourceConversationId"],
+        message: "A new-candidate review must retain its source conversation",
+      });
+    }
+  });
+
+export const memorySemanticClusterProposalSchema = z
+  .object({
+    relation: memorySemanticRelationSchema.exclude(["none"]),
+    leftMemoryId: entityIdSchema,
+    rightMemoryId: entityIdSchema,
+    confidence: z.number().min(0.85).max(1),
+  })
+  .strict()
+  .refine((proposal) => proposal.leftMemoryId !== proposal.rightMemoryId, {
+    message: "A semantic cluster proposal must reference two different memories",
+  });
+
+export const memorySemanticClusterOutputSchema = z
+  .object({ proposals: z.array(memorySemanticClusterProposalSchema).max(20) })
   .strict();
 
 export const memoryMergeReviewListInputSchema = z
@@ -341,6 +375,8 @@ export type MemoryMergeReview = z.infer<typeof memoryMergeReviewSchema>;
 export type MemoryMergeReviewStatus = z.infer<typeof memoryMergeReviewStatusSchema>;
 export type MemoryMergeReviewListInput = z.infer<typeof memoryMergeReviewListInputSchema>;
 export type MemoryMergeReviewResolveInput = z.infer<typeof memoryMergeReviewResolveInputSchema>;
+export type MemorySemanticClusterProposal = z.infer<typeof memorySemanticClusterProposalSchema>;
+export type MemorySemanticClusterOutput = z.infer<typeof memorySemanticClusterOutputSchema>;
 export type RecalledMemory = z.infer<typeof recalledMemorySchema>;
 export type AutomaticMemoryCandidate = z.infer<typeof automaticMemoryCandidateSchema>;
 export type AutomaticMemoryExtractionOutput = z.infer<typeof automaticMemoryExtractionOutputSchema>;

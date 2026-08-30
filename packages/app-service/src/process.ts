@@ -31,7 +31,7 @@ import { AutomationAppService } from "./automation-app-service";
 import { AutomationScheduler, ChatAutomationDispatcher } from "./automation-scheduler";
 import { ChatAppService } from "./chat-app-service";
 import { MainCapabilityClient } from "./main-capability-client";
-import { MemoryConsolidationScheduler } from "./memory-consolidation-scheduler";
+import { MemoryConsolidationScheduler, PiMemoryClusterer } from "./memory-consolidation-scheduler";
 import { MemoryExtractionScheduler, PiMemoryExtractor } from "./memory-extraction-scheduler";
 import { MessagePortPiHostClient } from "./pi-host-client";
 import { HttpAccountSyncTransport, SyncCoordinator } from "./sync-coordinator";
@@ -150,6 +150,7 @@ parentPort.once("message", async (bootstrapEvent) => {
   });
   const memoryConsolidationScheduler = new MemoryConsolidationScheduler({
     repository: memoryRepository,
+    clusterer: new PiMemoryClusterer(piHost, () => mainCapabilities.automationExecutionContext()),
   });
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.onEvent((event) => void automationScheduler.handleChatEvent(event));

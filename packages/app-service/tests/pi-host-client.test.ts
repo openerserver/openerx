@@ -79,6 +79,37 @@ describe("MessagePortPiHostClient tool progress", () => {
     await expect(pending).resolves.toMatchObject({ ok: true, output: { candidates: [] } });
   });
 
+  it("correlates background memory clustering results", async () => {
+    const port = new FakeMessagePort();
+    const client = new MessagePortPiHostClient(port as unknown as MessagePortMain, "d".repeat(64));
+    port.receive({
+      kind: "pi-host.ready",
+      contractVersion: piHostContractVersion,
+      nonce: "d".repeat(64),
+    });
+    const requestId = crypto.randomUUID();
+    const pending = client.clusterMemories({
+      kind: "pi.memory.cluster",
+      requestId,
+      runId: crypto.randomUUID(),
+      memories: [
+        { id: crypto.randomUUID(), kind: "preference", content: "用户希望先给结论。" },
+        { id: crypto.randomUUID(), kind: "preference", content: "用户偏好结论优先。" },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(port.sent).toContainEqual(expect.objectContaining({ requestId })),
+    );
+    port.receive({
+      kind: "pi.memory.cluster-result",
+      requestId,
+      ok: true,
+      output: { proposals: [] },
+      usageRecords: [],
+    });
+    await expect(pending).resolves.toMatchObject({ ok: true, output: { proposals: [] } });
+  });
+
   it("sequences progress and ignores updates after the response settles", async () => {
     const port = new FakeMessagePort();
     const client = new MessagePortPiHostClient(port as unknown as MessagePortMain, "a".repeat(64));

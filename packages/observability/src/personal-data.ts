@@ -236,6 +236,8 @@ export class PersonalDataExporter {
         `SELECT id, kind, relation, target_memory_id AS targetMemoryId,
                 target_content AS targetContent,
                 target_revision AS targetRevision,
+                proposal_memory_id AS proposalMemoryId,
+                proposal_revision AS proposalRevision,
                 proposed_content AS proposedContent,
                 proposed_retrieval_keys_json AS proposedRetrievalKeys,
                 proposed_conflict_key AS proposedConflictKey, confidence,

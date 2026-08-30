@@ -127,6 +127,93 @@ describe("Pi AgentSession composition", () => {
     ).toBe(false);
   });
 
+  it("runs historical memory clustering as a no-tool review task", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-memory-cluster-"));
+    temporaryDirectories.push(root);
+    const parentPort = new EventEmitter();
+    let resolveResult!: (frame: unknown) => void;
+    const result = new Promise<unknown>((resolve) => {
+      resolveResult = resolve;
+    });
+    const piPort = Object.assign(new EventEmitter(), {
+      sent: [] as unknown[],
+      postMessage(frame: unknown): void {
+        this.sent.push(frame);
+        if (
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "pi.memory.cluster-result"
+        ) {
+          resolveResult(frame);
+        }
+      },
+      start(): void {},
+    });
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const faux = fauxProvider({ tokensPerSecond: 10_000 });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const leftMemoryId = randomUUID();
+    const rightMemoryId = randomUUID();
+    faux.setResponses([
+      fauxAssistantMessage(
+        JSON.stringify({
+          proposals: [
+            {
+              relation: "duplicate",
+              leftMemoryId,
+              rightMemoryId,
+              confidence: 0.94,
+            },
+          ],
+        }),
+      ),
+    ]);
+    startPiHostProcess(parentPort as unknown as Electron.ParentPort, {
+      modelRuntime,
+      model: faux.getModel(),
+    });
+    parentPort.emit("message", {
+      data: {
+        kind: "pi-host.bootstrap",
+        contractVersion: piHostContractVersion,
+        nonce: "e".repeat(64),
+        profileDirectory: root,
+      },
+      ports: [piPort],
+    });
+    const requestId = randomUUID();
+    piPort.emit("message", {
+      data: {
+        kind: "pi.memory.cluster",
+        requestId,
+        runId: randomUUID(),
+        memories: [
+          { id: leftMemoryId, kind: "preference", content: "用户希望先给结论。" },
+          { id: rightMemoryId, kind: "preference", content: "用户偏好结论优先。" },
+        ],
+      },
+    });
+
+    await expect(result).resolves.toMatchObject({
+      kind: "pi.memory.cluster-result",
+      requestId,
+      ok: true,
+      output: {
+        proposals: [expect.objectContaining({ leftMemoryId, rightMemoryId, confidence: 0.94 })],
+      },
+    });
+    expect(
+      piPort.sent.some(
+        (frame) =>
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "pi.tool.request",
+      ),
+    ).toBe(false);
+  });
+
   it("queues an abort received before the Pi session is ready", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-host-early-abort-"));
     temporaryDirectories.push(root);

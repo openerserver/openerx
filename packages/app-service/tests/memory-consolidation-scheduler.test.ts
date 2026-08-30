@@ -1,9 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { PiMemoryClusterFrame } from "@openerx/contracts";
 import { MemoryRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryConsolidationScheduler } from "../src/memory-consolidation-scheduler";
+import {
+  MemoryConsolidationScheduler,
+  PiMemoryClusterer,
+} from "../src/memory-consolidation-scheduler";
+import type { PiHostClient } from "../src/pi-host-client";
 
 const directories: string[] = [];
 
@@ -20,6 +25,58 @@ afterEach(() => {
 });
 
 describe("MemoryConsolidationScheduler", () => {
+  it("uses a server-deduplicated platform request for semantic clustering", async () => {
+    const clusterMemories = vi.fn(async (frame: PiMemoryClusterFrame) => ({
+      kind: "pi.memory.cluster-result" as const,
+      requestId: frame.requestId,
+      ok: true as const,
+      output: { proposals: [] },
+      usageRecords: [],
+    }));
+    const clusterer = new PiMemoryClusterer(
+      { clusterMemories } as unknown as PiHostClient,
+      async () => ({
+        authorization: {
+          accountId: randomUUID(),
+          accessToken: "t".repeat(32),
+          accessTokenExpiresAt: "2026-08-31T00:00:00.000Z",
+          platformBaseUrl: "https://platform.example.test",
+        },
+      }),
+    );
+    const runId = randomUUID();
+    await expect(
+      clusterer.cluster({
+        run: {
+          id: runId,
+          ownerProfileId: "local-default",
+          reason: "daily",
+          status: "completed",
+          activeCount: 2,
+          expiredCount: 0,
+          repairedCount: 0,
+          lastErrorCode: null,
+          startedAt: "2026-08-30T00:00:00.000Z",
+          updatedAt: "2026-08-30T00:00:01.000Z",
+          completedAt: "2026-08-30T00:00:01.000Z",
+        },
+        memories: [
+          { id: randomUUID(), kind: "preference", content: "用户希望先给结论。" },
+          { id: randomUUID(), kind: "preference", content: "用户偏好结论优先。" },
+        ],
+      }),
+    ).resolves.toEqual({ proposals: [] });
+    expect(clusterMemories).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "pi.memory.cluster",
+        platform: expect.objectContaining({
+          selectedModelRef: "platform/auto",
+          requestDedupeKey: `memory-cluster:${runId}`,
+        }),
+      }),
+    );
+  });
+
   it("persists completed runs and respects both time and active-memory triggers", async () => {
     let now = "2026-08-30T00:00:00.000Z";
     const repository = new MemoryRepository(databasePath(), { now: () => now });
@@ -56,4 +113,81 @@ describe("MemoryConsolidationScheduler", () => {
     expect(repository.listConsolidationRuns()).toHaveLength(2);
     repository.close();
   });
+
+  it("stages bounded historical semantic proposals after deterministic consolidation", async () => {
+    const repository = new MemoryRepository(databasePath());
+    repository.updateSettings({ memoriesEnabled: true });
+    const left = repository.upsert({
+      kind: "preference",
+      content: "用户希望先给结论。",
+      idempotencyKey: "memory-cluster-scheduler-0001",
+    });
+    const right = repository.upsert({
+      kind: "preference",
+      content: "用户偏好结论优先。",
+      idempotencyKey: "memory-cluster-scheduler-0002",
+    });
+    const cluster = vi.fn(async () => ({
+      proposals: [
+        {
+          relation: "duplicate" as const,
+          leftMemoryId: left.id,
+          rightMemoryId: right.id,
+          confidence: 0.93,
+        },
+      ],
+    }));
+    const scheduler = new MemoryConsolidationScheduler({
+      repository,
+      clusterer: { cluster },
+    });
+
+    await expect(scheduler.tick()).resolves.toMatchObject({ status: "completed" });
+    expect(cluster).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memories: expect.arrayContaining([
+          expect.objectContaining({ id: left.id }),
+          expect.objectContaining({ id: right.id }),
+        ]),
+      }),
+    );
+    expect(repository.listMergeReviews()).toEqual([
+      expect.objectContaining({
+        relation: "duplicate",
+        proposalMemoryId: expect.any(String),
+        status: "pending",
+      }),
+    ]);
+    repository.close();
+  });
+
+  it("keeps a completed deterministic run when optional semantic clustering fails", async () => {
+    const repository = new MemoryRepository(databasePath());
+    repository.updateSettings({ memoriesEnabled: true });
+    for (const [index, content] of ["用户偏好中文。", "用户偏好简体中文。"].entries()) {
+      repository.upsert({
+        kind: "preference",
+        content,
+        idempotencyKey: `memory-cluster-failure-${index}-0001`,
+      });
+    }
+    const onError = vi.fn();
+    const scheduler = new MemoryConsolidationScheduler({
+      repository,
+      clusterer: { cluster: async () => Promise.reject(new Error("MODEL_OFFLINE")) },
+      onError,
+    });
+
+    await expect(scheduler.tick()).resolves.toMatchObject({ status: "completed" });
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "MODEL_OFFLINE" }),
+      expect.objectContaining({ status: "completed" }),
+    );
+    expect(repository.listConsolidationRuns()).toEqual([
+      expect.objectContaining({ status: "completed", lastErrorCode: null }),
+    ]);
+    repository.close();
+  });
 });
+
+import { randomUUID } from "node:crypto";

@@ -4,6 +4,8 @@ import {
   chatCommandEnvelopeSchema,
   memoryEntrySchema,
   parseChatCommandResult,
+  piMemoryClusterFrameSchema,
+  piMemoryClusterResultFrameSchema,
   piMemoryExtractFrameSchema,
   piMemoryExtractResultFrameSchema,
   piPromptFrameSchema,
@@ -204,6 +206,40 @@ describe("memory contracts", () => {
               relatedMemoryId: null,
             },
           ],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("bounds historical semantic clustering to supplied same-kind memory pairs", () => {
+    const leftMemoryId = id("17");
+    const rightMemoryId = id("18");
+    const request = piMemoryClusterFrameSchema.parse({
+      kind: "pi.memory.cluster",
+      requestId: id("19"),
+      runId: id("20"),
+      memories: [
+        { id: leftMemoryId, kind: "preference", content: "用户希望先给结论。" },
+        { id: rightMemoryId, kind: "preference", content: "回答应当结论优先。" },
+      ],
+    });
+    expect(
+      piMemoryClusterResultFrameSchema.parse({
+        kind: "pi.memory.cluster-result",
+        requestId: request.requestId,
+        ok: true,
+        output: {
+          proposals: [{ relation: "duplicate", leftMemoryId, rightMemoryId, confidence: 0.91 }],
+        },
+      }),
+    ).toMatchObject({ ok: true, usageRecords: [] });
+    expect(() =>
+      piMemoryClusterResultFrameSchema.parse({
+        kind: "pi.memory.cluster-result",
+        requestId: request.requestId,
+        ok: true,
+        output: {
+          proposals: [{ relation: "duplicate", leftMemoryId, rightMemoryId, confidence: 0.84 }],
         },
       }),
     ).toThrow();

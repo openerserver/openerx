@@ -35,6 +35,20 @@ describe("database migrations", () => {
         )
         .get(),
     ).toEqual({ name: "memory_merge_reviews_status_idx" });
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM pragma_table_info('memory_merge_reviews') WHERE name = 'proposal_memory_id'",
+        )
+        .get(),
+    ).toEqual({ name: "proposal_memory_id" });
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'memory_merge_reviews_proposal_idx'",
+        )
+        .get(),
+    ).toEqual({ name: "memory_merge_reviews_proposal_idx" });
     database.close();
   });
 

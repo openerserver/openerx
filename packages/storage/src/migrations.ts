@@ -1250,6 +1250,58 @@ const migrations: readonly Migration[] = [
         ON memory_merge_reviews(owner_profile_id, target_memory_id, created_at DESC);
     `,
   },
+  {
+    version: 26,
+    checksum: "memory-existing-pair-reviews-v26-20260830",
+    sql: `
+      ALTER TABLE memory_merge_reviews RENAME TO memory_merge_reviews_v25;
+      CREATE TABLE memory_merge_reviews (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('profile', 'preference', 'workflow', 'ongoing_context')),
+        relation TEXT NOT NULL CHECK (relation IN ('duplicate', 'conflict')),
+        target_memory_id TEXT NOT NULL REFERENCES memory_entries(id),
+        target_content TEXT NOT NULL,
+        target_revision INTEGER NOT NULL CHECK (target_revision > 0),
+        proposal_memory_id TEXT REFERENCES memory_entries(id),
+        proposal_revision INTEGER CHECK (proposal_revision IS NULL OR proposal_revision > 0),
+        proposed_content TEXT NOT NULL,
+        proposed_retrieval_keys_json TEXT NOT NULL,
+        proposed_canonical_key TEXT NOT NULL,
+        proposed_conflict_key TEXT,
+        confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+        source_conversation_id TEXT,
+        source_message_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'dismissed')),
+        result_memory_id TEXT REFERENCES memory_entries(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        resolved_at TEXT,
+        CHECK ((proposal_memory_id IS NULL AND proposal_revision IS NULL)
+          OR (proposal_memory_id IS NOT NULL AND proposal_revision IS NOT NULL)),
+        CHECK (proposal_memory_id IS NOT NULL OR source_conversation_id IS NOT NULL),
+        UNIQUE (owner_profile_id, target_memory_id, proposed_canonical_key, relation)
+      ) STRICT;
+      INSERT INTO memory_merge_reviews
+        (id, owner_profile_id, kind, relation, target_memory_id, target_content, target_revision,
+         proposal_memory_id, proposal_revision, proposed_content, proposed_retrieval_keys_json,
+         proposed_canonical_key, proposed_conflict_key, confidence, source_conversation_id,
+         source_message_id, status, result_memory_id, created_at, updated_at, resolved_at)
+      SELECT id, owner_profile_id, kind, relation, target_memory_id, target_content, target_revision,
+             NULL, NULL, proposed_content, proposed_retrieval_keys_json, proposed_canonical_key,
+             proposed_conflict_key, confidence, source_conversation_id, source_message_id, status,
+             result_memory_id, created_at, updated_at, resolved_at
+        FROM memory_merge_reviews_v25;
+      DROP TABLE memory_merge_reviews_v25;
+      CREATE INDEX memory_merge_reviews_status_idx
+        ON memory_merge_reviews(owner_profile_id, status, created_at DESC, id);
+      CREATE INDEX memory_merge_reviews_target_idx
+        ON memory_merge_reviews(owner_profile_id, target_memory_id, created_at DESC);
+      CREATE INDEX memory_merge_reviews_proposal_idx
+        ON memory_merge_reviews(owner_profile_id, proposal_memory_id, created_at DESC)
+        WHERE proposal_memory_id IS NOT NULL;
+    `,
+  },
 ];
 
 export function migrateDatabase(

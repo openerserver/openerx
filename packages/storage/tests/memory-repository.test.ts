@@ -467,6 +467,130 @@ describe("MemoryRepository", () => {
     chat.close();
   });
 
+  it("stages and resolves historical duplicate and conflict pairs without automatic mutation", () => {
+    const repository = new MemoryRepository(databasePath(), { idFactory: ids() });
+    repository.updateSettings({ memoriesEnabled: true });
+    const preferred = repository.upsert({
+      kind: "preference",
+      content: "用户希望回答先给结论。",
+      idempotencyKey: "memory-historical-duplicate-0001",
+    });
+    const duplicate = repository.upsert({
+      kind: "preference",
+      content: "用户偏好结论优先的回答。",
+      idempotencyKey: "memory-historical-duplicate-0002",
+    });
+    const [duplicateReview] = repository.stageHistoricalMergeReviews([
+      {
+        relation: "duplicate",
+        leftMemoryId: preferred.id,
+        rightMemoryId: duplicate.id,
+        confidence: 0.94,
+      },
+    ]);
+    expect(duplicateReview).toMatchObject({
+      proposalMemoryId: expect.any(String),
+      proposalRevision: 1,
+      status: "pending",
+    });
+    expect(repository.get(duplicate.id).status).toBe("active");
+    const merged = repository.resolveMergeReview({
+      reviewId: duplicateReview?.id ?? "",
+      resolution: "accept",
+      idempotencyKey: "memory-historical-duplicate-accept-0001",
+    });
+    const keptId = duplicateReview?.targetMemoryId ?? "";
+    const mergedId = duplicateReview?.proposalMemoryId ?? "";
+    expect(merged).toMatchObject({ status: "accepted", resultMemoryId: keptId });
+    expect(repository.get(keptId)).toMatchObject({
+      status: "active",
+      supersedesMemoryId: mergedId,
+    });
+    expect(repository.get(mergedId).status).toBe("superseded");
+    repository.delete({
+      memoryId: keptId,
+      idempotencyKey: "memory-historical-duplicate-undo-0001",
+    });
+    expect(repository.get(mergedId).status).toBe("active");
+
+    const older = repository.upsert({
+      kind: "workflow",
+      content: "提交前运行单元测试。",
+      idempotencyKey: "memory-historical-conflict-0001",
+    });
+    const newer = repository.upsert({
+      kind: "workflow",
+      content: "提交前不运行测试。",
+      idempotencyKey: "memory-historical-conflict-0002",
+    });
+    const [conflictReview] = repository.stageHistoricalMergeReviews([
+      {
+        relation: "conflict",
+        leftMemoryId: older.id,
+        rightMemoryId: newer.id,
+        confidence: 0.92,
+      },
+    ]);
+    expect(repository.list({ status: "active", limit: 50 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: older.id }),
+        expect.objectContaining({ id: newer.id }),
+      ]),
+    );
+    const replaced = repository.resolveMergeReview({
+      reviewId: conflictReview?.id ?? "",
+      resolution: "accept",
+      idempotencyKey: "memory-historical-conflict-accept-0001",
+    });
+    const conflictTargetId = conflictReview?.targetMemoryId ?? "";
+    const conflictProposalId = conflictReview?.proposalMemoryId ?? "";
+    expect(replaced).toMatchObject({ status: "accepted", resultMemoryId: conflictProposalId });
+    expect(repository.get(conflictTargetId).status).toBe("superseded");
+    expect(repository.get(conflictProposalId)).toMatchObject({
+      status: "active",
+      origin: "explicit",
+      supersedesMemoryId: conflictTargetId,
+    });
+    repository.close();
+  });
+
+  it("rejects a historical review when either stored memory changed after scanning", () => {
+    const repository = new MemoryRepository(databasePath(), { idFactory: ids() });
+    repository.updateSettings({ memoriesEnabled: true });
+    const left = repository.upsert({
+      kind: "profile",
+      content: "用户常驻上海。",
+      idempotencyKey: "memory-historical-stale-0001",
+    });
+    const right = repository.upsert({
+      kind: "profile",
+      content: "用户住在上海。",
+      idempotencyKey: "memory-historical-stale-0002",
+    });
+    const [review] = repository.stageHistoricalMergeReviews([
+      {
+        relation: "duplicate",
+        leftMemoryId: left.id,
+        rightMemoryId: right.id,
+        confidence: 0.93,
+      },
+    ]);
+    repository.upsert({
+      id: right.id,
+      kind: right.kind,
+      content: "用户目前常驻杭州。",
+      idempotencyKey: "memory-historical-stale-edit-0001",
+    });
+    expect(() =>
+      repository.resolveMergeReview({
+        reviewId: review?.id ?? "",
+        resolution: "accept",
+        idempotencyKey: "memory-historical-stale-accept-0001",
+      }),
+    ).toThrow("MEMORY_MERGE_REVIEW_STALE");
+    repository.close();
+  });
+
   it("rejects stale semantic reviews and removes pending proposals with a forgotten source", () => {
     const file = databasePath();
     const chat = new ChatRepository(file);

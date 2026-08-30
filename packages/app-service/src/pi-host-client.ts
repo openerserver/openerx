@@ -2,6 +2,8 @@ import {
   type PiActivityEvent,
   type PiFileToolRequestFrame,
   type PiHostEventFrame,
+  type PiMemoryClusterFrame,
+  type PiMemoryClusterResultFrame,
   type PiMemoryExtractFrame,
   type PiMemoryExtractResultFrame,
   type PiPromptFrame,
@@ -12,6 +14,7 @@ import {
   piFileToolRequestFrameSchema,
   piHostEventFrameSchema,
   piHostReadyFrameSchema,
+  piMemoryClusterResultFrameSchema,
   piMemoryExtractResultFrameSchema,
   piSessionControlResultFrameSchema,
   piToolCancelFrameSchema,
@@ -22,6 +25,7 @@ import type { MessagePortMain } from "electron";
 export interface PiHostClient {
   prompt(frame: PiPromptFrame): Promise<void>;
   extractMemories?(frame: PiMemoryExtractFrame): Promise<PiMemoryExtractResultFrame>;
+  clusterMemories?(frame: PiMemoryClusterFrame): Promise<PiMemoryClusterResultFrame>;
   abort(generationId: string): Promise<void>;
   control(frame: PiSessionControlFrame): Promise<void>;
   onEvent(listener: (frame: PiHostEventFrame) => void): () => void;
@@ -62,6 +66,14 @@ export class MessagePortPiHostClient implements PiHostClient {
       timeout: NodeJS.Timeout;
     }
   >();
+  readonly #pendingMemoryClusters = new Map<
+    string,
+    {
+      resolve(result: PiMemoryClusterResultFrame): void;
+      reject(error: Error): void;
+      timeout: NodeJS.Timeout;
+    }
+  >();
   readonly #ready: Promise<void>;
   #disconnected = false;
 
@@ -92,6 +104,11 @@ export class MessagePortPiHostClient implements PiHostClient {
               pending.reject(new Error("PI_HOST_DISCONNECTED"));
             }
             this.#pendingMemoryExtractions.clear();
+            for (const pending of this.#pendingMemoryClusters.values()) {
+              clearTimeout(pending.timeout);
+              pending.reject(new Error("PI_HOST_DISCONNECTED"));
+            }
+            this.#pendingMemoryClusters.clear();
             for (const listener of this.#disconnectListeners) listener();
           });
           resolve();
@@ -115,6 +132,18 @@ export class MessagePortPiHostClient implements PiHostClient {
         reject(new Error("PI_MEMORY_EXTRACTION_TIMEOUT"));
       }, 2 * 60_000);
       this.#pendingMemoryExtractions.set(frame.requestId, { resolve, reject, timeout });
+      this.#port.postMessage(frame);
+    });
+  }
+
+  async clusterMemories(frame: PiMemoryClusterFrame): Promise<PiMemoryClusterResultFrame> {
+    await this.#ready;
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.#pendingMemoryClusters.delete(frame.requestId);
+        reject(new Error("PI_MEMORY_CLUSTER_TIMEOUT"));
+      }, 2 * 60_000);
+      this.#pendingMemoryClusters.set(frame.requestId, { resolve, reject, timeout });
       this.#port.postMessage(frame);
     });
   }
@@ -176,6 +205,15 @@ export class MessagePortPiHostClient implements PiHostClient {
   }
 
   #handleMessage(data: unknown): void {
+    const cluster = piMemoryClusterResultFrameSchema.safeParse(data);
+    if (cluster.success) {
+      const pending = this.#pendingMemoryClusters.get(cluster.data.requestId);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      this.#pendingMemoryClusters.delete(cluster.data.requestId);
+      pending.resolve(cluster.data);
+      return;
+    }
     const extraction = piMemoryExtractResultFrameSchema.safeParse(data);
     if (extraction.success) {
       const pending = this.#pendingMemoryExtractions.get(extraction.data.requestId);

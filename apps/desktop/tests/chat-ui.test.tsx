@@ -817,7 +817,7 @@ describe("M1 chat renderer", () => {
     expect(screen.getByText("密钥、口令、验证码、Cookie、私钥", { exact: false })).toBeTruthy();
   });
 
-  it("keeps fuzzy semantic memory suggestions behind an explicit review action", async () => {
+  it("keeps historical semantic memory suggestions behind an explicit review action", async () => {
     cleanup();
     const bridge = createBridge();
     const review = {
@@ -828,6 +828,8 @@ describe("M1 chat renderer", () => {
       targetMemoryId: "77777777-7777-4777-8777-777777777702",
       targetContent: "用户希望技术方案先给结论。",
       targetRevision: 1,
+      proposalMemoryId: "77777777-7777-4777-8777-777777777703",
+      proposalRevision: 1,
       proposedContent: "用户希望技术方案最后给结论。",
       proposedRetrievalKeys: ["技术方案", "结论"],
       proposedConflictKey: null,
@@ -865,6 +867,7 @@ describe("M1 chat renderer", () => {
     await user.click(await screen.findByRole("button", { name: "记忆" }));
     expect(await screen.findByText(review.targetContent)).toBeTruthy();
     expect(screen.getByText(review.proposedContent)).toBeTruthy();
+    expect(screen.getByText("较新的已有记忆（确认后替代）")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "确认替代" }));
     await waitFor(() =>
       expect(bridge.resolveMemoryMergeReview).toHaveBeenCalledWith({

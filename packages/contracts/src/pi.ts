@@ -2,7 +2,11 @@ import { z } from "zod";
 import { brokeredBashExecutionContextSchema } from "./brokered-bash";
 import { entityIdSchema, timestampSchema } from "./chat";
 import { supportedFileFormatSchema } from "./file";
-import { automaticMemoryExtractionOutputSchema, recalledMemorySchema } from "./memory";
+import {
+  automaticMemoryExtractionOutputSchema,
+  memorySemanticClusterOutputSchema,
+  recalledMemorySchema,
+} from "./memory";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { processNonceSchema } from "./process";
 import { piSkillMountSchema } from "./skill";
@@ -17,7 +21,7 @@ import {
 } from "./tool";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 9 as const;
+export const piHostContractVersion = 10 as const;
 
 export const piHostBootstrapSchema = z
   .object({
@@ -283,6 +287,51 @@ export const piMemoryExtractResultFrameSchema = z.discriminatedUnion("ok", [
     .strict(),
 ]);
 
+const piMemoryClusterItemSchema = z
+  .object({
+    id: entityIdSchema,
+    kind: z.enum(["profile", "preference", "workflow", "ongoing_context"]),
+    content: z.string().trim().min(1).max(2_000),
+  })
+  .strict();
+
+export const piMemoryClusterFrameSchema = z
+  .object({
+    kind: z.literal("pi.memory.cluster"),
+    requestId: entityIdSchema,
+    runId: entityIdSchema,
+    thinkingLevel: thinkingLevelSchema.optional(),
+    memories: z.array(piMemoryClusterItemSchema).min(2).max(40),
+    platform: piBackgroundPlatformSchema.optional(),
+    byok: piBackgroundByokSchema.optional(),
+  })
+  .strict()
+  .superRefine((frame, context) => {
+    if (frame.platform && frame.byok) {
+      context.addIssue({ code: "custom", message: "Platform and BYOK are mutually exclusive" });
+    }
+  });
+
+export const piMemoryClusterResultFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      kind: z.literal("pi.memory.cluster-result"),
+      requestId: entityIdSchema,
+      ok: z.literal(true),
+      output: memorySemanticClusterOutputSchema,
+      usageRecords: z.array(usageRecordSchema).max(128).default([]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pi.memory.cluster-result"),
+      requestId: entityIdSchema,
+      ok: z.literal(false),
+      errorCode: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+    })
+    .strict(),
+]);
+
 export const piSessionControlFrameSchema = z
   .object({
     kind: z.literal("pi.session.control"),
@@ -355,6 +404,7 @@ export const piFileToolResponseFrameSchema = z.discriminatedUnion("ok", [
 export const piHostRequestFrameSchema = z.union([
   piPromptFrameSchema,
   piMemoryExtractFrameSchema,
+  piMemoryClusterFrameSchema,
   piAbortFrameSchema,
   piSessionControlFrameSchema,
   piFileToolResponseFrameSchema,
@@ -381,6 +431,7 @@ export const piHostPortFrameSchema = z.union([
   piHostRequestFrameSchema,
   piHostEventFrameSchema,
   piMemoryExtractResultFrameSchema,
+  piMemoryClusterResultFrameSchema,
   piSessionControlResultFrameSchema,
   piFileToolRequestFrameSchema,
   piFileToolResponseFrameSchema,
@@ -396,6 +447,8 @@ export type PiImageInput = z.infer<typeof piImageInputSchema>;
 export type PiPromptFrame = z.infer<typeof piPromptFrameSchema>;
 export type PiMemoryExtractFrame = z.infer<typeof piMemoryExtractFrameSchema>;
 export type PiMemoryExtractResultFrame = z.infer<typeof piMemoryExtractResultFrameSchema>;
+export type PiMemoryClusterFrame = z.infer<typeof piMemoryClusterFrameSchema>;
+export type PiMemoryClusterResultFrame = z.infer<typeof piMemoryClusterResultFrameSchema>;
 export type PiHostEventFrame = z.infer<typeof piHostEventFrameSchema>;
 export type PiSessionControlFrame = z.infer<typeof piSessionControlFrameSchema>;
 export type PiSessionControlResultFrame = z.infer<typeof piSessionControlResultFrameSchema>;
