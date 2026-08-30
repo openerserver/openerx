@@ -1,4 +1,5 @@
 export * from "./account";
+export * from "./automation";
 export * from "./billing";
 export * from "./brokered-bash";
 export * from "./browser-computer-use";
@@ -12,6 +13,7 @@ export * from "./file";
 export * from "./local-web-search";
 export * from "./memory";
 export * from "./model";
+export * from "./model-service";
 export * from "./pi";
 export * from "./platform";
 export * from "./process";

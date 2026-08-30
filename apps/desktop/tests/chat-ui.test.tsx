@@ -141,11 +141,33 @@ const snapshot: ConversationSnapshot = {
 
 function createBridge(): DesktopBridge {
   return {
+    getModelServiceSettings: vi.fn().mockResolvedValue({
+      mode: "byok",
+      byok: {
+        baseUrl: "https://api.deepseek.com",
+        modelId: "deepseek-v4-flash",
+        displayName: "DeepSeek V4 Flash",
+        contextWindow: 1_000_000,
+        maxOutputTokens: 384_000,
+        capabilities: { imageInput: false, functionCalling: true, reasoning: true },
+      },
+      credentialConfigured: false,
+      updatedAt: null,
+    }),
+    updateModelServiceSettings: vi.fn(),
+    testByokConnection: vi.fn(),
+    clearByokApiKey: vi.fn(),
     getEnvironment: vi.fn().mockResolvedValue({
       platform: "darwin",
       arch: "arm64",
       appVersion: "2.0.0-alpha.0",
     }),
+    getLoginStartupSettings: vi.fn().mockResolvedValue({
+      supported: true,
+      openAtLogin: false,
+      launchesInBackground: true,
+    }),
+    updateLoginStartupSettings: vi.fn(),
     requestDesktopNativePermission: vi.fn().mockResolvedValue({
       permission: "accessibility",
       status: "authorization_required",
@@ -236,6 +258,18 @@ function createBridge(): DesktopBridge {
     clearLocalCache: vi.fn(),
     deleteCloudData: vi.fn(),
     listConversations: vi.fn().mockResolvedValue([]),
+    createAutomation: vi.fn(),
+    listAutomations: vi.fn().mockResolvedValue([]),
+    getAutomation: vi.fn(),
+    updateAutomation: vi.fn(),
+    pauseAutomation: vi.fn(),
+    resumeAutomation: vi.fn(),
+    deleteAutomation: vi.fn(),
+    runAutomationNow: vi.fn(),
+    listAutomationRuns: vi.fn().mockResolvedValue([]),
+    previewAutomationSchedule: vi.fn().mockResolvedValue({ occurrences: [] }),
+    onAutomationRun: vi.fn().mockReturnValue(() => undefined),
+    onAutomationNavigate: vi.fn().mockReturnValue(() => undefined),
     getConversation: vi.fn().mockResolvedValue(snapshot),
     sendMessage: vi.fn().mockResolvedValue({
       conversationId,
@@ -1746,5 +1780,141 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "显示归档对话" }));
     expect(await screen.findByText("历史 · 含归档")).toBeTruthy();
     expect(screen.getByText("还没有活动或归档对话。")).toBeTruthy();
+  });
+  it("creates a daily standalone automation from the automation page", async () => {
+    const bridge = createBridge();
+    vi.mocked(bridge.createAutomation).mockResolvedValue({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      ownerProfileId: "local-default",
+      name: "每日巡检",
+      prompt: "检查项目并运行测试",
+      kind: "standalone",
+      status: "active",
+      schedule: {
+        mode: "rrule",
+        expression: "FREQ=DAILY",
+        timezone: "UTC",
+        startAt: "2026-08-30T01:00:00.000Z",
+      },
+      target: { conversationId: null, branchId: null, workspaceGrantIds: [] },
+      execution: {
+        modelRef: "platform/auto",
+        thinkingLevel: "medium",
+        skillInstallationId: null,
+        maxConcurrentRuns: 1,
+        catchUpPolicy: "skip",
+        retryPolicy: "none",
+      },
+      nextRunAt: "2026-08-30T01:00:00.000Z",
+      lastRunAt: null,
+      createdAt: "2026-08-29T01:00:00.000Z",
+      updatedAt: "2026-08-29T01:00:00.000Z",
+      revision: 1,
+    });
+    renderApp(bridge, "/automations");
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "新建自动化" }));
+    await user.type(screen.getByLabelText("名称"), "每日巡检");
+    await user.type(screen.getByLabelText("任务描述"), "检查项目并运行测试");
+    await user.click(screen.getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => expect(bridge.createAutomation).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(bridge.createAutomation).mock.calls[0]?.[0]).toMatchObject({
+      name: "每日巡检",
+      prompt: "检查项目并运行测试",
+      kind: "standalone",
+      execution: { modelRef: "platform/byok" },
+      schedule: { mode: "rrule", expression: "FREQ=DAILY" },
+    });
+  });
+
+  it("enables background startup from the automation page", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.updateLoginStartupSettings).mockResolvedValue({
+      supported: true,
+      openAtLogin: true,
+      launchesInBackground: true,
+    });
+    renderApp(bridge, "/automations");
+    const user = userEvent.setup();
+
+    const startup = await screen.findByRole("checkbox", {
+      name: "登录 Windows 后自动运行",
+    });
+    expect((startup as HTMLInputElement).checked).toBe(false);
+    await user.click(startup);
+
+    await waitFor(() =>
+      expect(bridge.updateLoginStartupSettings).toHaveBeenCalledWith({ openAtLogin: true }),
+    );
+    expect((startup as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("已开启")).toBeTruthy();
+    cleanup();
+  });
+
+  it("previews and edits an existing automation with revision locking", async () => {
+    const bridge = createBridge();
+    const automation = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      ownerProfileId: "local-default",
+      name: "每日巡检",
+      prompt: "检查项目并运行测试",
+      kind: "standalone" as const,
+      status: "active" as const,
+      schedule: {
+        mode: "rrule" as const,
+        expression: "FREQ=DAILY",
+        timezone: "UTC",
+        startAt: "2026-08-30T01:00:00.000Z",
+      },
+      target: { conversationId: null, branchId: null, workspaceGrantIds: [] },
+      execution: {
+        modelRef: "platform/byok",
+        thinkingLevel: "medium" as const,
+        skillInstallationId: null,
+        maxConcurrentRuns: 1 as const,
+        catchUpPolicy: "skip" as const,
+        retryPolicy: "none" as const,
+      },
+      nextRunAt: "2026-08-30T01:00:00.000Z",
+      lastRunAt: null,
+      createdAt: "2026-08-29T01:00:00.000Z",
+      updatedAt: "2026-08-29T01:00:00.000Z",
+      revision: 3,
+    };
+    vi.mocked(bridge.listAutomations).mockResolvedValue([automation]);
+    vi.mocked(bridge.previewAutomationSchedule).mockResolvedValue({
+      occurrences: ["2026-08-30T01:00:00.000Z", "2026-08-31T01:00:00.000Z"],
+    });
+    vi.mocked(bridge.updateAutomation).mockResolvedValue({
+      ...automation,
+      name: "每日安全巡检",
+      revision: 4,
+    });
+    renderApp(bridge, "/automations");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: /每日巡检/ }));
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    expect(await screen.findByRole("heading", { name: "编辑自动化" })).toBeTruthy();
+    await waitFor(() => expect(bridge.previewAutomationSchedule).toHaveBeenCalled());
+    expect(screen.getByRole("heading", { name: "未来执行时间" })).toBeTruthy();
+    const nameInput = screen.getByLabelText("名称");
+    await user.clear(nameInput);
+    await user.type(nameInput, "每日安全巡检");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() =>
+      expect(bridge.updateAutomation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          automationId: automation.id,
+          revision: 3,
+          changes: expect.objectContaining({ name: "每日安全巡检" }),
+        }),
+      ),
+    );
   });
 });

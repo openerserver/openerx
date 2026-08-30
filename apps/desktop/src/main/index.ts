@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -10,6 +10,15 @@ import {
   artifactGetInputSchema,
   artifactPreviewInputSchema,
   artifactSchema,
+  automationCommandEnvelopeSchema,
+  automationCreateInputSchema,
+  automationGetInputSchema,
+  automationListInputSchema,
+  automationRunNowInputSchema,
+  automationRunsListInputSchema,
+  automationSchedulePreviewInputSchema,
+  automationSetStatusInputSchema,
+  automationUpdateInputSchema,
   billingStatementRequestSchema,
   browserComputerUseSessionControlInputSchema,
   browserSessionDescriptorSchema,
@@ -30,6 +39,8 @@ import {
   chatStopInputSchema,
   createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
+  desktopLoginStartupSettingsSchema,
+  desktopLoginStartupSettingsUpdateSchema,
   desktopMcpServerSaveInputSchema,
   desktopNativePermissionRequestSchema,
   desktopNativePermissionResultSchema,
@@ -48,6 +59,7 @@ import {
   mcpServerAuthorizeInputSchema,
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
+  modelServiceSettingsUpdateSchema,
   permissionListInputSchema,
   permissionResolveInputSchema,
   personalDataSummarySchema,
@@ -88,19 +100,29 @@ import {
   dialog,
   ipcMain,
   Menu,
+  Notification,
+  nativeImage,
   net,
   protocol,
   shell,
   systemPreferences,
+  Tray,
 } from "electron";
 import started from "electron-squirrel-startup";
 import type { z } from "zod";
 import { AccountSessionManager, HttpIdentityTransport } from "./account-session-manager";
 import { AppServiceSupervisor } from "./app-service-supervisor";
+import { automationNotificationContent } from "./automation-notification";
+import {
+  keepsAutomationRuntimeAliveAfterWindowClose,
+  shouldHideMainWindowOnClose,
+} from "./background-lifecycle";
 import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
 import { initializeAccountSession } from "./development-account-bootstrap";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
 import { assertTrustedIpcSender } from "./ipc-security";
+import { DesktopLoginStartupService, isBackgroundLoginStartup } from "./login-startup";
+import { ModelServiceSettingsStore } from "./model-service-settings";
 import { PlatformAccountClient } from "./platform-account-client";
 import { RemoteDesktopController } from "./remote-desktop-controller";
 import {
@@ -167,6 +189,9 @@ if (started) {
   app.quit();
 }
 
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
+
 const e2eProfileDirectory =
   process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_PROFILE_DIR : undefined;
 if (e2eProfileDirectory) app.setPath("userData", path.resolve(e2eProfileDirectory));
@@ -180,6 +205,8 @@ function registerIpcHandlers(
   remote: RemoteDesktopController,
   diagnostics: DiagnosticsService,
   updates: DesktopUpdateService,
+  modelSettings: ModelServiceSettingsStore,
+  loginStartup: DesktopLoginStartupService,
 ): void {
   ipcMain.handle(ipcChannels.environmentGet, (event) => {
     assertTrustedIpcSender(event);
@@ -188,6 +215,16 @@ function registerIpcHandlers(
       arch: process.arch,
       appVersion: app.getVersion(),
     });
+  });
+  ipcMain.handle(ipcChannels.loginStartupSettingsGet, (event) => {
+    assertTrustedIpcSender(event);
+    return desktopLoginStartupSettingsSchema.parse(loginStartup.state());
+  });
+  ipcMain.handle(ipcChannels.loginStartupSettingsUpdate, (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    return desktopLoginStartupSettingsSchema.parse(
+      loginStartup.update(desktopLoginStartupSettingsUpdateSchema.parse(raw)),
+    );
   });
   ipcMain.handle(ipcChannels.desktopNativePermissionRequest, async (event, raw: unknown) => {
     assertTrustedIpcSender(event);
@@ -399,8 +436,53 @@ function registerIpcHandlers(
 
   ipcMain.handle(ipcChannels.modelList, async (event) => {
     assertTrustedIpcSender(event);
+    const settings = await modelSettings.state();
+    const byokModel = settings.byok
+      ? {
+          modelRef: "platform/byok" as const,
+          displayName: settings.byok.displayName,
+          version: "user-configured",
+          capabilities: {
+            textInput: true,
+            imageInput: settings.byok.capabilities.imageInput,
+            fileInput: false,
+            functionCalling: settings.byok.capabilities.functionCalling,
+            structuredOutput: false,
+          },
+          contextWindow: settings.byok.contextWindow,
+          maxOutputTokens: settings.byok.maxOutputTokens,
+          status: settings.credentialConfigured ? ("available" as const) : ("unavailable" as const),
+          priceRef: "byok/user-provider",
+          priceSummary: "由 API 提供商直接计费",
+          free: false,
+          thinkingLevels: settings.byok.capabilities.reasoning
+            ? (["off", "medium", "high"] as const)
+            : (["off"] as const),
+        }
+      : null;
+    if (settings.mode === "byok") {
+      if (!byokModel) throw new Error("BYOK_NOT_CONFIGURED");
+      return [byokModel];
+    }
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
-    return await platformClient.listModels(await accounts.accessToken());
+    const hostedModels = await platformClient.listModels(await accounts.accessToken());
+    return byokModel ? [...hostedModels, byokModel] : hostedModels;
+  });
+  ipcMain.handle(ipcChannels.modelServiceSettingsGet, async (event) => {
+    assertTrustedIpcSender(event);
+    return await modelSettings.state();
+  });
+  ipcMain.handle(ipcChannels.modelServiceSettingsUpdate, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    return await modelSettings.update(modelServiceSettingsUpdateSchema.parse(raw));
+  });
+  ipcMain.handle(ipcChannels.modelServiceConnectionTest, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    return await modelSettings.test(modelServiceSettingsUpdateSchema.parse(raw));
+  });
+  ipcMain.handle(ipcChannels.modelServiceApiKeyClear, async (event) => {
+    assertTrustedIpcSender(event);
+    return await modelSettings.clearApiKey();
   });
   ipcMain.handle(ipcChannels.usageGet, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
@@ -487,6 +569,7 @@ function registerIpcHandlers(
     command: z.input<typeof chatCommandEnvelopeSchema>["command"],
     inputSchema: { parse: (value: unknown) => T },
     needsAuthorization = false,
+    needsAccountAuthorization = false,
   ): void => {
     ipcMain.handle(channel, async (event, input: unknown) => {
       assertTrustedIpcSender(event);
@@ -494,20 +577,47 @@ function registerIpcHandlers(
         command,
         input: inputSchema.parse(input),
       });
+      const modelService = needsAuthorization ? await modelSettings.state() : undefined;
+      const byok = modelService?.mode === "byok" ? await modelSettings.execution() : undefined;
       const authorization =
-        needsAuthorization && platformUrl ? await accounts.authorization(platformUrl) : undefined;
+        (needsAccountAuthorization || (needsAuthorization && modelService?.mode !== "byok")) &&
+        platformUrl &&
+        accounts.state().status === "signed_in"
+          ? await accounts.authorization(platformUrl)
+          : undefined;
+      return await supervisor.request(request, authorization, 15_000, byok);
+    });
+  };
+
+  const registerAutomationHandler = <T>(
+    channel: string,
+    command: z.input<typeof automationCommandEnvelopeSchema>["command"],
+    inputSchema: { parse: (value: unknown) => T },
+  ): void => {
+    ipcMain.handle(channel, async (event, input: unknown) => {
+      assertTrustedIpcSender(event);
+      const request = automationCommandEnvelopeSchema.parse({
+        command,
+        input: inputSchema.parse(input),
+      });
+      const authorization =
+        platformUrl && accounts.state().status === "signed_in"
+          ? await accounts.authorization(platformUrl)
+          : undefined;
       return await supervisor.request(request, authorization);
     });
   };
 
   ipcMain.handle(ipcChannels.toolRuntimeReadiness, async (event) => {
     assertTrustedIpcSender(event);
+    const modelService = await modelSettings.state();
+    const hosted = modelService.mode === "hosted";
     return await supervisor.request(
       chatCommandEnvelopeSchema.parse({
         command: "tool.runtime.readiness",
         input: {
-          authenticated: accounts.state().status === "signed_in",
-          platformConfigured: Boolean(platformUrl),
+          authenticated: hosted && accounts.state().status === "signed_in",
+          platformConfigured: hosted && Boolean(platformUrl),
         },
       }),
     );
@@ -515,18 +625,19 @@ function registerIpcHandlers(
 
   registerChatHandler(ipcChannels.chatList, "chat.list", chatListInputSchema);
   registerChatHandler(ipcChannels.chatGet, "chat.get", chatGetInputSchema);
-  registerChatHandler(ipcChannels.chatSend, "chat.send", chatSendInputSchema, true);
+  registerChatHandler(ipcChannels.chatSend, "chat.send", chatSendInputSchema, true, true);
   registerChatHandler(ipcChannels.chatStop, "chat.stop", chatStopInputSchema, true);
   registerChatHandler(
     ipcChannels.chatRegenerate,
     "chat.regenerate",
     chatRegenerateInputSchema,
     true,
+    true,
   );
-  registerChatHandler(ipcChannels.chatEdit, "chat.edit", chatEditInputSchema, true);
+  registerChatHandler(ipcChannels.chatEdit, "chat.edit", chatEditInputSchema, true, true);
   registerChatHandler(ipcChannels.chatRename, "chat.rename", chatRenameInputSchema, true);
   registerChatHandler(ipcChannels.chatArchive, "chat.archive", chatArchiveInputSchema, true);
-  registerChatHandler(ipcChannels.chatDelete, "chat.delete", chatDeleteInputSchema, true);
+  registerChatHandler(ipcChannels.chatDelete, "chat.delete", chatDeleteInputSchema, true, true);
   registerChatHandler(
     ipcChannels.chatSelectModel,
     "chat.selectModel",
@@ -556,6 +667,52 @@ function registerIpcHandlers(
     true,
   );
   registerChatHandler(ipcChannels.localCacheClear, "cache.clear", emptyInputSchema);
+  registerAutomationHandler(
+    ipcChannels.automationCreate,
+    "automation.create",
+    automationCreateInputSchema,
+  );
+  registerAutomationHandler(
+    ipcChannels.automationList,
+    "automation.list",
+    automationListInputSchema,
+  );
+  registerAutomationHandler(ipcChannels.automationGet, "automation.get", automationGetInputSchema);
+  registerAutomationHandler(
+    ipcChannels.automationUpdate,
+    "automation.update",
+    automationUpdateInputSchema,
+  );
+  registerAutomationHandler(
+    ipcChannels.automationPause,
+    "automation.pause",
+    automationSetStatusInputSchema,
+  );
+  registerAutomationHandler(
+    ipcChannels.automationResume,
+    "automation.resume",
+    automationSetStatusInputSchema,
+  );
+  registerAutomationHandler(
+    ipcChannels.automationDelete,
+    "automation.delete",
+    automationSetStatusInputSchema,
+  );
+  registerAutomationHandler(
+    ipcChannels.automationRunNow,
+    "automation.runNow",
+    automationRunNowInputSchema,
+  );
+  registerAutomationHandler(
+    ipcChannels.automationRunsList,
+    "automation.runs.list",
+    automationRunsListInputSchema,
+  );
+  registerAutomationHandler(
+    ipcChannels.automationSchedulePreview,
+    "automation.schedule.preview",
+    automationSchedulePreviewInputSchema,
+  );
   ipcMain.handle(ipcChannels.fileChoose, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const parsed = fileChooseInputSchema.parse(input ?? {});
@@ -860,6 +1017,12 @@ function registerAppProtocol(): void {
 function createMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
   const mainWindow = new BrowserWindow(createWindowOptions(path.join(__dirname, "preload.js")));
 
+  mainWindow.on("close", (event) => {
+    if (!shouldHideMainWindowOnClose(process.platform, quitRequested)) return;
+    event.preventDefault();
+    mainWindow.hide();
+  });
+
   mainWindow.once("ready-to-show", () => {
     performanceBudgets.markDesktopInteractive();
     diagnostics.record({ source: "renderer", level: "info", code: "renderer.interactive" });
@@ -889,8 +1052,58 @@ function createMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
 }
 
 let supervisor: AppServiceSupervisor | null = null;
+let backgroundTray: Tray | null = null;
+let quitRequested = false;
+let activeDiagnostics: DiagnosticsService | null = null;
+let reopenRequested = false;
+
+function showMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
+  const window = BrowserWindow.getAllWindows()[0] ?? createMainWindow(diagnostics);
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+  return window;
+}
+
+async function createBackgroundTray(diagnostics: DiagnosticsService): Promise<void> {
+  if (!keepsAutomationRuntimeAliveAfterWindowClose(process.platform) || backgroundTray) return;
+  const iconCandidates = [
+    path.join(app.getAppPath(), "public", "assets", "china-unicom-logo.png"),
+    path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/assets/china-unicom-logo.png`),
+  ];
+  let icon = nativeImage.createEmpty();
+  for (const candidate of iconCandidates) {
+    if (!existsSync(candidate)) continue;
+    icon = nativeImage.createFromPath(candidate);
+    if (!icon.isEmpty()) break;
+  }
+  if (icon.isEmpty()) icon = await app.getFileIcon(process.execPath, { size: "small" });
+  backgroundTray = new Tray(icon.resize({ width: 16, height: 16 }));
+  backgroundTray.setToolTip("OpenerX · 自动化后台运行中");
+  backgroundTray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "自动化在后台运行", enabled: false },
+      { type: "separator" },
+      { label: "打开 OpenerX", click: () => showMainWindow(diagnostics) },
+      {
+        label: "退出 OpenerX（停止自动化）",
+        click: () => {
+          quitRequested = true;
+          app.quit();
+        },
+      },
+    ]),
+  );
+  backgroundTray.on("click", () => showMainWindow(diagnostics));
+}
+
+app.on("second-instance", () => {
+  if (activeDiagnostics) showMainWindow(activeDiagnostics);
+  else reopenRequested = true;
+});
 
 app.whenReady().then(async () => {
+  if (!primaryInstance) return;
   configureApplicationMenu();
   const profileDirectory = app.getPath("userData");
   mkdirSync(profileDirectory, { recursive: true });
@@ -898,6 +1111,7 @@ app.whenReady().then(async () => {
     path.join(profileDirectory, "logs", "diagnostics.jsonl"),
     performanceBudgets,
   );
+  activeDiagnostics = diagnostics;
   diagnostics.record({ source: "desktop", level: "info", code: "desktop.started" });
   const device = await loadOrCreateDeviceDescriptor(
     path.join(profileDirectory, "account", "device.json"),
@@ -968,6 +1182,26 @@ app.whenReady().then(async () => {
     device,
     app.getVersion(),
   );
+  const modelSettings = new ModelServiceSettingsStore(
+    path.join(profileDirectory, "model-service.json"),
+    new ToolCredentialVault(path.join(profileDirectory, "credentials", "model-service.bin")),
+  );
+  const loginStartup = new DesktopLoginStartupService(app, process.platform, process.execPath);
+  supervisor.setAutomationExecutionContextProvider(async () => {
+    const settings = await modelSettings.state();
+    const authorization =
+      platformUrl && accounts.state().status === "signed_in"
+        ? await accounts.authorization(platformUrl)
+        : undefined;
+    if (settings.mode === "byok") {
+      const byok = await modelSettings.execution();
+      if (!byok) throw new Error("BYOK_API_KEY_REQUIRED");
+      return { ...(authorization ? { authorization } : {}), byok };
+    }
+    if (!platformUrl) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
+    if (!authorization) throw new Error("AUTHENTICATION_REQUIRED");
+    return { authorization };
+  });
   if (process.env.OPENERX_E2E === "1") {
     Object.assign(globalThis, {
       __openerxCrashAppServiceForTest: () => supervisor?.crashAppServiceForTest(),
@@ -987,6 +1221,41 @@ app.whenReady().then(async () => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(ipcChannels.chatEvent, event);
     }
+  });
+  const notifiedAutomationRuns = new Set<string>();
+  supervisor.onAutomationRun((run) => {
+    diagnostics.record({
+      source: "app_service",
+      level:
+        run.status === "failed" || run.status === "interrupted"
+          ? "error"
+          : run.status === "needs_attention"
+            ? "warning"
+            : "info",
+      code: `automation.run.${run.status}`,
+      attributes: { automationId: run.automationId, runId: run.id },
+    });
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(ipcChannels.automationRunEvent, run);
+    }
+    const content = automationNotificationContent(run);
+    const notificationKey = `${run.id}:${run.status}`;
+    if (!content || notifiedAutomationRuns.has(notificationKey) || !Notification.isSupported()) {
+      return;
+    }
+    notifiedAutomationRuns.add(notificationKey);
+    const notification = new Notification(content);
+    notification.on("click", () => {
+      const existingWindow = BrowserWindow.getAllWindows()[0];
+      const window = existingWindow ?? createMainWindow(diagnostics);
+      const navigate = () =>
+        window.webContents.send(ipcChannels.automationNavigate, run.automationId);
+      if (existingWindow) navigate();
+      else window.webContents.once("did-finish-load", navigate);
+      window.show();
+      window.focus();
+    });
+    notification.show();
   });
   updates.onState((state) => {
     diagnostics.record({
@@ -1009,7 +1278,10 @@ app.whenReady().then(async () => {
     remote,
     diagnostics,
     updates,
+    modelSettings,
+    loginStartup,
   );
+  await createBackgroundTray(diagnostics);
   void supervisor.start().catch((error: unknown) => {
     diagnostics.record({
       source: "app_service",
@@ -1019,20 +1291,29 @@ app.whenReady().then(async () => {
     });
   });
   void remote.resume();
-  createMainWindow(diagnostics);
+  if (!isBackgroundLoginStartup(process.platform, process.argv) || reopenRequested) {
+    createMainWindow(diagnostics);
+  }
   if (updates.state().status === "idle") void updates.check();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow(diagnostics);
-    }
+    showMainWindow(diagnostics);
   });
 });
 
-app.on("before-quit", () => supervisor?.stop());
+app.on("before-quit", () => {
+  quitRequested = true;
+  activeDiagnostics = null;
+  backgroundTray?.destroy();
+  backgroundTray = null;
+  supervisor?.stop();
+});
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
+  if (
+    process.platform !== "darwin" &&
+    !keepsAutomationRuntimeAliveAfterWindowClose(process.platform)
+  ) {
     app.quit();
   }
 });

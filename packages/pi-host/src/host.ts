@@ -511,6 +511,36 @@ export function startPiHostProcess(
           modelRuntime.registerNativeProvider(platform.provider);
           model = platform.model;
         }
+        if (frame.byok) {
+          const providerId = "openerx-byok";
+          const restrictedFetch = createRestrictedByokFetch(frame.byok.baseUrl);
+          modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+          modelRuntime.registerProvider(providerId, {
+            name: "OpenAI-compatible BYOK",
+            baseUrl: frame.byok.baseUrl,
+            api: "openai-completions",
+            authHeader: true,
+            streamSimple: (model, context, streamOptions) =>
+              streamOpenAICompletions(model as Model<"openai-completions">, context, {
+                ...streamOptions,
+                fetch: restrictedFetch,
+              }),
+            models: [
+              {
+                id: frame.byok.modelId,
+                name: frame.byok.displayName,
+                api: "openai-completions",
+                reasoning: frame.byok.capabilities.reasoning,
+                input: frame.byok.capabilities.imageInput ? ["text", "image"] : ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: frame.byok.contextWindow,
+                maxTokens: frame.byok.maxOutputTokens,
+              },
+            ],
+          });
+          await modelRuntime.setRuntimeApiKey(providerId, frame.byok.apiKey);
+          model = modelRuntime.getModel(providerId, frame.byok.modelId);
+        }
         if (!modelRuntime || !model) {
           throw new PiModelNotConfiguredError("OpenerX Platform Model is not configured");
         }

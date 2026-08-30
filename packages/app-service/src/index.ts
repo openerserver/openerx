@@ -1,3 +1,5 @@
+export * from "./automation-app-service";
+export * from "./automation-scheduler";
 export * from "./chat-app-service";
 export * from "./memory-extraction-scheduler";
 export * from "./pi-host-client";

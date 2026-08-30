@@ -7,6 +7,17 @@ import {
   artifactExportResultSchema,
   artifactGetInputSchema,
   artifactPreviewInputSchema,
+  automationCreateInputSchema,
+  automationDefinitionSchema,
+  automationGetInputSchema,
+  automationListInputSchema,
+  automationRunNowInputSchema,
+  automationRunSchema,
+  automationRunsListInputSchema,
+  automationSchedulePreviewInputSchema,
+  automationSchedulePreviewSchema,
+  automationSetStatusInputSchema,
+  automationUpdateInputSchema,
   billingOverviewSchema,
   billingStatementExportSchema,
   billingStatementRequestSchema,
@@ -14,6 +25,7 @@ import {
   billingTermsStateSchema,
   browserComputerUseSessionControlInputSchema,
   browserSessionDescriptorSchema,
+  byokConnectionTestResultSchema,
   type ChatCommandEnvelope,
   type ChatCommandResultMap,
   chargeRecordSchema,
@@ -36,6 +48,8 @@ import {
   createRechargeOrderInputSchema,
   type DesktopBridge,
   desktopEnvironmentSchema,
+  desktopLoginStartupSettingsSchema,
+  desktopLoginStartupSettingsUpdateSchema,
   desktopMcpServerSaveInputSchema,
   desktopNativePermissionRequestSchema,
   desktopNativePermissionResultSchema,
@@ -59,6 +73,8 @@ import {
   mcpServerRemoveInputSchema,
   mcpServerRemoveResultSchema,
   modelCatalogEntrySchema,
+  modelServiceSettingsSchema,
+  modelServiceSettingsUpdateSchema,
   parseChatCommandResult,
   permissionListInputSchema,
   permissionResolveInputSchema,
@@ -112,6 +128,17 @@ const bridge: DesktopBridge = {
   getEnvironment: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.environmentGet);
     return desktopEnvironmentSchema.parse(result);
+  },
+  getLoginStartupSettings: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.loginStartupSettingsGet);
+    return desktopLoginStartupSettingsSchema.parse(result);
+  },
+  updateLoginStartupSettings: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.loginStartupSettingsUpdate,
+      desktopLoginStartupSettingsUpdateSchema.parse(input),
+    );
+    return desktopLoginStartupSettingsSchema.parse(result);
   },
   requestDesktopNativePermission: async (input) => {
     const result: unknown = await ipcRenderer.invoke(
@@ -237,6 +264,28 @@ const bridge: DesktopBridge = {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.modelList);
     return modelCatalogEntrySchema.array().parse(result);
   },
+  getModelServiceSettings: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.modelServiceSettingsGet);
+    return modelServiceSettingsSchema.parse(result);
+  },
+  updateModelServiceSettings: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.modelServiceSettingsUpdate,
+      modelServiceSettingsUpdateSchema.parse(input),
+    );
+    return modelServiceSettingsSchema.parse(result);
+  },
+  testByokConnection: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.modelServiceConnectionTest,
+      modelServiceSettingsUpdateSchema.parse(input),
+    );
+    return byokConnectionTestResultSchema.parse(result);
+  },
+  clearByokApiKey: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.modelServiceApiKeyClear);
+    return modelServiceSettingsSchema.parse(result);
+  },
   getUsage: async (input = {}) => {
     const result: unknown = await ipcRenderer.invoke(
       ipcChannels.usageGet,
@@ -353,6 +402,93 @@ const bridge: DesktopBridge = {
     ),
   getChatEvents: async (input) =>
     invokeChat(ipcChannels.chatEvents, "chat.events", chatEventsInputSchema.parse(input)),
+  createAutomation: async (input) =>
+    automationDefinitionSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.automationCreate,
+        automationCreateInputSchema.parse(input),
+      ),
+    ),
+  listAutomations: async (input = {}) =>
+    automationDefinitionSchema
+      .array()
+      .parse(
+        await ipcRenderer.invoke(
+          ipcChannels.automationList,
+          automationListInputSchema.parse(input),
+        ),
+      ),
+  getAutomation: async (input) =>
+    automationDefinitionSchema.parse(
+      await ipcRenderer.invoke(ipcChannels.automationGet, automationGetInputSchema.parse(input)),
+    ),
+  updateAutomation: async (input) =>
+    automationDefinitionSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.automationUpdate,
+        automationUpdateInputSchema.parse(input),
+      ),
+    ),
+  pauseAutomation: async (input) =>
+    automationDefinitionSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.automationPause,
+        automationSetStatusInputSchema.parse(input),
+      ),
+    ),
+  resumeAutomation: async (input) =>
+    automationDefinitionSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.automationResume,
+        automationSetStatusInputSchema.parse(input),
+      ),
+    ),
+  deleteAutomation: async (input) =>
+    automationDefinitionSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.automationDelete,
+        automationSetStatusInputSchema.parse(input),
+      ),
+    ),
+  runAutomationNow: async (input) =>
+    automationRunSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.automationRunNow,
+        automationRunNowInputSchema.parse(input),
+      ),
+    ),
+  listAutomationRuns: async (input) =>
+    automationRunSchema
+      .array()
+      .parse(
+        await ipcRenderer.invoke(
+          ipcChannels.automationRunsList,
+          automationRunsListInputSchema.parse(input),
+        ),
+      ),
+  previewAutomationSchedule: async (input) =>
+    automationSchedulePreviewSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.automationSchedulePreview,
+        automationSchedulePreviewInputSchema.parse(input),
+      ),
+    ),
+  onAutomationRun: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      const parsed = automationRunSchema.safeParse(value);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on(ipcChannels.automationRunEvent, wrapped);
+    return () => ipcRenderer.removeListener(ipcChannels.automationRunEvent, wrapped);
+  },
+  onAutomationNavigate: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      const parsed = automationGetInputSchema.safeParse({ automationId: value });
+      if (parsed.success) listener(parsed.data.automationId);
+    };
+    ipcRenderer.on(ipcChannels.automationNavigate, wrapped);
+    return () => ipcRenderer.removeListener(ipcChannels.automationNavigate, wrapped);
+  },
   chooseFiles: async (input = {}) =>
     invokeChat(ipcChannels.fileChoose, "file.import", fileChooseInputSchema.parse(input)),
   chooseDirectory: async (input = {}) =>

@@ -1,9 +1,11 @@
 import type {
+  MainAutomationContextRequestFrame,
   MainCapabilityAvailabilityRequestFrame,
   MainCredentialRequestFrame,
   MainOAuthRequestFrame,
 } from "@openerx/contracts";
 import {
+  mainAutomationContextRequestFrameSchema,
   mainCapabilityAvailabilityRequestFrameSchema,
   mainCredentialRequestFrameSchema,
   mainOAuthRequestFrameSchema,
@@ -20,6 +22,8 @@ function fixture() {
   const client = new MainCapabilityClient(port);
   return {
     client,
+    automationContextFrame: (): MainAutomationContextRequestFrame =>
+      mainAutomationContextRequestFrameSchema.parse(frames.at(-1)),
     availabilityFrame: (): MainCapabilityAvailabilityRequestFrame =>
       mainCapabilityAvailabilityRequestFrameSchema.parse(frames.at(-1)),
     credentialFrame: (): MainCredentialRequestFrame =>
@@ -29,6 +33,36 @@ function fixture() {
 }
 
 describe("MainCapabilityClient Main bridge", () => {
+  it("requests fresh automation execution context for unattended dispatch", async () => {
+    const { client, automationContextFrame } = fixture();
+    const resolving = client.automationExecutionContext();
+    const request = automationContextFrame();
+    expect(request.kind).toBe("main.automation-context.request");
+
+    expect(
+      client.handleMessage({
+        kind: "main.automation-context.response",
+        requestId: request.requestId,
+        ok: true,
+        data: {
+          byok: {
+            apiKey: "test-secret",
+            baseUrl: "https://api.example.com",
+            modelId: "example-model",
+            displayName: "Example model",
+            contextWindow: 128_000,
+            maxOutputTokens: 8_192,
+            capabilities: { imageInput: false, functionCalling: true, reasoning: true },
+          },
+        },
+      }),
+    ).toBe(true);
+    await expect(resolving).resolves.toMatchObject({
+      byok: { modelId: "example-model" },
+    });
+    client.close();
+  });
+
   it("round-trips live Host tool availability", async () => {
     const { client, availabilityFrame } = fixture();
     const checking = client.availability();

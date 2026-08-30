@@ -20,6 +20,28 @@ afterEach(() => {
 });
 
 describe("ChatRepository", () => {
+  it("uses a configured model for a new conversation without changing the repository fallback", () => {
+    const repository = new ChatRepository(databasePath(), {
+      selectedModelRef: "platform/auto",
+    });
+    const configured = repository.createGeneration({
+      text: "使用指定模型",
+      idempotencyKey: "configured-model-0001",
+      modelRef: "platform/pro",
+    });
+    const fallback = repository.createGeneration({
+      text: "使用默认模型",
+      idempotencyKey: "configured-model-0002",
+    });
+
+    expect(configured.selectedModelRef).toBe("platform/pro");
+    expect(
+      repository.getConversation(configured.receipt.conversationId).conversation.selectedModelRef,
+    ).toBe("platform/pro");
+    expect(fallback.selectedModelRef).toBe("platform/auto");
+    repository.close();
+  });
+
   it("persists the conversation thinking level and resolves it for each model message", () => {
     const file = databasePath();
     const repository = new ChatRepository(file);

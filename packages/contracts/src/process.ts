@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { automationCommandEnvelopeSchema, automationRunSchema } from "./automation";
 import {
   chatCommandEnvelopeSchema,
   chatEventSchema,
@@ -42,12 +43,31 @@ export const appServiceAuthorizationSchema = z
   })
   .strict();
 
+export const appServiceByokConfigurationSchema = z
+  .object({
+    apiKey: z.string().min(1).max(20_000),
+    baseUrl: z.url(),
+    modelId: z.string().min(1).max(200),
+    displayName: z.string().min(1).max(120),
+    contextWindow: z.number().int().positive(),
+    maxOutputTokens: z.number().int().positive(),
+    capabilities: z
+      .object({
+        imageInput: z.boolean(),
+        functionCalling: z.boolean(),
+        reasoning: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const appServiceRequestFrameSchema = z
   .object({
     kind: z.literal("app-service.request"),
     requestId: z.uuid(),
-    request: chatCommandEnvelopeSchema,
+    request: z.union([chatCommandEnvelopeSchema, automationCommandEnvelopeSchema]),
     authorization: appServiceAuthorizationSchema.optional(),
+    byok: appServiceByokConfigurationSchema.optional(),
   })
   .strict();
 
@@ -76,6 +96,46 @@ export const appServiceEventFrameSchema = z
     event: chatEventSchema,
   })
   .strict();
+
+export const automationRunEventFrameSchema = z
+  .object({
+    kind: z.literal("automation.run.event"),
+    run: automationRunSchema,
+  })
+  .strict();
+
+export const automationExecutionContextSchema = z
+  .object({
+    authorization: appServiceAuthorizationSchema.optional(),
+    byok: appServiceByokConfigurationSchema.optional(),
+  })
+  .strict();
+
+export const mainAutomationContextRequestFrameSchema = z
+  .object({
+    kind: z.literal("main.automation-context.request"),
+    requestId: z.uuid(),
+  })
+  .strict();
+
+export const mainAutomationContextResponseFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      kind: z.literal("main.automation-context.response"),
+      requestId: z.uuid(),
+      ok: z.literal(true),
+      data: automationExecutionContextSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("main.automation-context.response"),
+      requestId: z.uuid(),
+      ok: z.literal(false),
+      errorCode: z.string().min(1),
+    })
+    .strict(),
+]);
 
 export const mainCapabilityRequestFrameSchema = z
   .object({
@@ -247,6 +307,9 @@ export const appServicePortFrameSchema = z.union([
   appServiceRequestFrameSchema,
   appServiceResponseFrameSchema,
   appServiceEventFrameSchema,
+  automationRunEventFrameSchema,
+  mainAutomationContextRequestFrameSchema,
+  mainAutomationContextResponseFrameSchema,
   mainCapabilityRequestFrameSchema,
   mainCapabilityResponseFrameSchema,
   mainCapabilityCancelFrameSchema,
@@ -261,11 +324,21 @@ export const appServicePortFrameSchema = z.union([
 ]);
 
 export type AppServiceBootstrap = z.infer<typeof appServiceBootstrapSchema>;
+export type AppServiceByokConfiguration = z.infer<typeof appServiceByokConfigurationSchema>;
 export type AppServiceReadyFrame = z.infer<typeof appServiceReadyFrameSchema>;
 export type AppServiceRequestFrame = z.infer<typeof appServiceRequestFrameSchema>;
+export type AppServiceRequest = AppServiceRequestFrame["request"];
 export type AppServiceAuthorization = z.infer<typeof appServiceAuthorizationSchema>;
 export type AppServiceResponseFrame = z.infer<typeof appServiceResponseFrameSchema>;
 export type AppServiceEventFrame = z.infer<typeof appServiceEventFrameSchema>;
+export type AutomationRunEventFrame = z.infer<typeof automationRunEventFrameSchema>;
+export type AutomationExecutionContext = z.infer<typeof automationExecutionContextSchema>;
+export type MainAutomationContextRequestFrame = z.infer<
+  typeof mainAutomationContextRequestFrameSchema
+>;
+export type MainAutomationContextResponseFrame = z.infer<
+  typeof mainAutomationContextResponseFrameSchema
+>;
 export type MainCapabilityRequestFrame = z.infer<typeof mainCapabilityRequestFrameSchema>;
 export type MainCapabilityResponseFrame = z.infer<typeof mainCapabilityResponseFrameSchema>;
 export type MainCapabilityCancelFrame = z.infer<typeof mainCapabilityCancelFrameSchema>;

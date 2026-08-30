@@ -9,6 +9,7 @@ import {
   DeviceCredentialVault,
   ToolCredentialVault,
 } from "../src/main/credential-vault";
+import { ModelServiceSettingsStore } from "../src/main/model-service-settings";
 
 const temporaryDirectories: string[] = [];
 
@@ -103,5 +104,102 @@ describe("ToolCredentialVault", () => {
     await vault.clear("mcp:one");
     await expect(vault.resolve("mcp:one")).rejects.toThrow("MCP_CREDENTIAL_NOT_FOUND");
     await expect(vault.resolve("mcp:two")).resolves.toBe("second-bearer-secret");
+  });
+});
+
+describe("ModelServiceSettingsStore", () => {
+  it("defaults to unconfigured BYOK mode and stores secrets only in the protected vault", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-model-settings-"));
+    temporaryDirectories.push(directory);
+    const configurationPath = path.join(directory, "model-service.json");
+    const credentialPath = path.join(directory, "model-service.bin");
+    const store = new ModelServiceSettingsStore(
+      configurationPath,
+      new ToolCredentialVault(credentialPath, new TestProtector()),
+      async () => ["93.184.216.34"],
+    );
+    await expect(store.state()).resolves.toMatchObject({
+      mode: "byok",
+      byok: {
+        baseUrl: "https://api.deepseek.com",
+        modelId: "deepseek-v4-flash",
+      },
+      credentialConfigured: false,
+    });
+    const secret = "sk-user-secret-value";
+    const state = await store.update({
+      mode: "byok",
+      apiKey: secret,
+      byok: {
+        baseUrl: "https://api.example.com/v1/",
+        modelId: "example-model",
+        displayName: "Example",
+        contextWindow: 128_000,
+        maxOutputTokens: 8_192,
+        capabilities: { imageInput: false, functionCalling: true, reasoning: false },
+      },
+    });
+    expect(state).toMatchObject({ mode: "byok", credentialConfigured: true });
+    expect(await readFile(configurationPath, "utf8")).not.toContain(secret);
+    expect((await readFile(credentialPath)).toString()).not.toContain(secret);
+    await expect(store.execution()).resolves.toMatchObject({
+      apiKey: secret,
+      baseUrl: "https://api.example.com/v1",
+      modelId: "example-model",
+    });
+    await store.update({ mode: "hosted", byok: state.byok });
+    await expect(store.execution()).resolves.toBeUndefined();
+    await store.update({ mode: "byok", byok: state.byok });
+    await store.clearApiKey();
+    await expect(store.state()).resolves.toMatchObject({
+      mode: "byok",
+      credentialConfigured: false,
+    });
+  });
+
+  it("rejects insecure non-loopback HTTP endpoints", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-model-settings-"));
+    temporaryDirectories.push(directory);
+    const store = new ModelServiceSettingsStore(
+      path.join(directory, "model-service.json"),
+      new ToolCredentialVault(path.join(directory, "model-service.bin"), new TestProtector()),
+    );
+    await expect(
+      store.update({
+        mode: "byok",
+        apiKey: "secret",
+        byok: {
+          baseUrl: "http://api.example.com/v1",
+          modelId: "model",
+          displayName: "Model",
+          contextWindow: 8_192,
+          maxOutputTokens: 1_024,
+          capabilities: { imageInput: false, functionCalling: false, reasoning: false },
+        },
+      }),
+    ).rejects.toThrow("BYOK_INSECURE_REMOTE_URL");
+  });
+
+  it("rejects private DNS targets before returning BYOK execution credentials", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-model-settings-"));
+    temporaryDirectories.push(directory);
+    const store = new ModelServiceSettingsStore(
+      path.join(directory, "model-service.json"),
+      new ToolCredentialVault(path.join(directory, "model-service.bin"), new TestProtector()),
+      async () => ["169.254.169.254"],
+    );
+    await store.update({
+      mode: "byok",
+      apiKey: "secret",
+      byok: {
+        baseUrl: "https://api.example.com/v1",
+        modelId: "model",
+        displayName: "Model",
+        contextWindow: 8_192,
+        maxOutputTokens: 1_024,
+        capabilities: { imageInput: false, functionCalling: false, reasoning: false },
+      },
+    });
+    await expect(store.execution()).rejects.toThrow("BYOK_PRIVATE_NETWORK_FORBIDDEN");
   });
 });

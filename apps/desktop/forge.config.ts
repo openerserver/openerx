@@ -194,7 +194,17 @@ const config: ForgeConfig = {
     },
   },
   rebuildConfig: {},
-  makers: [new MakerSquirrel({}), new MakerZIP({}, ["darwin"]), new MakerDMG({})],
+  makers: [
+    new MakerSquirrel({
+      name: "OpenerX",
+      exe: "OpenerX.exe",
+      setupExe: "OpenerXSetup.exe",
+      title: "OpenerX",
+      authors: "OpenerX",
+    }),
+    new MakerZIP({}, ["darwin"]),
+    new MakerDMG({}),
+  ],
   plugins: [
     new VitePlugin({
       build: [

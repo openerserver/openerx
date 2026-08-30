@@ -4,6 +4,8 @@ import {
   type AppServiceAuthorization,
   appServiceBootstrapSchema,
   appServiceRequestFrameSchema,
+  automationCommandEnvelopeSchema,
+  chatCommandEnvelopeSchema,
   type ErrorEnvelope,
   remoteApplyCommandRequestFrameSchema,
   remoteConnectorConfigureFrameSchema,
@@ -15,6 +17,7 @@ import { FileAppService } from "@openerx/file-service";
 import { projectChatEventForRemote } from "@openerx/remote-host";
 import { SkillPackageService, SkillToolAdapter } from "@openerx/skills";
 import {
+  AutomationRepository,
   ChatRepository,
   FileRepository,
   MemoryRepository,
@@ -23,6 +26,8 @@ import {
   ToolRepository,
 } from "@openerx/storage";
 import type { MessagePortMain } from "electron";
+import { AutomationAppService } from "./automation-app-service";
+import { AutomationScheduler, ChatAutomationDispatcher } from "./automation-scheduler";
 import { ChatAppService } from "./chat-app-service";
 import { MainCapabilityClient } from "./main-capability-client";
 import { MessagePortPiHostClient } from "./pi-host-client";
@@ -109,7 +114,23 @@ parentPort.once("message", async (bootstrapEvent) => {
     skills,
     memoryRepository,
   );
+  const automationRepository = new AutomationRepository(
+    path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
+    { ownerProfileId: bootstrap.ownerProfileId },
+  );
+  const automationScheduler = new AutomationScheduler({
+    repository: automationRepository,
+    dispatcher: new ChatAutomationDispatcher(service, () =>
+      mainCapabilities.automationExecutionContext(),
+    ),
+    hostId: bootstrap.deviceId,
+    onRunChanged: (run) => mainPort.postMessage({ kind: "automation.run.event", run }),
+  });
+  const automationService = new AutomationAppService(automationRepository, () =>
+    automationScheduler.tick(),
+  );
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
+  service.onEvent((event) => void automationScheduler.handleChatEvent(event));
   service.onEvent((event) => {
     const projected = projectChatEventForRemote(event);
     if (!projected) return;
@@ -122,6 +143,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     });
   });
   service.initialize();
+  automationScheduler.start();
   let remoteAuthorization: AppServiceAuthorization | null = null;
 
   remotePort.on("message", async (event) => {
@@ -184,7 +206,14 @@ parentPort.once("message", async (bootstrapEvent) => {
     const request = appServiceRequestFrameSchema.safeParse(event.data);
     if (!request.success) return;
     try {
-      const data = await service.handle(request.data.request, request.data.authorization);
+      const automationRequest = automationCommandEnvelopeSchema.safeParse(request.data.request);
+      const data = automationRequest.success
+        ? await automationService.handle(automationRequest.data)
+        : await service.handle(
+            chatCommandEnvelopeSchema.parse(request.data.request),
+            request.data.authorization,
+            request.data.byok,
+          );
       mainPort.postMessage({
         kind: "app-service.response",
         requestId: request.data.requestId,
@@ -213,6 +242,8 @@ parentPort.once("message", async (bootstrapEvent) => {
     nonce: bootstrap.nonce,
   });
   process.once("exit", () => {
+    automationScheduler.stop();
+    automationRepository.close();
     mainCapabilities.close();
     service.close();
   });

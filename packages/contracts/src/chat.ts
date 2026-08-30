@@ -219,6 +219,10 @@ export const chatSendInputSchema = z
     conversationId: entityIdSchema.nullable().optional(),
     text: z.string().trim().min(1).max(100_000),
     idempotencyKey: z.string().min(8).max(200),
+    modelRef: z
+      .string()
+      .regex(/^platform\/[a-z0-9][a-z0-9._-]*$/)
+      .optional(),
     personalFileIds: z.array(entityIdSchema).max(100).optional(),
     skillInstallationId: entityIdSchema.optional(),
     thinkingLevel: thinkingLevelSchema.optional(),

@@ -125,9 +125,30 @@ export const piPromptFrameSchema = z
       })
       .strict()
       .optional(),
+    byok: z
+      .object({
+        apiKey: z.string().min(1).max(20_000),
+        baseUrl: z.url(),
+        modelId: z.string().min(1).max(200),
+        displayName: z.string().min(1).max(120),
+        contextWindow: z.number().int().positive(),
+        maxOutputTokens: z.number().int().positive(),
+        capabilities: z
+          .object({
+            imageInput: z.boolean(),
+            functionCalling: z.boolean(),
+            reasoning: z.boolean(),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((frame, context) => {
+    if (frame.platform && frame.byok) {
+      context.addIssue({ code: "custom", message: "Platform and BYOK are mutually exclusive" });
+    }
     if (frame.history.at(-1)?.role !== "user") {
       context.addIssue({
         code: "custom",

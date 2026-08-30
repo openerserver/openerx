@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AppServiceAuthorization,
+  AppServiceByokConfiguration,
   ChatCommandEnvelope,
   ChatEvent,
   ConversationSnapshot,
@@ -104,6 +105,7 @@ export class ChatAppService {
   async handle(
     request: ChatCommandEnvelope,
     authorization?: AppServiceAuthorization,
+    byok?: AppServiceByokConfiguration,
   ): Promise<unknown> {
     switch (request.command) {
       case "sync.now":
@@ -171,6 +173,9 @@ export class ChatAppService {
           mounts,
           request.input.skillInstallationId,
           request.input.personalFileIds,
+          "local_interactive",
+          undefined,
+          byok,
         );
         await this.#syncIfAuthorized(authorization);
         return draft.receipt;
@@ -191,13 +196,31 @@ export class ChatAppService {
       }
       case "chat.regenerate": {
         const draft = this.#repository.regenerateGeneration(request.input);
-        await this.#launch(draft, authorization);
+        await this.#launch(
+          draft,
+          authorization,
+          undefined,
+          undefined,
+          [],
+          "local_interactive",
+          undefined,
+          byok,
+        );
         await this.#syncIfAuthorized(authorization);
         return draft.receipt;
       }
       case "chat.edit": {
         const draft = this.#repository.editGeneration(request.input);
-        await this.#launch(draft, authorization);
+        await this.#launch(
+          draft,
+          authorization,
+          undefined,
+          undefined,
+          [],
+          "local_interactive",
+          undefined,
+          byok,
+        );
         await this.#syncIfAuthorized(authorization);
         return draft.receipt;
       }
@@ -233,6 +256,14 @@ export class ChatAppService {
         return { conversationId: result.conversationId, deletedAt: result.deletedAt };
       }
       case "chat.selectModel": {
+        const currentModelRef = this.#repository.getConversation(request.input.conversationId)
+          .conversation.selectedModelRef;
+        if (
+          (currentModelRef === "platform/byok") !==
+          (request.input.modelRef === "platform/byok")
+        ) {
+          throw new Error("CONVERSATION_EXECUTION_MODE_LOCKED");
+        }
         const result = this.#repository.selectConversationModel(
           request.input.conversationId,
           request.input.modelRef,
@@ -653,9 +684,13 @@ export class ChatAppService {
       | "remote_attended"
       | "remote_unattended" = "local_interactive",
     remoteAuthority?: RemoteExecutionAuthority,
+    byok?: AppServiceByokConfiguration,
   ): Promise<void> {
     for (const event of draft.events) this.#emit(event);
     if (!draft.created) return;
+    const usesByok = draft.selectedModelRef === "platform/byok";
+    const selectedAuthorization = usesByok ? undefined : authorization;
+    const selectedByok = usesByok ? byok : undefined;
     const generationId = randomUUID();
     const history = this.#repository.piHistory(draft.receipt.assistantMessageId);
     if (selectedSkillInstallationId) {
@@ -686,8 +721,12 @@ export class ChatAppService {
       if (!remoteAuthority) throw new Error("REMOTE_EXECUTION_AUTHORITY_REQUIRED");
       this.#remoteAuthorityByMessage.set(draft.receipt.assistantMessageId, remoteAuthority);
     }
-    if (authorization) this.#authorizationByGeneration.set(generationId, authorization);
+    if (selectedAuthorization) {
+      this.#authorizationByGeneration.set(generationId, selectedAuthorization);
+    }
+    if (authorization) this.#syncAuthorizationByGeneration.set(generationId, authorization);
     try {
+      if (usesByok && !selectedByok) throw new Error("BYOK_NOT_CONFIGURED");
       this.#tools?.startGeneration({
         generationId,
         conversationId: draft.receipt.conversationId,
@@ -715,7 +754,7 @@ export class ChatAppService {
             prompt: history.at(-1)?.text ?? "",
             hasFiles: (attachedFiles?.length ?? 0) > 0,
             skillInstallationIds: skillMounts.map(({ installationId }) => installationId),
-            authenticated: Boolean(authorization),
+            authenticated: Boolean(selectedAuthorization),
             executionOrigin,
           })
         : undefined;
@@ -795,18 +834,19 @@ export class ChatAppService {
           format: file.format,
         })),
         ...(images && images.length > 0 ? { images } : {}),
-        ...(authorization
+        ...(selectedAuthorization
           ? {
               platform: {
-                accountId: authorization.accountId,
-                accessToken: authorization.accessToken,
-                platformBaseUrl: authorization.platformBaseUrl,
+                accountId: selectedAuthorization.accountId,
+                accessToken: selectedAuthorization.accessToken,
+                platformBaseUrl: selectedAuthorization.platformBaseUrl,
                 selectedModelRef: draft.selectedModelRef,
                 approvedFallbackModelRef: null,
                 requestDedupeKey: `model-call:${draft.receipt.assistantMessageId}:1`,
               },
             }
           : {}),
+        ...(selectedByok ? { byok: selectedByok } : {}),
       };
       await this.#piHost.prompt(frame);
     } catch (error) {
@@ -816,7 +856,9 @@ export class ChatAppService {
           ? error.code
           : /^FILE_[A-Z0-9_]+$/u.test(message)
             ? message
-            : "PI_HOST_UNAVAILABLE";
+            : /^[A-Z][A-Z0-9_]*(?::.*)?$/u.test(message)
+              ? (message.split(":", 1)[0] ?? "PI_HOST_UNAVAILABLE")
+              : "PI_HOST_UNAVAILABLE";
       const event = this.#repository.appendPiEvent(draft.receipt.assistantMessageId, {
         eventId: randomUUID(),
         sequence: 1,

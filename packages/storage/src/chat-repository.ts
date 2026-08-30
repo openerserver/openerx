@@ -142,6 +142,7 @@ export class ChatRepository {
     conversationId?: string | null;
     text: string;
     idempotencyKey: string;
+    modelRef?: string;
     thinkingLevel?: ThinkingLevel;
   }): GenerationDraft {
     const duplicate = this.#idempotentResult(input.idempotencyKey, "chat.send");
@@ -178,7 +179,7 @@ export class ChatRepository {
             this.#ownerProfileId,
             deriveConversationTitle(input.text),
             branchId,
-            this.#selectedModelRef,
+            input.modelRef ?? this.#selectedModelRef,
             input.thinkingLevel ?? this.#thinkingLevel,
             now,
             now,

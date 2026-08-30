@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AccountBridge } from "./account";
+import type { AutomationBridge } from "./automation";
 import type { BillingBridge } from "./billing";
 import type {
   BrowserComputerUseSessionControlInput,
@@ -9,6 +10,7 @@ import type { RemoteDesktopBridge } from "./desktop-remote";
 import type { DiagnosticsBridge } from "./diagnostics";
 import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
+import type { ModelServiceBridge } from "./model-service";
 import type { ReleaseUpdateBridge } from "./release";
 import type { SkillBridge } from "./skill";
 import type { SyncBridge } from "./sync";
@@ -17,6 +19,8 @@ import type { WorkspaceBridge } from "./workspace";
 
 export const ipcChannels = Object.freeze({
   environmentGet: "desktop:environment:get",
+  loginStartupSettingsGet: "desktop:login-startup:settings:get",
+  loginStartupSettingsUpdate: "desktop:login-startup:settings:update",
   accountState: "account:state:get",
   accountDevices: "account:devices:list",
   accountRequestCode: "account:email-code:request",
@@ -25,6 +29,10 @@ export const ipcChannels = Object.freeze({
   accountSignOutAll: "account:devices:sign-out-all",
   accountRevokeDevice: "account:device:revoke",
   modelList: "model:catalog:list",
+  modelServiceSettingsGet: "model:service:settings:get",
+  modelServiceSettingsUpdate: "model:service:settings:update",
+  modelServiceConnectionTest: "model:service:connection:test",
+  modelServiceApiKeyClear: "model:service:api-key:clear",
   usageGet: "usage:aggregate:get",
   usageRecords: "usage:records:list",
   billingTerms: "billing:terms:get",
@@ -68,6 +76,18 @@ export const ipcChannels = Object.freeze({
   chatActivateBranch: "chat:branch:activate",
   chatEvents: "chat:events:list",
   chatEvent: "chat:event",
+  automationCreate: "automation:create",
+  automationList: "automation:list",
+  automationGet: "automation:get",
+  automationUpdate: "automation:update",
+  automationPause: "automation:pause",
+  automationResume: "automation:resume",
+  automationDelete: "automation:delete",
+  automationRunNow: "automation:run-now",
+  automationRunsList: "automation:runs:list",
+  automationSchedulePreview: "automation:schedule:preview",
+  automationRunEvent: "automation:run:event",
+  automationNavigate: "automation:navigate",
   fileChoose: "file:choose",
   directoryChoose: "file:directory:choose",
   workspaceChoose: "workspace:choose",
@@ -132,6 +152,22 @@ export const desktopEnvironmentSchema = z
 
 export type DesktopEnvironment = z.infer<typeof desktopEnvironmentSchema>;
 
+export const desktopLoginStartupSettingsSchema = z
+  .object({
+    supported: z.boolean(),
+    openAtLogin: z.boolean(),
+    launchesInBackground: z.boolean(),
+  })
+  .strict();
+export const desktopLoginStartupSettingsUpdateSchema = z
+  .object({ openAtLogin: z.boolean() })
+  .strict();
+
+export type DesktopLoginStartupSettings = z.infer<typeof desktopLoginStartupSettingsSchema>;
+export type DesktopLoginStartupSettingsUpdate = z.infer<
+  typeof desktopLoginStartupSettingsUpdateSchema
+>;
+
 export const desktopNativePermissionSchema = z.enum(["screen_capture", "accessibility"]);
 export const desktopNativePermissionRequestSchema = z
   .object({ permission: desktopNativePermissionSchema })
@@ -154,8 +190,10 @@ export type DesktopNativePermissionResult = z.infer<typeof desktopNativePermissi
 
 export interface DesktopBridge
   extends ChatBridge,
+    AutomationBridge,
     AccountBridge,
     ModelUsageBridge,
+    ModelServiceBridge,
     SyncBridge,
     BillingBridge,
     DiagnosticsBridge,
@@ -166,6 +204,10 @@ export interface DesktopBridge
     RemoteDesktopBridge,
     ReleaseUpdateBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
+  getLoginStartupSettings(): Promise<DesktopLoginStartupSettings>;
+  updateLoginStartupSettings(
+    input: DesktopLoginStartupSettingsUpdate,
+  ): Promise<DesktopLoginStartupSettings>;
   requestDesktopNativePermission(
     input: DesktopNativePermissionRequest,
   ): Promise<DesktopNativePermissionResult>;

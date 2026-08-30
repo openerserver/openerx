@@ -15,6 +15,7 @@ import type {
   McpServerConfig,
   Message,
   ModelCatalogEntry,
+  ModelServiceSettingsUpdate,
   PersonalFile,
   RechargeOrder,
   RefundOrder,
@@ -30,6 +31,7 @@ import type {
   WorkItem,
   WorkItemDetail,
 } from "@openerx/contracts";
+import { defaultByokModelConfiguration } from "@openerx/contracts";
 import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/model";
 import {
   ArrowClockwise,
@@ -74,6 +76,7 @@ import {
   useParams,
 } from "react-router-dom";
 import remarkGfm from "remark-gfm";
+import { AutomationsPage } from "./AutomationsPage";
 
 const suggestions = [
   "分析当前项目，列出最值得先做的三件事",
@@ -3251,6 +3254,210 @@ function ThemeSettings({
   );
 }
 
+function ModelServiceSettingsPanel(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const settings = useQuery({
+    queryKey: ["model-service", "settings"],
+    queryFn: () => window.openerx.getModelServiceSettings(),
+    retry: false,
+  });
+  const [draft, setDraft] = useState<ModelServiceSettingsUpdate>({
+    mode: "byok",
+    byok: defaultByokModelConfiguration(),
+  });
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!settings.data) return;
+    setDraft((current) => ({
+      mode: settings.data.mode,
+      byok: settings.data.byok ?? current.byok,
+    }));
+  }, [settings.data]);
+  const save = useMutation({
+    mutationFn: () => window.openerx.updateModelServiceSettings(draft),
+    onSuccess: async (value) => {
+      queryClient.setQueryData(["model-service", "settings"], value);
+      await queryClient.invalidateQueries({ queryKey: ["models", "catalog"] });
+      setDraft((current) => ({ ...current, apiKey: undefined }));
+      setNotice(
+        value.mode === "byok"
+          ? "BYOK 已启用，新任务将直接连接所配置的 API。"
+          : "已切换到托管服务模式。",
+      );
+    },
+  });
+  const test = useMutation({
+    mutationFn: () => window.openerx.testByokConnection({ ...draft, mode: "byok" }),
+    onSuccess: (value) =>
+      setNotice(
+        `连接成功 · ${value.latencyMs} ms${value.reportedModel ? ` · ${value.reportedModel}` : ""}`,
+      ),
+  });
+  const clearKey = useMutation({
+    mutationFn: () => window.openerx.clearByokApiKey(),
+    onSuccess: (value) => {
+      queryClient.setQueryData(["model-service", "settings"], value);
+      setDraft((current) => ({ ...current, mode: value.mode, apiKey: undefined }));
+      setNotice("API Key 已删除；BYOK 模式保持不变，需要重新配置后才能发送消息。");
+    },
+  });
+  const byok = draft.byok;
+  const patchByok = (patch: Partial<NonNullable<ModelServiceSettingsUpdate["byok"]>>): void => {
+    if (byok) setDraft({ ...draft, byok: { ...byok, ...patch } });
+  };
+  const applyDeepSeekPreset = (): void => {
+    setDraft({
+      ...draft,
+      mode: "byok",
+      byok: defaultByokModelConfiguration(),
+    });
+    setNotice("已应用 DeepSeek 官方 API 预设；请填写 API Key 后测试并保存。");
+  };
+  return (
+    <section className="settings-card settings-stack" aria-label="模型服务模式">
+      <div className="settings-heading">
+        <div>
+          <h2>模型服务</h2>
+          <p>
+            默认使用 BYOK；请求从本机直接发送到你的 OpenAI-compatible API，无需 OpenerX 服务端。
+          </p>
+        </div>
+      </div>
+      <label htmlFor="model-service-mode">运行模式</label>
+      <select
+        id="model-service-mode"
+        value={draft.mode}
+        onChange={(event) => setDraft({ ...draft, mode: event.target.value as "hosted" | "byok" })}
+      >
+        <option value="byok">单安装包 / BYOK（默认）</option>
+        <option value="hosted">托管服务（需要部署服务端）</option>
+      </select>
+      {draft.mode === "byok" && byok ? (
+        <>
+          <div className="toolbar-actions">
+            <button type="button" onClick={applyDeepSeekPreset}>
+              应用 DeepSeek 预设
+            </button>
+          </div>
+          <label htmlFor="byok-base-url">Base URL</label>
+          <input
+            id="byok-base-url"
+            type="url"
+            value={byok.baseUrl}
+            onChange={(event) => patchByok({ baseUrl: event.target.value })}
+          />
+          <label htmlFor="byok-api-key">API Key</label>
+          <input
+            id="byok-api-key"
+            type="password"
+            value={draft.apiKey ?? ""}
+            placeholder={
+              settings.data?.credentialConfigured ? "已安全保存；留空表示不更改" : "输入 API Key"
+            }
+            onChange={(event) => setDraft({ ...draft, apiKey: event.target.value || undefined })}
+          />
+          <label htmlFor="byok-model-id">模型 ID</label>
+          <input
+            id="byok-model-id"
+            value={byok.modelId}
+            onChange={(event) =>
+              patchByok({ modelId: event.target.value, displayName: event.target.value })
+            }
+          />
+          <label htmlFor="byok-context-window">上下文窗口</label>
+          <input
+            id="byok-context-window"
+            type="number"
+            min="1024"
+            value={byok.contextWindow}
+            onChange={(event) => patchByok({ contextWindow: Number(event.target.value) })}
+          />
+          <label htmlFor="byok-max-output">最大输出 Token</label>
+          <input
+            id="byok-max-output"
+            type="number"
+            min="1"
+            value={byok.maxOutputTokens}
+            onChange={(event) => patchByok({ maxOutputTokens: Number(event.target.value) })}
+          />
+          <label>
+            <input
+              type="checkbox"
+              checked={byok.capabilities.imageInput}
+              onChange={(event) =>
+                patchByok({
+                  capabilities: { ...byok.capabilities, imageInput: event.target.checked },
+                })
+              }
+            />
+            支持图片输入
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={byok.capabilities.functionCalling}
+              onChange={(event) =>
+                patchByok({
+                  capabilities: { ...byok.capabilities, functionCalling: event.target.checked },
+                })
+              }
+            />
+            支持工具调用
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={byok.capabilities.reasoning}
+              onChange={(event) =>
+                patchByok({
+                  capabilities: { ...byok.capabilities, reasoning: event.target.checked },
+                })
+              }
+            />
+            支持推理
+          </label>
+          <div className="toolbar-actions">
+            <button type="button" onClick={() => test.mutate()} disabled={test.isPending}>
+              测试连接
+            </button>
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => save.mutate()}
+              disabled={save.isPending}
+            >
+              保存并启用
+            </button>
+            {settings.data?.credentialConfigured ? (
+              <button type="button" onClick={() => clearKey.mutate()} disabled={clearKey.isPending}>
+                删除 API Key
+              </button>
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="primary-action"
+          onClick={() => save.mutate()}
+          disabled={save.isPending}
+        >
+          保存模式
+        </button>
+      )}
+      {notice ? <p className="inline-success">{notice}</p> : null}
+      {settings.error || save.error || test.error || clearKey.error ? (
+        <p className="inline-error">
+          {userFacingError(
+            settings.error ?? save.error ?? test.error ?? clearKey.error,
+            "模型服务配置失败。",
+          )}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 const performanceLabels = {
   desktop_interactive: "桌面可交互",
   app_service_ready: "本地服务就绪",
@@ -3817,6 +4024,7 @@ function AccountSettings({
           查看费用与账单
         </NavLink>
       </section>
+      <ModelServiceSettingsPanel />
       <div id="appearance-section" tabIndex={-1}>
         <ThemeSettings value={themePreference} onChange={onThemeChange} />
       </div>
@@ -5198,6 +5406,10 @@ function Sidebar({
             <TerminalWindow size={17} />
             <span>任务与工具</span>
           </NavLink>
+          <NavLink to="/automations">
+            <ArrowClockwise size={17} />
+            <span>自动化</span>
+          </NavLink>
           <NavLink to="/assistants">
             <Sparkle size={17} />
             <span>助手与 Skill</span>
@@ -5392,6 +5604,21 @@ export function App(): React.JSX.Element {
       unsubscribe();
     };
   }, [queryClient]);
+  useEffect(() => {
+    const unsubscribeRun = window.openerx.onAutomationRun((run) => {
+      void queryClient.invalidateQueries({ queryKey: ["automations"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["automations", run.automationId, "runs"],
+      });
+    });
+    const unsubscribeNavigate = window.openerx.onAutomationNavigate((automationId) => {
+      navigate(`/automations?automation=${encodeURIComponent(automationId)}`);
+    });
+    return () => {
+      unsubscribeRun();
+      unsubscribeNavigate();
+    };
+  }, [navigate, queryClient]);
 
   return (
     <div
@@ -5436,6 +5663,10 @@ export function App(): React.JSX.Element {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/files" element={<FilesAndArtifacts />} />
           <Route path="/tasks" element={<ToolCenter />} />
+          <Route
+            path="/automations"
+            element={<AutomationsPage defaultModelRef="platform/byok" />}
+          />
           <Route path="/assistants" element={<SkillCenter />} />
           <Route path="/settings" element={<Navigate to="/settings/account" replace />} />
           <Route path="/settings/billing" element={<BillingSettings />} />

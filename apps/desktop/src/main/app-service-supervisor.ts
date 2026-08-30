@@ -3,18 +3,24 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import {
   type AppServiceAuthorization,
+  type AppServiceByokConfiguration,
+  type AppServiceRequest,
+  type AutomationExecutionContext,
+  type AutomationRun,
   appServiceEventFrameSchema,
   appServiceResponseFrameSchema,
+  automationRunEventFrameSchema,
   type BrowserSessionDescriptor,
-  type ChatCommandEnvelope,
   type ChatEvent,
   type HostToolAvailability,
+  mainAutomationContextRequestFrameSchema,
   mainCapabilityAvailabilityRequestFrameSchema,
   mainCapabilityCancelFrameSchema,
   mainCapabilityRequestFrameSchema,
   mainCredentialRequestFrameSchema,
   mainOAuthRequestFrameSchema,
   type NormalizedToolResult,
+  parseAutomationCommandResult,
   parseChatCommandResult,
   piHostContractVersion,
   type RemoteConnectorConfigureFrame,
@@ -30,7 +36,7 @@ import {
 import { parseInitialAppServiceReady } from "./ipc-security";
 
 interface PendingRequest {
-  command: ChatCommandEnvelope["command"];
+  command: AppServiceRequest["command"];
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timeout: NodeJS.Timeout;
@@ -57,6 +63,7 @@ export class AppServiceSupervisor {
   readonly #deviceId: string;
   readonly #piHostEntry: string;
   readonly #listeners = new Set<(event: ChatEvent) => void>();
+  readonly #automationListeners = new Set<(run: AutomationRun) => void>();
   readonly #pending = new Map<string, PendingRequest>();
   #appProcess: UtilityProcess | null = null;
   #piHostProcess: UtilityProcess | null = null;
@@ -71,6 +78,7 @@ export class AppServiceSupervisor {
   #remoteHandshakeComplete = false;
   #remoteConfiguration: RemoteConnectorConfigureFrame | null = null;
   #capabilityHost: MainCapabilityHost | null = null;
+  #automationExecutionContextProvider: (() => Promise<AutomationExecutionContext>) | null = null;
   readonly #capabilityHostFactory: ((profileDirectory: string) => MainCapabilityHost) | null;
   readonly #capabilityRequests = new Map<string, AbortController>();
 
@@ -132,6 +140,15 @@ export class AppServiceSupervisor {
     return () => this.#listeners.delete(listener);
   }
 
+  onAutomationRun(listener: (run: AutomationRun) => void): () => void {
+    this.#automationListeners.add(listener);
+    return () => this.#automationListeners.delete(listener);
+  }
+
+  setAutomationExecutionContextProvider(provider: () => Promise<AutomationExecutionContext>): void {
+    this.#automationExecutionContextProvider = provider;
+  }
+
   crashAppServiceForTest(): void {
     if (process.env.OPENERX_E2E !== "1") {
       throw new Error("Crash injection is available only in the E2E environment");
@@ -140,9 +157,10 @@ export class AppServiceSupervisor {
   }
 
   async request(
-    request: ChatCommandEnvelope,
+    request: AppServiceRequest,
     authorization?: AppServiceAuthorization,
     timeoutMs = 15_000,
+    byok?: AppServiceByokConfiguration,
   ): Promise<unknown> {
     await this.start();
     const port = this.#mainPort;
@@ -159,6 +177,7 @@ export class AppServiceSupervisor {
         requestId,
         request,
         ...(authorization ? { authorization } : {}),
+        ...(byok ? { byok } : {}),
       });
     });
   }
@@ -334,7 +353,17 @@ export class AppServiceSupervisor {
       this.#pending.delete(response.data.requestId);
       if (response.data.ok) {
         try {
-          pending.resolve(parseChatCommandResult(pending.command, response.data.data));
+          pending.resolve(
+            pending.command.startsWith("automation.")
+              ? parseAutomationCommandResult(
+                  pending.command as Parameters<typeof parseAutomationCommandResult>[0],
+                  response.data.data,
+                )
+              : parseChatCommandResult(
+                  pending.command as Parameters<typeof parseChatCommandResult>[0],
+                  response.data.data,
+                ),
+          );
         } catch (error) {
           pending.reject(
             error instanceof Error ? error : new Error("Invalid App Service response"),
@@ -343,6 +372,39 @@ export class AppServiceSupervisor {
       } else {
         pending.reject(new Error(`${response.data.error.code}: ${response.data.error.message}`));
       }
+      return;
+    }
+    const automationContextRequest = mainAutomationContextRequestFrameSchema.safeParse(data);
+    if (automationContextRequest.success) {
+      const provider = this.#automationExecutionContextProvider;
+      if (!provider) {
+        this.#mainPort?.postMessage({
+          kind: "main.automation-context.response",
+          requestId: automationContextRequest.data.requestId,
+          ok: false,
+          errorCode: "AUTOMATION_EXECUTION_CONTEXT_UNAVAILABLE",
+        });
+        return;
+      }
+      void provider().then(
+        (context) =>
+          this.#mainPort?.postMessage({
+            kind: "main.automation-context.response",
+            requestId: automationContextRequest.data.requestId,
+            ok: true,
+            data: context,
+          }),
+        (error: unknown) =>
+          this.#mainPort?.postMessage({
+            kind: "main.automation-context.response",
+            requestId: automationContextRequest.data.requestId,
+            ok: false,
+            errorCode:
+              error instanceof Error
+                ? (error.message.split(":", 1)[0] ?? "AUTOMATION_EXECUTION_CONTEXT_FAILED")
+                : "AUTOMATION_EXECUTION_CONTEXT_FAILED",
+          }),
+      );
       return;
     }
     const capabilityRequest = mainCapabilityRequestFrameSchema.safeParse(data);
@@ -507,6 +569,11 @@ export class AppServiceSupervisor {
       );
       return;
     }
+    const automationEvent = automationRunEventFrameSchema.safeParse(data);
+    if (automationEvent.success) {
+      this.#emitAutomationRun(automationEvent.data.run);
+      return;
+    }
     const event = appServiceEventFrameSchema.safeParse(data);
     if (event.success) this.#emit(event.data.event);
   }
@@ -582,5 +649,9 @@ export class AppServiceSupervisor {
 
   #emit(event: ChatEvent): void {
     for (const listener of this.#listeners) listener(event);
+  }
+
+  #emitAutomationRun(run: AutomationRun): void {
+    for (const listener of this.#automationListeners) listener(run);
   }
 }

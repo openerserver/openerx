@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  type AutomationExecutionContext,
   type HostToolAvailability,
   type MainOAuthResponseFrame,
+  mainAutomationContextResponseFrameSchema,
   mainCapabilityAvailabilityResponseFrameSchema,
   mainCapabilityResponseFrameSchema,
   mainCredentialResponseFrameSchema,
@@ -32,6 +34,14 @@ export class MainCapabilityClient {
     string,
     {
       resolve(value: HostToolAvailability): void;
+      reject(error: Error): void;
+      timeout: NodeJS.Timeout;
+    }
+  >();
+  readonly #pendingAutomationContexts = new Map<
+    string,
+    {
+      resolve(value: AutomationExecutionContext): void;
       reject(error: Error): void;
       timeout: NodeJS.Timeout;
     }
@@ -81,6 +91,16 @@ export class MainCapabilityClient {
   }
 
   handleMessage(data: unknown): boolean {
+    const automationContext = mainAutomationContextResponseFrameSchema.safeParse(data);
+    if (automationContext.success) {
+      const pending = this.#pendingAutomationContexts.get(automationContext.data.requestId);
+      if (!pending) return true;
+      clearTimeout(pending.timeout);
+      this.#pendingAutomationContexts.delete(automationContext.data.requestId);
+      if (automationContext.data.ok) pending.resolve(automationContext.data.data);
+      else pending.reject(new Error(automationContext.data.errorCode));
+      return true;
+    }
     const response = mainCapabilityResponseFrameSchema.safeParse(data);
     if (!response.success) {
       const availability = mainCapabilityAvailabilityResponseFrameSchema.safeParse(data);
@@ -141,6 +161,23 @@ export class MainCapabilityClient {
       pending.reject(new Error("MAIN_OAUTH_HOST_STOPPED"));
       this.#pendingOAuth.delete(requestId);
     }
+    for (const [requestId, pending] of this.#pendingAutomationContexts) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("MAIN_AUTOMATION_CONTEXT_HOST_STOPPED"));
+      this.#pendingAutomationContexts.delete(requestId);
+    }
+  }
+
+  async automationExecutionContext(): Promise<AutomationExecutionContext> {
+    const requestId = randomUUID();
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.#pendingAutomationContexts.delete(requestId);
+        reject(new Error("MAIN_AUTOMATION_CONTEXT_TIMEOUT"));
+      }, 15_000);
+      this.#pendingAutomationContexts.set(requestId, { resolve, reject, timeout });
+      this.port.postMessage({ kind: "main.automation-context.request", requestId });
+    });
   }
 
   async resolve(credentialRef: string): Promise<string> {
