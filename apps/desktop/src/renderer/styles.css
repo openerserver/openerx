@@ -5093,6 +5093,70 @@ summary:focus-visible {
   border-radius: 8px;
 }
 
+.memory-merge-reviews {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--workspace-accent-soft) 45%, transparent);
+  border: 1px solid var(--workspace-border);
+  border-radius: 9px;
+}
+
+.memory-review-heading {
+  display: flex;
+  gap: 12px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.memory-review-heading h3,
+.memory-review-heading p {
+  margin: 0;
+}
+
+.memory-review-heading > span {
+  min-width: 24px;
+  padding: 2px 7px;
+  color: var(--workspace-accent-ink);
+  text-align: center;
+  background: var(--workspace-surface-raised);
+  border-radius: 999px;
+}
+
+.memory-review-row {
+  display: flex;
+  gap: 14px;
+  align-items: start;
+  justify-content: space-between;
+  padding: 12px;
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+}
+
+.memory-review-row > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.memory-review-row span {
+  color: var(--workspace-accent-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.memory-review-row small {
+  margin-top: 4px;
+  color: var(--workspace-muted);
+  font-size: 11px;
+}
+
+.memory-review-row p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .memory-row.is-highlighted {
   border-color: var(--workspace-accent);
   box-shadow: 0 0 0 3px var(--workspace-accent-soft);

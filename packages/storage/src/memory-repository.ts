@@ -13,6 +13,9 @@ import {
   type MemoryExtractionSkipReason,
   type MemoryKind,
   type MemoryListInput,
+  type MemoryMergeReview,
+  type MemoryMergeReviewListInput,
+  type MemoryMergeReviewResolveInput,
   type MemorySettings,
   type MemorySettingsUpdateInput,
   type MemorySourceLink,
@@ -21,6 +24,7 @@ import {
   memoryConsolidationRunSchema,
   memoryEntrySchema,
   memoryExtractionJobSchema,
+  memoryMergeReviewSchema,
   memorySettingsSchema,
   memorySourceLinkSchema,
   type RecalledMemory,
@@ -53,6 +57,11 @@ export interface MemoryConsolidationClaimOptions {
   intervalMs?: number;
   activeLimit?: number;
   staleAfterMs?: number;
+}
+
+export interface AutomaticMemoryIngestResult {
+  memory: MemoryEntry | null;
+  review: MemoryMergeReview | null;
 }
 
 function normalize(value: string): string {
@@ -320,6 +329,170 @@ export class MemoryRepository {
     return rows.map((row) => this.#sourceLinkFromRow(row));
   }
 
+  listMergeReviews(
+    input: MemoryMergeReviewListInput = { status: "pending", limit: 50 },
+  ): MemoryMergeReview[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM memory_merge_reviews
+         WHERE owner_profile_id = ? AND status = ?
+         ORDER BY created_at DESC, id LIMIT ?`,
+      )
+      .all(
+        this.#ownerProfileId,
+        input.status ?? "pending",
+        Math.max(1, Math.min(input.limit ?? 50, 100)),
+      ) as SqlRow[];
+    return rows.map((row) => this.#mergeReviewFromRow(row));
+  }
+
+  resolveMergeReview(input: MemoryMergeReviewResolveInput): MemoryMergeReview {
+    return this.#idempotent(
+      "memory.merge-review.resolve",
+      input.idempotencyKey,
+      memoryMergeReviewSchema,
+      () => {
+        const review = this.#getMergeReview(input.reviewId);
+        if (review.status !== "pending") throw new Error("MEMORY_MERGE_REVIEW_ALREADY_RESOLVED");
+        const now = this.#now();
+        if (input.resolution === "dismiss") {
+          this.#database
+            .prepare(
+              `UPDATE memory_merge_reviews
+               SET status = 'dismissed', updated_at = ?, resolved_at = ?
+               WHERE id = ? AND owner_profile_id = ? AND status = 'pending'`,
+            )
+            .run(now, now, review.id, this.#ownerProfileId);
+          return this.#getMergeReview(review.id);
+        }
+        if (!this.settings().memoriesEnabled) throw new Error("MEMORY_DISABLED");
+        const target = this.get(review.targetMemoryId);
+        if (
+          target.status !== "active" ||
+          target.kind !== review.kind ||
+          target.revision !== review.targetRevision ||
+          target.content !== review.targetContent
+        ) {
+          throw new Error("MEMORY_MERGE_REVIEW_STALE");
+        }
+        let result: MemoryEntry;
+        if (review.relation === "duplicate") {
+          this.#recordSourceLink({
+            memoryId: target.id,
+            conversationId: review.sourceConversationId,
+            messageId: review.sourceMessageId,
+            origin: "automatic",
+            confidence: review.confidence,
+            createdAt: now,
+          });
+          result = target;
+        } else {
+          const duplicate = this.#database
+            .prepare(
+              `SELECT id FROM memory_entries
+               WHERE owner_profile_id = ? AND kind = ? AND canonical_key = ?
+                 AND status = 'active' AND id != ? LIMIT 1`,
+            )
+            .get(
+              this.#ownerProfileId,
+              review.kind,
+              canonicalKey(review.kind, review.proposedContent),
+              target.id,
+            );
+          if (duplicate) throw new Error("MEMORY_MERGE_REVIEW_STALE");
+          const conflictKey =
+            target.conflictKey ??
+            (review.proposedConflictKey &&
+            !this.#activeConflict(review.kind, review.proposedConflictKey, target.id)
+              ? review.proposedConflictKey
+              : `review.${createHash("sha256").update(target.id).digest("hex").slice(0, 32)}`);
+          this.#database
+            .prepare(
+              `UPDATE memory_entries
+               SET conflict_key = ?, status = 'superseded', updated_at = ?, revision = revision + 1
+               WHERE id = ? AND owner_profile_id = ? AND status = 'active'`,
+            )
+            .run(conflictKey, now, target.id, this.#ownerProfileId);
+          const superseded = this.get(target.id);
+          result = memoryEntrySchema.parse({
+            id: this.#idFactory(),
+            ownerProfileId: this.#ownerProfileId,
+            scope: "personal",
+            kind: review.kind,
+            content: review.proposedContent,
+            retrievalKeys:
+              review.proposedRetrievalKeys.length > 0
+                ? [...new Set(review.proposedRetrievalKeys.map(normalize))]
+                : tokens(review.proposedContent),
+            canonicalKey: canonicalKey(review.kind, review.proposedContent),
+            conflictKey,
+            origin: "explicit",
+            confidence: 1,
+            status: "active",
+            sourceConversationId: review.sourceConversationId,
+            sourceMessageId: review.sourceMessageId,
+            supersedesMemoryId: target.id,
+            expiresAt:
+              review.kind === "ongoing_context"
+                ? new Date(Date.parse(now) + 90 * 86_400_000).toISOString()
+                : null,
+            createdAt: now,
+            updatedAt: now,
+            revision: 1,
+          });
+          this.#database
+            .prepare(
+              `INSERT INTO memory_entries
+               (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key,
+                conflict_key, origin, confidence, status, source_conversation_id, source_message_id,
+                supersedes_memory_id, expires_at, created_at, updated_at, revision)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              result.id,
+              result.ownerProfileId,
+              result.scope,
+              result.kind,
+              result.content,
+              JSON.stringify(result.retrievalKeys),
+              result.canonicalKey,
+              result.conflictKey,
+              result.origin,
+              result.confidence,
+              result.status,
+              result.sourceConversationId,
+              result.sourceMessageId,
+              result.supersedesMemoryId,
+              result.expiresAt,
+              result.createdAt,
+              result.updatedAt,
+              result.revision,
+            );
+          this.#recordSourceLink({
+            memoryId: result.id,
+            conversationId: review.sourceConversationId,
+            messageId: review.sourceMessageId,
+            origin: "automatic",
+            confidence: review.confidence,
+            createdAt: now,
+          });
+          if (this.settings().syncMemories) {
+            this.#queueSync("memory_entry", superseded.id, "upsert", superseded, now);
+            this.#queueSync("memory_entry", result.id, "upsert", result, now);
+          }
+        }
+        this.#database
+          .prepare(
+            `UPDATE memory_merge_reviews
+             SET status = 'accepted', result_memory_id = ?, updated_at = ?, resolved_at = ?
+             WHERE id = ? AND owner_profile_id = ? AND status = 'pending'`,
+          )
+          .run(result.id, now, now, review.id, this.#ownerProfileId);
+        return this.#getMergeReview(review.id);
+      },
+    );
+  }
+
   search(query: string, limit = 8): MemoryEntry[] {
     const queryTokens = new Set(tokens(query));
     const normalizedQuery = normalize(query);
@@ -524,6 +697,12 @@ export class MemoryRepository {
             .all(this.#ownerProfileId, this.#ownerProfileId, conversationId) as SqlRow[]
         ).map((row) => this.#entryFromRow(row));
         const now = this.#now();
+        this.#database
+          .prepare(
+            `DELETE FROM memory_merge_reviews
+             WHERE owner_profile_id = ? AND source_conversation_id = ?`,
+          )
+          .run(this.#ownerProfileId, conversationId);
         this.#database
           .prepare(
             `DELETE FROM memory_source_links
@@ -904,6 +1083,100 @@ export class MemoryRepository {
     return rows.map((row) => this.#extractionJobFromRow(row));
   }
 
+  ingestAutomaticCandidate(input: {
+    candidate: AutomaticMemoryCandidate;
+    conversationId: string;
+    jobId: string;
+  }): AutomaticMemoryIngestResult {
+    const relation = input.candidate.semanticRelation ?? "none";
+    if (relation === "none") {
+      return { memory: this.upsertAutomatic(input), review: null };
+    }
+    const relatedMemoryId = input.candidate.relatedMemoryId;
+    if (!relatedMemoryId) throw new Error("MEMORY_CANDIDATE_RELATION_INVALID");
+    const candidate = input.candidate;
+    assertSafeMemoryContent(candidate.content);
+    if (candidate.confidence < 0.72) throw new Error("MEMORY_CANDIDATE_LOW_CONFIDENCE");
+    if (candidate.confidence < 0.85) {
+      throw new Error("MEMORY_CANDIDATE_RELATION_LOW_CONFIDENCE");
+    }
+    const proposedCanonicalKey = canonicalKey(candidate.kind, candidate.content);
+    let target: MemoryEntry;
+    try {
+      target = this.get(relatedMemoryId);
+    } catch {
+      throw new Error("MEMORY_CANDIDATE_RELATION_INVALID");
+    }
+    if (target.status !== "active" || target.kind !== candidate.kind) {
+      throw new Error("MEMORY_CANDIDATE_RELATION_INVALID");
+    }
+    if (target.canonicalKey === proposedCanonicalKey) {
+      return { memory: this.upsertAutomatic(input), review: null };
+    }
+    const review = this.#transaction(() => {
+      const settings = this.settings();
+      const conversationSettings = this.conversationSettings(input.conversationId);
+      if (!settings.memoriesEnabled || !settings.generateMemories) {
+        throw new Error("MEMORY_GENERATION_DISABLED");
+      }
+      if (conversationSettings.generateMemories === false) {
+        throw new Error("MEMORY_CONVERSATION_GENERATION_DISABLED");
+      }
+      const source = this.#database
+        .prepare(`SELECT role, status, conversation_id FROM messages WHERE id = ?`)
+        .get(candidate.sourceMessageId) as
+        | { role: string; status: string; conversation_id: string }
+        | undefined;
+      if (
+        source?.role !== "user" ||
+        source.status !== "completed" ||
+        source.conversation_id !== input.conversationId
+      ) {
+        throw new Error("MEMORY_CANDIDATE_SOURCE_INVALID");
+      }
+      const existing = this.#database
+        .prepare(
+          `SELECT * FROM memory_merge_reviews
+           WHERE owner_profile_id = ? AND target_memory_id = ?
+             AND proposed_canonical_key = ? AND relation = ?`,
+        )
+        .get(this.#ownerProfileId, target.id, proposedCanonicalKey, relation) as SqlRow | undefined;
+      if (existing) return this.#mergeReviewFromRow(existing);
+      const now = this.#now();
+      const id = this.#idFactory();
+      this.#database
+        .prepare(
+          `INSERT INTO memory_merge_reviews
+           (id, owner_profile_id, kind, relation, target_memory_id, target_content, target_revision,
+            proposed_content,
+            proposed_retrieval_keys_json, proposed_canonical_key, proposed_conflict_key,
+            confidence, source_conversation_id, source_message_id, status, result_memory_id,
+            created_at, updated_at, resolved_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL)`,
+        )
+        .run(
+          id,
+          this.#ownerProfileId,
+          candidate.kind,
+          relation,
+          target.id,
+          target.content,
+          target.revision,
+          candidate.content,
+          JSON.stringify([...new Set(candidate.retrievalKeys.map(normalize))]),
+          proposedCanonicalKey,
+          candidate.conflictKey,
+          candidate.confidence,
+          input.conversationId,
+          candidate.sourceMessageId,
+          now,
+          now,
+        );
+      return this.#getMergeReview(id);
+    });
+    return { memory: null, review };
+  }
+
   upsertAutomatic(input: {
     candidate: AutomaticMemoryCandidate;
     conversationId: string;
@@ -1261,7 +1534,12 @@ export class MemoryRepository {
       `UPDATE memory_entries SET status = 'deleted', updated_at = ?, revision = revision + 1
        WHERE id = ? AND owner_profile_id = ?`,
     );
+    const deleteReviews = this.#database.prepare(
+      `DELETE FROM memory_merge_reviews
+       WHERE owner_profile_id = ? AND (target_memory_id = ? OR result_memory_id = ?)`,
+    );
     for (const entry of entries) {
+      deleteReviews.run(this.#ownerProfileId, entry.id, entry.id);
       statement.run(now, entry.id, this.#ownerProfileId);
       if (restoreSuperseded) this.#restoreSupersededEntry(entry, now);
       if (syncMemories) {
@@ -1341,6 +1619,37 @@ export class MemoryRepository {
       conversationTitle: row.conversation_title ?? null,
       conversationDeletedAt: row.conversation_deleted_at ?? null,
       createdAt: row.created_at,
+    });
+  }
+
+  #getMergeReview(reviewId: string): MemoryMergeReview {
+    const row = this.#database
+      .prepare(`SELECT * FROM memory_merge_reviews WHERE id = ? AND owner_profile_id = ?`)
+      .get(reviewId, this.#ownerProfileId) as SqlRow | undefined;
+    if (!row) throw new Error("MEMORY_MERGE_REVIEW_NOT_FOUND");
+    return this.#mergeReviewFromRow(row);
+  }
+
+  #mergeReviewFromRow(row: SqlRow): MemoryMergeReview {
+    return memoryMergeReviewSchema.parse({
+      id: row.id,
+      ownerProfileId: row.owner_profile_id,
+      kind: row.kind,
+      relation: row.relation,
+      targetMemoryId: row.target_memory_id,
+      targetContent: row.target_content,
+      targetRevision: Number(row.target_revision),
+      proposedContent: row.proposed_content,
+      proposedRetrievalKeys: JSON.parse(String(row.proposed_retrieval_keys_json)),
+      proposedConflictKey: row.proposed_conflict_key,
+      confidence: Number(row.confidence),
+      sourceConversationId: row.source_conversation_id,
+      sourceMessageId: row.source_message_id,
+      status: row.status,
+      resultMemoryId: row.result_memory_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      resolvedAt: row.resolved_at,
     });
   }
 

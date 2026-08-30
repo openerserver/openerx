@@ -281,6 +281,8 @@ function createBridge(): DesktopBridge {
     }),
     updateConversationMemorySettings: vi.fn(),
     listMemories: vi.fn().mockResolvedValue([]),
+    listMemoryMergeReviews: vi.fn().mockResolvedValue([]),
+    resolveMemoryMergeReview: vi.fn(),
     listMemorySources: vi.fn().mockResolvedValue([]),
     upsertMemory: vi.fn(),
     deleteMemory: vi.fn(),
@@ -813,6 +815,64 @@ describe("M1 chat renderer", () => {
       ),
     );
     expect(screen.getByText("密钥、口令、验证码、Cookie、私钥", { exact: false })).toBeTruthy();
+  });
+
+  it("keeps fuzzy semantic memory suggestions behind an explicit review action", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const review = {
+      id: "77777777-7777-4777-8777-777777777701",
+      ownerProfileId: "local-default",
+      kind: "preference" as const,
+      relation: "conflict" as const,
+      targetMemoryId: "77777777-7777-4777-8777-777777777702",
+      targetContent: "用户希望技术方案先给结论。",
+      targetRevision: 1,
+      proposedContent: "用户希望技术方案最后给结论。",
+      proposedRetrievalKeys: ["技术方案", "结论"],
+      proposedConflictKey: null,
+      confidence: 0.89,
+      sourceConversationId: conversationId,
+      sourceMessageId: userMessageId,
+      status: "pending" as const,
+      resultMemoryId: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      resolvedAt: null,
+    };
+    vi.mocked(bridge.getMemorySettings).mockResolvedValue({
+      ownerProfileId: "local-default",
+      memoriesEnabled: true,
+      useMemories: true,
+      generateMemories: true,
+      syncMemories: false,
+      disableOnExternalContext: true,
+      idleDelayMinutes: 30,
+      minRateLimitRemainingPercent: 20,
+      updatedAt: timestamp,
+      revision: 2,
+    });
+    vi.mocked(bridge.listMemoryMergeReviews).mockResolvedValue([review]);
+    vi.mocked(bridge.resolveMemoryMergeReview).mockResolvedValue({
+      ...review,
+      status: "accepted",
+      resultMemoryId: "77777777-7777-4777-8777-777777777703",
+      resolvedAt: timestamp,
+    });
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "记忆" }));
+    expect(await screen.findByText(review.targetContent)).toBeTruthy();
+    expect(screen.getByText(review.proposedContent)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认替代" }));
+    await waitFor(() =>
+      expect(bridge.resolveMemoryMergeReview).toHaveBeenCalledWith({
+        reviewId: review.id,
+        resolution: "accept",
+        idempotencyKey: expect.stringMatching(/^memory-merge-review:/u),
+      }),
+    );
   });
 
   it("notifies about automatic memories and can undo the created batch", async () => {

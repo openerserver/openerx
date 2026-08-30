@@ -34,6 +34,12 @@ export interface MemoryExtractionRequest {
   job: MemoryExtractionJob;
   snapshot: ConversationSnapshot;
   messages: Array<{ messageId: string; text: string }>;
+  existingMemories: Array<{
+    id: string;
+    kind: MemoryEntry["kind"];
+    content: string;
+    conflictKey: string | null;
+  }>;
 }
 
 export interface MemoryExtractor {
@@ -42,9 +48,7 @@ export interface MemoryExtractor {
 
 export class PiMemoryExtractor implements MemoryExtractor {
   readonly #piHost: PiHostClient;
-  readonly #executionContext: () =>
-    | MemoryExecutionContext
-    | Promise<MemoryExecutionContext>;
+  readonly #executionContext: () => MemoryExecutionContext | Promise<MemoryExecutionContext>;
 
   constructor(
     piHost: PiHostClient,
@@ -77,6 +81,7 @@ export class PiMemoryExtractor implements MemoryExtractor {
       sourceAssistantMessageId: request.job.sourceAssistantMessageId,
       thinkingLevel: "low",
       messages: request.messages,
+      existingMemories: request.existingMemories,
       ...(authorization
         ? {
             platform: {
@@ -113,6 +118,8 @@ const rejectedCandidateCodes = new Set([
   "MEMORY_CANDIDATE_LOW_CONFIDENCE",
   "MEMORY_CANDIDATE_SOURCE_INVALID",
   "MEMORY_CANDIDATE_CONFLICTS_EXPLICIT",
+  "MEMORY_CANDIDATE_RELATION_INVALID",
+  "MEMORY_CANDIDATE_RELATION_LOW_CONFIDENCE",
 ]);
 
 export class MemoryExtractionScheduler {
@@ -226,16 +233,25 @@ export class MemoryExtractionScheduler {
       ) {
         return this.#memoryRepository.skipExtractionJob(job.id, "external_context");
       }
-      const output = await this.#extractor.extract({ job, snapshot, messages });
+      const existingMemories = this.#memoryRepository
+        .list({ status: "active", limit: 50 })
+        .map((memory) => ({
+          id: memory.id,
+          kind: memory.kind,
+          content: memory.content.slice(0, 500),
+          conflictKey: memory.conflictKey,
+        }));
+      const output = await this.#extractor.extract({ job, snapshot, messages, existingMemories });
       const createdById = new Map<string, MemoryEntry>();
       for (const candidate of output.candidates) {
         try {
-          const memory = this.#memoryRepository.upsertAutomatic({
+          const { memory } = this.#memoryRepository.ingestAutomaticCandidate({
             candidate,
             conversationId: job.conversationId,
             jobId: job.id,
           });
           if (
+            memory &&
             memory.origin === "automatic" &&
             memory.sourceConversationId === job.conversationId
           ) {

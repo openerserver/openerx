@@ -79,6 +79,8 @@ import {
   memoryClearInputSchema,
   memoryDeleteInputSchema,
   memoryListInputSchema,
+  memoryMergeReviewListInputSchema,
+  memoryMergeReviewResolveInputSchema,
   memorySettingsUpdateInputSchema,
   memorySourcesListInputSchema,
   memoryUpsertInputSchema,
@@ -386,6 +388,18 @@ const bridge: DesktopBridge = {
     ),
   listMemories: async (input = {}) =>
     invokeChat(ipcChannels.memoryList, "memory.list", memoryListInputSchema.parse(input)),
+  listMemoryMergeReviews: async (input = {}) =>
+    invokeChat(
+      ipcChannels.memoryMergeReviewsList,
+      "memory.merge-reviews.list",
+      memoryMergeReviewListInputSchema.parse(input),
+    ),
+  resolveMemoryMergeReview: async (input) =>
+    invokeChat(
+      ipcChannels.memoryMergeReviewResolve,
+      "memory.merge-reviews.resolve",
+      memoryMergeReviewResolveInputSchema.parse(input),
+    ),
   listMemorySources: async (input) =>
     invokeChat(
       ipcChannels.memorySourcesList,

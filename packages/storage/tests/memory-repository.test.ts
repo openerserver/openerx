@@ -369,6 +369,171 @@ describe("MemoryRepository", () => {
     chat.close();
   });
 
+  it("stages fuzzy semantic relationships for explicit review before merging or replacing", () => {
+    const file = databasePath();
+    const chat = new ChatRepository(file);
+    const duplicateSource = chat.createGeneration({
+      text: "技术方案请先写清楚结论，然后再补必要依据。",
+      idempotencyKey: "memory-review-source-duplicate-0001",
+    });
+    const conflictSource = chat.createGeneration({
+      text: "以后技术方案把结论放在最后。",
+      idempotencyKey: "memory-review-source-conflict-0001",
+    });
+    const repository = new MemoryRepository(file, { idFactory: ids() });
+    repository.updateSettings({ memoriesEnabled: true, generateMemories: true });
+    const target = repository.upsert({
+      kind: "preference",
+      content: "用户希望技术方案结论优先。",
+      idempotencyKey: "memory-review-target-0001",
+    });
+
+    const duplicate = repository.ingestAutomaticCandidate({
+      candidate: {
+        kind: "preference",
+        content: "用户希望技术方案先给明确结论。",
+        retrievalKeys: ["技术方案", "结论优先"],
+        conflictKey: null,
+        confidence: 0.91,
+        sourceMessageId: duplicateSource.receipt.userMessageId ?? "",
+        semanticRelation: "duplicate",
+        relatedMemoryId: target.id,
+      },
+      conversationId: duplicateSource.receipt.conversationId,
+      jobId: "10000000-0000-4000-8000-000000000401",
+    });
+    expect(duplicate.memory).toBeNull();
+    expect(duplicate.review).toMatchObject({
+      relation: "duplicate",
+      targetMemoryId: target.id,
+      targetContent: target.content,
+      status: "pending",
+    });
+    expect(repository.list({ status: "active", limit: 50 })).toHaveLength(1);
+    const acceptedDuplicate = repository.resolveMergeReview({
+      reviewId: duplicate.review?.id ?? "",
+      resolution: "accept",
+      idempotencyKey: "memory-review-accept-duplicate-0001",
+    });
+    expect(acceptedDuplicate).toMatchObject({ status: "accepted", resultMemoryId: target.id });
+    expect(repository.sources(target.id)).toEqual([
+      expect.objectContaining({ conversationId: duplicateSource.receipt.conversationId }),
+    ]);
+
+    const conflict = repository.ingestAutomaticCandidate({
+      candidate: {
+        kind: "preference",
+        content: "用户希望技术方案最后给结论。",
+        retrievalKeys: ["技术方案", "结论最后"],
+        conflictKey: null,
+        confidence: 0.88,
+        sourceMessageId: conflictSource.receipt.userMessageId ?? "",
+        semanticRelation: "conflict",
+        relatedMemoryId: target.id,
+      },
+      conversationId: conflictSource.receipt.conversationId,
+      jobId: "10000000-0000-4000-8000-000000000402",
+    });
+    expect(conflict.review).toMatchObject({ relation: "conflict", status: "pending" });
+    const acceptedConflict = repository.resolveMergeReview({
+      reviewId: conflict.review?.id ?? "",
+      resolution: "accept",
+      idempotencyKey: "memory-review-accept-conflict-0001",
+    });
+    const replacement = repository.get(acceptedConflict.resultMemoryId ?? "");
+    expect(replacement).toMatchObject({
+      origin: "explicit",
+      status: "active",
+      supersedesMemoryId: target.id,
+    });
+    expect(replacement.conflictKey).toMatch(/^review\.[0-9a-f]{32}$/u);
+    expect(repository.get(target.id)).toMatchObject({
+      status: "superseded",
+      conflictKey: replacement.conflictKey,
+    });
+    repository.delete({
+      memoryId: replacement.id,
+      idempotencyKey: "memory-review-undo-conflict-0001",
+    });
+    expect(repository.get(target.id).status).toBe("active");
+    expect(
+      repository.resolveMergeReview({
+        reviewId: conflict.review?.id ?? "",
+        resolution: "accept",
+        idempotencyKey: "memory-review-accept-conflict-0001",
+      }),
+    ).toEqual(acceptedConflict);
+    repository.close();
+    chat.close();
+  });
+
+  it("rejects stale semantic reviews and removes pending proposals with a forgotten source", () => {
+    const file = databasePath();
+    const chat = new ChatRepository(file);
+    const source = chat.createGeneration({
+      text: "技术方案请先写结论。",
+      idempotencyKey: "memory-review-stale-source-0001",
+    });
+    const repository = new MemoryRepository(file, { idFactory: ids() });
+    repository.updateSettings({ memoriesEnabled: true, generateMemories: true });
+    const target = repository.upsert({
+      kind: "preference",
+      content: "用户偏好先给结论。",
+      idempotencyKey: "memory-review-stale-target-0001",
+    });
+    expect(() =>
+      repository.ingestAutomaticCandidate({
+        candidate: {
+          kind: "preference",
+          content: "用户或许偏好简短结论。",
+          retrievalKeys: ["结论"],
+          conflictKey: null,
+          confidence: 0.84,
+          sourceMessageId: source.receipt.userMessageId ?? "",
+          semanticRelation: "duplicate",
+          relatedMemoryId: target.id,
+        },
+        conversationId: source.receipt.conversationId,
+        jobId: "10000000-0000-4000-8000-000000000404",
+      }),
+    ).toThrow("MEMORY_CANDIDATE_RELATION_LOW_CONFIDENCE");
+    const staged = repository.ingestAutomaticCandidate({
+      candidate: {
+        kind: "preference",
+        content: "用户希望技术方案结论优先。",
+        retrievalKeys: ["技术方案", "结论"],
+        conflictKey: null,
+        confidence: 0.9,
+        sourceMessageId: source.receipt.userMessageId ?? "",
+        semanticRelation: "duplicate",
+        relatedMemoryId: target.id,
+      },
+      conversationId: source.receipt.conversationId,
+      jobId: "10000000-0000-4000-8000-000000000403",
+    });
+    repository.upsert({
+      id: target.id,
+      kind: target.kind,
+      content: "用户偏好先给结论并附一行摘要。",
+      idempotencyKey: "memory-review-stale-target-edit-0001",
+    });
+    expect(() =>
+      repository.resolveMergeReview({
+        reviewId: staged.review?.id ?? "",
+        resolution: "accept",
+        idempotencyKey: "memory-review-stale-accept-0001",
+      }),
+    ).toThrow("MEMORY_MERGE_REVIEW_STALE");
+
+    repository.deleteBySourceConversation(
+      source.receipt.conversationId,
+      "memory-review-stale-source-forget-0001",
+    );
+    expect(repository.listMergeReviews()).toEqual([]);
+    repository.close();
+    chat.close();
+  });
+
   it("lets newer automatic values supersede automatic ones but never explicit memories", () => {
     const file = databasePath();
     const chat = new ChatRepository(file);

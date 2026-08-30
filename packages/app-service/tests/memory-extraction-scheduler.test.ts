@@ -224,6 +224,67 @@ describe("MemoryExtractionScheduler", () => {
     chat.close();
   });
 
+  it("stages model-related fuzzy candidates for review without changing active memories", async () => {
+    const file = databasePath();
+    let now = "2026-08-30T00:00:00.000Z";
+    const chat = new ChatRepository(file, { now: () => now });
+    const memories = new MemoryRepository(file, { now: () => now });
+    memories.updateSettings({
+      memoriesEnabled: true,
+      generateMemories: true,
+      idleDelayMinutes: 1,
+    });
+    const target = memories.upsert({
+      kind: "preference",
+      content: "用户偏好结论优先的技术方案。",
+      idempotencyKey: "memory-review-scheduler-target-0001",
+    });
+    const conversation = twoTurnConversation(chat, now);
+    const extractor: MemoryExtractor = {
+      extract: vi.fn(async () => ({
+        candidates: [
+          {
+            kind: "preference" as const,
+            content: "用户希望技术方案先给明确结论。",
+            retrievalKeys: ["技术方案", "结论"],
+            conflictKey: null,
+            confidence: 0.91,
+            sourceMessageId: conversation.first.receipt.userMessageId ?? "",
+            semanticRelation: "duplicate" as const,
+            relatedMemoryId: target.id,
+          },
+        ],
+      })),
+    };
+    const created = vi.fn();
+    const scheduler = new MemoryExtractionScheduler({
+      chatRepository: chat,
+      memoryRepository: memories,
+      extractor,
+      onMemoriesCreated: created,
+    });
+    scheduler.handleChatEvent(conversation.event);
+
+    now = "2026-08-30T00:02:00.000Z";
+    await expect(scheduler.tick()).resolves.toEqual([
+      expect.objectContaining({ status: "completed", candidateCount: 0 }),
+    ]);
+    expect(extractor.extract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingMemories: [expect.objectContaining({ id: target.id, content: target.content })],
+      }),
+    );
+    expect(created).not.toHaveBeenCalled();
+    expect(memories.list({ status: "active", limit: 50 })).toEqual([
+      expect.objectContaining({ id: target.id }),
+    ]);
+    expect(memories.listMergeReviews()).toEqual([
+      expect.objectContaining({ relation: "duplicate", targetMemoryId: target.id }),
+    ]);
+    memories.close();
+    chat.close();
+  });
+
   it("protects explicit conflicts and notifies only the final active automatic value", async () => {
     const file = databasePath();
     let now = "2026-08-30T00:00:00.000Z";

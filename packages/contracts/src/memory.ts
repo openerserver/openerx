@@ -152,6 +152,48 @@ export const memorySourceLinkSchema = z
   })
   .strict();
 
+export const memorySemanticRelationSchema = z.enum(["none", "duplicate", "conflict"]);
+
+export const memoryMergeReviewStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
+
+export const memoryMergeReviewSchema = z
+  .object({
+    id: entityIdSchema,
+    ownerProfileId: z.string().min(1),
+    kind: memoryKindSchema,
+    relation: memorySemanticRelationSchema.exclude(["none"]),
+    targetMemoryId: entityIdSchema,
+    targetContent: z.string().trim().min(1).max(2_000),
+    targetRevision: z.number().int().positive(),
+    proposedContent: z.string().trim().min(1).max(500),
+    proposedRetrievalKeys: z.array(z.string().trim().min(1).max(120)).max(20),
+    proposedConflictKey: memoryConflictKeySchema.nullable(),
+    confidence: z.number().min(0).max(1),
+    sourceConversationId: entityIdSchema,
+    sourceMessageId: entityIdSchema,
+    status: memoryMergeReviewStatusSchema,
+    resultMemoryId: entityIdSchema.nullable(),
+    createdAt: timestampSchema,
+    updatedAt: timestampSchema,
+    resolvedAt: timestampSchema.nullable(),
+  })
+  .strict();
+
+export const memoryMergeReviewListInputSchema = z
+  .object({
+    status: memoryMergeReviewStatusSchema.optional().default("pending"),
+    limit: z.number().int().min(1).max(100).optional().default(50),
+  })
+  .strict();
+
+export const memoryMergeReviewResolveInputSchema = z
+  .object({
+    reviewId: entityIdSchema,
+    resolution: z.enum(["accept", "dismiss"]),
+    idempotencyKey: z.string().min(8).max(240),
+  })
+  .strict();
+
 export const automaticMemoryCandidateSchema = z
   .object({
     kind: memoryKindSchema,
@@ -160,8 +202,27 @@ export const automaticMemoryCandidateSchema = z
     conflictKey: memoryConflictKeySchema.nullable().default(null),
     confidence: z.number().min(0).max(1),
     sourceMessageId: entityIdSchema,
+    semanticRelation: memorySemanticRelationSchema.optional(),
+    relatedMemoryId: entityIdSchema.nullable().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((candidate, context) => {
+    const relation = candidate.semanticRelation ?? "none";
+    if (relation === "none" && candidate.relatedMemoryId) {
+      context.addIssue({
+        code: "custom",
+        path: ["relatedMemoryId"],
+        message: "Unrelated memory candidates cannot reference an existing memory",
+      });
+    }
+    if (relation !== "none" && !candidate.relatedMemoryId) {
+      context.addIssue({
+        code: "custom",
+        path: ["relatedMemoryId"],
+        message: "Related memory candidates must reference an existing memory",
+      });
+    }
+  });
 
 export const automaticMemoryExtractionOutputSchema = z
   .object({ candidates: z.array(automaticMemoryCandidateSchema).max(8) })
@@ -275,6 +336,11 @@ export type MemoryUpsertInput = z.infer<typeof memoryUpsertInputSchema>;
 export type MemoryDeleteInput = z.infer<typeof memoryDeleteInputSchema>;
 export type MemoryClearResult = z.infer<typeof memoryClearResultSchema>;
 export type MemorySourceLink = z.infer<typeof memorySourceLinkSchema>;
+export type MemorySemanticRelation = z.infer<typeof memorySemanticRelationSchema>;
+export type MemoryMergeReview = z.infer<typeof memoryMergeReviewSchema>;
+export type MemoryMergeReviewStatus = z.infer<typeof memoryMergeReviewStatusSchema>;
+export type MemoryMergeReviewListInput = z.infer<typeof memoryMergeReviewListInputSchema>;
+export type MemoryMergeReviewResolveInput = z.infer<typeof memoryMergeReviewResolveInputSchema>;
 export type RecalledMemory = z.infer<typeof recalledMemorySchema>;
 export type AutomaticMemoryCandidate = z.infer<typeof automaticMemoryCandidateSchema>;
 export type AutomaticMemoryExtractionOutput = z.infer<typeof automaticMemoryExtractionOutputSchema>;

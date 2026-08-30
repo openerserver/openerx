@@ -64,6 +64,8 @@ import {
   memoryClearInputSchema,
   memoryDeleteInputSchema,
   memoryListInputSchema,
+  memoryMergeReviewListInputSchema,
+  memoryMergeReviewResolveInputSchema,
   memorySettingsUpdateInputSchema,
   memorySourcesListInputSchema,
   memoryUpsertInputSchema,
@@ -697,6 +699,18 @@ function registerIpcHandlers(
     true,
   );
   registerChatHandler(ipcChannels.memoryList, "memory.list", memoryListInputSchema);
+  registerChatHandler(
+    ipcChannels.memoryMergeReviewsList,
+    "memory.merge-reviews.list",
+    memoryMergeReviewListInputSchema,
+  );
+  registerChatHandler(
+    ipcChannels.memoryMergeReviewResolve,
+    "memory.merge-reviews.resolve",
+    memoryMergeReviewResolveInputSchema,
+    false,
+    true,
+  );
   registerChatHandler(
     ipcChannels.memorySourcesList,
     "memory.sources.list",

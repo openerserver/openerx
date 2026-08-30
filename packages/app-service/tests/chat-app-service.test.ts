@@ -452,6 +452,66 @@ describe("ChatAppService", () => {
     service.close();
   });
 
+  it("lists and resolves pending semantic memory reviews through the app-service boundary", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-review-app-service-"));
+    temporaryDirectories.push(directory);
+    const database = path.join(directory, "chat.sqlite");
+    const chatRepository = new ChatRepository(database);
+    const source = chatRepository.createGeneration({
+      text: "技术方案请先给结论。",
+      idempotencyKey: "app-memory-review-source-0001",
+    });
+    const memoryRepository = new MemoryRepository(database);
+    memoryRepository.updateSettings({ memoriesEnabled: true, generateMemories: true });
+    const target = memoryRepository.upsert({
+      kind: "preference",
+      content: "用户偏好结论优先的技术方案。",
+      idempotencyKey: "app-memory-review-target-0001",
+    });
+    const staged = memoryRepository.ingestAutomaticCandidate({
+      candidate: {
+        kind: "preference",
+        content: "用户希望技术方案先给明确结论。",
+        retrievalKeys: ["技术方案", "结论"],
+        conflictKey: null,
+        confidence: 0.9,
+        sourceMessageId: source.receipt.userMessageId ?? "",
+        semanticRelation: "duplicate",
+        relatedMemoryId: target.id,
+      },
+      conversationId: source.receipt.conversationId,
+      jobId: "10000000-0000-4000-8000-000000000501",
+    });
+    const service = new ChatAppService(
+      chatRepository,
+      new ScriptedPiHostClient(),
+      null,
+      null,
+      null,
+      null,
+      null,
+      memoryRepository,
+    );
+
+    await expect(
+      service.handle({
+        command: "memory.merge-reviews.list",
+        input: { status: "pending", limit: 50 },
+      }),
+    ).resolves.toEqual([expect.objectContaining({ id: staged.review?.id, status: "pending" })]);
+    await expect(
+      service.handle({
+        command: "memory.merge-reviews.resolve",
+        input: {
+          reviewId: staged.review?.id ?? "",
+          resolution: "dismiss",
+          idempotencyKey: "app-memory-review-dismiss-0001",
+        },
+      }),
+    ).resolves.toMatchObject({ status: "dismissed", resultMemoryId: null });
+    service.close();
+  });
+
   it("locks each conversation to its creation-time hosted or BYOK execution mode", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-execution-mode-"));
     temporaryDirectories.push(directory);

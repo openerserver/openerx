@@ -40,6 +40,7 @@ import {
   conversationMemorySettingsUpdateInputSchema,
   type MemoryClearResult,
   type MemoryEntry,
+  type MemoryMergeReview,
   type MemorySettings,
   type MemorySourceLink,
   memoryClearInputSchema,
@@ -47,6 +48,9 @@ import {
   memoryDeleteInputSchema,
   memoryEntrySchema,
   memoryListInputSchema,
+  memoryMergeReviewListInputSchema,
+  memoryMergeReviewResolveInputSchema,
+  memoryMergeReviewSchema,
   memorySettingsSchema,
   memorySettingsUpdateInputSchema,
   memorySourceLinkSchema,
@@ -341,6 +345,18 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     .strict(),
   z.object({ command: z.literal("memory.list"), input: memoryListInputSchema }).strict(),
   z
+    .object({
+      command: z.literal("memory.merge-reviews.list"),
+      input: memoryMergeReviewListInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal("memory.merge-reviews.resolve"),
+      input: memoryMergeReviewResolveInputSchema,
+    })
+    .strict(),
+  z
     .object({ command: z.literal("memory.sources.list"), input: memorySourcesListInputSchema })
     .strict(),
   z.object({ command: z.literal("memory.upsert"), input: memoryUpsertInputSchema }).strict(),
@@ -556,6 +572,8 @@ export interface ChatCommandResultMap {
   "memory.conversation.settings.get": ConversationMemorySettings;
   "memory.conversation.settings.update": ConversationMemorySettings;
   "memory.list": MemoryEntry[];
+  "memory.merge-reviews.list": MemoryMergeReview[];
+  "memory.merge-reviews.resolve": MemoryMergeReview;
   "memory.sources.list": MemorySourceLink[];
   "memory.upsert": MemoryEntry;
   "memory.delete": MemoryEntry;
@@ -643,6 +661,12 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "memory.list":
       parsed = z.array(memoryEntrySchema).parse(value);
+      break;
+    case "memory.merge-reviews.list":
+      parsed = z.array(memoryMergeReviewSchema).max(100).parse(value);
+      break;
+    case "memory.merge-reviews.resolve":
+      parsed = memoryMergeReviewSchema.parse(value);
       break;
     case "memory.sources.list":
       parsed = z.array(memorySourceLinkSchema).max(200).parse(value);
@@ -795,15 +819,19 @@ export interface ChatBridge {
     input: z.input<typeof conversationMemorySettingsUpdateInputSchema>,
   ): Promise<ConversationMemorySettings>;
   listMemories(input?: z.input<typeof memoryListInputSchema>): Promise<MemoryEntry[]>;
+  listMemoryMergeReviews(
+    input?: z.input<typeof memoryMergeReviewListInputSchema>,
+  ): Promise<MemoryMergeReview[]>;
+  resolveMemoryMergeReview(
+    input: z.input<typeof memoryMergeReviewResolveInputSchema>,
+  ): Promise<MemoryMergeReview>;
   listMemorySources(
     input: z.input<typeof memorySourcesListInputSchema>,
   ): Promise<MemorySourceLink[]>;
   upsertMemory(input: z.input<typeof memoryUpsertInputSchema>): Promise<MemoryEntry>;
   deleteMemory(input: z.input<typeof memoryDeleteInputSchema>): Promise<MemoryEntry>;
   clearMemories(input: z.input<typeof memoryClearInputSchema>): Promise<MemoryClearResult>;
-  onAutomaticMemoryCreated(
-    listener: (event: AutomaticMemoryCreatedEvent) => void,
-  ): () => void;
+  onAutomaticMemoryCreated(listener: (event: AutomaticMemoryCreatedEvent) => void): () => void;
   onMemoryNavigate(listener: (memoryId: string) => void): () => void;
   listConversations(input?: z.input<typeof chatListInputSchema>): Promise<ConversationSummary[]>;
   getConversation(input: z.input<typeof chatGetInputSchema>): Promise<ConversationSnapshot>;

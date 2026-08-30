@@ -51,6 +51,7 @@ describe("Pi AgentSession composition", () => {
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     modelRuntime.registerNativeProvider(faux.provider);
     const sourceMessageId = randomUUID();
+    const relatedMemoryId = randomUUID();
     faux.setResponses([
       fauxAssistantMessage(
         JSON.stringify({
@@ -62,6 +63,8 @@ describe("Pi AgentSession composition", () => {
               conflictKey: "response.structure",
               confidence: 0.93,
               sourceMessageId,
+              semanticRelation: "duplicate",
+              relatedMemoryId,
             },
           ],
         }),
@@ -92,6 +95,14 @@ describe("Pi AgentSession composition", () => {
           { messageId: sourceMessageId, text: "我希望回答先给结论。" },
           { messageId: randomUUID(), text: "这是第二条足够长的用户消息，用于满足抽取资格。" },
         ],
+        existingMemories: [
+          {
+            id: relatedMemoryId,
+            kind: "preference",
+            content: "用户偏好结论优先。",
+            conflictKey: null,
+          },
+        ],
       },
     });
 
@@ -100,7 +111,9 @@ describe("Pi AgentSession composition", () => {
       requestId,
       ok: true,
       output: {
-        candidates: [expect.objectContaining({ sourceMessageId, confidence: 0.93 })],
+        candidates: [
+          expect.objectContaining({ sourceMessageId, relatedMemoryId, confidence: 0.93 }),
+        ],
       },
     });
     expect(

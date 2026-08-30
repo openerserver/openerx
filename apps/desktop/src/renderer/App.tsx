@@ -4398,6 +4398,12 @@ function MemorySettingsPanel(): React.JSX.Element {
       }),
     retry: false,
   });
+  const mergeReviews = useQuery({
+    queryKey: ["memory", "merge-reviews", "pending"],
+    queryFn: () => window.openerx.listMemoryMergeReviews({ status: "pending", limit: 50 }),
+    enabled: settings.data?.memoriesEnabled === true,
+    retry: false,
+  });
   const updateSettings = useMutation({
     mutationFn: window.openerx.updateMemorySettings,
     onSuccess: (next) => queryClient.setQueryData(["memory", "settings"], next),
@@ -4424,6 +4430,19 @@ function MemorySettingsPanel(): React.JSX.Element {
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["memory", "list"] });
+    },
+  });
+  const resolveMergeReview = useMutation({
+    mutationFn: (input: { reviewId: string; resolution: "accept" | "dismiss" }) =>
+      window.openerx.resolveMemoryMergeReview({
+        ...input,
+        idempotencyKey: `memory-merge-review:${crypto.randomUUID()}`,
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["memory", "merge-reviews"] }),
+        queryClient.invalidateQueries({ queryKey: ["memory", "list"] }),
+      ]);
     },
   });
   const clearMemories = useMutation({
@@ -4454,9 +4473,11 @@ function MemorySettingsPanel(): React.JSX.Element {
   const error =
     settings.error ??
     memories.error ??
+    mergeReviews.error ??
     updateSettings.error ??
     saveMemory.error ??
     deleteMemory.error ??
+    resolveMergeReview.error ??
     clearMemories.error;
   return (
     <section className="settings-card settings-stack memory-settings" aria-label="长期记忆">
@@ -4589,6 +4610,55 @@ function MemorySettingsPanel(): React.JSX.Element {
         </search>
       ) : null}
       {state?.memoriesEnabled ? (
+        <section className="memory-merge-reviews" aria-label="待确认的记忆合并建议">
+          <div className="memory-review-heading">
+            <div>
+              <h3>待确认的记忆建议</h3>
+              <p>模型发现语义相近或可能冲突的内容；确认前不会修改已保存记忆。</p>
+            </div>
+            <span>{mergeReviews.data?.length ?? 0}</span>
+          </div>
+          {(mergeReviews.data ?? []).map((review) => (
+            <article key={review.id} className="memory-review-row">
+              <div>
+                <span>
+                  {memoryKindLabels[review.kind]} ·{" "}
+                  {review.relation === "duplicate" ? "可能重复" : "可能冲突"}
+                </span>
+                <small>现有记忆</small>
+                <p>{review.targetContent}</p>
+                <small>{review.relation === "duplicate" ? "合并来源" : "建议替代为"}</small>
+                <p>{review.proposedContent}</p>
+              </div>
+              <div className="memory-row-actions">
+                <button
+                  type="button"
+                  className="primary-action"
+                  disabled={resolveMergeReview.isPending}
+                  onClick={() =>
+                    resolveMergeReview.mutate({ reviewId: review.id, resolution: "accept" })
+                  }
+                >
+                  {review.relation === "duplicate" ? "确认合并" : "确认替代"}
+                </button>
+                <button
+                  type="button"
+                  disabled={resolveMergeReview.isPending}
+                  onClick={() =>
+                    resolveMergeReview.mutate({ reviewId: review.id, resolution: "dismiss" })
+                  }
+                >
+                  忽略
+                </button>
+              </div>
+            </article>
+          ))}
+          {!mergeReviews.isPending && (mergeReviews.data?.length ?? 0) === 0 ? (
+            <p className="empty-hint">没有需要确认的建议。</p>
+          ) : null}
+        </section>
+      ) : null}
+      {state?.memoriesEnabled ? (
         <form
           className="memory-create-form"
           onSubmit={(event) => {
@@ -4663,9 +4733,7 @@ function MemorySettingsPanel(): React.JSX.Element {
                 {memory.origin === "automatic" ? " · 自动生成（可撤销）" : " · 显式保存"}
               </span>
               <p>{memory.content}</p>
-              <small>
-                更新于 {new Date(memory.updatedAt).toLocaleString()}
-              </small>
+              <small>更新于 {new Date(memory.updatedAt).toLocaleString()}</small>
               {memory.supersedesMemoryId ? (
                 <small className="memory-supersede-note">
                   已替代上一版本；删除此条将恢复上一版本。
@@ -6574,9 +6642,7 @@ export function App(): React.JSX.Element {
       void queryClient.invalidateQueries({ queryKey: ["memory", "list"] });
     });
     const unsubscribeMemoryNavigate = window.openerx.onMemoryNavigate((memoryId) => {
-      navigate(
-        `/settings/account?section=memory&memory=${encodeURIComponent(memoryId)}`,
-      );
+      navigate(`/settings/account?section=memory&memory=${encodeURIComponent(memoryId)}`);
     });
     return () => {
       unsubscribeRun();

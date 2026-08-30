@@ -14,6 +14,30 @@ afterEach(() => {
 });
 
 describe("database migrations", () => {
+  it("adds durable memory merge reviews with bounded review indexes", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-review-migration-"));
+    directories.push(directory);
+    const database = new DatabaseSync(path.join(directory, "openerx.sqlite"));
+    migrateDatabase(database, { throughVersion: 24 });
+    migrateDatabase(database);
+
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_merge_reviews'",
+        )
+        .get(),
+    ).toEqual({ name: "memory_merge_reviews" });
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'memory_merge_reviews_status_idx'",
+        )
+        .get(),
+    ).toEqual({ name: "memory_merge_reviews_status_idx" });
+    database.close();
+  });
+
   it("adds persistent memory consolidation runs with one running job per profile", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-consolidation-migration-"));
     directories.push(directory);

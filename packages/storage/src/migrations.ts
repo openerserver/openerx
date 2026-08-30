@@ -1218,6 +1218,38 @@ const migrations: readonly Migration[] = [
         ON memory_consolidation_runs(owner_profile_id, started_at DESC, id);
     `,
   },
+  {
+    version: 25,
+    checksum: "memory-merge-reviews-v25-20260830",
+    sql: `
+      CREATE TABLE memory_merge_reviews (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('profile', 'preference', 'workflow', 'ongoing_context')),
+        relation TEXT NOT NULL CHECK (relation IN ('duplicate', 'conflict')),
+        target_memory_id TEXT NOT NULL REFERENCES memory_entries(id),
+        target_content TEXT NOT NULL,
+        target_revision INTEGER NOT NULL CHECK (target_revision > 0),
+        proposed_content TEXT NOT NULL,
+        proposed_retrieval_keys_json TEXT NOT NULL,
+        proposed_canonical_key TEXT NOT NULL,
+        proposed_conflict_key TEXT,
+        confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+        source_conversation_id TEXT NOT NULL,
+        source_message_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'dismissed')),
+        result_memory_id TEXT REFERENCES memory_entries(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        resolved_at TEXT,
+        UNIQUE (owner_profile_id, target_memory_id, proposed_canonical_key, relation)
+      ) STRICT;
+      CREATE INDEX memory_merge_reviews_status_idx
+        ON memory_merge_reviews(owner_profile_id, status, created_at DESC, id);
+      CREATE INDEX memory_merge_reviews_target_idx
+        ON memory_merge_reviews(owner_profile_id, target_memory_id, created_at DESC);
+    `,
+  },
 ];
 
 export function migrateDatabase(

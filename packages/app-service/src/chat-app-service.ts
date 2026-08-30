@@ -140,6 +140,13 @@ export class ChatAppService {
       }
       case "memory.list":
         return this.#requiredMemories().list(request.input);
+      case "memory.merge-reviews.list":
+        return this.#requiredMemories().listMergeReviews(request.input);
+      case "memory.merge-reviews.resolve": {
+        const result = this.#requiredMemories().resolveMergeReview(request.input);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
       case "memory.sources.list":
         return this.#requiredMemories().sources(request.input.memoryId);
       case "memory.upsert": {
@@ -1017,9 +1024,7 @@ export class ChatAppService {
             ...(frame.operation.retrievalKeys
               ? { retrievalKeys: frame.operation.retrievalKeys }
               : {}),
-            ...(frame.operation.conflictKey
-              ? { conflictKey: frame.operation.conflictKey }
-              : {}),
+            ...(frame.operation.conflictKey ? { conflictKey: frame.operation.conflictKey } : {}),
             sourceConversationId: frame.conversationId,
             idempotencyKey: frame.operation.idempotencyKey,
           });

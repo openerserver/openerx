@@ -50,6 +50,16 @@ describe("memory contracts", () => {
         input: { memoryId: id("16") },
       }).command,
     ).toBe("memory.sources.list");
+    expect(
+      chatCommandEnvelopeSchema.parse({
+        command: "memory.merge-reviews.resolve",
+        input: {
+          reviewId: id("17"),
+          resolution: "accept",
+          idempotencyKey: "memory-review-contract-0001",
+        },
+      }).command,
+    ).toBe("memory.merge-reviews.resolve");
   });
 
   it("returns bounded, account-scoped memory source links", () => {
@@ -144,8 +154,17 @@ describe("memory contracts", () => {
         { messageId: sourceMessageId, text: "我希望先给结论。" },
         { messageId: id("15"), text: "这是第二条用户消息。" },
       ],
+      existingMemories: [
+        {
+          id: id("16"),
+          kind: "preference",
+          content: "用户希望先给结论。",
+          conflictKey: null,
+        },
+      ],
     });
     expect(request.messages).toHaveLength(2);
+    expect(request.existingMemories).toHaveLength(1);
     expect(
       piMemoryExtractResultFrameSchema.parse({
         kind: "pi.memory.extract-result",
@@ -160,11 +179,34 @@ describe("memory contracts", () => {
               conflictKey: "response.structure",
               confidence: 0.93,
               sourceMessageId,
+              semanticRelation: "duplicate",
+              relatedMemoryId: id("16"),
             },
           ],
         },
       }),
     ).toMatchObject({ ok: true, usageRecords: [] });
+    expect(() =>
+      piMemoryExtractResultFrameSchema.parse({
+        kind: "pi.memory.extract-result",
+        requestId: request.requestId,
+        ok: true,
+        output: {
+          candidates: [
+            {
+              kind: "preference",
+              content: "用户希望先给结论。",
+              retrievalKeys: ["结论"],
+              conflictKey: null,
+              confidence: 0.93,
+              sourceMessageId,
+              semanticRelation: "conflict",
+              relatedMemoryId: null,
+            },
+          ],
+        },
+      }),
+    ).toThrow();
   });
 
   it("accepts only active automatic memories in created-memory events", () => {

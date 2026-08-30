@@ -17,7 +17,7 @@ import {
 } from "./tool";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 8 as const;
+export const piHostContractVersion = 9 as const;
 
 export const piHostBootstrapSchema = z
   .object({
@@ -240,6 +240,19 @@ export const piMemoryExtractFrameSchema = z
       )
       .min(2)
       .max(200),
+    existingMemories: z
+      .array(
+        z
+          .object({
+            id: entityIdSchema,
+            kind: z.enum(["profile", "preference", "workflow", "ongoing_context"]),
+            content: z.string().trim().min(1).max(500),
+            conflictKey: z.string().trim().min(3).max(120).nullable(),
+          })
+          .strict(),
+      )
+      .max(50)
+      .optional(),
     platform: piBackgroundPlatformSchema.optional(),
     byok: piBackgroundByokSchema.optional(),
   })

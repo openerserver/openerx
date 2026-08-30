@@ -231,6 +231,20 @@ export class PersonalDataExporter {
                 completed_at AS completedAt
          FROM memory_consolidation_runs ORDER BY started_at, id`,
       ),
+      memoryMergeReviews: rows(
+        database,
+        `SELECT id, kind, relation, target_memory_id AS targetMemoryId,
+                target_content AS targetContent,
+                target_revision AS targetRevision,
+                proposed_content AS proposedContent,
+                proposed_retrieval_keys_json AS proposedRetrievalKeys,
+                proposed_conflict_key AS proposedConflictKey, confidence,
+                source_conversation_id AS sourceConversationId,
+                source_message_id AS sourceMessageId, status,
+                result_memory_id AS resultMemoryId, created_at AS createdAt,
+                updated_at AS updatedAt, resolved_at AS resolvedAt
+         FROM memory_merge_reviews ORDER BY created_at, id`,
+      ),
       memoryConversationContext: rows(
         database,
         `SELECT conversation_id AS conversationId,
@@ -283,6 +297,7 @@ export class PersonalDataExporter {
       conversationMemorySettings: [],
       memoryExtractionJobs: [],
       memoryConsolidationRuns: [],
+      memoryMergeReviews: [],
       memoryConversationContext: [],
       memorySourceLinks: [],
       memories: [],
