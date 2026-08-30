@@ -216,6 +216,7 @@ function createBridge(): DesktopBridge {
       artifacts: 0,
       workItems: 0,
       skillInstallations: 1,
+      memories: 0,
     }),
     exportPersonalData: vi.fn(),
     getAccountState: vi.fn().mockResolvedValue({
@@ -256,6 +257,32 @@ function createBridge(): DesktopBridge {
     listSyncConflicts: vi.fn().mockResolvedValue([]),
     resolveSyncConflict: vi.fn(),
     clearLocalCache: vi.fn(),
+    getMemorySettings: vi.fn().mockResolvedValue({
+      ownerProfileId: "local-default",
+      memoriesEnabled: false,
+      useMemories: false,
+      generateMemories: false,
+      syncMemories: false,
+      disableOnExternalContext: true,
+      idleDelayMinutes: 30,
+      minRateLimitRemainingPercent: 20,
+      updatedAt: timestamp,
+      revision: 1,
+    }),
+    updateMemorySettings: vi.fn(),
+    getConversationMemorySettings: vi.fn().mockResolvedValue({
+      conversationId,
+      ownerProfileId: "local-default",
+      useMemories: null,
+      generateMemories: null,
+      updatedAt: timestamp,
+      revision: 1,
+    }),
+    updateConversationMemorySettings: vi.fn(),
+    listMemories: vi.fn().mockResolvedValue([]),
+    upsertMemory: vi.fn(),
+    deleteMemory: vi.fn(),
+    clearMemories: vi.fn(),
     deleteCloudData: vi.fn(),
     listConversations: vi.fn().mockResolvedValue([]),
     createAutomation: vi.fn(),
@@ -390,6 +417,19 @@ function renderApp(bridge: DesktopBridge, initialEntry = "/chat/new"): void {
 
 describe("M1 chat renderer", () => {
   it("applies model deltas immediately through one Codex-style waterfall response", async () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    const observe = vi.fn();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallback = callback;
+        }
+        observe = observe;
+        unobserve = vi.fn();
+        disconnect = vi.fn();
+      },
+    );
     const bridge = createBridge();
     const userSnapshot = snapshot.messages[0];
     const assistantSnapshot = snapshot.messages[1];
@@ -419,6 +459,12 @@ describe("M1 chat renderer", () => {
     const assistant = document.querySelector<HTMLElement>(".message-assistant");
     expect(assistant?.getAttribute("aria-busy")).toBe("true");
     expect(assistant?.querySelector(".response-waterfall .stream-tail")).toBeTruthy();
+    const messageList = screen.getByRole("region", { name: "对话消息" });
+    const messageListContent = messageList.querySelector(".message-list-content");
+    const scrollTo = vi.fn();
+    Object.defineProperty(messageList, "scrollHeight", { configurable: true, value: 960 });
+    Object.defineProperty(messageList, "scrollTo", { configurable: true, value: scrollTo });
+    expect(observe).toHaveBeenCalledWith(messageListContent);
 
     const event: ChatEvent = {
       eventId: crypto.randomUUID(),
@@ -438,10 +484,13 @@ describe("M1 chat renderer", () => {
       },
     };
     act(() => listener?.(event));
+    act(() => resizeCallback?.([], {} as ResizeObserver));
 
     expect(await screen.findByText("第一段第二段")).toBeTruthy();
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 960, behavior: "auto" }));
     expect(bridge.getConversation).toHaveBeenCalledTimes(1);
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("sends through the narrow bridge and renders GFM code and tables", async () => {
@@ -666,6 +715,7 @@ describe("M1 chat renderer", () => {
     renderApp(bridge, "/settings/account");
     const user = userEvent.setup();
 
+    await user.click(await screen.findByRole("button", { name: "外观" }));
     expect(await screen.findByRole("radiogroup", { name: "主题" })).toBeTruthy();
     expect(screen.getAllByRole("radio")).toHaveLength(3);
     expect((screen.getByRole("radio", { name: /跟随系统/ }) as HTMLInputElement).checked).toBe(
@@ -690,6 +740,276 @@ describe("M1 chat renderer", () => {
     window.localStorage.removeItem("openerx.theme");
   });
 
+  it("keeps long-term memory opt-in and supports explicit memory management", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.updateMemorySettings).mockResolvedValue({
+      ownerProfileId: "local-default",
+      memoriesEnabled: true,
+      useMemories: true,
+      generateMemories: false,
+      syncMemories: false,
+      disableOnExternalContext: true,
+      idleDelayMinutes: 30,
+      minRateLimitRemainingPercent: 20,
+      updatedAt: timestamp,
+      revision: 2,
+    });
+    vi.mocked(bridge.upsertMemory).mockResolvedValue({
+      id: crypto.randomUUID(),
+      ownerProfileId: "local-default",
+      scope: "personal",
+      kind: "preference",
+      content: "回答时先给结论。",
+      retrievalKeys: ["回答", "结论"],
+      canonicalKey: "preference:回答时先给结论。",
+      origin: "explicit",
+      confidence: 1,
+      status: "active",
+      sourceConversationId: null,
+      sourceMessageId: null,
+      supersedesMemoryId: null,
+      expiresAt: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    });
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "记忆" }));
+    expect(await screen.findByRole("heading", { name: "长期记忆" })).toBeTruthy();
+    const enabled = screen.getByRole("checkbox", { name: /启用长期记忆/ });
+    expect((enabled as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByLabelText("内容")).toBeNull();
+    await user.click(enabled);
+    await waitFor(() => expect(bridge.updateMemorySettings).toHaveBeenCalled());
+    expect(vi.mocked(bridge.updateMemorySettings).mock.calls[0]?.[0]).toEqual({
+      memoriesEnabled: true,
+      useMemories: true,
+    });
+    await user.type(await screen.findByLabelText("内容"), "回答时先给结论。");
+    await user.click(screen.getByRole("button", { name: "保存记忆" }));
+    await waitFor(() =>
+      expect(bridge.upsertMemory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "preference",
+          content: "回答时先给结论。",
+          idempotencyKey: expect.stringMatching(/^memory-ui:/u),
+        }),
+      ),
+    );
+    expect(screen.getByText("密钥、口令、验证码、Cookie、私钥", { exact: false })).toBeTruthy();
+  });
+
+  it("searches, edits, filters, and clears saved memories by category", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const memory = {
+      id: "77777777-7777-4777-8777-777777777777",
+      ownerProfileId: "local-default",
+      scope: "personal" as const,
+      kind: "workflow" as const,
+      content: "提交前运行类型检查。",
+      retrievalKeys: ["类型检查"],
+      canonicalKey: "workflow:类型检查",
+      origin: "explicit" as const,
+      confidence: 1,
+      status: "active" as const,
+      sourceConversationId: null,
+      sourceMessageId: null,
+      supersedesMemoryId: null,
+      expiresAt: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    };
+    vi.mocked(bridge.getMemorySettings).mockResolvedValue({
+      ownerProfileId: "local-default",
+      memoriesEnabled: true,
+      useMemories: true,
+      generateMemories: false,
+      syncMemories: false,
+      disableOnExternalContext: true,
+      idleDelayMinutes: 30,
+      minRateLimitRemainingPercent: 20,
+      updatedAt: timestamp,
+      revision: 2,
+    });
+    vi.mocked(bridge.listMemories).mockResolvedValue([memory]);
+    vi.mocked(bridge.upsertMemory).mockResolvedValue({ ...memory, revision: 2 });
+    vi.mocked(bridge.clearMemories).mockResolvedValue({ deleted: 1, clearedAt: timestamp });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "记忆" }));
+    await user.type(await screen.findByLabelText("搜索记忆"), "类型检查");
+    await waitFor(() =>
+      expect(bridge.listMemories).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: "类型检查" }),
+      ),
+    );
+    await user.selectOptions(screen.getByLabelText("筛选类型"), "workflow");
+    await waitFor(() =>
+      expect(bridge.listMemories).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: "workflow" }),
+      ),
+    );
+
+    await user.click(await screen.findByRole("button", { name: /编辑记忆/ }));
+    const editor = screen.getByLabelText("内容");
+    await user.clear(editor);
+    await user.type(editor, "提交前运行类型检查和测试。");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() =>
+      expect(bridge.upsertMemory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: memory.id,
+          kind: "workflow",
+          content: "提交前运行类型检查和测试。",
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "删除当前类别" }));
+    await waitFor(() =>
+      expect(bridge.clearMemories).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "workflow" }),
+      ),
+    );
+    expect(confirm).toHaveBeenCalled();
+  });
+
+  it("controls memory use and future contribution per conversation", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.getMemorySettings).mockResolvedValue({
+      ownerProfileId: "local-default",
+      memoriesEnabled: true,
+      useMemories: true,
+      generateMemories: false,
+      syncMemories: false,
+      disableOnExternalContext: true,
+      idleDelayMinutes: 30,
+      minRateLimitRemainingPercent: 20,
+      updatedAt: timestamp,
+      revision: 2,
+    });
+    vi.mocked(bridge.updateConversationMemorySettings).mockImplementation(async (input) => ({
+      conversationId,
+      ownerProfileId: "local-default",
+      useMemories: input.useMemories ?? null,
+      generateMemories: input.generateMemories ?? null,
+      updatedAt: timestamp,
+      revision: 2,
+    }));
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    const useMemorySelect = (await screen.findByLabelText("当前对话使用记忆")) as HTMLSelectElement;
+    await waitFor(() => expect(useMemorySelect.disabled).toBe(false));
+    await user.selectOptions(useMemorySelect, "off");
+    await waitFor(() =>
+      expect(bridge.updateConversationMemorySettings).toHaveBeenCalledWith({
+        conversationId,
+        useMemories: false,
+      }),
+    );
+    await user.selectOptions(screen.getByLabelText("当前对话贡献未来记忆"), "off");
+    await waitFor(() =>
+      expect(bridge.updateConversationMemorySettings).toHaveBeenCalledWith({
+        conversationId,
+        generateMemories: false,
+      }),
+    );
+  });
+
+  it("persists the default model setting and uses it for new tasks", async () => {
+    cleanup();
+    window.localStorage.removeItem("openerx.defaultModelRef");
+    const models: ModelCatalogEntry[] = [
+      { ...thinkingModel, modelRef: "platform/auto", displayName: "自动选择" },
+      { ...thinkingModel, modelRef: "platform/pro", displayName: "专业模型" },
+    ];
+    const settingsBridge = createBridge();
+    vi.mocked(settingsBridge.listModels).mockResolvedValue(models);
+    renderApp(settingsBridge, "/settings/account");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "模型" }));
+    const defaultModelSelect = await screen.findByLabelText("新任务默认模型");
+    await waitFor(() =>
+      expect(within(defaultModelSelect).getByRole("option", { name: /专业模型/u })).toBeTruthy(),
+    );
+    await user.selectOptions(defaultModelSelect, "platform/pro");
+    await waitFor(() =>
+      expect(window.localStorage.getItem("openerx.defaultModelRef")).toBe("platform/pro"),
+    );
+    cleanup();
+
+    const chatBridge = createBridge();
+    vi.mocked(chatBridge.listModels).mockResolvedValue(models);
+    renderApp(chatBridge);
+    await user.type(await screen.findByLabelText("发送消息"), "使用默认模型");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(chatBridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "platform/pro", text: "使用默认模型" }),
+    );
+    window.localStorage.removeItem("openerx.defaultModelRef");
+  });
+
+  it("configures and tests an OpenAI-compatible BYOK provider", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.updateModelServiceSettings).mockResolvedValue({
+      mode: "byok",
+      byok: {
+        baseUrl: "https://api.example.com/v1",
+        modelId: "example-model",
+        displayName: "example-model",
+        contextWindow: 128_000,
+        maxOutputTokens: 8_192,
+        capabilities: { imageInput: false, functionCalling: true, reasoning: false },
+      },
+      credentialConfigured: true,
+      updatedAt: timestamp,
+    });
+    vi.mocked(bridge.testByokConnection).mockResolvedValue({
+      ok: true,
+      latencyMs: 42,
+      reportedModel: "example-model",
+    });
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "模型" }));
+    await user.selectOptions(await screen.findByLabelText("运行模式"), "byok");
+    await user.click(screen.getByRole("button", { name: "应用 DeepSeek 预设" }));
+    expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe(
+      "https://api.deepseek.com",
+    );
+    expect((screen.getByLabelText("模型 ID") as HTMLInputElement).value).toBe("deepseek-v4-flash");
+    await user.clear(screen.getByLabelText("Base URL"));
+    await user.type(screen.getByLabelText("Base URL"), "https://api.example.com/v1");
+    await user.type(screen.getByLabelText("API Key"), "sk-test-secret");
+    await user.clear(screen.getByLabelText("模型 ID"));
+    await user.type(screen.getByLabelText("模型 ID"), "example-model");
+    await user.click(screen.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByText(/连接成功 · 42 ms/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "保存并启用" }));
+    expect(bridge.updateModelServiceSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "byok",
+        apiKey: "sk-test-secret",
+        byok: expect.objectContaining({
+          baseUrl: "https://api.example.com/v1",
+          modelId: "example-model",
+        }),
+      }),
+    );
+  });
+
   it("previews diagnostics separately from personal data before export", async () => {
     cleanup();
     const bridge = createBridge();
@@ -710,6 +1030,7 @@ describe("M1 chat renderer", () => {
     renderApp(bridge, "/settings/account");
     const user = userEvent.setup();
 
+    await user.click(await screen.findByRole("button", { name: "诊断与数据" }));
     expect(await screen.findByText("对话与 Prompt 正文", { exact: false })).toBeTruthy();
     const panel = screen.getByLabelText("诊断与数据导出");
     expect(panel).toBeTruthy();
@@ -750,6 +1071,7 @@ describe("M1 chat renderer", () => {
       reason: null,
     });
     renderApp(bridge, "/settings/account");
+    await userEvent.setup().click(await screen.findByRole("button", { name: "更新" }));
     const panel = await screen.findByLabelText("应用更新");
     expect(await within(panel).findByText("可用版本 2.0.1")).toBeTruthy();
     expect(panel.textContent).not.toContain("https://");
@@ -1115,14 +1437,15 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "收起侧栏" }));
     expect(screen.getByRole("button", { name: "展开侧栏" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "展开侧栏" }));
-    const syncButton = screen.getByRole("button", { name: "登录后可同步" });
-    expect((syncButton as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("本机模式")).toBeTruthy();
+    expect(screen.queryByText("本机模式")).toBeNull();
     expect(bridge.syncNow).not.toHaveBeenCalled();
 
     await user.keyboard("{Meta>}k{/Meta}");
     expect(await screen.findByRole("heading", { name: "搜索对话" })).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("搜索关键词")));
+
+    await user.keyboard("{Control>},{/Control}");
+    expect(await screen.findByRole("heading", { name: "设置" })).toBeTruthy();
   });
 
   it("keeps new chat fixed while navigation and history share one scroll region", async () => {
@@ -1133,7 +1456,7 @@ describe("M1 chat renderer", () => {
     expect(scrollRegion.contains(screen.getByRole("navigation", { name: "主导航" }))).toBe(true);
     expect(scrollRegion.contains(screen.getByRole("region", { name: "对话历史" }))).toBe(true);
     expect(scrollRegion.contains(screen.getByRole("link", { name: "新对话" }))).toBe(false);
-    expect(scrollRegion.contains(await screen.findByText("本机模式"))).toBe(false);
+    expect(screen.queryByText("本机模式")).toBeNull();
     expect(scrollRegion.contains(await screen.findByRole("link", { name: /未登录/ }))).toBe(false);
   });
 
@@ -1151,6 +1474,34 @@ describe("M1 chat renderer", () => {
     expect(await screen.findByRole("heading", { name: "搜索对话" })).toBeTruthy();
     expect(newChatLink.classList.contains("active")).toBe(false);
     expect(searchLink.classList.contains("active")).toBe(true);
+  });
+
+  it("visibly marks the current conversation in history", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listConversations).mockResolvedValue([
+      {
+        ...snapshot.conversation,
+        lastMessagePreview: "生成代码块和表格",
+        messageCount: snapshot.messages.length,
+      },
+      {
+        ...snapshot.conversation,
+        id: "66666666-6666-4666-8666-666666666666",
+        title: "另一个任务",
+        lastMessagePreview: "未选中的历史任务",
+        messageCount: 1,
+      },
+    ]);
+    renderApp(bridge, `/chat/${conversationId}`);
+
+    const activeHistoryLink = await screen.findByRole("link", { name: /Markdown 验收/ });
+    const inactiveHistoryLink = screen.getByRole("link", { name: /另一个任务/ });
+
+    expect(activeHistoryLink.getAttribute("aria-current")).toBe("page");
+    expect(activeHistoryLink.classList).toContain("history-item-active");
+    expect(inactiveHistoryLink.hasAttribute("aria-current")).toBe(false);
+    expect(inactiveHistoryLink.classList).not.toContain("history-item-active");
   });
 
   it("keeps destructive conversation actions behind an in-product confirmation", async () => {
@@ -1173,6 +1524,22 @@ describe("M1 chat renderer", () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多操作" })),
     );
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除对话…" }));
+    const confirmedDialog = screen.getByRole("alertdialog", { name: "删除这个对话？" });
+    await user.click(
+      within(confirmedDialog).getByRole("checkbox", {
+        name: /同时删除仅来源于此对话的长期记忆/,
+      }),
+    );
+    await user.click(within(confirmedDialog).getByRole("button", { name: "确认删除" }));
+    await waitFor(() =>
+      expect(bridge.deleteConversation).toHaveBeenCalledWith({
+        conversationId,
+        forgetSourceMemories: true,
+      }),
+    );
   });
 
   it("keeps HashRouter section navigation on settings and moves focus to the target", async () => {
@@ -1180,15 +1547,24 @@ describe("M1 chat renderer", () => {
     renderApp(createBridge(), "/settings/account");
     const user = userEvent.setup();
 
-    expect(await screen.findByRole("heading", { name: "账户与设备" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "设置" })).toBeTruthy();
+    const settingsWorkspace = document.querySelector(".settings-account-page");
+    const mainContent = document.getElementById("main-content");
+    expect(settingsWorkspace).toBeTruthy();
+    expect(mainContent?.classList).toContain("app-main-settings");
+    expect(settingsWorkspace?.querySelector(".settings-page-header")).toBeTruthy();
+    expect(settingsWorkspace?.querySelector(".settings-section-nav")).toBeTruthy();
+    expect(settingsWorkspace?.querySelector(".settings-section-content")).toBeTruthy();
+    expect(screen.queryByLabelText("发送消息")).toBeNull();
     await user.click(screen.getByRole("button", { name: "外观" }));
     await waitFor(() => expect(document.activeElement?.id).toBe("appearance-section"));
-    expect(screen.getByRole("heading", { name: "账户与设备" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "外观" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "外观" }).getAttribute("aria-current")).toBe("page");
 
     await user.click(screen.getByRole("button", { name: "诊断与数据" }));
-    const diagnostics = document.getElementById("diagnostics-section") as HTMLDetailsElement;
+    const diagnostics = document.getElementById("diagnostics-section") as HTMLElement;
     await waitFor(() => expect(document.activeElement).toBe(diagnostics));
-    expect(diagnostics.open).toBe(true);
+    expect(screen.getByLabelText("诊断与数据导出")).toBeTruthy();
   });
 
   it("nests billing under settings instead of the primary sidebar", async () => {
@@ -1202,6 +1578,7 @@ describe("M1 chat renderer", () => {
       "active",
     );
 
+    await user.click(await screen.findByRole("button", { name: "费用与账单" }));
     await user.click(await screen.findByRole("link", { name: "查看费用与账单" }));
     expect(await screen.findByRole("heading", { name: "费用与账单" })).toBeTruthy();
     expect(within(mainNavigation).getByRole("link", { name: "设置" }).classList).toContain(
@@ -1306,6 +1683,63 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("menuitem", { name: "归档对话" }));
     expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
     expect(await screen.findByText("对话已归档。")).toBeTruthy();
+  });
+
+  it("uses the fixed-workbench hierarchy for completed replies", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const workItem: WorkItem = {
+      id: "66666666-6666-4666-8666-666666666666",
+      ownerProfileId: "local-default",
+      conversationId,
+      messageId: assistantMessageId,
+      title: "对话轮次",
+      status: "completed",
+      activeRunId: null,
+      createdAt: timestamp,
+      updatedAt: "2026-08-25T09:00:08.000Z",
+      completedAt: "2026-08-25T09:00:08.000Z",
+      revision: 1,
+    };
+    vi.mocked(bridge.listWorkItems).mockResolvedValue([workItem]);
+    renderApp(bridge, `/chat/${conversationId}`);
+
+    const workspace = await screen.findByRole("region", { name: "对话工作区" });
+    const rail = await screen.findByRole("complementary", { name: "成果与来源" });
+    const activity = workspace.querySelector(".tool-activity");
+    const userMessage = workspace.querySelector(".message-user");
+    const assistantMessage = workspace.querySelector(".message-assistant");
+    const composer = workspace.querySelector(".composer");
+    if (!activity || !userMessage || !assistantMessage || !composer) {
+      throw new Error("Expected completed conversation workbench elements");
+    }
+
+    expect(activity.textContent).toContain("用时 8s");
+    expect(activity.textContent).not.toContain("已完成");
+    expect(
+      activity.compareDocumentPosition(assistantMessage) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(userMessage.querySelector(".message-state-header")).toBeNull();
+    expect(assistantMessage.querySelector(".message-state-header")).toBeNull();
+    const userContent = userMessage.querySelector(".message-content");
+    const userActions = userMessage.querySelector(".message-actions");
+    expect(userContent).toBeTruthy();
+    expect(userActions?.parentElement).toBe(userMessage);
+    expect(userContent?.contains(userActions)).toBe(false);
+    expect(
+      within(assistantMessage as HTMLElement).getByRole("button", { name: "复制" }),
+    ).toBeTruthy();
+    expect(
+      within(assistantMessage as HTMLElement).getByRole("button", { name: "有帮助" }),
+    ).toBeTruthy();
+    expect(
+      within(assistantMessage as HTMLElement).getByRole("button", { name: "没有帮助" }),
+    ).toBeTruthy();
+    expect(composer.contains(screen.getByLabelText("后续消息模型"))).toBe(true);
+    expect(composer.contains(screen.getByLabelText("后续消息思考强度"))).toBe(true);
+    expect(within(rail).getByRole("heading", { name: "输出内容" })).toBeTruthy();
+    expect(within(rail).getByRole("heading", { name: "来源" })).toBeTruthy();
+    expect(within(rail).getByRole("heading", { name: "本次运行" })).toBeTruthy();
   });
 
   it("replays rich Items for the selected historical Run without exposing raw reasoning", async () => {

@@ -1,4 +1,5 @@
 import type {
+  Artifact,
   Attachment,
   BillingOverview,
   BrowserSessionDescriptor,
@@ -6,13 +7,13 @@ import type {
   ChatEvent,
   ConversationSnapshot,
   ConversationSummary,
-  DesktopEnvironment,
   DeviceSession,
   LocalWebSearchProviderRuntimeState,
   LocalWebSearchSettingsSelection,
   LocalWebSearchSettingsState,
   McpServerAuthorizationState,
   McpServerConfig,
+  MemoryKind,
   Message,
   ModelCatalogEntry,
   ModelServiceSettingsUpdate,
@@ -36,9 +37,11 @@ import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/mode
 import {
   ArrowClockwise,
   ArrowUp,
+  Brain,
   CaretDown,
   ChatCircle,
   CheckCircle,
+  Copy,
   Desktop,
   DeviceMobile,
   DownloadSimple,
@@ -51,6 +54,7 @@ import {
   Moon,
   Paperclip,
   PaperPlaneTilt,
+  PencilSimple,
   Plus,
   QrCode,
   Receipt,
@@ -59,12 +63,14 @@ import {
   Sparkle,
   Sun,
   TerminalWindow,
+  ThumbsDown,
+  ThumbsUp,
   UserCircle,
   X,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Navigate,
@@ -93,6 +99,7 @@ const chatKeys = {
 const accountKey = ["account", "state"] as const;
 const billingKey = ["billing"] as const;
 const themeStorageKey = "openerx.theme";
+const defaultModelStorageKey = "openerx.defaultModelRef";
 
 type ThemePreference = "system" | "dark" | "light";
 type WorkspaceAccessChoice = "read_only" | "read_write";
@@ -129,6 +136,14 @@ function initialThemePreference(): ThemePreference {
     return isThemePreference(saved) ? saved : "system";
   } catch {
     return "system";
+  }
+}
+
+function initialDefaultModelRef(): string {
+  try {
+    return window.localStorage.getItem(defaultModelStorageKey) || "platform/byok";
+  } catch {
+    return "platform/byok";
   }
 }
 
@@ -191,6 +206,20 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   xhigh: "超高",
   max: "最大",
 };
+
+type MemoryOverrideChoice = "inherit" | "on" | "off";
+
+function memoryOverrideChoice(value: boolean | null | undefined): MemoryOverrideChoice {
+  if (value === true) return "on";
+  if (value === false) return "off";
+  return "inherit";
+}
+
+function memoryOverrideValue(value: MemoryOverrideChoice): boolean | null {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  return null;
+}
 
 function modelThinkingLevels(model: ModelCatalogEntry): ThinkingLevel[] {
   return model.thinkingLevels ?? ["off"];
@@ -447,6 +476,27 @@ function skillDescription(skill: SkillInstallation): string {
 
 function userFacingError(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message.includes("BYOK_API_KEY_REQUIRED") || message.includes("BYOK_NOT_CONFIGURED")) {
+    return "请先在“设置 → 模型”中配置并保存 OpenAI-compatible API。";
+  }
+  if (message.includes("BYOK_CONNECTION_FAILED:401")) {
+    return "API Key 无效或已过期，请在提供商控制台重新生成后再试。";
+  }
+  if (message.includes("BYOK_CONNECTION_FAILED:403")) {
+    return "API Key 没有调用该模型的权限，请检查提供商授权。";
+  }
+  if (message.includes("BYOK_CONNECTION_FAILED:404")) {
+    return "API 地址或模型 ID 不存在，请检查 Base URL 和模型 ID。";
+  }
+  if (message.includes("BYOK_CONNECTION_FAILED:429")) {
+    return "API 配额不足或请求过于频繁，请检查余额后重试。";
+  }
+  if (message.includes("BYOK_PRIVATE_NETWORK_FORBIDDEN")) {
+    return "该远程 API 地址解析到了内网或系统保留地址，已为安全起见阻止连接。";
+  }
+  if (message.includes("BYOK_INSECURE_REMOTE_URL")) {
+    return "远程 BYOK 地址必须使用 HTTPS；本机 localhost 可使用 HTTP。";
+  }
   if (message.includes("PI_MODEL_NOT_CONFIGURED")) {
     return "默认模型暂时未就绪，OpenerX 正在自动恢复；请稍后重试。";
   }
@@ -509,17 +559,45 @@ function withUiTimeout<T>(promise: Promise<T>, timeoutMs = 8_000): Promise<T> {
   });
 }
 
-function focusSection(sectionId: string): void {
-  const section = document.getElementById(sectionId);
-  if (!(section instanceof HTMLElement)) return;
-  if (section instanceof HTMLDetailsElement) section.open = true;
-  section.scrollIntoView?.({ behavior: "smooth", block: "start" });
-  window.requestAnimationFrame(() => section.focus({ preventScroll: true }));
+function scrollMessageListToEnd(
+  messageList: HTMLElement | null,
+  behavior: ScrollBehavior = "auto",
+): void {
+  if (!messageList) return;
+  if (typeof messageList.scrollTo === "function") {
+    messageList.scrollTo({ top: messageList.scrollHeight, behavior });
+    return;
+  }
+  messageList.scrollTop = messageList.scrollHeight;
 }
 
-function scrollDocumentToEnd(behavior: ScrollBehavior = "auto"): void {
-  const scrollingElement = document.scrollingElement ?? document.documentElement;
-  window.scrollTo({ top: scrollingElement.scrollHeight, behavior });
+function messageTimestamp(value: string): string {
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return "";
+  const now = new Date();
+  const sameDay =
+    instant.getFullYear() === now.getFullYear() &&
+    instant.getMonth() === now.getMonth() &&
+    instant.getDate() === now.getDate();
+  const date = sameDay
+    ? "今天"
+    : new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(instant);
+  const time = new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(instant);
+  return `${date} ${time}`;
+}
+
+function elapsedTime(startedAt: string, completedAt: string | null): string | null {
+  if (!completedAt) return null;
+  const milliseconds = Date.parse(completedAt) - Date.parse(startedAt);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return null;
+  const seconds = Math.max(1, Math.round(milliseconds / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
 }
 
 function trapFocus(event: React.KeyboardEvent<HTMLElement>): void {
@@ -546,6 +624,7 @@ function ConfirmDialog({
   description,
   confirmLabel,
   pending = false,
+  children,
   onCancel,
   onConfirm,
 }: {
@@ -553,6 +632,7 @@ function ConfirmDialog({
   description: string;
   confirmLabel: string;
   pending?: boolean;
+  children?: ReactNode;
   onCancel: () => void;
   onConfirm: () => void;
 }): React.JSX.Element {
@@ -584,6 +664,7 @@ function ConfirmDialog({
       <div>
         <strong>{title}</strong>
         <p>{description}</p>
+        {children}
       </div>
       <div className="confirmation-dialog-actions">
         <button ref={cancelButtonRef} type="button" onClick={onCancel}>
@@ -675,12 +756,16 @@ function AttachmentCard({
 
 function Composer({
   conversationId,
+  conversationSnapshot,
   onOpenContext,
   contextOpen = false,
+  defaultModelRef = automaticModelRef,
 }: {
   conversationId?: string;
+  conversationSnapshot?: ConversationSnapshot;
   onOpenContext?: () => void;
   contextOpen?: boolean;
+  defaultModelRef?: string;
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const [skillInstallationId, setSkillInstallationId] = useState("");
@@ -722,12 +807,96 @@ function Composer({
   const models = useQuery({
     queryKey: ["models", "catalog"],
     queryFn: () => window.openerx.listModels(),
-    enabled: !conversationId,
     retry: false,
   });
+  const globalMemorySettings = useQuery({
+    queryKey: ["memory", "settings"],
+    queryFn: () => window.openerx.getMemorySettings(),
+    retry: false,
+  });
+  const conversationMemorySettings = useQuery({
+    queryKey: ["memory", "conversation-settings", conversationId],
+    queryFn: () =>
+      window.openerx.getConversationMemorySettings({ conversationId: conversationId ?? "" }),
+    enabled: Boolean(conversationId),
+    retry: false,
+  });
+  const updateConversationMemorySettings = useMutation({
+    mutationFn: (input: { useMemories?: boolean | null; generateMemories?: boolean | null }) => {
+      if (!conversationId) throw new Error("CONVERSATION_REQUIRED");
+      return window.openerx.updateConversationMemorySettings({ conversationId, ...input });
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(
+        ["memory", "conversation-settings", updated.conversationId],
+        updated,
+      );
+    },
+  });
+  const conversation = conversationSnapshot?.conversation;
+  const compatibleConversationModels = conversation
+    ? models.data?.filter(
+        ({ modelRef }) =>
+          (modelRef === "platform/byok") === (conversation.selectedModelRef === "platform/byok"),
+      )
+    : undefined;
+  const selectedConversationModel = compatibleConversationModels?.find(
+    ({ modelRef }) => modelRef === conversation?.selectedModelRef,
+  );
+  const conversationThinkingLevels = selectedConversationModel
+    ? modelThinkingLevels(selectedConversationModel)
+    : conversation
+      ? [conversation.thinkingLevel]
+      : [defaultThinkingLevel];
+  const selectConversationModel = useMutation({
+    mutationFn: async (modelRef: string) => {
+      if (!conversation) throw new Error("CONVERSATION_REQUIRED");
+      const updated = await window.openerx.selectConversationModel({
+        conversationId: conversation.id,
+        modelRef,
+      });
+      const nextModel = models.data?.find((model) => model.modelRef === modelRef);
+      if (!nextModel) return updated;
+      const levels = modelThinkingLevels(nextModel);
+      if (levels.includes(updated.thinkingLevel)) return updated;
+      return await window.openerx.selectConversationThinkingLevel({
+        conversationId: conversation.id,
+        thinkingLevel: preferredThinkingLevel(levels),
+      });
+    },
+    onSuccess: (updated) => {
+      if (!conversation) return;
+      queryClient.setQueryData<ConversationSnapshot>(
+        chatKeys.conversation(conversation.id),
+        (current) => (current ? { ...current, conversation: updated } : current),
+      );
+    },
+  });
+  const selectConversationThinking = useMutation({
+    mutationFn: async (nextThinkingLevel: ThinkingLevel) => {
+      if (!conversation) throw new Error("CONVERSATION_REQUIRED");
+      return await window.openerx.selectConversationThinkingLevel({
+        conversationId: conversation.id,
+        thinkingLevel: nextThinkingLevel,
+      });
+    },
+    onSuccess: (updated) => {
+      if (!conversation) return;
+      queryClient.setQueryData<ConversationSnapshot>(
+        chatKeys.conversation(conversation.id),
+        (current) => (current ? { ...current, conversation: updated } : current),
+      );
+    },
+  });
   const newConversationModel =
+    models.data?.find(
+      ({ modelRef, status }) => modelRef === defaultModelRef && status === "available",
+    ) ??
     models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
-    models.data?.find(({ status }) => status === "available");
+    models.data?.find(({ status }) => status === "available") ??
+    models.data?.[0];
+  const newConversationModelRequiresConfiguration =
+    !conversationId && newConversationModel?.status === "unavailable";
   const newConversationThinkingLevels = useMemo(
     () =>
       newConversationModel ? modelThinkingLevels(newConversationModel) : [defaultThinkingLevel],
@@ -749,7 +918,9 @@ function Composer({
         conversationId: conversationId ?? null,
         text,
         idempotencyKey: idempotencyKey("send"),
-        ...(!conversationId ? { thinkingLevel } : {}),
+        ...(!conversationId
+          ? { thinkingLevel, modelRef: newConversationModel?.modelRef ?? defaultModelRef }
+          : {}),
         ...(pendingFiles.length > 0 ? { personalFileIds: pendingFiles.map(({ id }) => id) } : {}),
         ...(skillInstallationId ? { skillInstallationId } : {}),
       }),
@@ -772,7 +943,9 @@ function Composer({
       onSubmit={(event) => {
         event.preventDefault();
         const text = draft.trim();
-        if (text && !send.isPending) send.mutate(text);
+        if (text && !send.isPending && !newConversationModelRequiresConfiguration) {
+          send.mutate(text);
+        }
       }}
     >
       <label htmlFor={`message-${conversationId ?? "new"}`}>发送消息</label>
@@ -801,7 +974,9 @@ function Composer({
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             const text = draft.trim();
-            if (text && !send.isPending) send.mutate(text);
+            if (text && !send.isPending && !newConversationModelRequiresConfiguration) {
+              send.mutate(text);
+            }
           }
         }}
       />
@@ -838,6 +1013,137 @@ function Composer({
               <CaretDown size={13} weight="bold" aria-hidden="true" />
             </div>
           ) : null}
+          {conversation ? (
+            <>
+              <div
+                className="composer-select composer-model-select"
+                title={
+                  selectedConversationModel
+                    ? `${modelCapabilities(selectedConversationModel)} · 上下文 ${selectedConversationModel.contextWindow.toLocaleString()}`
+                    : undefined
+                }
+              >
+                <span className="composer-select-label">
+                  {selectedConversationModel?.displayName ?? "后续消息模型"}
+                </span>
+                <select
+                  aria-label="后续消息模型"
+                  value={conversation.selectedModelRef}
+                  disabled={selectConversationModel.isPending}
+                  onChange={(event) => selectConversationModel.mutate(event.target.value)}
+                >
+                  {(compatibleConversationModels ?? []).map((model) => (
+                    <option
+                      key={model.modelRef}
+                      value={model.modelRef}
+                      disabled={model.status !== "available"}
+                    >
+                      {model.displayName}
+                    </option>
+                  ))}
+                </select>
+                <CaretDown size={13} weight="bold" aria-hidden="true" />
+              </div>
+              <div className="composer-select">
+                <SlidersHorizontal size={15} weight="regular" />
+                <span className="composer-select-label">
+                  思考 · {thinkingLevelLabels[conversation.thinkingLevel]}
+                </span>
+                <select
+                  aria-label="后续消息思考强度"
+                  value={conversation.thinkingLevel}
+                  disabled={selectConversationThinking.isPending || !selectedConversationModel}
+                  onChange={(event) =>
+                    selectConversationThinking.mutate(event.target.value as ThinkingLevel)
+                  }
+                >
+                  {!conversationThinkingLevels.includes(conversation.thinkingLevel) ? (
+                    <option value={conversation.thinkingLevel} disabled>
+                      {thinkingLevelLabels[conversation.thinkingLevel]}
+                    </option>
+                  ) : null}
+                  {conversationThinkingLevels.map((level) => (
+                    <option value={level} key={level}>
+                      {thinkingLevelLabels[level]}
+                    </option>
+                  ))}
+                </select>
+                <CaretDown size={13} weight="bold" aria-hidden="true" />
+              </div>
+              <div
+                className="composer-select"
+                title={
+                  globalMemorySettings.data?.memoriesEnabled
+                    ? "仅覆盖当前对话；不会修改全局记忆设置。"
+                    : "请先在设置中启用长期记忆。"
+                }
+              >
+                <Brain size={15} weight="regular" />
+                <span className="composer-select-label">
+                  记忆 ·
+                  {conversationMemorySettings.data?.useMemories === true
+                    ? "使用"
+                    : conversationMemorySettings.data?.useMemories === false
+                      ? "不使用"
+                      : "默认"}
+                </span>
+                <select
+                  aria-label="当前对话使用记忆"
+                  value={memoryOverrideChoice(conversationMemorySettings.data?.useMemories)}
+                  disabled={
+                    !globalMemorySettings.data?.memoriesEnabled ||
+                    conversationMemorySettings.isPending ||
+                    updateConversationMemorySettings.isPending
+                  }
+                  onChange={(event) =>
+                    updateConversationMemorySettings.mutate({
+                      useMemories: memoryOverrideValue(event.target.value as MemoryOverrideChoice),
+                    })
+                  }
+                >
+                  <option value="inherit">跟随全局</option>
+                  <option value="on">使用记忆</option>
+                  <option value="off">不使用记忆</option>
+                </select>
+                <CaretDown size={13} weight="bold" aria-hidden="true" />
+              </div>
+              <div
+                className="composer-select"
+                title="控制当前对话能否在自动生成开放后贡献未来记忆；全局设置仍是硬开关。"
+              >
+                <Sparkle size={15} weight="regular" />
+                <span className="composer-select-label">
+                  学习 ·
+                  {conversationMemorySettings.data?.generateMemories === true
+                    ? "允许"
+                    : conversationMemorySettings.data?.generateMemories === false
+                      ? "不允许"
+                      : "默认"}
+                </span>
+                <select
+                  aria-label="当前对话贡献未来记忆"
+                  value={memoryOverrideChoice(conversationMemorySettings.data?.generateMemories)}
+                  disabled={
+                    !globalMemorySettings.data?.memoriesEnabled ||
+                    conversationMemorySettings.isPending ||
+                    updateConversationMemorySettings.isPending
+                  }
+                  onChange={(event) =>
+                    updateConversationMemorySettings.mutate({
+                      generateMemories: memoryOverrideValue(
+                        event.target.value as MemoryOverrideChoice,
+                      ),
+                    })
+                  }
+                >
+                  <option value="inherit">跟随全局</option>
+                  <option value="on">允许贡献</option>
+                  <option value="off">不允许贡献</option>
+                </select>
+                <CaretDown size={13} weight="bold" aria-hidden="true" />
+              </div>
+            </>
+          ) : null}
           <div className="composer-select">
             <Sparkle size={15} weight="regular" />
             <span className="composer-select-label">
@@ -864,6 +1170,7 @@ function Composer({
             <button
               type="button"
               className={`composer-context ${contextOpen ? "is-active" : ""}`}
+              aria-label="切换上下文"
               onClick={onOpenContext}
             >
               <SidebarSimple size={15} weight="regular" />
@@ -876,7 +1183,7 @@ function Composer({
           type="submit"
           className="primary-action"
           aria-label="发送"
-          disabled={!draft.trim() || send.isPending}
+          disabled={!draft.trim() || send.isPending || newConversationModelRequiresConfiguration}
         >
           <PaperPlaneTilt size={17} weight="fill" />
           <span>{send.isPending ? "发送中…" : "发送"}</span>
@@ -892,9 +1199,27 @@ function Composer({
             {userFacingError(send.error, "消息暂时未能发送，请重试。")}
           </p>
         ) : null}
+        {newConversationModelRequiresConfiguration ? (
+          <p className="inline-error">
+            使用前需要配置 OpenAI-compatible API。请前往
+            <NavLink to="/settings/account">设置 → 模型</NavLink>。
+          </p>
+        ) : null}
         {chooseFiles.error ? (
           <p className="inline-error">
             {userFacingError(chooseFiles.error, "暂时无法添加文件，请重新选择。")}
+          </p>
+        ) : null}
+        {selectConversationModel.error ||
+        selectConversationThinking.error ||
+        updateConversationMemorySettings.error ? (
+          <p className="inline-error">
+            {userFacingError(
+              selectConversationModel.error ??
+                selectConversationThinking.error ??
+                updateConversationMemorySettings.error,
+              "当前对话设置暂时没有更新，请重试。",
+            )}
           </p>
         ) : null}
       </div>
@@ -902,25 +1227,32 @@ function Composer({
   );
 }
 
-function NewChat(): React.JSX.Element {
+function NewChat({ defaultModelRef }: { defaultModelRef: string }): React.JSX.Element {
   const models = useQuery({
     queryKey: ["models", "catalog"],
     queryFn: () => window.openerx.listModels(),
     retry: false,
   });
   const defaultModel =
+    models.data?.find(
+      ({ modelRef, status }) => modelRef === defaultModelRef && status === "available",
+    ) ??
     models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
-    models.data?.find(({ status }) => status === "available");
+    models.data?.find(({ status }) => status === "available") ??
+    models.data?.[0];
   const suggestionThinkingLevel = defaultModel
     ? preferredThinkingLevel(modelThinkingLevels(defaultModel))
     : defaultThinkingLevel;
+  const modelRequiresConfiguration = defaultModel?.status === "unavailable";
   return (
     <main className="new-chat-page">
       <header className="new-chat-topbar">
         <span className="topbar-product">新任务</span>
         <span className="topbar-state">
-          {defaultModel?.displayName ??
-            (models.isPending ? "正在连接默认模型" : "默认模型自动可用")}
+          {defaultModel?.status === "unavailable"
+            ? "需要配置 API"
+            : (defaultModel?.displayName ??
+              (models.isPending ? "正在读取模型配置" : "需要配置 API"))}
         </span>
       </header>
       <section className="welcome" aria-labelledby="welcome-title">
@@ -928,12 +1260,27 @@ function NewChat(): React.JSX.Element {
         <h1 id="welcome-title">今天想完成什么？</h1>
         <p>描述目标，或附上文件；已授权范围内自动执行，越出范围或产生高影响副作用时再确认。</p>
       </section>
-      <section className="suggestion-grid" aria-label="常用任务建议">
-        {suggestions.map((suggestion) => (
-          <Suggestion key={suggestion} text={suggestion} thinkingLevel={suggestionThinkingLevel} />
-        ))}
-      </section>
-      <Composer />
+      {modelRequiresConfiguration ? (
+        <section className="settings-card" aria-label="配置模型 API">
+          <h2>先配置模型 API</h2>
+          <p>此安装包默认使用 BYOK，不依赖 OpenerX 服务器。配置 API Key 后即可开始任务。</p>
+          <NavLink className="primary-link" to="/settings/account">
+            前往设置 → 模型
+          </NavLink>
+        </section>
+      ) : (
+        <section className="suggestion-grid" aria-label="常用任务建议">
+          {suggestions.map((suggestion) => (
+            <Suggestion
+              key={suggestion}
+              text={suggestion}
+              thinkingLevel={suggestionThinkingLevel}
+              modelRef={defaultModel?.modelRef ?? defaultModelRef}
+            />
+          ))}
+        </section>
+      )}
+      <Composer defaultModelRef={defaultModelRef} />
     </main>
   );
 }
@@ -941,9 +1288,11 @@ function NewChat(): React.JSX.Element {
 function Suggestion({
   text,
   thinkingLevel,
+  modelRef,
 }: {
   text: string;
   thinkingLevel: ThinkingLevel;
+  modelRef: string;
 }): React.JSX.Element {
   const navigate = useNavigate();
   const send = useMutation({
@@ -951,6 +1300,7 @@ function Suggestion({
       window.openerx.sendMessage({
         conversationId: null,
         text,
+        modelRef,
         thinkingLevel,
         idempotencyKey: idempotencyKey("suggestion"),
       }),
@@ -1598,6 +1948,7 @@ function MessageCard({
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.parts[0]?.text ?? "");
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<"positive" | "negative" | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const conversationId = message.conversationId;
   useEffect(() => {
@@ -1657,6 +2008,7 @@ function MessageCard({
     retry: false,
   });
   const execution: UsageRecord | undefined = usageRecords.data?.at(-1);
+  const showMessageStatus = message.status !== "completed";
 
   return (
     <article
@@ -1664,130 +2016,153 @@ function MessageCard({
       data-message-status={message.status}
       aria-busy={running || undefined}
     >
-      <header>
-        <strong>{message.role === "user" ? "你" : "OpenerX"}</strong>
-        <span className={`message-status status-${message.status}`}>
-          {messageStatusLabel[message.status]}
-        </span>
-      </header>
-      {attachments.length > 0 ? (
-        <ul className="message-attachments" aria-label="消息附件">
-          {attachments.map((attachment) => {
-            const file = filesById.get(attachment.personalFileId);
-            return file ? (
-              <AttachmentCard key={attachment.id} file={file} placement="message" />
-            ) : (
-              <li
-                key={attachment.id}
-                className="attachment-card attachment-card-message attachment-card-missing"
-              >
-                <div className="attachment-visual" aria-hidden="true">
-                  <FileText size={24} weight="regular" />
-                </div>
-                <div className="attachment-copy">
-                  <strong>附件</strong>
-                  <span>正在读取…</span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
-      {editing ? (
-        <form
-          className="edit-message"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (editText.trim()) edit.mutate();
-          }}
-        >
-          <textarea
-            ref={editTextareaRef}
-            aria-label="编辑消息内容"
-            value={editText}
-            onChange={(event) => setEditText(event.target.value)}
-            rows={4}
-          />
-          <p className="field-help">保存会创建一个新分支，当前分支和原消息不会被覆盖。</p>
-          <div>
-            <button type="button" onClick={() => setEditing(false)}>
-              取消
-            </button>
-            <button type="submit" disabled={!editText.trim() || edit.isPending}>
-              {edit.isPending ? "正在创建…" : "保存并新建分支"}
-            </button>
+      <div className="message-content">
+        {showMessageStatus ? (
+          <header className="message-state-header">
+            <strong>{message.role === "user" ? "你" : "OpenerX"}</strong>
+            <span className={`message-status status-${message.status}`}>
+              {messageStatusLabel[message.status]}
+            </span>
+          </header>
+        ) : null}
+        {attachments.length > 0 ? (
+          <ul className="message-attachments" aria-label="消息附件">
+            {attachments.map((attachment) => {
+              const file = filesById.get(attachment.personalFileId);
+              return file ? (
+                <AttachmentCard key={attachment.id} file={file} placement="message" />
+              ) : (
+                <li
+                  key={attachment.id}
+                  className="attachment-card attachment-card-message attachment-card-missing"
+                >
+                  <div className="attachment-visual" aria-hidden="true">
+                    <FileText size={24} weight="regular" />
+                  </div>
+                  <div className="attachment-copy">
+                    <strong>附件</strong>
+                    <span>正在读取…</span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+        {editing ? (
+          <form
+            className="edit-message"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (editText.trim()) edit.mutate();
+            }}
+          >
+            <textarea
+              ref={editTextareaRef}
+              aria-label="编辑消息内容"
+              value={editText}
+              onChange={(event) => setEditText(event.target.value)}
+              rows={4}
+            />
+            <p className="field-help">保存会创建一个新分支，当前分支和原消息不会被覆盖。</p>
+            <div>
+              <button type="button" onClick={() => setEditing(false)}>
+                取消
+              </button>
+              <button type="submit" disabled={!editText.trim() || edit.isPending}>
+                {edit.isPending ? "正在创建…" : "保存并新建分支"}
+              </button>
+            </div>
+          </form>
+        ) : message.role === "assistant" ? (
+          <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
+            <div className="markdown-body">
+              {text ? (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    a: ({ href, children }) => (
+                      <a href={href} target="_blank" rel="noreferrer">
+                        {children}
+                      </a>
+                    ),
+                    pre: ({ children }) => (
+                      <div className="code-block">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            const code = event.currentTarget.nextElementSibling?.textContent ?? "";
+                            void copyText(code, "代码已复制到剪贴板。");
+                          }}
+                        >
+                          {actionNotice === "代码已复制到剪贴板。" ? "已复制" : "复制代码"}
+                        </button>
+                        <pre>{children}</pre>
+                      </div>
+                    ),
+                  }}
+                >
+                  {text}
+                </ReactMarkdown>
+              ) : (
+                <p className="thinking">正在思考…</p>
+              )}
+            </div>
+            {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
           </div>
-        </form>
-      ) : message.role === "assistant" ? (
-        <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
-          <div className="markdown-body">
-            {text ? (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  a: ({ href, children }) => (
-                    <a href={href} target="_blank" rel="noreferrer">
-                      {children}
-                    </a>
-                  ),
-                  pre: ({ children }) => (
-                    <div className="code-block">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          const code = event.currentTarget.nextElementSibling?.textContent ?? "";
-                          void copyText(code, "代码已复制到剪贴板。");
-                        }}
-                      >
-                        {actionNotice === "代码已复制到剪贴板。" ? "已复制" : "复制代码"}
-                      </button>
-                      <pre>{children}</pre>
-                    </div>
-                  ),
-                }}
-              >
-                {text}
-              </ReactMarkdown>
-            ) : (
-              <p className="thinking">正在思考…</p>
-            )}
-          </div>
-          {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
-        </div>
-      ) : (
-        <p className="user-text">{text}</p>
-      )}
-      {message.errorCode ? (
-        <p className="inline-error" role="alert">
-          {messageFailureLabel(message.errorCode)}
-        </p>
-      ) : null}
-      {usage.data && usage.data.records > 0 ? (
-        <div className="usage-line" role="status" aria-label="消息 Token 用量">
-          <span>输入 {tokenValue(usage.data.inputTokens)}</span>
-          <span>缓存 {tokenValue(usage.data.cachedInputTokens)}</span>
-          <span>输出 {tokenValue(usage.data.outputTokens)}</span>
-          <span>推理 {tokenValue(usage.data.reasoningTokens)}</span>
-          <strong>总计 {tokenValue(usage.data.totalTokens)}</strong>
-        </div>
-      ) : null}
-      {execution ? (
-        <div className="model-execution" role="status" aria-label="消息模型执行详情">
-          <span>选择 {execution.selectedModelRef}</span>
-          <span>实际 {execution.effectiveModelRef}</span>
-          {execution.fallbackReason ? <strong>降级原因：{execution.fallbackReason}</strong> : null}
-        </div>
-      ) : null}
+        ) : (
+          <p className="user-text">{text}</p>
+        )}
+        {message.errorCode ? (
+          <p className="inline-error" role="alert">
+            {messageFailureLabel(message.errorCode)}
+          </p>
+        ) : null}
+        {(usage.data && usage.data.records > 0) || execution ? (
+          <details className="message-diagnostics">
+            <summary>运行详情</summary>
+            {usage.data && usage.data.records > 0 ? (
+              <div className="usage-line" role="status" aria-label="消息 Token 用量">
+                <span>输入 {tokenValue(usage.data.inputTokens)}</span>
+                <span>缓存 {tokenValue(usage.data.cachedInputTokens)}</span>
+                <span>输出 {tokenValue(usage.data.outputTokens)}</span>
+                <span>推理 {tokenValue(usage.data.reasoningTokens)}</span>
+                <strong>总计 {tokenValue(usage.data.totalTokens)}</strong>
+              </div>
+            ) : null}
+            {execution ? (
+              <div className="model-execution" role="status" aria-label="消息模型执行详情">
+                <span>选择 {execution.selectedModelRef}</span>
+                <span>实际 {execution.effectiveModelRef}</span>
+                {execution.fallbackReason ? (
+                  <strong>降级原因：{execution.fallbackReason}</strong>
+                ) : null}
+              </div>
+            ) : null}
+          </details>
+        ) : null}
+      </div>
       {!editing ? (
         <footer className="message-actions">
           {text ? (
-            <button type="button" onClick={() => void copyText(text, "消息已复制到剪贴板。")}>
-              {actionNotice === "消息已复制到剪贴板。" ? "已复制" : "复制"}
+            <button
+              type="button"
+              className="message-action-icon"
+              aria-label="复制"
+              title={actionNotice === "消息已复制到剪贴板。" ? "已复制" : "复制"}
+              onClick={() => void copyText(text, "消息已复制到剪贴板。")}
+            >
+              <Copy size={16} weight="regular" />
             </button>
           ) : null}
           {message.role === "user" ? (
-            <button type="button" onClick={() => setEditing(true)}>
-              编辑并分支
+            <button
+              type="button"
+              className="message-action-icon"
+              aria-label="编辑并分支"
+              title="编辑并创建新分支"
+              onClick={() => setEditing(true)}
+            >
+              <PencilSimple size={16} weight="regular" />
             </button>
           ) : null}
           {running ? (
@@ -1796,18 +2171,44 @@ function MessageCard({
             </button>
           ) : null}
           {message.role === "assistant" && !running ? (
-            <button
-              type="button"
-              onClick={() => regenerate.mutate()}
-              disabled={regenerate.isPending}
-              title="会创建新分支，当前回复不会被覆盖"
-            >
-              {regenerate.isPending
-                ? "正在创建分支…"
-                : message.status === "failed"
-                  ? "重试并新建分支"
-                  : "重新生成到新分支"}
-            </button>
+            <>
+              <button
+                type="button"
+                className={`message-action-icon ${feedback === "positive" ? "is-selected" : ""}`}
+                aria-label="有帮助"
+                aria-pressed={feedback === "positive"}
+                title="有帮助"
+                onClick={() => {
+                  setFeedback((current) => (current === "positive" ? null : "positive"));
+                  setActionNotice("感谢反馈。");
+                }}
+              >
+                <ThumbsUp size={16} weight={feedback === "positive" ? "fill" : "regular"} />
+              </button>
+              <button
+                type="button"
+                className={`message-action-icon ${feedback === "negative" ? "is-selected" : ""}`}
+                aria-label="没有帮助"
+                aria-pressed={feedback === "negative"}
+                title="没有帮助"
+                onClick={() => {
+                  setFeedback((current) => (current === "negative" ? null : "negative"));
+                  setActionNotice("已记录反馈。");
+                }}
+              >
+                <ThumbsDown size={16} weight={feedback === "negative" ? "fill" : "regular"} />
+              </button>
+              <button
+                type="button"
+                className="message-action-icon"
+                aria-label={message.status === "failed" ? "重试并新建分支" : "重新生成到新分支"}
+                onClick={() => regenerate.mutate()}
+                disabled={regenerate.isPending}
+                title="会创建新分支，当前回复不会被覆盖"
+              >
+                <ArrowClockwise size={16} weight="regular" />
+              </button>
+            </>
           ) : null}
         </footer>
       ) : null}
@@ -1923,14 +2324,20 @@ function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
   const shouldOpen = ["running", "cancelling", "waiting_for_permission", "failed"].includes(
     workItem.status,
   );
+  const elapsed = elapsedTime(workItem.createdAt, workItem.completedAt);
+  const showTitle = elapsed && workItem.title !== "对话轮次";
+  const showStatus = workItem.status !== "completed";
   return (
     <details className="tool-activity" open={shouldOpen || undefined}>
       <summary>
         <TerminalWindow size={17} />
-        <strong>{workItem.title}</strong>
-        <span className={`tool-state tool-state-${workItem.status}`}>
-          {workItemStatusLabel[workItem.status]}
-        </span>
+        <strong>{elapsed ? `用时 ${elapsed}` : workItem.title}</strong>
+        {showTitle ? <span className="tool-activity-title">{workItem.title}</span> : null}
+        {showStatus ? (
+          <span className={`tool-state tool-state-${workItem.status}`}>
+            {workItemStatusLabel[workItem.status]}
+          </span>
+        ) : null}
       </summary>
       {detail.isPending ? <p className="muted-copy">正在读取工具活动…</p> : null}
       {value ? (
@@ -2229,10 +2636,12 @@ function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
 
 function ConversationToolbar({
   snapshot,
-  onToggleContext,
+  railOpen,
+  onToggleRail,
 }: {
   snapshot: ConversationSnapshot;
-  onToggleContext: () => void;
+  railOpen: boolean;
+  onToggleRail: () => void;
 }): React.JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -2240,6 +2649,7 @@ function ConversationToolbar({
   const [renaming, setRenaming] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [forgetSourceMemories, setForgetSourceMemories] = useState(false);
   const [nextTitle, setNextTitle] = useState(conversation.title);
   const [selectedBranchId, setSelectedBranchId] = useState(conversation.activeBranchId);
   const [toolbarNotice, setToolbarNotice] = useState<string | null>(null);
@@ -2282,7 +2692,11 @@ function ConversationToolbar({
     },
   });
   const remove = useMutation({
-    mutationFn: () => window.openerx.deleteConversation({ conversationId: conversation.id }),
+    mutationFn: () =>
+      window.openerx.deleteConversation({
+        conversationId: conversation.id,
+        forgetSourceMemories,
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["chat"] });
       navigate("/chat/new");
@@ -2300,128 +2714,23 @@ function ConversationToolbar({
     },
     onError: () => setSelectedBranchId(conversation.activeBranchId),
   });
-  const models = useQuery({
-    queryKey: ["models", "catalog"],
-    queryFn: () => window.openerx.listModels(),
-    retry: false,
-  });
   const usage = useQuery({
     queryKey: ["usage", "conversation", conversation.id],
     queryFn: () => window.openerx.getUsage({ conversationId: conversation.id }),
     retry: false,
   });
-  const selectModel = useMutation({
-    mutationFn: async (modelRef: string) => {
-      const updated = await window.openerx.selectConversationModel({
-        conversationId: conversation.id,
-        modelRef,
-      });
-      const nextModel = models.data?.find((model) => model.modelRef === modelRef);
-      if (!nextModel) return updated;
-      const levels = modelThinkingLevels(nextModel);
-      if (levels.includes(updated.thinkingLevel)) return updated;
-      return await window.openerx.selectConversationThinkingLevel({
-        conversationId: conversation.id,
-        thinkingLevel: preferredThinkingLevel(levels),
-      });
-    },
-    onSuccess: (updated) => {
-      queryClient.setQueryData<ConversationSnapshot>(
-        chatKeys.conversation(conversation.id),
-        (current) => (current ? { ...current, conversation: updated } : current),
-      );
-    },
-  });
-  const selectedModel = models.data?.find(
-    ({ modelRef }) => modelRef === conversation.selectedModelRef,
-  );
-  const supportedThinkingLevels = selectedModel
-    ? modelThinkingLevels(selectedModel)
-    : [conversation.thinkingLevel];
-  const selectThinkingLevel = useMutation({
-    mutationFn: (thinkingLevel: ThinkingLevel) =>
-      window.openerx.selectConversationThinkingLevel({
-        conversationId: conversation.id,
-        thinkingLevel,
-      }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData<ConversationSnapshot>(
-        chatKeys.conversation(conversation.id),
-        (current) => (current ? { ...current, conversation: updated } : current),
-      );
-      setToolbarNotice(`后续消息思考强度已设为${thinkingLevelLabels[updated.thinkingLevel]}。`);
-    },
-  });
-
   return (
     <header className="conversation-toolbar">
       <div className="conversation-heading">
-        <p className="eyebrow">{selectedModel?.displayName ?? "默认模型"}</p>
         <h1>{conversation.title}</h1>
       </div>
       <div className="toolbar-actions">
-        {models.data?.length ? (
-          <label>
-            后续消息模型
-            <select
-              aria-label="后续消息模型"
-              value={conversation.selectedModelRef}
-              onChange={(event) => selectModel.mutate(event.target.value)}
-              disabled={selectModel.isPending}
-            >
-              {models.data.map((model) => (
-                <option
-                  value={model.modelRef}
-                  key={model.modelRef}
-                  disabled={model.status !== "available"}
-                >
-                  {model.displayName} · {model.status}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <label>
-          思考强度
-          <select
-            aria-label="后续消息思考强度"
-            value={conversation.thinkingLevel}
-            onChange={(event) => selectThinkingLevel.mutate(event.target.value as ThinkingLevel)}
-            disabled={selectThinkingLevel.isPending || !selectedModel}
-          >
-            {!supportedThinkingLevels.includes(conversation.thinkingLevel) ? (
-              <option value={conversation.thinkingLevel} disabled>
-                {thinkingLevelLabels[conversation.thinkingLevel]} · 当前模型不支持
-              </option>
-            ) : null}
-            {supportedThinkingLevels.map((level) => (
-              <option value={level} key={level}>
-                {thinkingLevelLabels[level]}
-              </option>
-            ))}
-          </select>
-        </label>
-        {selectedModel ? (
-          <div className="model-details">
-            <span>{modelCapabilities(selectedModel)}</span>
-            <span>
-              思考{" "}
-              {modelThinkingLevels(selectedModel)
-                .map((level) => thinkingLevelLabels[level])
-                .join(" / ")}
-            </span>
-            <span>
-              上下文 {selectedModel.contextWindow.toLocaleString()} · 最大输出{" "}
-              {selectedModel.maxOutputTokens.toLocaleString()}
-            </span>
-            <strong>{selectedModel.priceSummary}</strong>
-          </div>
-        ) : null}
         <button
           type="button"
           className="toolbar-icon-button"
-          aria-label="切换上下文"
-          onClick={onToggleContext}
+          aria-label={railOpen ? "隐藏成果与来源" : "显示成果与来源"}
+          aria-pressed={railOpen}
+          onClick={onToggleRail}
         >
           <SidebarSimple size={17} weight="regular" />
         </button>
@@ -2497,6 +2806,7 @@ function ConversationToolbar({
               className="danger-action"
               onClick={() => {
                 setMoreOpen(false);
+                setForgetSourceMemories(false);
                 setConfirmingDelete(true);
               }}
             >
@@ -2540,22 +2850,26 @@ function ConversationToolbar({
             window.setTimeout(() => moreButtonRef.current?.focus(), 0);
           }}
           onConfirm={() => remove.mutate()}
-        />
+        >
+          <label className="confirmation-dialog-option">
+            <input
+              type="checkbox"
+              checked={forgetSourceMemories}
+              onChange={(event) => setForgetSourceMemories(event.target.checked)}
+            />
+            <span>
+              同时删除仅来源于此对话的长期记忆
+              <small>其他对话或手动创建的记忆不受影响。</small>
+            </span>
+          </label>
+        </ConfirmDialog>
       ) : null}
       <div className="toolbar-feedback" aria-live="polite">
         {toolbarNotice ? <p>{toolbarNotice}</p> : null}
-        {rename.error ||
-        archive.error ||
-        activate.error ||
-        selectModel.error ||
-        selectThinkingLevel.error ? (
+        {rename.error || archive.error || activate.error ? (
           <p className="inline-error">
             {userFacingError(
-              rename.error ??
-                archive.error ??
-                activate.error ??
-                selectModel.error ??
-                selectThinkingLevel.error,
+              rename.error ?? archive.error ?? activate.error,
               "对话操作暂时没有完成，请重试。",
             )}
           </p>
@@ -2570,6 +2884,106 @@ function ConversationToolbar({
   );
 }
 
+function ConversationRail({
+  artifacts,
+  files,
+  workItems,
+  onAddSource,
+  onClose,
+}: {
+  artifacts: Artifact[];
+  files: PersonalFile[];
+  workItems: WorkItem[];
+  onAddSource: () => void;
+  onClose: () => void;
+}): React.JSX.Element {
+  return (
+    <aside className="conversation-rail" aria-label="成果与来源">
+      <header className="conversation-rail-header">
+        <div>
+          <strong>成果与来源</strong>
+          <span>与回复并排查看</span>
+        </div>
+        <button type="button" className="icon-button" aria-label="隐藏成果与来源" onClick={onClose}>
+          <X size={17} weight="regular" />
+        </button>
+      </header>
+
+      <section className="rail-section" aria-labelledby="rail-outputs-title">
+        <div className="rail-section-heading">
+          <h2 id="rail-outputs-title">输出内容</h2>
+          <NavLink to="/files" aria-label="查看全部成果" title="查看全部成果">
+            <Plus size={17} weight="regular" />
+          </NavLink>
+        </div>
+        {artifacts.length > 0 ? (
+          <div className="rail-list">
+            {artifacts.slice(0, 6).map((artifact) => (
+              <NavLink className="rail-item" to="/files" key={artifact.id}>
+                <FolderSimple size={18} weight="regular" />
+                <span>
+                  <strong>{artifact.displayName}</strong>
+                  <small>
+                    {artifact.format.toUpperCase()} · v{artifact.currentVersion}
+                  </small>
+                </span>
+              </NavLink>
+            ))}
+          </div>
+        ) : (
+          <p className="rail-empty">创建的文件、报告和页面会出现在这里。</p>
+        )}
+      </section>
+
+      <section className="rail-section" aria-labelledby="rail-sources-title">
+        <div className="rail-section-heading">
+          <h2 id="rail-sources-title">来源</h2>
+          <button type="button" aria-label="添加来源" title="添加来源" onClick={onAddSource}>
+            <Plus size={17} weight="regular" />
+          </button>
+        </div>
+        {files.length > 0 ? (
+          <div className="rail-list">
+            {files.map((file) => (
+              <button className="rail-item" type="button" key={file.id} onClick={onAddSource}>
+                <FileText size={18} weight="regular" />
+                <span>
+                  <strong>{file.displayName}</strong>
+                  <small>{file.parseStatus === "ready" ? "已解析" : "处理中"}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <button type="button" className="rail-empty rail-empty-action" onClick={onAddSource}>
+            添加文件、工作区或其他上下文来源。
+          </button>
+        )}
+      </section>
+
+      <section className="rail-section rail-runs" aria-labelledby="rail-runs-title">
+        <div className="rail-section-heading">
+          <h2 id="rail-runs-title">本次运行</h2>
+          <span>{workItems.length}</span>
+        </div>
+        {workItems.slice(-4).map((workItem) => (
+          <div className="rail-run" key={workItem.id}>
+            <TerminalWindow size={17} weight="regular" />
+            <span>
+              <strong>{workItem.title}</strong>
+              <small>
+                {elapsedTime(workItem.createdAt, workItem.completedAt)
+                  ? `用时 ${elapsedTime(workItem.createdAt, workItem.completedAt)}`
+                  : workItemStatusLabel[workItem.status]}
+              </small>
+            </span>
+          </div>
+        ))}
+      </section>
+    </aside>
+  );
+}
+
 function ChatPage({
   contextOpen,
   onToggleContext,
@@ -2579,9 +2993,11 @@ function ChatPage({
 }): React.JSX.Element {
   const { conversationId = "" } = useParams();
   const messageListRef = useRef<HTMLElement>(null);
+  const messageListContentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(true);
   const previousConversationIdRef = useRef(conversationId);
   const [following, setFollowing] = useState(true);
+  const [railOpen, setRailOpen] = useState(true);
   const snapshot = useQuery({
     queryKey: chatKeys.conversation(conversationId),
     queryFn: () => window.openerx.getConversation({ conversationId }),
@@ -2591,6 +3007,10 @@ function ChatPage({
     queryKey: ["files", "conversation", conversationId],
     queryFn: () => window.openerx.listFiles({ conversationId }),
     enabled: Boolean(conversationId),
+  });
+  const artifacts = useQuery({
+    queryKey: ["artifacts"],
+    queryFn: () => window.openerx.listArtifacts(),
   });
   const ready = Boolean(snapshot.data);
   const hasRunningMessage =
@@ -2605,30 +3025,49 @@ function ChatPage({
     setFollowing(true);
   }, [conversationId]);
   useEffect(() => {
+    if (!ready) return;
+    const messageList = messageListRef.current;
+    if (!messageList) return;
     const updateFollowing = (): void => {
-      const scrollingElement = document.scrollingElement ?? document.documentElement;
       const distanceFromBottom =
-        scrollingElement.scrollHeight -
-        (scrollingElement.scrollTop + scrollingElement.clientHeight);
+        messageList.scrollHeight - (messageList.scrollTop + messageList.clientHeight);
       const next = distanceFromBottom <= 140;
       followingRef.current = next;
       setFollowing((current) => (current === next ? current : next));
     };
-    window.addEventListener("scroll", updateFollowing, { passive: true });
+    messageList.addEventListener("scroll", updateFollowing, { passive: true });
     updateFollowing();
-    return () => window.removeEventListener("scroll", updateFollowing);
-  }, []);
+    return () => messageList.removeEventListener("scroll", updateFollowing);
+  }, [ready]);
   useEffect(() => {
     if (!ready) return;
     const messageList = messageListRef.current;
-    if (!messageList || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
+    const messageListContent = messageListContentRef.current;
+    if (!messageList || !messageListContent) return;
+    let scheduledFrame: number | null = null;
+    const scheduleFollow = (): void => {
       if (!followingRef.current) return;
-      window.requestAnimationFrame(() => scrollDocumentToEnd());
+      if (scheduledFrame !== null) return;
+      scheduledFrame = window.requestAnimationFrame(() => {
+        scheduledFrame = null;
+        if (followingRef.current) scrollMessageListToEnd(messageList);
+      });
+    };
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleFollow);
+    resizeObserver?.observe(messageListContent);
+    const mutationObserver = new MutationObserver(scheduleFollow);
+    mutationObserver.observe(messageListContent, {
+      childList: true,
+      characterData: true,
+      subtree: true,
     });
-    observer.observe(messageList);
-    if (followingRef.current) window.requestAnimationFrame(() => scrollDocumentToEnd());
-    return () => observer.disconnect();
+    scheduleFollow();
+    return () => {
+      resizeObserver?.disconnect();
+      mutationObserver.disconnect();
+      if (scheduledFrame !== null) window.cancelAnimationFrame(scheduledFrame);
+    };
   }, [ready]);
   const workItems = useQuery({
     queryKey: ["tools", "work-items", conversationId],
@@ -2643,52 +3082,85 @@ function ChatPage({
   }
   const filesById = new Map((conversationFiles.data ?? []).map((file) => [file.id, file] as const));
   return (
-    <main className="conversation-page">
-      <ConversationToolbar snapshot={snapshot.data} onToggleContext={onToggleContext} />
-      <section
-        ref={messageListRef}
-        className="message-list"
-        aria-live="polite"
-        aria-atomic="false"
-        aria-relevant="additions text"
-        aria-label="对话消息"
-      >
-        {snapshot.data.messages.map((message) => (
-          <section className="message-stack" key={message.id}>
-            <MessageCard
-              message={message}
-              attachments={snapshot.data.attachments.filter(
-                ({ messageId }) => messageId === message.id,
-              )}
-              filesById={filesById}
-            />
-            {workItems.data
-              ?.filter((workItem) => workItem.messageId === message.id)
-              .map((workItem) => (
-                <ToolActivity key={workItem.id} workItem={workItem} />
-              ))}
-          </section>
-        ))}
-      </section>
-      {hasRunningMessage && !following ? (
-        <button
-          type="button"
-          className="jump-to-latest"
-          onClick={() => {
-            followingRef.current = true;
-            setFollowing(true);
-            scrollDocumentToEnd("smooth");
-          }}
+    <main className={`conversation-workspace ${railOpen ? "rail-is-open" : ""}`}>
+      <section className="conversation-page" aria-label="对话工作区">
+        <ConversationToolbar
+          snapshot={snapshot.data}
+          railOpen={railOpen}
+          onToggleRail={() => setRailOpen((open) => !open)}
+        />
+        <section
+          ref={messageListRef}
+          className="message-list"
+          aria-live="polite"
+          aria-atomic="false"
+          aria-relevant="additions text"
+          aria-label="对话消息"
         >
-          <CaretDown size={15} />
-          回到最新回复
-        </button>
+          <div ref={messageListContentRef} className="message-list-content">
+            {snapshot.data.messages.map((message) => {
+              const activities = (workItems.data ?? []).filter(
+                (workItem) => workItem.messageId === message.id,
+              );
+              return (
+                <section className={`message-stack message-stack-${message.role}`} key={message.id}>
+                  {message.role === "user" ? (
+                    <time className="turn-timestamp" dateTime={message.createdAt}>
+                      {messageTimestamp(message.createdAt)}
+                    </time>
+                  ) : null}
+                  {message.role === "assistant"
+                    ? activities.map((workItem) => (
+                        <ToolActivity key={workItem.id} workItem={workItem} />
+                      ))
+                    : null}
+                  <MessageCard
+                    message={message}
+                    attachments={snapshot.data.attachments.filter(
+                      ({ messageId }) => messageId === message.id,
+                    )}
+                    filesById={filesById}
+                  />
+                  {message.role !== "assistant"
+                    ? activities.map((workItem) => (
+                        <ToolActivity key={workItem.id} workItem={workItem} />
+                      ))
+                    : null}
+                </section>
+              );
+            })}
+          </div>
+        </section>
+        {hasRunningMessage && !following ? (
+          <button
+            type="button"
+            className="jump-to-latest"
+            onClick={() => {
+              followingRef.current = true;
+              setFollowing(true);
+              scrollMessageListToEnd(messageListRef.current, "smooth");
+            }}
+          >
+            <CaretDown size={15} />
+            回到最新回复
+          </button>
+        ) : null}
+        <Composer
+          conversationId={conversationId}
+          conversationSnapshot={snapshot.data}
+          onOpenContext={onToggleContext}
+          contextOpen={contextOpen}
+        />
+      </section>
+      {railOpen ? (
+        <ConversationRail
+          artifacts={artifacts.data ?? []}
+          files={conversationFiles.data ?? []}
+          workItems={workItems.data ?? []}
+          onAddSource={onToggleContext}
+          onClose={() => setRailOpen(false)}
+        />
       ) : null}
-      <Composer
-        conversationId={conversationId}
-        onOpenContext={onToggleContext}
-        contextOpen={contextOpen}
-      />
     </main>
   );
 }
@@ -3254,6 +3726,55 @@ function ThemeSettings({
   );
 }
 
+function ModelSettings({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (modelRef: string) => void;
+}): React.JSX.Element {
+  const models = useQuery({
+    queryKey: ["models", "catalog"],
+    queryFn: () => window.openerx.listModels(),
+    retry: false,
+  });
+  const availableModels = (models.data ?? []).filter(({ status }) => status === "available");
+  const visibleModels = availableModels.length > 0 ? availableModels : (models.data ?? []);
+  const effectiveValue = visibleModels.some(({ modelRef }) => modelRef === value)
+    ? value
+    : (visibleModels.find(({ modelRef }) => modelRef === automaticModelRef)?.modelRef ??
+      visibleModels[0]?.modelRef ??
+      value);
+
+  return (
+    <section className="settings-card settings-stack" aria-label="默认模型">
+      <div className="settings-heading">
+        <div>
+          <h2>默认模型</h2>
+          <p>用于之后创建的新任务；已有对话继续使用各自选择的模型。</p>
+        </div>
+      </div>
+      <label htmlFor="default-model-setting">新任务默认模型</label>
+      <select
+        id="default-model-setting"
+        value={effectiveValue}
+        disabled={models.isPending || visibleModels.length === 0 || availableModels.length === 0}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {visibleModels.map((model) => (
+          <option key={model.modelRef} value={model.modelRef}>
+            {model.displayName} · {model.priceSummary}
+            {model.status === "unavailable" ? " · 需要配置 API" : ""}
+          </option>
+        ))}
+      </select>
+      {models.error ? (
+        <p className="inline-error">{userFacingError(models.error, "模型目录暂时不可用。")}</p>
+      ) : null}
+    </section>
+  );
+}
+
 function ModelServiceSettingsPanel(): React.JSX.Element {
   const queryClient = useQueryClient();
   const settings = useQuery({
@@ -3635,7 +4156,8 @@ function DiagnosticsSettings(): React.JSX.Element {
           <strong>本机个人数据</strong>
           <span>
             {summary?.conversations ?? 0} 个对话 · {summary?.messages ?? 0} 条消息 ·{" "}
-            {summary?.files ?? 0} 个文件 · {summary?.artifacts ?? 0} 个成果
+            {summary?.files ?? 0} 个文件 · {summary?.artifacts ?? 0} 个成果 ·{" "}
+            {summary?.memories ?? 0} 条记忆
           </span>
           <small>Token、报价、费用和账单只读取服务端记录，不写入此本地导出。</small>
         </div>
@@ -3787,12 +4309,375 @@ function RemoteSettings(): React.JSX.Element {
   );
 }
 
+const memoryKindLabels: Record<MemoryKind, string> = {
+  profile: "个人资料",
+  preference: "偏好",
+  workflow: "工作方式",
+  ongoing_context: "持续上下文",
+};
+
+function MemorySettingsPanel(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const [kind, setKind] = useState<MemoryKind>("preference");
+  const [content, setContent] = useState("");
+  const [query, setQuery] = useState("");
+  const [filterKind, setFilterKind] = useState<MemoryKind | "all">("all");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const settings = useQuery({
+    queryKey: ["memory", "settings"],
+    queryFn: () => window.openerx.getMemorySettings(),
+    retry: false,
+  });
+  const memories = useQuery({
+    queryKey: ["memory", "list", query.trim(), filterKind],
+    queryFn: () =>
+      window.openerx.listMemories({
+        status: "active",
+        limit: 100,
+        ...(query.trim() ? { query: query.trim() } : {}),
+        ...(filterKind === "all" ? {} : { kind: filterKind }),
+      }),
+    retry: false,
+  });
+  const updateSettings = useMutation({
+    mutationFn: window.openerx.updateMemorySettings,
+    onSuccess: (next) => queryClient.setQueryData(["memory", "settings"], next),
+  });
+  const saveMemory = useMutation({
+    mutationFn: () =>
+      window.openerx.upsertMemory({
+        ...(editingId ? { id: editingId } : {}),
+        kind,
+        content: content.trim(),
+        idempotencyKey: `memory-ui:${crypto.randomUUID()}`,
+      }),
+    onSuccess: async () => {
+      setContent("");
+      setEditingId(null);
+      await queryClient.invalidateQueries({ queryKey: ["memory", "list"] });
+    },
+  });
+  const deleteMemory = useMutation({
+    mutationFn: (memoryId: string) =>
+      window.openerx.deleteMemory({
+        memoryId,
+        idempotencyKey: `memory-ui-delete:${crypto.randomUUID()}`,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["memory", "list"] });
+    },
+  });
+  const clearMemories = useMutation({
+    mutationFn: async () => {
+      const scope =
+        filterKind === "all" ? "全部长期记忆" : `全部“${memoryKindLabels[filterKind]}”记忆`;
+      if (!window.confirm(`删除${scope}？若已开启同步，此操作也会同步到其他设备。`)) {
+        return null;
+      }
+      return await window.openerx.clearMemories({
+        ...(filterKind === "all" ? {} : { kind: filterKind }),
+        idempotencyKey: `memory-ui-clear:${crypto.randomUUID()}`,
+      });
+    },
+    onSuccess: async (result) => {
+      if (!result) return;
+      await queryClient.invalidateQueries({ queryKey: ["memory", "list"] });
+    },
+  });
+  const state = settings.data;
+  const error =
+    settings.error ??
+    memories.error ??
+    updateSettings.error ??
+    saveMemory.error ??
+    deleteMemory.error ??
+    clearMemories.error;
+  return (
+    <section className="settings-card settings-stack memory-settings" aria-label="长期记忆">
+      <div className="settings-heading">
+        <div>
+          <h2>长期记忆</h2>
+          <p>跨对话保存你明确要求记住的资料、偏好和工作方式。</p>
+        </div>
+        <Brain size={23} />
+      </div>
+      {settings.isPending ? <p>正在读取记忆设置…</p> : null}
+      {state ? (
+        <div className="memory-toggle-list">
+          <label>
+            <span>
+              <strong>启用长期记忆</strong>
+              <small>默认关闭；关闭后不会召回，也不会提供记忆工具。</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={state.memoriesEnabled}
+              disabled={updateSettings.isPending}
+              onChange={(event) =>
+                updateSettings.mutate({
+                  memoriesEnabled: event.target.checked,
+                  ...(event.target.checked && !state.useMemories ? { useMemories: true } : {}),
+                })
+              }
+            />
+          </label>
+          <label>
+            <span>
+              <strong>用于回答</strong>
+              <small>每轮最多召回 8 条；当前消息始终优先。</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={state.useMemories}
+              disabled={!state.memoriesEnabled || updateSettings.isPending}
+              onChange={(event) => updateSettings.mutate({ useMemories: event.target.checked })}
+            />
+          </label>
+          <label>
+            <span>
+              <strong>跨设备同步</strong>
+              <small>登录后随账户同步；未登录时只保存在本机。</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={state.syncMemories}
+              disabled={!state.memoriesEnabled || updateSettings.isPending}
+              onChange={(event) => updateSettings.mutate({ syncMemories: event.target.checked })}
+            />
+          </label>
+          <label className="is-disabled">
+            <span>
+              <strong>自动生成记忆</strong>
+              <small>后台抽取管线已接入；独立用量与 Beta 门禁通过前保持锁定。</small>
+            </span>
+            <input type="checkbox" checked={state.generateMemories} disabled />
+          </label>
+          <label>
+            <span>
+              <strong>排除外部上下文</strong>
+              <small>自动学习开放后，默认跳过使用过 Web、MCP、文件或工具搜索的对话。</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={state.disableOnExternalContext}
+              disabled={!state.memoriesEnabled || updateSettings.isPending}
+              onChange={(event) =>
+                updateSettings.mutate({ disableOnExternalContext: event.target.checked })
+              }
+            />
+          </label>
+          <label>
+            <span>
+              <strong>空闲等待（分钟）</strong>
+              <small>只有对话持续空闲且没有生成任务时，后台任务才有资格运行。</small>
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={1_440}
+              value={state.idleDelayMinutes}
+              disabled={!state.memoriesEnabled || updateSettings.isPending}
+              onChange={(event) => {
+                const value = event.currentTarget.valueAsNumber;
+                if (Number.isInteger(value) && value >= 1 && value <= 1_440) {
+                  updateSettings.mutate({ idleDelayMinutes: value });
+                }
+              }}
+            />
+          </label>
+          <label>
+            <span>
+              <strong>最低剩余额度（%）</strong>
+              <small>接入平台剩余额度信号后，低于此阈值的后台抽取会直接跳过。</small>
+            </span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={state.minRateLimitRemainingPercent}
+              disabled={!state.memoriesEnabled || updateSettings.isPending}
+              onChange={(event) => {
+                const value = event.currentTarget.valueAsNumber;
+                if (Number.isInteger(value) && value >= 0 && value <= 100) {
+                  updateSettings.mutate({ minRateLimitRemainingPercent: value });
+                }
+              }}
+            />
+          </label>
+        </div>
+      ) : null}
+      {state?.memoriesEnabled ? (
+        <search className="memory-filters" aria-label="搜索和筛选记忆">
+          <label htmlFor="memory-search">搜索记忆</label>
+          <div>
+            <MagnifyingGlass size={15} aria-hidden="true" />
+            <input
+              id="memory-search"
+              type="search"
+              value={query}
+              placeholder="搜索内容或检索词"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
+          <label htmlFor="memory-filter-kind">筛选类型</label>
+          <select
+            id="memory-filter-kind"
+            value={filterKind}
+            onChange={(event) => setFilterKind(event.target.value as MemoryKind | "all")}
+          >
+            <option value="all">全部类型</option>
+            {Object.entries(memoryKindLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </search>
+      ) : null}
+      {state?.memoriesEnabled ? (
+        <form
+          className="memory-create-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (content.trim()) saveMemory.mutate();
+          }}
+        >
+          <label htmlFor="memory-kind">类型</label>
+          <select
+            id="memory-kind"
+            value={kind}
+            onChange={(event) => setKind(event.target.value as MemoryKind)}
+          >
+            {Object.entries(memoryKindLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="memory-content">内容</label>
+          <textarea
+            id="memory-content"
+            value={content}
+            maxLength={2_000}
+            placeholder="例如：回答我时优先给结论，再给必要细节。"
+            onChange={(event) => setContent(event.target.value)}
+          />
+          <div className="settings-actions">
+            <button
+              type="submit"
+              className="primary-action"
+              disabled={!content.trim() || saveMemory.isPending}
+            >
+              {editingId ? "保存修改" : "保存记忆"}
+            </button>
+            {editingId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingId(null);
+                  setKind("preference");
+                  setContent("");
+                }}
+              >
+                取消编辑
+              </button>
+            ) : null}
+            {(memories.data?.length ?? 0) > 0 ? (
+              <button
+                type="button"
+                className="danger-action"
+                disabled={clearMemories.isPending}
+                onClick={() => clearMemories.mutate()}
+              >
+                {filterKind === "all" ? "删除全部" : "删除当前类别"}
+              </button>
+            ) : null}
+          </div>
+        </form>
+      ) : null}
+      <section className="memory-list" aria-label="已保存记忆">
+        {(memories.data ?? []).map((memory) => (
+          <article key={memory.id} className="memory-row">
+            <div>
+              <span>
+                {memoryKindLabels[memory.kind]}
+                {memory.origin === "automatic" ? " · 自动生成（可撤销）" : " · 显式保存"}
+              </span>
+              <p>{memory.content}</p>
+              <small>
+                更新于 {new Date(memory.updatedAt).toLocaleString()}
+                {memory.sourceConversationId
+                  ? ` · 来源对话 ${memory.sourceConversationId.slice(0, 8)}`
+                  : ""}
+              </small>
+            </div>
+            <div className="memory-row-actions">
+              <button
+                type="button"
+                className="secondary-action"
+                aria-label={`编辑记忆：${memory.content}`}
+                onClick={() => {
+                  setEditingId(memory.id);
+                  setKind(memory.kind);
+                  setContent(memory.content);
+                  document.getElementById("memory-content")?.focus();
+                }}
+              >
+                编辑
+              </button>
+              <button
+                type="button"
+                aria-label={`删除记忆：${memory.content}`}
+                disabled={deleteMemory.isPending}
+                onClick={() => deleteMemory.mutate(memory.id)}
+              >
+                删除
+              </button>
+            </div>
+          </article>
+        ))}
+        {!memories.isPending && (memories.data?.length ?? 0) === 0 ? (
+          <p className="empty-hint">
+            {query.trim() || filterKind !== "all"
+              ? "没有符合当前搜索条件的记忆。"
+              : "还没有已保存的长期记忆。"}
+          </p>
+        ) : null}
+      </section>
+      {error ? (
+        <p className="inline-error">
+          {error.message === "MEMORY_SENSITIVE_CONTENT_REJECTED"
+            ? "该内容可能包含凭证或敏感标识，未保存为长期记忆。"
+            : error.message}
+        </p>
+      ) : null}
+      <p className="field-help">
+        密钥、口令、验证码、Cookie、私钥、身份证/银行卡完整号码和本机绝对路径会被拒绝保存。
+        记忆内容只作为可纠正的用户回忆，不作为系统指令。
+      </p>
+    </section>
+  );
+}
+
+type AccountSettingsSection =
+  | "account"
+  | "billing"
+  | "appearance"
+  | "model"
+  | "memory"
+  | "update"
+  | "diagnostics";
+
 function AccountSettings({
   themePreference,
   onThemeChange,
+  defaultModelRef,
+  onDefaultModelChange,
 }: {
   themePreference: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
+  defaultModelRef: string;
+  onDefaultModelChange: (modelRef: string) => void;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
   const account = useQuery({
@@ -3802,6 +4687,15 @@ function AccountSettings({
   const [email, setEmail] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [code, setCode] = useState("");
+  const [activeSection, setActiveSection] = useState<AccountSettingsSection>("account");
+  const openSettingsSection = (section: AccountSettingsSection): void => {
+    setActiveSection(section);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() =>
+        document.getElementById(`${section}-section`)?.focus({ preventScroll: true }),
+      );
+    });
+  };
   const signedIn = account.data?.status === "signed_in";
   const devices = useQuery({
     queryKey: ["account", "devices"],
@@ -3918,291 +4812,368 @@ function AccountSettings({
   if (account.isPending) return <main className="center-state">正在读取账户状态…</main>;
   const state = account.data;
   return (
-    <main className="settings-page">
-      <p className="eyebrow">设置</p>
-      <h1>账户与设备</h1>
-      <nav className="settings-section-nav" aria-label="设置分区">
-        <button type="button" onClick={() => focusSection("account-section")}>
-          账户
-        </button>
-        <button type="button" onClick={() => focusSection("billing-section")}>
-          费用与账单
-        </button>
-        <button type="button" onClick={() => focusSection("appearance-section")}>
-          外观
-        </button>
-        <button type="button" onClick={() => focusSection("update-section")}>
-          更新
-        </button>
-        <button type="button" onClick={() => focusSection("diagnostics-section")}>
-          诊断与数据
-        </button>
-      </nav>
-      <section
-        className="settings-card settings-account-primary"
-        id="account-section"
-        tabIndex={-1}
-        aria-label="账户状态"
-      >
+    <main className="settings-page settings-account-page">
+      <header className="settings-page-header">
         <div>
-          <span className={`account-status account-${state?.status ?? "unavailable"}`}>
-            {accountStatusLabel(state?.status)}
-          </span>
-          <h2>{state?.account?.displayName ?? "登录 OpenerX"}</h2>
-          <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
+          <h1>设置</h1>
+          <p>管理账户、外观、模型与桌面应用偏好。</p>
         </div>
-        {state?.status !== "signed_in" || !state.session ? (
-          <form
-            className="account-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (challengeId) verify.mutate();
-              else requestCode.mutate();
-            }}
+        <kbd aria-label="打开设置快捷键">Ctrl + ,</kbd>
+      </header>
+      <div className="settings-workbench">
+        <nav className="settings-section-nav" aria-label="设置分区">
+          <button
+            type="button"
+            className={activeSection === "account" ? "is-active" : ""}
+            aria-current={activeSection === "account" ? "page" : undefined}
+            onClick={() => openSettingsSection("account")}
           >
-            <label htmlFor="account-email">邮箱</label>
-            <input
-              id="account-email"
-              type="email"
-              value={email}
-              disabled={Boolean(challengeId)}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-            {challengeId ? (
-              <>
-                <label htmlFor="account-code">六位验证码</label>
-                <input
-                  id="account-code"
-                  inputMode="numeric"
-                  pattern="[0-9]{6}"
-                  value={code}
-                  onChange={(event) => setCode(event.target.value)}
-                  required
-                />
-              </>
-            ) : null}
-            <button
-              type="submit"
-              className="primary-action"
-              disabled={
-                requestCode.isPending ||
-                verify.isPending ||
-                (!challengeId && !email.trim()) ||
-                (Boolean(challengeId) && !/^\d{6}$/.test(code))
-              }
+            <UserCircle size={17} />
+            <span>账户</span>
+          </button>
+          <button
+            type="button"
+            className={activeSection === "billing" ? "is-active" : ""}
+            aria-current={activeSection === "billing" ? "page" : undefined}
+            onClick={() => openSettingsSection("billing")}
+          >
+            <Receipt size={17} />
+            <span>费用与账单</span>
+          </button>
+          <button
+            type="button"
+            className={activeSection === "appearance" ? "is-active" : ""}
+            aria-current={activeSection === "appearance" ? "page" : undefined}
+            onClick={() => openSettingsSection("appearance")}
+          >
+            <Sun size={17} />
+            <span>外观</span>
+          </button>
+          <button
+            type="button"
+            className={activeSection === "model" ? "is-active" : ""}
+            aria-current={activeSection === "model" ? "page" : undefined}
+            onClick={() => openSettingsSection("model")}
+          >
+            <SlidersHorizontal size={17} />
+            <span>模型</span>
+          </button>
+          <button
+            type="button"
+            className={activeSection === "memory" ? "is-active" : ""}
+            aria-current={activeSection === "memory" ? "page" : undefined}
+            onClick={() => openSettingsSection("memory")}
+          >
+            <Brain size={17} />
+            <span>记忆</span>
+          </button>
+          <button
+            type="button"
+            className={activeSection === "update" ? "is-active" : ""}
+            aria-current={activeSection === "update" ? "page" : undefined}
+            onClick={() => openSettingsSection("update")}
+          >
+            <ArrowClockwise size={17} />
+            <span>更新</span>
+          </button>
+          <button
+            type="button"
+            className={activeSection === "diagnostics" ? "is-active" : ""}
+            aria-current={activeSection === "diagnostics" ? "page" : undefined}
+            onClick={() => openSettingsSection("diagnostics")}
+          >
+            <DownloadSimple size={17} />
+            <span>诊断与数据</span>
+          </button>
+        </nav>
+        <div className="settings-section-content">
+          {activeSection === "account" ? (
+            <section
+              className="settings-card settings-account-primary"
+              id="account-section"
+              tabIndex={-1}
+              aria-label="账户状态"
             >
-              {challengeId ? "验证并登录" : "发送验证码"}
-            </button>
-            {!challengeId && !email.trim() ? (
-              <p className="field-help">输入邮箱后即可获取六位验证码。</p>
-            ) : null}
-            {requestCode.error || verify.error || state?.reason ? (
-              <p className="inline-error">
-                {requestCode.error?.message ??
-                  verify.error?.message ??
-                  accountReason(state?.reason)}
-              </p>
-            ) : null}
-          </form>
-        ) : null}
-      </section>
-      <section
-        className="settings-card settings-stack settings-billing-entry"
-        id="billing-section"
-        tabIndex={-1}
-        aria-label="费用与账单"
-      >
-        <div className="settings-heading">
-          <div>
-            <h2>费用与账单</h2>
-            <p>查看账户额度、充值记录、消费明细和月度账单。</p>
-          </div>
-          <Receipt size={22} weight="regular" />
-        </div>
-        <NavLink className="primary-link" to="/settings/billing">
-          查看费用与账单
-        </NavLink>
-      </section>
-      <ModelServiceSettingsPanel />
-      <div id="appearance-section" tabIndex={-1}>
-        <ThemeSettings value={themePreference} onChange={onThemeChange} />
-      </div>
-      <div id="update-section" tabIndex={-1}>
-        <ReleaseUpdateSettings />
-      </div>
-      <details className="settings-disclosure" id="diagnostics-section" tabIndex={-1}>
-        <summary>
-          <span>诊断与数据</span>
-          <small>性能状态、诊断导出与个人数据导出</small>
-        </summary>
-        <DiagnosticsSettings />
-      </details>
-      {state?.status === "signed_in" && state.session ? (
-        <>
-          <RemoteSettings />
-          <section className="settings-card settings-stack" aria-label="设备会话">
-            <div className="settings-heading">
               <div>
-                <h2>设备会话</h2>
-                <p>Refresh 凭证只保存在各设备的系统凭证边界。</p>
+                <span className={`account-status account-${state?.status ?? "unavailable"}`}>
+                  {accountStatusLabel(state?.status)}
+                </span>
+                <h2>{state?.account?.displayName ?? "登录 OpenerX"}</h2>
+                <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
               </div>
-              <button type="button" onClick={() => void devices.refetch()}>
-                刷新设备
-              </button>
-            </div>
-            {(devices.data ?? [state.session]).map((session: DeviceSession) => {
-              const current = session.sessionId === state.session?.sessionId;
-              return (
-                <div className="device-card" key={session.sessionId}>
-                  <div>
-                    <strong>
-                      {session.device.name} {current ? "· 当前设备" : ""}
-                    </strong>
-                    <span>
-                      {session.device.platform} · {session.device.arch} · session v
-                      {session.sessionVersion}
-                    </span>
-                    <span>{session.revokedAt ? `已撤销 ${session.revokedAt}` : "可用"}</span>
-                  </div>
-                  {!session.revokedAt ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        current ? signOut.mutate() : revokeDevice.mutate(session.sessionId)
-                      }
-                      disabled={signOut.isPending || revokeDevice.isPending}
-                    >
-                      {current ? "退出此设备" : "撤销设备"}
-                    </button>
+              {state?.status !== "signed_in" || !state.session ? (
+                <form
+                  className="account-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (challengeId) verify.mutate();
+                    else requestCode.mutate();
+                  }}
+                >
+                  <label htmlFor="account-email">邮箱</label>
+                  <input
+                    id="account-email"
+                    type="email"
+                    value={email}
+                    disabled={Boolean(challengeId)}
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                  />
+                  {challengeId ? (
+                    <>
+                      <label htmlFor="account-code">六位验证码</label>
+                      <input
+                        id="account-code"
+                        inputMode="numeric"
+                        pattern="[0-9]{6}"
+                        value={code}
+                        onChange={(event) => setCode(event.target.value)}
+                        required
+                      />
+                    </>
                   ) : null}
-                </div>
-              );
-            })}
-            <button
-              type="button"
-              className="danger-action"
-              onClick={() => signOutAll.mutate()}
-              disabled={signOutAll.isPending}
+                  <button
+                    type="submit"
+                    className="primary-action"
+                    disabled={
+                      requestCode.isPending ||
+                      verify.isPending ||
+                      (!challengeId && !email.trim()) ||
+                      (Boolean(challengeId) && !/^\d{6}$/.test(code))
+                    }
+                  >
+                    {challengeId ? "验证并登录" : "发送验证码"}
+                  </button>
+                  {!challengeId && !email.trim() ? (
+                    <p className="field-help">输入邮箱后即可获取六位验证码。</p>
+                  ) : null}
+                  {requestCode.error || verify.error || state?.reason ? (
+                    <p className="inline-error">
+                      {requestCode.error?.message ??
+                        verify.error?.message ??
+                        accountReason(state?.reason)}
+                    </p>
+                  ) : null}
+                </form>
+              ) : null}
+            </section>
+          ) : null}
+          {activeSection === "billing" ? (
+            <section
+              className="settings-card settings-stack settings-billing-entry"
+              id="billing-section"
+              tabIndex={-1}
+              aria-label="费用与账单"
             >
-              退出全部设备
-            </button>
-            {devices.error || revokeDevice.error || signOut.error || signOutAll.error ? (
-              <p className="inline-error">
-                {
-                  (devices.error ?? revokeDevice.error ?? signOut.error ?? signOutAll.error)
-                    ?.message
-                }
-              </p>
-            ) : null}
-          </section>
-
-          <section className="settings-card settings-stack" aria-label="同步状态">
-            <div className="settings-heading">
-              <div>
-                <h2>账户同步</h2>
-                {sync.data ? (
-                  <p>
-                    最近成功 {new Date(sync.data.syncedAt).toLocaleString()} · 待上传{" "}
-                    {sync.data.pending} · 冲突 {sync.data.conflicts}
-                  </p>
-                ) : (
-                  <p>正在读取同步状态…</p>
-                )}
-              </div>
-              <button type="button" onClick={() => void sync.refetch()} disabled={sync.isFetching}>
-                立即同步
-              </button>
-            </div>
-            {sync.error ? (
-              <p className="inline-error">
-                同步失败：{sync.error.message}。本地内容仍在 Outbox，可稍后重试。
-              </p>
-            ) : null}
-            {conflicts.data?.map((conflict) => (
-              <div className="conflict-card" key={conflict.conflictId}>
-                <strong>
-                  {conflict.objectType} · {conflict.objectId}
-                </strong>
-                <span>本机版本：{conflictPayload(conflict.clientPayload)}</span>
-                <span>云端版本：{conflictPayload(conflict.serverPayload)}</span>
+              <div className="settings-heading">
                 <div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      resolveConflict.mutate({
-                        conflictId: conflict.conflictId,
-                        resolution: "local",
-                      })
-                    }
-                  >
-                    保留本机版本
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      resolveConflict.mutate({
-                        conflictId: conflict.conflictId,
-                        resolution: "cloud",
-                      })
-                    }
-                  >
-                    使用云端版本
+                  <h2>费用与账单</h2>
+                  <p>查看账户额度、充值记录、消费明细和月度账单。</p>
+                </div>
+                <Receipt size={22} weight="regular" />
+              </div>
+              <NavLink className="primary-link" to="/settings/billing">
+                查看费用与账单
+              </NavLink>
+            </section>
+          ) : null}
+          {activeSection === "appearance" ? (
+            <div className="settings-section-panel" id="appearance-section" tabIndex={-1}>
+              <ThemeSettings value={themePreference} onChange={onThemeChange} />
+            </div>
+          ) : null}
+          {activeSection === "model" ? (
+            <div className="settings-section-panel" id="model-section" tabIndex={-1}>
+              <ModelServiceSettingsPanel />
+              <ModelSettings value={defaultModelRef} onChange={onDefaultModelChange} />
+            </div>
+          ) : null}
+          {activeSection === "memory" ? (
+            <div className="settings-section-panel" id="memory-section" tabIndex={-1}>
+              <MemorySettingsPanel />
+            </div>
+          ) : null}
+          {activeSection === "update" ? (
+            <div className="settings-section-panel" id="update-section" tabIndex={-1}>
+              <ReleaseUpdateSettings />
+            </div>
+          ) : null}
+          {activeSection === "diagnostics" ? (
+            <div className="settings-section-panel" id="diagnostics-section" tabIndex={-1}>
+              <DiagnosticsSettings />
+            </div>
+          ) : null}
+          {activeSection === "account" && state?.status === "signed_in" && state.session ? (
+            <>
+              <RemoteSettings />
+              <section className="settings-card settings-stack" aria-label="设备会话">
+                <div className="settings-heading">
+                  <div>
+                    <h2>设备会话</h2>
+                    <p>Refresh 凭证只保存在各设备的系统凭证边界。</p>
+                  </div>
+                  <button type="button" onClick={() => void devices.refetch()}>
+                    刷新设备
                   </button>
                 </div>
-              </div>
-            ))}
-            {resolveConflict.error ? (
-              <p className="inline-error">冲突处理失败：{resolveConflict.error.message}</p>
-            ) : null}
-          </section>
+                {(devices.data ?? [state.session]).map((session: DeviceSession) => {
+                  const current = session.sessionId === state.session?.sessionId;
+                  return (
+                    <div className="device-card" key={session.sessionId}>
+                      <div>
+                        <strong>
+                          {session.device.name} {current ? "· 当前设备" : ""}
+                        </strong>
+                        <span>
+                          {session.device.platform} · {session.device.arch} · session v
+                          {session.sessionVersion}
+                        </span>
+                        <span>{session.revokedAt ? `已撤销 ${session.revokedAt}` : "可用"}</span>
+                      </div>
+                      {!session.revokedAt ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            current ? signOut.mutate() : revokeDevice.mutate(session.sessionId)
+                          }
+                          disabled={signOut.isPending || revokeDevice.isPending}
+                        >
+                          {current ? "退出此设备" : "撤销设备"}
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  className="danger-action"
+                  onClick={() => signOutAll.mutate()}
+                  disabled={signOutAll.isPending}
+                >
+                  退出全部设备
+                </button>
+                {devices.error || revokeDevice.error || signOut.error || signOutAll.error ? (
+                  <p className="inline-error">
+                    {
+                      (devices.error ?? revokeDevice.error ?? signOut.error ?? signOutAll.error)
+                        ?.message
+                    }
+                  </p>
+                ) : null}
+              </section>
 
-          <section className="settings-card settings-stack" aria-label="账户 Token 用量">
-            <h2>账户 Token 用量</h2>
-            {accountUsage.data ? (
-              <div className="usage-line">
-                <span>{accountUsage.data.records} 次模型调用</span>
-                <span>输入 {tokenValue(accountUsage.data.inputTokens)}</span>
-                <span>缓存 {tokenValue(accountUsage.data.cachedInputTokens)}</span>
-                <span>输出 {tokenValue(accountUsage.data.outputTokens)}</span>
-                <span>推理 {tokenValue(accountUsage.data.reasoningTokens)}</span>
-                <strong>总计 {tokenValue(accountUsage.data.totalTokens)}</strong>
-              </div>
-            ) : (
-              <p>暂无可核对的账户用量。</p>
-            )}
-          </section>
+              <section className="settings-card settings-stack" aria-label="同步状态">
+                <div className="settings-heading">
+                  <div>
+                    <h2>账户同步</h2>
+                    {sync.data ? (
+                      <p>
+                        最近成功 {new Date(sync.data.syncedAt).toLocaleString()} · 待上传{" "}
+                        {sync.data.pending} · 冲突 {sync.data.conflicts}
+                      </p>
+                    ) : (
+                      <p>正在读取同步状态…</p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void sync.refetch()}
+                    disabled={sync.isFetching}
+                  >
+                    立即同步
+                  </button>
+                </div>
+                {sync.error ? (
+                  <p className="inline-error">
+                    同步失败：{sync.error.message}。本地内容仍在 Outbox，可稍后重试。
+                  </p>
+                ) : null}
+                {conflicts.data?.map((conflict) => (
+                  <div className="conflict-card" key={conflict.conflictId}>
+                    <strong>
+                      {conflict.objectType} · {conflict.objectId}
+                    </strong>
+                    <span>本机版本：{conflictPayload(conflict.clientPayload)}</span>
+                    <span>云端版本：{conflictPayload(conflict.serverPayload)}</span>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          resolveConflict.mutate({
+                            conflictId: conflict.conflictId,
+                            resolution: "local",
+                          })
+                        }
+                      >
+                        保留本机版本
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          resolveConflict.mutate({
+                            conflictId: conflict.conflictId,
+                            resolution: "cloud",
+                          })
+                        }
+                      >
+                        使用云端版本
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {resolveConflict.error ? (
+                  <p className="inline-error">冲突处理失败：{resolveConflict.error.message}</p>
+                ) : null}
+              </section>
 
-          <section className="settings-card settings-stack" aria-label="个人数据边界">
-            <h2>个人数据边界</h2>
-            <p>清本机缓存不会创建云端墓碑；退出设备不会删除本机历史或云端对话。</p>
-            <div className="settings-actions">
-              <button type="button" onClick={() => clearLocalCache.mutate()}>
-                清理本机缓存
-              </button>
-              <button
-                type="button"
-                className="danger-action"
-                onClick={() => deleteCloudData.mutate()}
-              >
-                删除云端对话数据
-              </button>
-            </div>
-            {clearLocalCache.data ? <p>本机缓存已清理。</p> : null}
-            {deleteCloudData.data ? (
-              <p>
-                已删除 {deleteCloudData.data.deletedObjects} 个云对象；墓碑保留至{" "}
-                {new Date(deleteCloudData.data.retainUntil).toLocaleString()}。
-              </p>
-            ) : null}
-            {clearLocalCache.error || deleteCloudData.error ? (
-              <p className="inline-error">
-                {(clearLocalCache.error ?? deleteCloudData.error)?.message}
-              </p>
-            ) : null}
-          </section>
-        </>
-      ) : null}
+              <section className="settings-card settings-stack" aria-label="账户 Token 用量">
+                <h2>账户 Token 用量</h2>
+                {accountUsage.data ? (
+                  <div className="usage-line">
+                    <span>{accountUsage.data.records} 次模型调用</span>
+                    <span>输入 {tokenValue(accountUsage.data.inputTokens)}</span>
+                    <span>缓存 {tokenValue(accountUsage.data.cachedInputTokens)}</span>
+                    <span>输出 {tokenValue(accountUsage.data.outputTokens)}</span>
+                    <span>推理 {tokenValue(accountUsage.data.reasoningTokens)}</span>
+                    <strong>总计 {tokenValue(accountUsage.data.totalTokens)}</strong>
+                  </div>
+                ) : (
+                  <p>暂无可核对的账户用量。</p>
+                )}
+              </section>
+
+              <section className="settings-card settings-stack" aria-label="个人数据边界">
+                <h2>个人数据边界</h2>
+                <p>清本机缓存不会创建云端墓碑；退出设备不会删除本机历史或云端对话。</p>
+                <div className="settings-actions">
+                  <button type="button" onClick={() => clearLocalCache.mutate()}>
+                    清理本机缓存
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-action"
+                    onClick={() => deleteCloudData.mutate()}
+                  >
+                    删除云端对话数据
+                  </button>
+                </div>
+                {clearLocalCache.data ? <p>本机缓存已清理。</p> : null}
+                {deleteCloudData.data ? (
+                  <p>
+                    已删除 {deleteCloudData.data.deletedObjects} 个云对象；墓碑保留至{" "}
+                    {new Date(deleteCloudData.data.retainUntil).toLocaleString()}。
+                  </p>
+                ) : null}
+                {clearLocalCache.error || deleteCloudData.error ? (
+                  <p className="inline-error">
+                    {(clearLocalCache.error ?? deleteCloudData.error)?.message}
+                  </p>
+                ) : null}
+              </section>
+            </>
+          ) : null}
+        </div>
+      </div>
     </main>
   );
 }
@@ -4788,7 +5759,9 @@ function ToolCenter(): React.JSX.Element {
           <span
             className={`local-web-search-feature ${localWebSearchSettings.data?.featureEnabled ? "is-enabled" : ""}`}
           >
-            {localWebSearchSettings.data?.featureEnabled ? "Local Alpha 已启用" : "功能开关关闭"}
+            {localWebSearchSettings.data?.featureEnabled
+              ? "本地搜索已启用（默认）"
+              : "本地搜索已关闭"}
           </span>
         </div>
         <form
@@ -5310,18 +6283,13 @@ function ToolCenter(): React.JSX.Element {
 }
 
 function Sidebar({
-  environment,
-  serviceStatus,
   onCollapse,
   backgroundInert = false,
 }: {
-  environment: DesktopEnvironment | null;
-  serviceStatus: string;
   onCollapse: () => void;
   backgroundInert?: boolean;
 }): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
-  const queryClient = useQueryClient();
   const history = useQuery({
     queryKey: chatKeys.list(showArchived),
     queryFn: () => window.openerx.listConversations({ includeArchived: showArchived }),
@@ -5330,37 +6298,7 @@ function Sidebar({
     queryKey: accountKey,
     queryFn: () => window.openerx.getAccountState(),
   });
-  const syncNow = useMutation({
-    mutationFn: () => window.openerx.syncNow(),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
-      await queryClient.invalidateQueries({ queryKey: accountKey });
-    },
-  });
-  const displayedStatus =
-    history.isSuccess && serviceStatus === "starting" ? "ready" : serviceStatus;
-  const signedIn = account.data?.status === "signed_in";
   const archivedCount = history.data?.filter(({ archivedAt }) => archivedAt !== null).length ?? 0;
-  const syncHeading = syncNow.isPending
-    ? "正在同步"
-    : syncNow.error
-      ? "同步失败"
-      : !signedIn
-        ? "本机模式"
-        : syncNow.data
-          ? "同步完成"
-          : displayedStatus === "ready"
-            ? "同步已就绪"
-            : "正在连接";
-  const syncDetail = syncNow.error
-    ? userFacingError(syncNow.error, "稍后重试，本机内容不会丢失。")
-    : !signedIn
-      ? "登录后同步数据"
-      : syncNow.data
-        ? `刚刚 · 待上传 ${syncNow.data.pending}`
-        : environment
-          ? `此设备 · ${environment.platform}`
-          : "正在连接桌面服务";
   return (
     <aside
       className="sidebar"
@@ -5432,7 +6370,13 @@ function Sidebar({
             </button>
           </div>
           {history.data?.map((conversation: ConversationSummary) => (
-            <NavLink to={`/chat/${conversation.id}`} key={conversation.id}>
+            <NavLink
+              to={`/chat/${conversation.id}`}
+              key={conversation.id}
+              className={({ isActive }) =>
+                `history-item${isActive ? " active history-item-active" : ""}`
+              }
+            >
               <ChatCircle size={16} weight="regular" />
               <strong>{conversation.title}</strong>
               <span>
@@ -5453,26 +6397,6 @@ function Sidebar({
           ) : null}
         </section>
       </div>
-      <div className={`sync-state service-${displayedStatus}`}>
-        {displayedStatus === "ready" ? (
-          <CheckCircle size={16} weight="fill" />
-        ) : (
-          <ArrowClockwise size={16} />
-        )}
-        <div>
-          <strong aria-live="polite">{syncHeading}</strong>
-          <span title={syncDetail}>{syncDetail}</span>
-        </div>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={signedIn ? "立即同步" : "登录后可同步"}
-          onClick={() => syncNow.mutate()}
-          disabled={syncNow.isPending || !signedIn}
-        >
-          <ArrowClockwise size={16} />
-        </button>
-      </div>
       <NavLink className="sidebar-account" to="/settings/account">
         <UserCircle size={23} weight="regular" />
         <strong>{account.data?.account?.displayName ?? "未登录"}</strong>
@@ -5485,14 +6409,14 @@ function Sidebar({
 }
 
 export function App(): React.JSX.Element {
-  const [environment, setEnvironment] = useState<DesktopEnvironment | null>(null);
-  const [serviceStatus, setServiceStatus] = useState("starting");
   const [contextOpen, setContextOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
+  const [defaultModelRef, setDefaultModelRef] = useState(initialDefaultModelRef);
   const contextReturnFocus = useRef<HTMLElement | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
+  const settingsOpen = location.pathname.startsWith("/settings");
   const contextConversationId = /^\/chat\/([^/]+)$/u.exec(location.pathname)?.[1] ?? null;
   useEffect(() => {
     if (location.pathname) setContextOpen(false);
@@ -5500,10 +6424,16 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent): void => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
         navigate("/search");
         window.requestAnimationFrame(() => document.getElementById("global-search-input")?.focus());
+        return;
+      }
+      if (event.key === ",") {
+        event.preventDefault();
+        navigate("/settings/account");
       }
     };
     window.addEventListener("keydown", handleShortcut);
@@ -5532,8 +6462,31 @@ export function App(): React.JSX.Element {
     return () => mediaQuery?.removeEventListener("change", applyTheme);
   }, [themePreference]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(defaultModelStorageKey, defaultModelRef);
+    } catch {
+      // The current session still uses the selected model when storage is unavailable.
+    }
+  }, [defaultModelRef]);
+
   const sequenceByConversation = useRef(new Map<string, number>());
   const queryClient = useQueryClient();
+  useEffect(() => {
+    const unsubscribeRun = window.openerx.onAutomationRun((run) => {
+      void queryClient.invalidateQueries({ queryKey: ["automations"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["automations", run.automationId, "runs"],
+      });
+    });
+    const unsubscribeNavigate = window.openerx.onAutomationNavigate((automationId) => {
+      navigate(`/automations?automation=${encodeURIComponent(automationId)}`);
+    });
+    return () => {
+      unsubscribeRun();
+      unsubscribeNavigate();
+    };
+  }, [navigate, queryClient]);
   const toggleContext = (): void => {
     if (!contextOpen && document.activeElement instanceof HTMLElement) {
       contextReturnFocus.current = document.activeElement;
@@ -5549,13 +6502,8 @@ export function App(): React.JSX.Element {
   };
 
   useEffect(() => {
-    let active = true;
-    void window.openerx.getEnvironment().then((value) => {
-      if (active) setEnvironment(value);
-    });
     const applyEvent = (event: ChatEvent): void => {
       if (event.type === "service.status") {
-        setServiceStatus(event.payload.status ?? "unavailable");
         return;
       }
       if (
@@ -5600,29 +6548,13 @@ export function App(): React.JSX.Element {
     };
     const unsubscribe = window.openerx.onChatEvent(applyEvent);
     return () => {
-      active = false;
       unsubscribe();
     };
   }, [queryClient]);
-  useEffect(() => {
-    const unsubscribeRun = window.openerx.onAutomationRun((run) => {
-      void queryClient.invalidateQueries({ queryKey: ["automations"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["automations", run.automationId, "runs"],
-      });
-    });
-    const unsubscribeNavigate = window.openerx.onAutomationNavigate((automationId) => {
-      navigate(`/automations?automation=${encodeURIComponent(automationId)}`);
-    });
-    return () => {
-      unsubscribeRun();
-      unsubscribeNavigate();
-    };
-  }, [navigate, queryClient]);
 
   return (
     <div
-      className={`app-shell ${sidebarOpen ? "" : "sidebar-is-collapsed"} ${contextOpen ? "context-is-open" : ""}`}
+      className={`app-shell ${sidebarOpen ? "" : "sidebar-is-collapsed"} ${contextOpen ? "context-is-open" : ""} ${settingsOpen ? "settings-is-open" : ""}`}
     >
       <button
         type="button"
@@ -5631,12 +6563,7 @@ export function App(): React.JSX.Element {
       >
         跳到主要内容
       </button>
-      <Sidebar
-        environment={environment}
-        serviceStatus={serviceStatus}
-        onCollapse={() => setSidebarOpen(false)}
-        backgroundInert={contextOpen}
-      />
+      <Sidebar onCollapse={() => setSidebarOpen(false)} backgroundInert={contextOpen} />
       {!sidebarOpen ? (
         <button
           type="button"
@@ -5648,14 +6575,14 @@ export function App(): React.JSX.Element {
         </button>
       ) : null}
       <div
-        className="app-main"
+        className={`app-main${settingsOpen ? " app-main-settings" : ""}`}
         id="main-content"
         tabIndex={-1}
         inert={contextOpen ? true : undefined}
         aria-hidden={contextOpen || undefined}
       >
         <Routes>
-          <Route path="/chat/new" element={<NewChat />} />
+          <Route path="/chat/new" element={<NewChat defaultModelRef={defaultModelRef} />} />
           <Route
             path="/chat/:conversationId"
             element={<ChatPage contextOpen={contextOpen} onToggleContext={toggleContext} />}
@@ -5665,7 +6592,7 @@ export function App(): React.JSX.Element {
           <Route path="/tasks" element={<ToolCenter />} />
           <Route
             path="/automations"
-            element={<AutomationsPage defaultModelRef="platform/byok" />}
+            element={<AutomationsPage defaultModelRef={defaultModelRef} />}
           />
           <Route path="/assistants" element={<SkillCenter />} />
           <Route path="/settings" element={<Navigate to="/settings/account" replace />} />
@@ -5676,6 +6603,8 @@ export function App(): React.JSX.Element {
               <AccountSettings
                 themePreference={themePreference}
                 onThemeChange={setThemePreference}
+                defaultModelRef={defaultModelRef}
+                onDefaultModelChange={setDefaultModelRef}
               />
             }
           />
