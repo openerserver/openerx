@@ -87,10 +87,10 @@ import remarkGfm from "remark-gfm";
 import { AutomationsPage } from "./AutomationsPage";
 
 const suggestions = [
-  "分析当前项目，列出最值得先做的三件事",
-  "把这份材料整理成一页清晰的执行摘要",
-  "检查这段代码，并给出可验证的修复方案",
-  "根据现有文件生成一份结构化报告",
+  "搜索网络并调研最近一周 AI 行业的重要动态，核实信息并附上来源",
+  "检查我选择的文件或文件夹，找出问题并给出可验证的改进方案",
+  "搜索最新资料，制作一份 AI 工具选型报告，同时生成对比表格、DOCX 和汇报 PPT",
+  "计算一家月营收 100 万元、成本 65 万元公司的三种增长情景，并生成可下载的 Excel 分析表",
 ];
 
 const chatKeys = {

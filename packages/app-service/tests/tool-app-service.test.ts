@@ -463,6 +463,62 @@ describe("ToolAppService", () => {
     await service.close();
   });
 
+  it("routes every homepage capability showcase to the required built-in tools", async () => {
+    const { chat, service, base } = fixture();
+    const prepare = (prompt: string) =>
+      service.prepareGeneration({
+        conversationId: base.conversationId,
+        prompt,
+        hasFiles: false,
+        skillInstallationIds: [],
+        authenticated: true,
+      });
+
+    try {
+      const research = await prepare(
+        "搜索网络并调研最近一周 AI 行业的重要动态，核实信息并附上来源",
+      );
+      expect(research.initialToolNames).toContain("openerx_web_search");
+
+      const fileReview = await prepare(
+        "检查我选择的文件或文件夹，找出问题并给出可验证的改进方案",
+      );
+      expect(fileReview.initialToolNames).toEqual(
+        expect.arrayContaining([
+          "openerx_file_list",
+          "openerx_file_search",
+          "openerx_file_read",
+        ]),
+      );
+
+      const deliverables = await prepare(
+        "搜索最新资料，制作一份 AI 工具选型报告，同时生成对比表格、DOCX 和汇报 PPT",
+      );
+      expect(deliverables.initialToolNames).toEqual(
+        expect.arrayContaining([
+          "openerx_web_search",
+          "openerx_office_artifact",
+          "openerx_calculate",
+          "openerx_structured_data",
+        ]),
+      );
+
+      const financialModel = await prepare(
+        "计算一家月营收 100 万元、成本 65 万元公司的三种增长情景，并生成可下载的 Excel 分析表",
+      );
+      expect(financialModel.initialToolNames).toEqual(
+        expect.arrayContaining([
+          "openerx_office_artifact",
+          "openerx_calculate",
+          "openerx_structured_data",
+        ]),
+      );
+    } finally {
+      chat.close();
+      await service.close();
+    }
+  });
+
   it("fails closed when Host and OS capabilities are unavailable and reports actionable readiness", async () => {
     const { chat, service, host, base, directory } = fixture({
       shellAvailability: () => ({
