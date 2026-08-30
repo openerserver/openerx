@@ -32,6 +32,23 @@ import {
   localWebSearchSettingsStateSchema,
   localWebSearchSettingsUpdateInputSchema,
 } from "./local-web-search";
+import {
+  type ConversationMemorySettings,
+  conversationMemorySettingsGetInputSchema,
+  conversationMemorySettingsSchema,
+  conversationMemorySettingsUpdateInputSchema,
+  type MemoryClearResult,
+  type MemoryEntry,
+  type MemorySettings,
+  memoryClearInputSchema,
+  memoryClearResultSchema,
+  memoryDeleteInputSchema,
+  memoryEntrySchema,
+  memoryListInputSchema,
+  memorySettingsSchema,
+  memorySettingsUpdateInputSchema,
+  memoryUpsertInputSchema,
+} from "./memory";
 import { defaultThinkingLevel, thinkingLevelSchema } from "./model";
 import {
   type SkillInstallation,
@@ -246,7 +263,12 @@ export const chatArchiveInputSchema = z
   })
   .strict();
 
-export const chatDeleteInputSchema = z.object({ conversationId: entityIdSchema }).strict();
+export const chatDeleteInputSchema = z
+  .object({
+    conversationId: entityIdSchema,
+    forgetSourceMemories: z.boolean().optional(),
+  })
+  .strict();
 
 export const chatSelectModelInputSchema = z
   .object({
@@ -290,6 +312,29 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
   z.object({ command: z.literal("sync.conflicts"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("sync.resolve"), input: syncResolveConflictInputSchema }).strict(),
   z.object({ command: z.literal("cache.clear"), input: emptyInputSchema }).strict(),
+  z.object({ command: z.literal("memory.settings.get"), input: emptyInputSchema }).strict(),
+  z
+    .object({
+      command: z.literal("memory.settings.update"),
+      input: memorySettingsUpdateInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal("memory.conversation.settings.get"),
+      input: conversationMemorySettingsGetInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal("memory.conversation.settings.update"),
+      input: conversationMemorySettingsUpdateInputSchema,
+    })
+    .strict(),
+  z.object({ command: z.literal("memory.list"), input: memoryListInputSchema }).strict(),
+  z.object({ command: z.literal("memory.upsert"), input: memoryUpsertInputSchema }).strict(),
+  z.object({ command: z.literal("memory.delete"), input: memoryDeleteInputSchema }).strict(),
+  z.object({ command: z.literal("memory.clear"), input: memoryClearInputSchema }).strict(),
   z.object({ command: z.literal("chat.list"), input: chatListInputSchema }).strict(),
   z.object({ command: z.literal("chat.get"), input: chatGetInputSchema }).strict(),
   z.object({ command: z.literal("chat.send"), input: chatSendInputSchema }).strict(),
@@ -495,6 +540,14 @@ export interface ChatCommandResultMap {
   "sync.conflicts": SyncConflict[];
   "sync.resolve": z.infer<typeof syncStatusSchema>;
   "cache.clear": z.infer<typeof localCacheClearResultSchema>;
+  "memory.settings.get": MemorySettings;
+  "memory.settings.update": MemorySettings;
+  "memory.conversation.settings.get": ConversationMemorySettings;
+  "memory.conversation.settings.update": ConversationMemorySettings;
+  "memory.list": MemoryEntry[];
+  "memory.upsert": MemoryEntry;
+  "memory.delete": MemoryEntry;
+  "memory.clear": MemoryClearResult;
   "chat.list": ConversationSummary[];
   "chat.get": ConversationSnapshot;
   "chat.send": GenerationReceipt;
@@ -567,6 +620,24 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "cache.clear":
       parsed = localCacheClearResultSchema.parse(value);
+      break;
+    case "memory.settings.get":
+    case "memory.settings.update":
+      parsed = memorySettingsSchema.parse(value);
+      break;
+    case "memory.conversation.settings.get":
+    case "memory.conversation.settings.update":
+      parsed = conversationMemorySettingsSchema.parse(value);
+      break;
+    case "memory.list":
+      parsed = z.array(memoryEntrySchema).parse(value);
+      break;
+    case "memory.upsert":
+    case "memory.delete":
+      parsed = memoryEntrySchema.parse(value);
+      break;
+    case "memory.clear":
+      parsed = memoryClearResultSchema.parse(value);
       break;
     case "chat.list":
       parsed = z.array(conversationSummarySchema).parse(value);

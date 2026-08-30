@@ -3,6 +3,7 @@ import { brokeredBashExecutionContextSchema } from "./brokered-bash";
 import { entityIdSchema, timestampSchema } from "./chat";
 import { supportedFileFormatSchema } from "./file";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
+import { automaticMemoryExtractionOutputSchema, recalledMemorySchema } from "./memory";
 import { processNonceSchema } from "./process";
 import { piSkillMountSchema } from "./skill";
 import {
@@ -16,7 +17,7 @@ import {
 } from "./tool";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 6 as const;
+export const piHostContractVersion = 7 as const;
 
 export const piHostBootstrapSchema = z
   .object({
@@ -111,6 +112,8 @@ export const piPromptFrameSchema = z
     mcpTools: z.array(mcpToolDescriptorSchema).max(2_000).optional(),
     initialToolNames: z.array(z.string().min(1).max(200)).max(1_000).optional(),
     availableToolNames: z.array(z.string().min(1).max(200)).max(2_000).optional(),
+    memoryEnabled: z.boolean().optional(),
+    memories: z.array(recalledMemorySchema).max(8).optional(),
     platform: z
       .object({
         accountId: entityIdSchema,
@@ -167,6 +170,84 @@ export const piAbortFrameSchema = z
     generationId: entityIdSchema,
   })
   .strict();
+
+const piBackgroundPlatformSchema = z
+  .object({
+    accountId: entityIdSchema,
+    accessToken: z.string().min(32),
+    platformBaseUrl: z.url(),
+    selectedModelRef: z.string().min(1),
+    approvedFallbackModelRef: z.string().min(1).nullable(),
+    requestDedupeKey: z.string().min(8).max(240),
+  })
+  .strict();
+
+const piBackgroundByokSchema = z
+  .object({
+    apiKey: z.string().min(1).max(20_000),
+    baseUrl: z.url(),
+    modelId: z.string().min(1).max(200),
+    displayName: z.string().min(1).max(120),
+    contextWindow: z.number().int().positive(),
+    maxOutputTokens: z.number().int().positive(),
+    capabilities: z
+      .object({
+        imageInput: z.boolean(),
+        functionCalling: z.boolean(),
+        reasoning: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const piMemoryExtractFrameSchema = z
+  .object({
+    kind: z.literal("pi.memory.extract"),
+    requestId: entityIdSchema,
+    jobId: entityIdSchema,
+    conversationId: entityIdSchema,
+    sourceAssistantMessageId: entityIdSchema,
+    thinkingLevel: thinkingLevelSchema.optional(),
+    messages: z
+      .array(
+        z
+          .object({
+            messageId: entityIdSchema,
+            text: z.string().trim().min(1).max(100_000),
+          })
+          .strict(),
+      )
+      .min(2)
+      .max(200),
+    platform: piBackgroundPlatformSchema.optional(),
+    byok: piBackgroundByokSchema.optional(),
+  })
+  .strict()
+  .superRefine((frame, context) => {
+    if (frame.platform && frame.byok) {
+      context.addIssue({ code: "custom", message: "Platform and BYOK are mutually exclusive" });
+    }
+  });
+
+export const piMemoryExtractResultFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      kind: z.literal("pi.memory.extract-result"),
+      requestId: entityIdSchema,
+      ok: z.literal(true),
+      output: automaticMemoryExtractionOutputSchema,
+      usageRecords: z.array(usageRecordSchema).max(128).default([]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("pi.memory.extract-result"),
+      requestId: entityIdSchema,
+      ok: z.literal(false),
+      errorCode: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+    })
+    .strict(),
+]);
 
 export const piSessionControlFrameSchema = z
   .object({
@@ -239,6 +320,7 @@ export const piFileToolResponseFrameSchema = z.discriminatedUnion("ok", [
 
 export const piHostRequestFrameSchema = z.union([
   piPromptFrameSchema,
+  piMemoryExtractFrameSchema,
   piAbortFrameSchema,
   piSessionControlFrameSchema,
   piFileToolResponseFrameSchema,
@@ -264,6 +346,7 @@ export const piHostPortFrameSchema = z.union([
   piHostReadyFrameSchema,
   piHostRequestFrameSchema,
   piHostEventFrameSchema,
+  piMemoryExtractResultFrameSchema,
   piSessionControlResultFrameSchema,
   piFileToolRequestFrameSchema,
   piFileToolResponseFrameSchema,
@@ -277,6 +360,8 @@ export const piHostPortFrameSchema = z.union([
 export type PiHistoryMessage = z.infer<typeof piHistoryMessageSchema>;
 export type PiImageInput = z.infer<typeof piImageInputSchema>;
 export type PiPromptFrame = z.infer<typeof piPromptFrameSchema>;
+export type PiMemoryExtractFrame = z.infer<typeof piMemoryExtractFrameSchema>;
+export type PiMemoryExtractResultFrame = z.infer<typeof piMemoryExtractResultFrameSchema>;
 export type PiHostEventFrame = z.infer<typeof piHostEventFrameSchema>;
 export type PiSessionControlFrame = z.infer<typeof piSessionControlFrameSchema>;
 export type PiSessionControlResultFrame = z.infer<typeof piSessionControlResultFrameSchema>;

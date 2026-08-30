@@ -8,6 +8,7 @@ import type {
   LocalWebSearchSettingsState,
   SelectableLocalWebSearchProviderId,
 } from "./local-web-search";
+import { memoryKindSchema } from "./memory";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
@@ -609,6 +610,39 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
       args: z.array(z.string().max(8_000)).max(200),
       timeoutMs: z.number().int().min(100).max(1_800_000),
       allowNetwork: z.boolean().default(false),
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("memory_search"),
+      query: z.string().trim().min(1).max(500),
+      limit: z.number().int().min(1).max(20).default(8),
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("memory_list"),
+      kind: memoryKindSchema.optional(),
+      limit: z.number().int().min(1).max(100).default(50),
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("memory_upsert"),
+      memoryId: entityIdSchema.optional(),
+      kind: memoryKindSchema,
+      content: z.string().trim().min(1).max(2_000),
+      retrievalKeys: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("memory_forget"),
+      memoryId: entityIdSchema,
     })
     .strict(),
 ]);

@@ -2,6 +2,8 @@ import {
   type PiActivityEvent,
   type PiFileToolRequestFrame,
   type PiHostEventFrame,
+  type PiMemoryExtractFrame,
+  type PiMemoryExtractResultFrame,
   type PiPromptFrame,
   type PiSessionControlFrame,
   type PiToolCancelFrame,
@@ -10,6 +12,7 @@ import {
   piFileToolRequestFrameSchema,
   piHostEventFrameSchema,
   piHostReadyFrameSchema,
+  piMemoryExtractResultFrameSchema,
   piSessionControlResultFrameSchema,
   piToolCancelFrameSchema,
   piToolRequestFrameSchema,
@@ -18,6 +21,7 @@ import type { MessagePortMain } from "electron";
 
 export interface PiHostClient {
   prompt(frame: PiPromptFrame): Promise<void>;
+  extractMemories?(frame: PiMemoryExtractFrame): Promise<PiMemoryExtractResultFrame>;
   abort(generationId: string): Promise<void>;
   control(frame: PiSessionControlFrame): Promise<void>;
   onEvent(listener: (frame: PiHostEventFrame) => void): () => void;
@@ -50,6 +54,14 @@ export class MessagePortPiHostClient implements PiHostClient {
     string,
     { resolve(): void; reject(error: Error): void; timeout: NodeJS.Timeout }
   >();
+  readonly #pendingMemoryExtractions = new Map<
+    string,
+    {
+      resolve(result: PiMemoryExtractResultFrame): void;
+      reject(error: Error): void;
+      timeout: NodeJS.Timeout;
+    }
+  >();
   readonly #ready: Promise<void>;
   #disconnected = false;
 
@@ -75,6 +87,11 @@ export class MessagePortPiHostClient implements PiHostClient {
               pending.reject(new Error("PI_HOST_DISCONNECTED"));
             }
             this.#pendingControls.clear();
+            for (const pending of this.#pendingMemoryExtractions.values()) {
+              clearTimeout(pending.timeout);
+              pending.reject(new Error("PI_HOST_DISCONNECTED"));
+            }
+            this.#pendingMemoryExtractions.clear();
             for (const listener of this.#disconnectListeners) listener();
           });
           resolve();
@@ -88,6 +105,18 @@ export class MessagePortPiHostClient implements PiHostClient {
   async prompt(frame: PiPromptFrame): Promise<void> {
     await this.#ready;
     this.#port.postMessage(frame);
+  }
+
+  async extractMemories(frame: PiMemoryExtractFrame): Promise<PiMemoryExtractResultFrame> {
+    await this.#ready;
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.#pendingMemoryExtractions.delete(frame.requestId);
+        reject(new Error("PI_MEMORY_EXTRACTION_TIMEOUT"));
+      }, 2 * 60_000);
+      this.#pendingMemoryExtractions.set(frame.requestId, { resolve, reject, timeout });
+      this.#port.postMessage(frame);
+    });
   }
 
   async abort(generationId: string): Promise<void> {
@@ -147,6 +176,15 @@ export class MessagePortPiHostClient implements PiHostClient {
   }
 
   #handleMessage(data: unknown): void {
+    const extraction = piMemoryExtractResultFrameSchema.safeParse(data);
+    if (extraction.success) {
+      const pending = this.#pendingMemoryExtractions.get(extraction.data.requestId);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      this.#pendingMemoryExtractions.delete(extraction.data.requestId);
+      pending.resolve(extraction.data);
+      return;
+    }
     const toolCancel = piToolCancelFrameSchema.safeParse(data);
     if (toolCancel.success) {
       for (const listener of this.#toolCancelListeners) listener(toolCancel.data);

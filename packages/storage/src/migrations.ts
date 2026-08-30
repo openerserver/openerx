@@ -964,6 +964,199 @@ const migrations: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 17,
+    checksum: "automation-scheduler-v17-20260829",
+    sql: `
+      CREATE TABLE automation_definitions (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('heartbeat', 'standalone')),
+        status TEXT NOT NULL CHECK (status IN (
+          'active', 'paused', 'disabled_by_system', 'deleted'
+        )),
+        schedule_json TEXT NOT NULL,
+        target_json TEXT NOT NULL,
+        execution_json TEXT NOT NULL,
+        next_run_at TEXT,
+        last_run_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0)
+      ) STRICT;
+      CREATE TABLE automation_runs (
+        id TEXT PRIMARY KEY,
+        automation_id TEXT NOT NULL REFERENCES automation_definitions(id),
+        scheduled_for TEXT NOT NULL,
+        attempt_group TEXT NOT NULL,
+        trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual', 'catch_up', 'retry')),
+        status TEXT NOT NULL CHECK (status IN (
+          'scheduled', 'claimed', 'starting', 'running', 'succeeded', 'failed', 'cancelled',
+          'missed', 'needs_attention', 'interrupted', 'retry_scheduled', 'skipped_overlap'
+        )),
+        conversation_id TEXT,
+        branch_id TEXT,
+        generation_id TEXT,
+        execution_run_id TEXT,
+        attempt INTEGER NOT NULL CHECK (attempt > 0),
+        claimed_by_host_id TEXT,
+        lease_expires_at TEXT,
+        prompt_snapshot TEXT NOT NULL,
+        config_snapshot_json TEXT NOT NULL,
+        failure_code TEXT,
+        action_required INTEGER NOT NULL CHECK (action_required IN (0, 1)),
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        UNIQUE(automation_id, scheduled_for, attempt_group),
+        UNIQUE(generation_id),
+        UNIQUE(execution_run_id)
+      ) STRICT;
+      CREATE INDEX automation_definitions_due_idx
+        ON automation_definitions(owner_profile_id, status, next_run_at);
+      CREATE INDEX automation_runs_history_idx
+        ON automation_runs(automation_id, created_at DESC);
+      CREATE INDEX automation_runs_claim_idx
+        ON automation_runs(status, lease_expires_at, scheduled_for);
+    `,
+  },
+  {
+    version: 18,
+    checksum: "automation-assistant-reconciliation-v18-20260829",
+    sql: `
+      ALTER TABLE automation_runs ADD COLUMN assistant_message_id TEXT;
+      CREATE UNIQUE INDEX automation_runs_assistant_message_idx
+        ON automation_runs(assistant_message_id)
+        WHERE assistant_message_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 19,
+    checksum: "personal-long-term-memory-v19-20260830",
+    sql: `
+      CREATE TABLE memory_settings (
+        owner_profile_id TEXT PRIMARY KEY,
+        memories_enabled INTEGER NOT NULL CHECK (memories_enabled IN (0, 1)),
+        use_memories INTEGER NOT NULL CHECK (use_memories IN (0, 1)),
+        generate_memories INTEGER NOT NULL CHECK (generate_memories IN (0, 1)),
+        sync_memories INTEGER NOT NULL CHECK (sync_memories IN (0, 1)),
+        updated_at TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0)
+      ) STRICT;
+      CREATE TABLE memory_entries (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        scope TEXT NOT NULL CHECK (scope = 'personal'),
+        kind TEXT NOT NULL CHECK (kind IN (
+          'profile', 'preference', 'workflow', 'ongoing_context'
+        )),
+        content TEXT NOT NULL,
+        retrieval_keys_json TEXT NOT NULL,
+        canonical_key TEXT,
+        origin TEXT NOT NULL CHECK (origin IN ('explicit', 'automatic', 'consolidated')),
+        confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+        status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'deleted')),
+        source_conversation_id TEXT,
+        source_message_id TEXT,
+        supersedes_memory_id TEXT REFERENCES memory_entries(id),
+        expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0)
+      ) STRICT;
+      CREATE UNIQUE INDEX memory_entries_active_canonical_idx
+        ON memory_entries(owner_profile_id, kind, canonical_key)
+        WHERE status = 'active' AND canonical_key IS NOT NULL;
+      CREATE INDEX memory_entries_retrieval_idx
+        ON memory_entries(owner_profile_id, status, kind, updated_at DESC);
+      CREATE TABLE memory_idempotency (
+        key TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        command TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE memory_usage_events (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        assistant_message_id TEXT NOT NULL,
+        memory_id TEXT NOT NULL REFERENCES memory_entries(id),
+        score REAL NOT NULL CHECK (score >= 0 AND score <= 1),
+        used_at TEXT NOT NULL,
+        UNIQUE(assistant_message_id, memory_id)
+      ) STRICT;
+      CREATE INDEX memory_usage_events_owner_idx
+        ON memory_usage_events(owner_profile_id, used_at DESC);
+    `,
+  },
+  {
+    version: 20,
+    checksum: "conversation-memory-controls-v20-20260830",
+    sql: `
+      CREATE TABLE memory_conversation_settings (
+        conversation_id TEXT NOT NULL,
+        owner_profile_id TEXT NOT NULL,
+        use_memories INTEGER CHECK (use_memories IS NULL OR use_memories IN (0, 1)),
+        generate_memories INTEGER CHECK (generate_memories IS NULL OR generate_memories IN (0, 1)),
+        updated_at TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        PRIMARY KEY (owner_profile_id, conversation_id)
+      ) STRICT;
+      CREATE INDEX memory_conversation_settings_owner_idx
+        ON memory_conversation_settings(owner_profile_id, updated_at DESC);
+    `,
+  },
+  {
+    version: 21,
+    checksum: "memory-background-extraction-v21-20260830",
+    sql: `
+      ALTER TABLE memory_settings
+        ADD COLUMN disable_on_external_context INTEGER NOT NULL DEFAULT 1
+        CHECK (disable_on_external_context IN (0, 1));
+      ALTER TABLE memory_settings
+        ADD COLUMN idle_delay_minutes INTEGER NOT NULL DEFAULT 30
+        CHECK (idle_delay_minutes BETWEEN 1 AND 1440);
+      ALTER TABLE memory_settings
+        ADD COLUMN min_rate_limit_remaining_percent INTEGER NOT NULL DEFAULT 20
+        CHECK (min_rate_limit_remaining_percent BETWEEN 0 AND 100);
+
+      CREATE TABLE memory_extraction_jobs (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        source_assistant_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK (status IN (
+          'pending', 'running', 'completed', 'skipped', 'failed'
+        )),
+        eligible_at TEXT NOT NULL,
+        attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+        candidate_count INTEGER NOT NULL DEFAULT 0 CHECK (candidate_count >= 0),
+        skip_reason TEXT CHECK (skip_reason IN (
+          'memory_disabled', 'generation_disabled', 'conversation_disabled',
+          'conversation_deleted', 'conversation_active', 'conversation_too_short',
+          'external_context', 'rate_limit_low', 'execution_context_unavailable'
+        )),
+        last_error_code TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE(owner_profile_id, conversation_id)
+      ) STRICT;
+      CREATE INDEX memory_extraction_jobs_due_idx
+        ON memory_extraction_jobs(owner_profile_id, status, eligible_at, updated_at);
+
+      CREATE TABLE memory_conversation_context (
+        owner_profile_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        external_context_used INTEGER NOT NULL DEFAULT 0 CHECK (external_context_used IN (0, 1)),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(owner_profile_id, conversation_id)
+      ) STRICT;
+    `,
+  },
 ];
 
 export function migrateDatabase(

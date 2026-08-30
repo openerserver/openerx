@@ -1,0 +1,139 @@
+import { describe, expect, it } from "vitest";
+import {
+  chatCommandEnvelopeSchema,
+  memoryEntrySchema,
+  piMemoryExtractFrameSchema,
+  piMemoryExtractResultFrameSchema,
+  piPromptFrameSchema,
+  toolOperationSchema,
+} from "../src";
+
+const id = (suffix: string) => `00000000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+const timestamp = "2026-08-30T00:00:00.000Z";
+
+describe("memory contracts", () => {
+  it("accepts strict settings and explicit-memory commands", () => {
+    expect(
+      chatCommandEnvelopeSchema.parse({
+        command: "memory.settings.update",
+        input: { memoriesEnabled: true, useMemories: true },
+      }).command,
+    ).toBe("memory.settings.update");
+    expect(
+      chatCommandEnvelopeSchema.parse({
+        command: "memory.conversation.settings.update",
+        input: { conversationId: id("9"), useMemories: false },
+      }).command,
+    ).toBe("memory.conversation.settings.update");
+    expect(
+      chatCommandEnvelopeSchema.parse({
+        command: "memory.clear",
+        input: { kind: "preference", idempotencyKey: "memory-clear-kind-0001" },
+      }).input,
+    ).toMatchObject({ kind: "preference" });
+    expect(
+      chatCommandEnvelopeSchema.parse({
+        command: "memory.upsert",
+        input: {
+          kind: "preference",
+          content: "先给结论，再给必要细节。",
+          idempotencyKey: "memory-contract-0001",
+        },
+      }).command,
+    ).toBe("memory.upsert");
+  });
+
+  it("carries bounded recalled memories into a Pi prompt frame", () => {
+    const memory = memoryEntrySchema.parse({
+      id: id("1"),
+      ownerProfileId: "local-default",
+      scope: "personal",
+      kind: "preference",
+      content: "先给结论。",
+      retrievalKeys: ["结论"],
+      canonicalKey: "preference:先给结论。",
+      origin: "explicit",
+      confidence: 1,
+      status: "active",
+      sourceConversationId: null,
+      sourceMessageId: null,
+      supersedesMemoryId: null,
+      expiresAt: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    });
+    const prompt = piPromptFrameSchema.parse({
+      kind: "pi.session.prompt",
+      generationId: id("2"),
+      conversationId: id("3"),
+      branchId: id("4"),
+      assistantMessageId: id("5"),
+      history: [{ role: "user", text: "请解释方案" }],
+      memoryEnabled: true,
+      memories: [
+        {
+          id: memory.id,
+          kind: memory.kind,
+          content: memory.content,
+          score: 0.8,
+          updatedAt: memory.updatedAt,
+        },
+      ],
+    });
+    expect(prompt.memories).toHaveLength(1);
+  });
+
+  it("validates Pi-native remember and forget operations", () => {
+    expect(
+      toolOperationSchema.parse({
+        operation: "memory_upsert",
+        memoryId: id("7"),
+        kind: "workflow",
+        content: "提交前运行类型检查。",
+        idempotencyKey: "memory-tool-0001",
+      }).operation,
+    ).toBe("memory_upsert");
+    expect(
+      toolOperationSchema.parse({
+        operation: "memory_forget",
+        memoryId: id("6"),
+        idempotencyKey: "memory-tool-0002",
+      }).operation,
+    ).toBe("memory_forget");
+  });
+
+  it("bounds background Pi memory extraction requests and structured results", () => {
+    const sourceMessageId = id("10");
+    const request = piMemoryExtractFrameSchema.parse({
+      kind: "pi.memory.extract",
+      requestId: id("11"),
+      jobId: id("12"),
+      conversationId: id("13"),
+      sourceAssistantMessageId: id("14"),
+      messages: [
+        { messageId: sourceMessageId, text: "我希望先给结论。" },
+        { messageId: id("15"), text: "这是第二条用户消息。" },
+      ],
+    });
+    expect(request.messages).toHaveLength(2);
+    expect(
+      piMemoryExtractResultFrameSchema.parse({
+        kind: "pi.memory.extract-result",
+        requestId: request.requestId,
+        ok: true,
+        output: {
+          candidates: [
+            {
+              kind: "preference",
+              content: "用户希望先给结论。",
+              retrievalKeys: ["结论"],
+              confidence: 0.93,
+              sourceMessageId,
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({ ok: true, usageRecords: [] });
+  });
+});

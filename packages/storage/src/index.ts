@@ -1,5 +1,6 @@
 export * from "./chat-repository";
 export * from "./file-repository";
+export * from "./memory-repository";
 export * from "./migrations";
 export * from "./remote-repository";
 export * from "./skill-repository";

@@ -39,6 +39,7 @@ export const personalDataSummarySchema = z
     artifacts: z.number().int().nonnegative(),
     workItems: z.number().int().nonnegative(),
     skillInstallations: z.number().int().nonnegative(),
+    memories: z.number().int().nonnegative(),
   })
   .strict();
 

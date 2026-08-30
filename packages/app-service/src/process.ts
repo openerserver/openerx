@@ -17,6 +17,7 @@ import { SkillPackageService, SkillToolAdapter } from "@openerx/skills";
 import {
   ChatRepository,
   FileRepository,
+  MemoryRepository,
   RemoteRepository,
   SkillRepository,
   ToolRepository,
@@ -67,6 +68,10 @@ parentPort.once("message", async (bootstrapEvent) => {
     { ownerProfileId: bootstrap.ownerProfileId, deviceId: bootstrap.deviceId },
   );
   const skills = new SkillPackageService(skillRepository, bootstrap.profileDirectory);
+  const memoryRepository = new MemoryRepository(
+    path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
+    { ownerProfileId: bootstrap.ownerProfileId, deviceId: bootstrap.deviceId },
+  );
   skills.seedBuiltIns();
   const workspaceDirectory = path.join(bootstrap.profileDirectory, "pi-workspace");
   mkdirSync(workspaceDirectory, { recursive: true });
@@ -102,6 +107,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     toolService,
     remoteRepository,
     skills,
+    memoryRepository,
   );
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.onEvent((event) => {

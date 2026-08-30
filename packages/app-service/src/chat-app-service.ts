@@ -15,7 +15,12 @@ import type {
 } from "@openerx/contracts";
 import { type FileAppService, FileServiceError } from "@openerx/file-service";
 import type { SkillPackageService } from "@openerx/skills";
-import type { ChatRepository, GenerationDraft, RemoteRepository } from "@openerx/storage";
+import type {
+  ChatRepository,
+  GenerationDraft,
+  MemoryRepository,
+  RemoteRepository,
+} from "@openerx/storage";
 import type { PiHostClient } from "./pi-host-client";
 import type { SyncCoordinator } from "./sync-coordinator";
 import type { ToolAppService } from "./tool-app-service";
@@ -35,12 +40,14 @@ export class ChatAppService {
   readonly #conversationByGeneration = new Map<string, string>();
   readonly #branchByGeneration = new Map<string, string>();
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
+  readonly #syncAuthorizationByGeneration = new Map<string, AppServiceAuthorization>();
   readonly #remoteAuthorityByMessage = new Map<string, RemoteExecutionAuthority>();
   readonly #sync: SyncCoordinator | null;
   readonly #files: FileAppService | null;
   readonly #tools: ToolAppService | null;
   readonly #remote: RemoteRepository | null;
   readonly #skills: SkillPackageService | null;
+  readonly #memories: MemoryRepository | null;
   readonly #remoteApplications = new Map<string, Promise<RemoteApplyCommandResponseFrame>>();
 
   constructor(
@@ -51,6 +58,7 @@ export class ChatAppService {
     tools: ToolAppService | null = null,
     remote: RemoteRepository | null = null,
     skills: SkillPackageService | null = null,
+    memories: MemoryRepository | null = null,
   ) {
     this.#repository = repository;
     this.#piHost = piHost;
@@ -69,6 +77,7 @@ export class ChatAppService {
     this.#tools = tools;
     this.#remote = remote;
     this.#skills = skills;
+    this.#memories = memories;
   }
 
   initialize(): ChatEvent[] {
@@ -84,6 +93,7 @@ export class ChatAppService {
     void this.#tools?.close();
     this.#remote?.close();
     this.#skills?.close();
+    this.#memories?.close();
   }
 
   onEvent(listener: (event: ChatEvent) => void): () => void {
@@ -111,6 +121,40 @@ export class ChatAppService {
       case "cache.clear": {
         this.#repository.clearLocalCache();
         return { clearedAt: new Date().toISOString() };
+      }
+      case "memory.settings.get":
+        return this.#requiredMemories().settings();
+      case "memory.settings.update": {
+        const result = this.#requiredMemories().updateSettings(request.input);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "memory.conversation.settings.get":
+        return this.#requiredMemories().conversationSettings(request.input.conversationId);
+      case "memory.conversation.settings.update": {
+        const result = this.#requiredMemories().updateConversationSettings(request.input);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "memory.list":
+        return this.#requiredMemories().list(request.input);
+      case "memory.upsert": {
+        const result = this.#requiredMemories().upsert(request.input);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "memory.delete": {
+        const result = this.#requiredMemories().delete(request.input);
+        await this.#syncIfAuthorized(authorization);
+        return result;
+      }
+      case "memory.clear": {
+        const result = this.#requiredMemories().clear(
+          request.input.idempotencyKey,
+          request.input.kind,
+        );
+        await this.#syncIfAuthorized(authorization);
+        return result;
       }
       case "chat.list":
         return this.#repository.listConversations(request.input.includeArchived ?? false);
@@ -176,6 +220,13 @@ export class ChatAppService {
         return result.conversation;
       }
       case "chat.delete": {
+        this.#memories?.deleteExtractionState(request.input.conversationId);
+        if (request.input.forgetSourceMemories) {
+          this.#requiredMemories().deleteBySourceConversation(
+            request.input.conversationId,
+            `chat-delete-source:${request.input.conversationId}`,
+          );
+        }
         const result = this.#repository.deleteConversation(request.input.conversationId);
         if (result.event) this.#emit(result.event);
         await this.#syncIfAuthorized(authorization);
@@ -386,6 +437,11 @@ export class ChatAppService {
   #requiredSkills(): SkillPackageService {
     if (!this.#skills) throw new Error("SKILL_SERVICE_UNAVAILABLE");
     return this.#skills;
+  }
+
+  #requiredMemories(): MemoryRepository {
+    if (!this.#memories) throw new Error("MEMORY_SERVICE_UNAVAILABLE");
+    return this.#memories;
   }
 
   async #applyRemoteCommand(
@@ -683,6 +739,23 @@ export class ChatAppService {
       const images = currentUserMessageId
         ? this.#files?.modelImagesForMessage(currentUserMessageId)
         : undefined;
+      const memorySettings = this.#memories?.settings();
+      const recalledMemories =
+        memorySettings?.memoriesEnabled && memorySettings.useMemories
+          ? (this.#memories?.recall(
+              history.at(-1)?.text ?? "",
+              8,
+              1_200,
+              draft.receipt.conversationId,
+            ) ?? [])
+          : [];
+      if (recalledMemories.length > 0) {
+        this.#memories?.recordUsage({
+          conversationId: draft.receipt.conversationId,
+          assistantMessageId: draft.receipt.assistantMessageId,
+          memories: recalledMemories,
+        });
+      }
       const frame: PiPromptFrame = {
         kind: "pi.session.prompt",
         generationId,
@@ -691,6 +764,9 @@ export class ChatAppService {
         assistantMessageId: draft.receipt.assistantMessageId,
         thinkingLevel: draft.thinkingLevel,
         history,
+        ...(memorySettings?.memoriesEnabled
+          ? { memoryEnabled: true, memories: recalledMemories }
+          : {}),
         ...(skillMounts.length > 0 ? { skills: skillMounts } : {}),
         ...(selectedSkillInstallationId ? { selectedSkillInstallationId } : {}),
         ...(preparedTools
@@ -857,6 +933,84 @@ export class ChatAppService {
     ) {
       throw new Error("GENERATION_NOT_ACTIVE");
     }
+    if (frame.operation.operation.startsWith("memory_")) {
+      const startedAt = Date.now();
+      const memories = this.#requiredMemories();
+      switch (frame.operation.operation) {
+        case "memory_search": {
+          const results = memories.search(frame.operation.query, frame.operation.limit);
+          return {
+            summary: `Found ${results.length} saved memories`,
+            content: [{ type: "text", text: JSON.stringify(results) }],
+            data: { memories: results },
+            sources: [],
+            artifacts: [],
+            sideEffectCommitted: false,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+        case "memory_list": {
+          const results = memories.list({
+            ...(frame.operation.kind ? { kind: frame.operation.kind } : {}),
+            status: "active",
+            limit: frame.operation.limit,
+          });
+          return {
+            summary: `Listed ${results.length} saved memories`,
+            content: [{ type: "text", text: JSON.stringify(results) }],
+            data: { memories: results },
+            sources: [],
+            artifacts: [],
+            sideEffectCommitted: false,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+        case "memory_upsert": {
+          const result = memories.upsert({
+            ...(frame.operation.memoryId ? { id: frame.operation.memoryId } : {}),
+            kind: frame.operation.kind,
+            content: frame.operation.content,
+            ...(frame.operation.retrievalKeys
+              ? { retrievalKeys: frame.operation.retrievalKeys }
+              : {}),
+            sourceConversationId: frame.conversationId,
+            idempotencyKey: frame.operation.idempotencyKey,
+          });
+          await this.#syncIfAuthorized(
+            this.#syncAuthorizationByGeneration.get(frame.generationId) ??
+              this.#authorizationByGeneration.get(frame.generationId),
+          );
+          return {
+            summary: "Saved one long-term memory",
+            content: [{ type: "text", text: `Saved memory ${result.id}: ${result.content}` }],
+            data: { memory: result },
+            sources: [],
+            artifacts: [],
+            sideEffectCommitted: true,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+        case "memory_forget": {
+          const result = memories.delete({
+            memoryId: frame.operation.memoryId,
+            idempotencyKey: frame.operation.idempotencyKey,
+          });
+          await this.#syncIfAuthorized(
+            this.#syncAuthorizationByGeneration.get(frame.generationId) ??
+              this.#authorizationByGeneration.get(frame.generationId),
+          );
+          return {
+            summary: "Deleted one long-term memory",
+            content: [{ type: "text", text: `Forgot memory ${result.id}` }],
+            data: { memory: result },
+            sources: [],
+            artifacts: [],
+            sideEffectCommitted: true,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+      }
+    }
     if (
       frame.operation.operation === "skill_read" ||
       frame.operation.operation === "skill_script_execute"
@@ -881,6 +1035,14 @@ export class ChatAppService {
   }
 
   #handlePiActivity(frame: PiActivityEvent): void {
+    if (
+      frame.type === "tool.requested" &&
+      frame.toolName &&
+      !frame.toolName.startsWith("openerx_memory_")
+    ) {
+      const conversationId = this.#conversationByGeneration.get(frame.generationId);
+      if (conversationId) this.#memories?.markExternalContext(conversationId);
+    }
     this.#tools?.handleActivity(frame);
   }
 
@@ -894,6 +1056,7 @@ export class ChatAppService {
     this.#conversationByGeneration.delete(generationId);
     this.#branchByGeneration.delete(generationId);
     this.#authorizationByGeneration.delete(generationId);
+    this.#syncAuthorizationByGeneration.delete(generationId);
     if (messageId) {
       this.#generationByMessage.delete(messageId);
       this.#remoteAuthorityByMessage.delete(messageId);

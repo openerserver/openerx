@@ -85,6 +85,7 @@ export class PersonalDataExporter {
         artifacts: count(database, "artifacts"),
         workItems: count(database, "work_items"),
         skillInstallations: count(database, "skill_installations", "WHERE deleted_at IS NULL"),
+        memories: count(database, "memory_entries", "WHERE status != 'deleted'"),
       });
     } finally {
       database.close();
@@ -196,6 +197,47 @@ export class PersonalDataExporter {
                 installed_at AS installedAt, updated_at AS updatedAt, last_used_at AS lastUsedAt, revision
          FROM skill_installations WHERE deleted_at IS NULL ORDER BY installed_at, id`,
       ),
+      memorySettings: rows(
+        database,
+        `SELECT memories_enabled AS memoriesEnabled, use_memories AS useMemories,
+                generate_memories AS generateMemories, sync_memories AS syncMemories,
+                disable_on_external_context AS disableOnExternalContext,
+                idle_delay_minutes AS idleDelayMinutes,
+                min_rate_limit_remaining_percent AS minRateLimitRemainingPercent,
+                updated_at AS updatedAt, revision
+         FROM memory_settings ORDER BY owner_profile_id`,
+      ),
+      conversationMemorySettings: rows(
+        database,
+        `SELECT conversation_id AS conversationId, use_memories AS useMemories,
+                generate_memories AS generateMemories, updated_at AS updatedAt, revision
+         FROM memory_conversation_settings ORDER BY updated_at, conversation_id`,
+      ),
+      memoryExtractionJobs: rows(
+        database,
+        `SELECT id, conversation_id AS conversationId,
+                source_assistant_message_id AS sourceAssistantMessageId,
+                status, eligible_at AS eligibleAt, attempt,
+                candidate_count AS candidateCount, skip_reason AS skipReason,
+                last_error_code AS lastErrorCode, created_at AS createdAt,
+                updated_at AS updatedAt, completed_at AS completedAt
+         FROM memory_extraction_jobs ORDER BY created_at, id`,
+      ),
+      memoryConversationContext: rows(
+        database,
+        `SELECT conversation_id AS conversationId,
+                external_context_used AS externalContextUsed, updated_at AS updatedAt
+         FROM memory_conversation_context ORDER BY updated_at, conversation_id`,
+      ),
+      memories: rows(
+        database,
+        `SELECT id, kind, content, retrieval_keys_json AS retrievalKeys,
+                canonical_key AS canonicalKey, origin, confidence, status,
+                source_conversation_id AS sourceConversationId,
+                source_message_id AS sourceMessageId, supersedes_memory_id AS supersedesMemoryId,
+                expires_at AS expiresAt, created_at AS createdAt, updated_at AS updatedAt, revision
+         FROM memory_entries WHERE status != 'deleted' ORDER BY created_at, id`,
+      ),
     };
   }
 
@@ -208,6 +250,7 @@ export class PersonalDataExporter {
       artifacts: 0,
       workItems: 0,
       skillInstallations: 0,
+      memories: 0,
     });
   }
 
@@ -221,6 +264,11 @@ export class PersonalDataExporter {
       artifactVersions: [],
       workItems: [],
       skillInstallations: [],
+      memorySettings: [],
+      conversationMemorySettings: [],
+      memoryExtractionJobs: [],
+      memoryConversationContext: [],
+      memories: [],
     };
   }
 

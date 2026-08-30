@@ -46,6 +46,39 @@ const request: PiToolRequestFrame = {
 };
 
 describe("MessagePortPiHostClient tool progress", () => {
+  it("correlates background memory extraction results", async () => {
+    const port = new FakeMessagePort();
+    const client = new MessagePortPiHostClient(port as unknown as MessagePortMain, "c".repeat(64));
+    port.receive({
+      kind: "pi-host.ready",
+      contractVersion: piHostContractVersion,
+      nonce: "c".repeat(64),
+    });
+    const requestId = crypto.randomUUID();
+    const pending = client.extractMemories({
+      kind: "pi.memory.extract",
+      requestId,
+      jobId: crypto.randomUUID(),
+      conversationId: crypto.randomUUID(),
+      sourceAssistantMessageId: crypto.randomUUID(),
+      messages: [
+        { messageId: crypto.randomUUID(), text: "第一条有效用户消息" },
+        { messageId: crypto.randomUUID(), text: "第二条有效用户消息" },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(port.sent).toContainEqual(expect.objectContaining({ requestId })),
+    );
+    port.receive({
+      kind: "pi.memory.extract-result",
+      requestId,
+      ok: true,
+      output: { candidates: [] },
+      usageRecords: [],
+    });
+    await expect(pending).resolves.toMatchObject({ ok: true, output: { candidates: [] } });
+  });
+
   it("sequences progress and ignores updates after the response settles", async () => {
     const port = new FakeMessagePort();
     const client = new MessagePortPiHostClient(port as unknown as MessagePortMain, "a".repeat(64));

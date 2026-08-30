@@ -15,6 +15,9 @@ export const syncObjectTypeSchema = z.enum([
   "artifact_version",
   "assistant_profile",
   "skill_installation",
+  "memory_entry",
+  "memory_settings",
+  "memory_conversation_settings",
 ]);
 
 export const syncPayloadSchema = z.record(z.string(), z.unknown());

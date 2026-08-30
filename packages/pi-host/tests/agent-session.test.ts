@@ -24,6 +24,95 @@ afterEach(() => {
 });
 
 describe("Pi AgentSession composition", () => {
+  it("runs memory extraction as a no-tool in-memory Pi task with strict candidates", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-memory-extract-"));
+    temporaryDirectories.push(root);
+    const parentPort = new EventEmitter();
+    let resolveResult!: (frame: unknown) => void;
+    const result = new Promise<unknown>((resolve) => {
+      resolveResult = resolve;
+    });
+    const piPort = Object.assign(new EventEmitter(), {
+      sent: [] as unknown[],
+      postMessage(frame: unknown): void {
+        this.sent.push(frame);
+        if (
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "pi.memory.extract-result"
+        ) {
+          resolveResult(frame);
+        }
+      },
+      start(): void {},
+    });
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const faux = fauxProvider({ tokensPerSecond: 10_000 });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const sourceMessageId = randomUUID();
+    faux.setResponses([
+      fauxAssistantMessage(
+        JSON.stringify({
+          candidates: [
+            {
+              kind: "preference",
+              content: "用户希望先给结论。",
+              retrievalKeys: ["结论"],
+              confidence: 0.93,
+              sourceMessageId,
+            },
+          ],
+        }),
+      ),
+    ]);
+    startPiHostProcess(parentPort as unknown as Electron.ParentPort, {
+      modelRuntime,
+      model: faux.getModel(),
+    });
+    parentPort.emit("message", {
+      data: {
+        kind: "pi-host.bootstrap",
+        contractVersion: piHostContractVersion,
+        nonce: "d".repeat(64),
+        profileDirectory: root,
+      },
+      ports: [piPort],
+    });
+    const requestId = randomUUID();
+    piPort.emit("message", {
+      data: {
+        kind: "pi.memory.extract",
+        requestId,
+        jobId: randomUUID(),
+        conversationId: randomUUID(),
+        sourceAssistantMessageId: randomUUID(),
+        messages: [
+          { messageId: sourceMessageId, text: "我希望回答先给结论。" },
+          { messageId: randomUUID(), text: "这是第二条足够长的用户消息，用于满足抽取资格。" },
+        ],
+      },
+    });
+
+    await expect(result).resolves.toMatchObject({
+      kind: "pi.memory.extract-result",
+      requestId,
+      ok: true,
+      output: {
+        candidates: [expect.objectContaining({ sourceMessageId, confidence: 0.93 })],
+      },
+    });
+    expect(
+      piPort.sent.some(
+        (frame) =>
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "pi.tool.request",
+      ),
+    ).toBe(false);
+  });
+
   it("queues an abort received before the Pi session is ready", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-host-early-abort-"));
     temporaryDirectories.push(root);

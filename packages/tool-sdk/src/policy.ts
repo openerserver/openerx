@@ -293,6 +293,28 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         reason: `执行 Skill 脚本：${operation.relativePath}`,
         approval: "per_call",
       };
+    case "memory_search":
+    case "memory_list":
+      return {
+        capability: "builtin.structured_data",
+        risk: "L0",
+        resourceType: "builtin",
+        resource: "personal-memory",
+        actions: [operation.operation === "memory_search" ? "search" : "read"],
+        reason: "读取用户已启用的长期记忆",
+        approval: "automatic",
+      };
+    case "memory_upsert":
+    case "memory_forget":
+      return {
+        capability: "builtin.structured_data",
+        risk: "L1",
+        resourceType: "builtin",
+        resource: "personal-memory",
+        actions: ["create"],
+        reason: operation.operation === "memory_upsert" ? "保存长期记忆" : "删除长期记忆",
+        approval: "automatic",
+      };
   }
 }
 
@@ -331,6 +353,10 @@ export function hasUncertainExternalSideEffect(operation: ToolOperation): boolea
     case "workspace_diff":
     case "workspace_changes":
     case "workspace_change_set_review":
+    case "memory_search":
+    case "memory_list":
+    case "memory_upsert":
+    case "memory_forget":
       return false;
     case "workspace_apply_patch":
     case "workspace_undo":
@@ -460,5 +486,13 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
         input: operation.args.join(" ").slice(0, 2_000),
         target: `${operation.installationId}:${operation.relativePath}`,
       };
+    case "memory_search":
+      return { input: operation.query, target: "personal-memory" };
+    case "memory_list":
+      return { input: operation.kind ?? "all", target: "personal-memory" };
+    case "memory_upsert":
+      return { input: operation.content.slice(0, 2_000), target: operation.kind };
+    case "memory_forget":
+      return { input: "forget", target: operation.memoryId };
   }
 }

@@ -8,6 +8,7 @@ import {
   type ConversationSnapshot,
   type ConversationSummary,
   chatEventSchema,
+  conversationMemorySettingsSchema,
   conversationSchema,
   conversationSnapshotSchema,
   conversationSummarySchema,
@@ -15,6 +16,8 @@ import {
   type GenerationReceipt,
   generationReceiptSchema,
   type Message,
+  memoryEntrySchema,
+  memorySettingsSchema,
   messageSchema,
   type PiHistoryMessage,
   type SearchResult,
@@ -123,6 +126,16 @@ export class ChatRepository {
 
   conversationRevision(conversationId: string | null): number {
     return conversationId ? this.#getConversationEntity(conversationId).revision : 0;
+  }
+
+  hasActiveGeneration(conversationId: string): boolean {
+    const row = this.#database
+      .prepare(
+        `SELECT 1 FROM messages
+         WHERE conversation_id = ? AND status IN ('pending', 'streaming') LIMIT 1`,
+      )
+      .get(conversationId);
+    return row !== undefined;
   }
 
   createGeneration(input: {
@@ -760,6 +773,13 @@ export class ChatRepository {
     if (this.syncConflicts().length > 0) throw new Error("SYNC_UNRESOLVED_CONFLICTS_EXIST");
     this.#transaction(() => {
       this.#database.exec(`
+        DELETE FROM memory_extraction_jobs;
+        DELETE FROM memory_conversation_context;
+        DELETE FROM memory_usage_events;
+        DELETE FROM memory_entries;
+        DELETE FROM memory_idempotency;
+        DELETE FROM memory_conversation_settings;
+        DELETE FROM memory_settings;
         DELETE FROM events;
         DELETE FROM message_parts;
         DELETE FROM messages;
@@ -1247,9 +1267,150 @@ export class ChatRepository {
           )
           .run(this.#now(), this.#now(), objectId, this.#ownerProfileId);
       }
+      if (objectType === "memory_entry") {
+        this.#database
+          .prepare(
+            `UPDATE memory_entries SET status = 'deleted', updated_at = ?, revision = revision + 1
+             WHERE id = ? AND owner_profile_id = ?`,
+          )
+          .run(this.#now(), objectId, this.#ownerProfileId);
+      }
+      if (objectType === "memory_settings") {
+        this.#database
+          .prepare("DELETE FROM memory_settings WHERE owner_profile_id = ?")
+          .run(this.#ownerProfileId);
+      }
+      if (objectType === "memory_conversation_settings") {
+        this.#database
+          .prepare(
+            `DELETE FROM memory_conversation_settings
+             WHERE conversation_id = ? AND owner_profile_id = ?`,
+          )
+          .run(objectId, this.#ownerProfileId);
+      }
       return;
     }
     if (!payload) throw new Error("SYNC_PAYLOAD_MISSING");
+    if (objectType === "memory_settings") {
+      const settings = memorySettingsSchema.parse(payload);
+      if (settings.ownerProfileId !== this.#ownerProfileId || objectId !== this.#ownerProfileId) {
+        throw new Error("ACCOUNT_SCOPE_VIOLATION");
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO memory_settings
+           (owner_profile_id, memories_enabled, use_memories, generate_memories, sync_memories,
+            disable_on_external_context, idle_delay_minutes,
+            min_rate_limit_remaining_percent, updated_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(owner_profile_id) DO UPDATE SET
+             memories_enabled = excluded.memories_enabled,
+             use_memories = excluded.use_memories,
+             generate_memories = excluded.generate_memories,
+             sync_memories = excluded.sync_memories,
+             disable_on_external_context = excluded.disable_on_external_context,
+             idle_delay_minutes = excluded.idle_delay_minutes,
+             min_rate_limit_remaining_percent = excluded.min_rate_limit_remaining_percent,
+             updated_at = excluded.updated_at,
+             revision = excluded.revision`,
+        )
+        .run(
+          settings.ownerProfileId,
+          settings.memoriesEnabled ? 1 : 0,
+          settings.useMemories ? 1 : 0,
+          settings.generateMemories ? 1 : 0,
+          settings.syncMemories ? 1 : 0,
+          settings.disableOnExternalContext ? 1 : 0,
+          settings.idleDelayMinutes,
+          settings.minRateLimitRemainingPercent,
+          settings.updatedAt,
+          settings.revision,
+        );
+      return;
+    }
+    if (objectType === "memory_entry") {
+      const memory = memoryEntrySchema.parse(payload);
+      if (memory.ownerProfileId !== this.#ownerProfileId || memory.id !== objectId) {
+        throw new Error("ACCOUNT_SCOPE_VIOLATION");
+      }
+      if (memory.status === "active" && memory.canonicalKey !== null) {
+        this.#database
+          .prepare(
+            `UPDATE memory_entries SET status = 'superseded', updated_at = ?
+             WHERE owner_profile_id = ? AND kind = ? AND canonical_key = ?
+               AND status = 'active' AND id != ?`,
+          )
+          .run(memory.updatedAt, this.#ownerProfileId, memory.kind, memory.canonicalKey, memory.id);
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO memory_entries
+           (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key,
+            origin, confidence, status, source_conversation_id, source_message_id,
+            supersedes_memory_id, expires_at, created_at, updated_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             scope = excluded.scope, kind = excluded.kind, content = excluded.content,
+             retrieval_keys_json = excluded.retrieval_keys_json,
+             canonical_key = excluded.canonical_key, origin = excluded.origin,
+             confidence = excluded.confidence, status = excluded.status,
+             source_conversation_id = excluded.source_conversation_id,
+             source_message_id = excluded.source_message_id,
+             supersedes_memory_id = excluded.supersedes_memory_id,
+             expires_at = excluded.expires_at, updated_at = excluded.updated_at,
+             revision = excluded.revision
+           WHERE owner_profile_id = excluded.owner_profile_id`,
+        )
+        .run(
+          memory.id,
+          memory.ownerProfileId,
+          memory.scope,
+          memory.kind,
+          memory.content,
+          JSON.stringify(memory.retrievalKeys),
+          memory.canonicalKey,
+          memory.origin,
+          memory.confidence,
+          memory.status,
+          memory.sourceConversationId,
+          memory.sourceMessageId,
+          memory.supersedesMemoryId,
+          memory.expiresAt,
+          memory.createdAt,
+          memory.updatedAt,
+          memory.revision,
+        );
+      return;
+    }
+    if (objectType === "memory_conversation_settings") {
+      const settings = conversationMemorySettingsSchema.parse(payload);
+      if (
+        settings.ownerProfileId !== this.#ownerProfileId ||
+        settings.conversationId !== objectId
+      ) {
+        throw new Error("ACCOUNT_SCOPE_VIOLATION");
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO memory_conversation_settings
+           (conversation_id, owner_profile_id, use_memories, generate_memories, updated_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(owner_profile_id, conversation_id) DO UPDATE SET
+             use_memories = excluded.use_memories,
+             generate_memories = excluded.generate_memories,
+             updated_at = excluded.updated_at,
+             revision = excluded.revision`,
+        )
+        .run(
+          settings.conversationId,
+          settings.ownerProfileId,
+          settings.useMemories === null ? null : settings.useMemories ? 1 : 0,
+          settings.generateMemories === null ? null : settings.generateMemories ? 1 : 0,
+          settings.updatedAt,
+          settings.revision,
+        );
+      return;
+    }
     if (objectType === "skill_installation") {
       const skill = skillInstallationSyncSchema.parse(payload);
       if (skill.ownerProfileId !== this.#ownerProfileId || skill.id !== objectId) {
