@@ -9,7 +9,7 @@ import {
   type BrowserObservation,
   type BrowserSessionDescriptor,
 } from "@openerx/contracts";
-import { app, desktopCapturer, nativeImage } from "electron";
+import { app, nativeImage } from "electron";
 import type {
   BrowserAdapterActionInput,
   BrowserAdapterResult,
@@ -25,6 +25,7 @@ import type {
 } from "./system-default-browser-adapter";
 import type { BrowserSurfaceState } from "./ui-observation-registry";
 import {
+  parseWindowsBrowserCapture,
   parseWindowsBrowserInputMonitorLine,
   parseWindowsBrowserObservation,
   parseWindowsBrowserWindows,
@@ -376,18 +377,23 @@ export class ElectronWindowsSystemBrowserDriver implements SystemDefaultBrowserD
       ]),
     );
     this.#assertIdentity(descriptor, raw.target, browser);
-    const sources = await desktopCapturer.getSources({
-      types: ["window"],
-      thumbnailSize: { width: 4_096, height: 4_096 },
-      fetchWindowIcons: false,
-    });
     const windowId = nativeWindowId(descriptor);
-    const source = sources.find(
-      ({ id }) => Number(/^window:([0-9]+):/u.exec(id)?.[1]) === windowId,
+    const capture = parseWindowsBrowserCapture(
+      await this.#runHelper([
+        "capture",
+        String(descriptor.nativeProcessId),
+        String(windowId),
+        browser.applicationId,
+        browser.applicationName,
+        browser.executablePath,
+        browser.processName,
+      ]),
     );
-    if (!source) throw new Error("BROWSER_SURFACE_NOT_BOUND");
-    const sourceSize = source.thumbnail.getSize();
-    if (source.thumbnail.isEmpty() || sourceSize.width < 1 || sourceSize.height < 1) {
+    this.#assertIdentity(descriptor, capture.target, browser);
+    const windowImage = nativeImage.createFromBuffer(capture.png);
+    const sourceId = `print-window:${windowId}`;
+    const sourceSize = windowImage.getSize();
+    if (windowImage.isEmpty() || sourceSize.width < 1 || sourceSize.height < 1) {
       throw new Error("BROWSER_OBSERVATION_REQUIRED");
     }
     const crop = clippedCrop(
@@ -396,7 +402,7 @@ export class ElectronWindowsSystemBrowserDriver implements SystemDefaultBrowserD
       sourceSize.width,
       sourceSize.height,
     );
-    const pageImage = source.thumbnail.crop(crop);
+    const pageImage = windowImage.crop(crop);
     const pageSize = pageImage.getSize();
     const elements = scaledElements(raw, crop.scaleX, crop.scaleY);
     const bitmap = maskBrowserBitmap(
@@ -415,7 +421,7 @@ export class ElectronWindowsSystemBrowserDriver implements SystemDefaultBrowserD
       url: raw.url,
       elementCount: elements.length,
       pageSize,
-      sourceId: source.id,
+      sourceId,
     });
     return {
       surface: {

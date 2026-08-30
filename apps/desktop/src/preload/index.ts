@@ -45,6 +45,8 @@ import {
   chatSendInputSchema,
   chatStopInputSchema,
   cloudDataDeletionResultSchema,
+  conversationMemorySettingsGetInputSchema,
+  conversationMemorySettingsUpdateInputSchema,
   createRechargeOrderInputSchema,
   type DesktopBridge,
   desktopEnvironmentSchema,
@@ -72,6 +74,11 @@ import {
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
   mcpServerRemoveResultSchema,
+  memoryClearInputSchema,
+  memoryDeleteInputSchema,
+  memoryListInputSchema,
+  memorySettingsUpdateInputSchema,
+  memoryUpsertInputSchema,
   modelCatalogEntrySchema,
   modelServiceSettingsSchema,
   modelServiceSettingsUpdateSchema,
@@ -354,6 +361,34 @@ const bridge: DesktopBridge = {
       syncResolveConflictInputSchema.parse(input),
     ),
   clearLocalCache: async () => invokeChat(ipcChannels.localCacheClear, "cache.clear", {}),
+  getMemorySettings: async () =>
+    invokeChat(ipcChannels.memorySettingsGet, "memory.settings.get", {}),
+  updateMemorySettings: async (input) =>
+    invokeChat(
+      ipcChannels.memorySettingsUpdate,
+      "memory.settings.update",
+      memorySettingsUpdateInputSchema.parse(input),
+    ),
+  getConversationMemorySettings: async (input) =>
+    invokeChat(
+      ipcChannels.memoryConversationSettingsGet,
+      "memory.conversation.settings.get",
+      conversationMemorySettingsGetInputSchema.parse(input),
+    ),
+  updateConversationMemorySettings: async (input) =>
+    invokeChat(
+      ipcChannels.memoryConversationSettingsUpdate,
+      "memory.conversation.settings.update",
+      conversationMemorySettingsUpdateInputSchema.parse(input),
+    ),
+  listMemories: async (input = {}) =>
+    invokeChat(ipcChannels.memoryList, "memory.list", memoryListInputSchema.parse(input)),
+  upsertMemory: async (input) =>
+    invokeChat(ipcChannels.memoryUpsert, "memory.upsert", memoryUpsertInputSchema.parse(input)),
+  deleteMemory: async (input) =>
+    invokeChat(ipcChannels.memoryDelete, "memory.delete", memoryDeleteInputSchema.parse(input)),
+  clearMemories: async (input) =>
+    invokeChat(ipcChannels.memoryClear, "memory.clear", memoryClearInputSchema.parse(input)),
   deleteCloudData: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.cloudDataDelete);
     return cloudDataDeletionResultSchema.parse(result);

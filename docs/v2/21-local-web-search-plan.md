@@ -385,7 +385,8 @@ normalized query + provider + locale + domains + recency + safe-search + policy 
 ### 9.1 LWS-001：先建立可逆边界
 
 - 新增 `local-web-search-policy-v2`、Provider descriptor/result/attempt/error schema；
-- 增加 `OPENERX_LOCAL_WEB_SEARCH_V2`，默认关闭；
+- 增加 `OPENERX_LOCAL_WEB_SEARCH_V2`；当前发布默认启用本地链，显式设置为 `0` 或 `false`
+  时回退到托管云端链；
 - Fake Provider 固定返回 `executionPerformed=false`；
 - 将 `openerx_web_search` readiness 从账户鉴权改为本机 policy/provider readiness；
 - 保留旧 `HttpPlatformWebSearchTransport` 作为短期回滚代码，但本地/云端只能注册一个；
@@ -457,9 +458,10 @@ git diff --check
 
 ## 11. 迁移和回滚
 
-1. LWS-001 加入 V2 feature flag，默认不改变现有路径。
+1. LWS-001 初始加入 V2 feature flag，不改变当时的现有路径；完成本地实现和验证后，发布默认值已
+   切换为本地链。
 2. LWS-002 仅在 Desktop Local Alpha 启用百度直连。
-3. 百度门禁通过后，本地 Adapter 成为开发默认，旧云端 Transport 默认关闭。
+3. 本地 Adapter 现为安装包默认，旧云端 Transport 仅在显式关闭本地链后启用。
 4. LWS-003 加入可信策略显式选择的 Bing，不自动 fallback。（已完成。）
 5. LWS-004 在 Desktop Tool Center 提供可信选择，并移除 `authenticated` 对本地
    `openerx_web_search` 的约束。（已完成。）

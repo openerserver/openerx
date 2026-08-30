@@ -27,7 +27,11 @@ if (packages.length === 0) throw new Error("RELEASE_ASAR_NOT_FOUND");
 
 for (const archive of packages) {
   const relative = path.relative(desktopRoot, archive);
-  const entries = listPackage(archive);
+  const listedEntries = listPackage(archive);
+  const originalEntryByNormalized = new Map(
+    listedEntries.map((entry) => [entry.replaceAll("\\", "/"), entry]),
+  );
+  const entries = [...originalEntryByNormalized.keys()];
   if (target.startsWith("darwin-") || target.startsWith("mas-")) {
     const browserHelper = path.join(
       `${archive}.unpacked`,
@@ -76,9 +80,15 @@ for (const archive of packages) {
   const rendererScripts = entries.filter(
     (entry) => entry.includes("/.vite/renderer/") && entry.endsWith(".js"),
   );
+  const updateBoundaryValues = [
+    updateConfig.manifestUrl,
+    updateConfig.publicKeyPem,
+    updateConfig.keyId,
+  ].filter((value) => typeof value === "string" && value.length > 0);
   for (const entry of rendererScripts) {
-    const source = extractFile(archive, entry.replace(/^\//u, "")).toString("utf8");
-    if (/manifestUrl|publicKeyPem|feedUrl/u.test(source)) {
+    const originalEntry = originalEntryByNormalized.get(entry) ?? entry;
+    const source = extractFile(archive, originalEntry.replace(/^[\\/]/u, "")).toString("utf8");
+    if (updateBoundaryValues.some((value) => source.includes(value))) {
       throw new Error(`RELEASE_RENDERER_UPDATE_SECRET_BOUNDARY:${entry}`);
     }
   }

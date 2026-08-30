@@ -37,6 +37,8 @@ import {
   chatSelectThinkingLevelInputSchema,
   chatSendInputSchema,
   chatStopInputSchema,
+  conversationMemorySettingsGetInputSchema,
+  conversationMemorySettingsUpdateInputSchema,
   createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
   desktopLoginStartupSettingsSchema,
@@ -59,6 +61,11 @@ import {
   mcpServerAuthorizeInputSchema,
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
+  memoryClearInputSchema,
+  memoryDeleteInputSchema,
+  memoryListInputSchema,
+  memorySettingsUpdateInputSchema,
+  memoryUpsertInputSchema,
   modelServiceSettingsUpdateSchema,
   permissionListInputSchema,
   permissionResolveInputSchema,
@@ -667,6 +674,42 @@ function registerIpcHandlers(
     true,
   );
   registerChatHandler(ipcChannels.localCacheClear, "cache.clear", emptyInputSchema);
+  registerChatHandler(ipcChannels.memorySettingsGet, "memory.settings.get", emptyInputSchema);
+  registerChatHandler(
+    ipcChannels.memorySettingsUpdate,
+    "memory.settings.update",
+    memorySettingsUpdateInputSchema,
+    false,
+    true,
+  );
+  registerChatHandler(
+    ipcChannels.memoryConversationSettingsGet,
+    "memory.conversation.settings.get",
+    conversationMemorySettingsGetInputSchema,
+  );
+  registerChatHandler(
+    ipcChannels.memoryConversationSettingsUpdate,
+    "memory.conversation.settings.update",
+    conversationMemorySettingsUpdateInputSchema,
+    false,
+    true,
+  );
+  registerChatHandler(ipcChannels.memoryList, "memory.list", memoryListInputSchema);
+  registerChatHandler(
+    ipcChannels.memoryUpsert,
+    "memory.upsert",
+    memoryUpsertInputSchema,
+    false,
+    true,
+  );
+  registerChatHandler(
+    ipcChannels.memoryDelete,
+    "memory.delete",
+    memoryDeleteInputSchema,
+    false,
+    true,
+  );
+  registerChatHandler(ipcChannels.memoryClear, "memory.clear", memoryClearInputSchema, false, true);
   registerAutomationHandler(
     ipcChannels.automationCreate,
     "automation.create",

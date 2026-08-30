@@ -113,7 +113,7 @@ try {
   await page.getByRole("heading", { name: "任务与工具" }).waitFor();
   await page.getByText("已完成").first().waitFor();
   let localSearchPanel = page.getByLabel("本地 Web Search");
-  await localSearchPanel.getByText("Local Alpha 已启用", { exact: true }).waitFor();
+  await localSearchPanel.getByText("本地搜索已启用（默认）", { exact: true }).waitFor();
   await localSearchPanel.getByLabel("Web Search Provider").selectOption("direct:bing-html");
   await localSearchPanel.getByLabel("Web Search 结果语言").selectOption("en-US");
   await localSearchPanel.getByLabel("Web Search SafeSearch").selectOption("strict");

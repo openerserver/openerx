@@ -12,7 +12,13 @@ import type {
 } from "@openerx/contracts";
 import { FileAppService, MultiFormatParser } from "@openerx/file-service";
 import { SkillPackageService } from "@openerx/skills";
-import { ChatRepository, FileRepository, SkillRepository, ToolRepository } from "@openerx/storage";
+import {
+  ChatRepository,
+  FileRepository,
+  MemoryRepository,
+  SkillRepository,
+  ToolRepository,
+} from "@openerx/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatAppService, type PiHostClient, ToolAppService } from "../src";
 
@@ -347,6 +353,155 @@ async function waitForTerminal(service: ChatAppService, conversationId: string):
 }
 
 describe("ChatAppService", () => {
+  it("honors chat-level recall controls and source-linked forgetting", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-app-service-"));
+    temporaryDirectories.push(directory);
+    const database = path.join(directory, "chat.sqlite");
+    const pi = new ScriptedPiHostClient();
+    const memoryRepository = new MemoryRepository(database);
+    const service = new ChatAppService(
+      new ChatRepository(database),
+      pi,
+      null,
+      null,
+      null,
+      null,
+      null,
+      memoryRepository,
+    );
+    await service.handle({
+      command: "memory.settings.update",
+      input: { memoriesEnabled: true, useMemories: true },
+    });
+    await service.handle({
+      command: "memory.upsert",
+      input: {
+        kind: "preference",
+        content: "回答时先给结论，再给必要细节。",
+        idempotencyKey: "app-memory-upsert-0001",
+      },
+    });
+    const receipt = (await service.handle({
+      command: "chat.send",
+      input: {
+        conversationId: null,
+        text: "请给我一个实现方案",
+        idempotencyKey: "app-memory-chat-0001",
+      },
+    })) as { conversationId: string };
+    await waitForTerminal(service, receipt.conversationId);
+
+    expect(pi.prompts[0]).toMatchObject({
+      memoryEnabled: true,
+      memories: [
+        expect.objectContaining({
+          kind: "preference",
+          content: "回答时先给结论，再给必要细节。",
+        }),
+      ],
+    });
+    expect(pi.prompts[0]?.history.some(({ text }) => text.includes("长期记忆"))).toBe(false);
+
+    await service.handle({
+      command: "memory.conversation.settings.update",
+      input: { conversationId: receipt.conversationId, useMemories: false },
+    });
+    expect(
+      await service.handle({
+        command: "memory.conversation.settings.get",
+        input: { conversationId: receipt.conversationId },
+      }),
+    ).toMatchObject({ useMemories: false });
+    await service.handle({
+      command: "chat.send",
+      input: {
+        conversationId: receipt.conversationId,
+        text: "继续完善",
+        idempotencyKey: "app-memory-chat-0002",
+      },
+    });
+    await waitForTerminal(service, receipt.conversationId);
+    expect(pi.prompts[1]).toMatchObject({ memoryEnabled: true, memories: [] });
+
+    const sourced = (await service.handle({
+      command: "memory.upsert",
+      input: {
+        kind: "ongoing_context",
+        content: "这个对话正在完善记忆功能。",
+        sourceConversationId: receipt.conversationId,
+        idempotencyKey: "app-memory-source-0001",
+      },
+    })) as { id: string };
+    await service.handle({
+      command: "chat.delete",
+      input: { conversationId: receipt.conversationId, forgetSourceMemories: true },
+    });
+    expect(memoryRepository.get(sourced.id).status).toBe("deleted");
+    service.close();
+  });
+
+  it("locks each conversation to its creation-time hosted or BYOK execution mode", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-execution-mode-"));
+    temporaryDirectories.push(directory);
+    const pi = new ScriptedPiHostClient();
+    const service = new ChatAppService(new ChatRepository(path.join(directory, "chat.sqlite")), pi);
+    const authorization = {
+      accountId: "11111111-1111-4111-8111-111111111111",
+      accessToken: "a".repeat(32),
+      accessTokenExpiresAt: "2026-08-29T12:00:00.000Z",
+      platformBaseUrl: "https://platform.example.com",
+    };
+    const byok = {
+      apiKey: "secret",
+      baseUrl: "https://api.example.com/v1",
+      modelId: "example-model",
+      displayName: "Example Model",
+      contextWindow: 128_000,
+      maxOutputTokens: 8_192,
+      capabilities: { imageInput: false, functionCalling: true, reasoning: false },
+    };
+    const byokReceipt = (await service.handle(
+      {
+        command: "chat.send",
+        input: {
+          conversationId: null,
+          text: "BYOK conversation",
+          idempotencyKey: "execution-mode-byok-1",
+          modelRef: "platform/byok",
+        },
+      },
+      authorization,
+      byok,
+    )) as { conversationId: string };
+    await waitForTerminal(service, byokReceipt.conversationId);
+    expect(pi.prompts[0]).toMatchObject({ byok });
+    expect(pi.prompts[0]?.platform).toBeUndefined();
+    await expect(
+      service.handle({
+        command: "chat.selectModel",
+        input: { conversationId: byokReceipt.conversationId, modelRef: "platform/auto" },
+      }),
+    ).rejects.toThrow("CONVERSATION_EXECUTION_MODE_LOCKED");
+
+    const hostedReceipt = (await service.handle(
+      {
+        command: "chat.send",
+        input: {
+          conversationId: null,
+          text: "Hosted conversation",
+          idempotencyKey: "execution-mode-hosted-1",
+          modelRef: "platform/auto",
+        },
+      },
+      authorization,
+      byok,
+    )) as { conversationId: string };
+    await waitForTerminal(service, hostedReceipt.conversationId);
+    expect(pi.prompts[1]?.platform).toMatchObject({ selectedModelRef: "platform/auto" });
+    expect(pi.prompts[1]?.byok).toBeUndefined();
+    service.close();
+  });
+
   it("creates and edits DOCX, XLSX, PPTX and PDF from natural-language Skill Turns", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-office-workflow-"));
     temporaryDirectories.push(directory);

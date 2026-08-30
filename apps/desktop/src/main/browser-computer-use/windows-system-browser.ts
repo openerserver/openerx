@@ -46,6 +46,11 @@ export interface WindowsBrowserRawObservation {
   elements: WindowsBrowserRawElement[];
 }
 
+export interface WindowsBrowserRawCapture {
+  target: WindowsBrowserWindow;
+  png: Buffer;
+}
+
 export type WindowsBrowserInputMonitorMessage = "ready" | "user_input";
 
 function parsedRecord(output: string, errorCode: string): Record<string, unknown> {
@@ -217,6 +222,22 @@ export function parseWindowsBrowserObservation(output: string): WindowsBrowserRa
     webAreaBounds: parseBounds(value.webAreaBounds, errorCode),
     elements,
   };
+}
+
+export function parseWindowsBrowserCapture(output: string): WindowsBrowserRawCapture {
+  const errorCode = "BROWSER_OBSERVATION_REQUIRED";
+  const value = parsedRecord(output, errorCode);
+  const pngBase64 = stringField(value, "pngBase64", errorCode);
+  if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(pngBase64)) throw new Error(errorCode);
+  const png = Buffer.from(pngBase64, "base64");
+  if (
+    png.length < 8 ||
+    png.length > 16 * 1_024 * 1_024 ||
+    !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  ) {
+    throw new Error(errorCode);
+  }
+  return { target: parseWindow(value.target), png };
 }
 
 export function parseWindowsBrowserInputMonitorLine(

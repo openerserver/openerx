@@ -30,6 +30,7 @@ import { AutomationAppService } from "./automation-app-service";
 import { AutomationScheduler, ChatAutomationDispatcher } from "./automation-scheduler";
 import { ChatAppService } from "./chat-app-service";
 import { MainCapabilityClient } from "./main-capability-client";
+import { MemoryExtractionScheduler, PiMemoryExtractor } from "./memory-extraction-scheduler";
 import { MessagePortPiHostClient } from "./pi-host-client";
 import { HttpAccountSyncTransport, SyncCoordinator } from "./sync-coordinator";
 import { ToolAppService } from "./tool-app-service";
@@ -129,8 +130,14 @@ parentPort.once("message", async (bootstrapEvent) => {
   const automationService = new AutomationAppService(automationRepository, () =>
     automationScheduler.tick(),
   );
+  const memoryExtractionScheduler = new MemoryExtractionScheduler({
+    chatRepository: repository,
+    memoryRepository,
+    extractor: new PiMemoryExtractor(piHost, () => mainCapabilities.automationExecutionContext()),
+  });
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.onEvent((event) => void automationScheduler.handleChatEvent(event));
+  service.onEvent((event) => memoryExtractionScheduler.handleChatEvent(event));
   service.onEvent((event) => {
     const projected = projectChatEventForRemote(event);
     if (!projected) return;
@@ -144,6 +151,7 @@ parentPort.once("message", async (bootstrapEvent) => {
   });
   service.initialize();
   automationScheduler.start();
+  memoryExtractionScheduler.start();
   let remoteAuthorization: AppServiceAuthorization | null = null;
 
   remotePort.on("message", async (event) => {
@@ -242,6 +250,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     nonce: bootstrap.nonce,
   });
   process.once("exit", () => {
+    memoryExtractionScheduler.stop();
     automationScheduler.stop();
     automationRepository.close();
     mainCapabilities.close();

@@ -773,6 +773,20 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
 }
 
 export interface ChatBridge {
+  getMemorySettings(): Promise<MemorySettings>;
+  updateMemorySettings(
+    input: z.input<typeof memorySettingsUpdateInputSchema>,
+  ): Promise<MemorySettings>;
+  getConversationMemorySettings(
+    input: z.input<typeof conversationMemorySettingsGetInputSchema>,
+  ): Promise<ConversationMemorySettings>;
+  updateConversationMemorySettings(
+    input: z.input<typeof conversationMemorySettingsUpdateInputSchema>,
+  ): Promise<ConversationMemorySettings>;
+  listMemories(input?: z.input<typeof memoryListInputSchema>): Promise<MemoryEntry[]>;
+  upsertMemory(input: z.input<typeof memoryUpsertInputSchema>): Promise<MemoryEntry>;
+  deleteMemory(input: z.input<typeof memoryDeleteInputSchema>): Promise<MemoryEntry>;
+  clearMemories(input: z.input<typeof memoryClearInputSchema>): Promise<MemoryClearResult>;
   listConversations(input?: z.input<typeof chatListInputSchema>): Promise<ConversationSummary[]>;
   getConversation(input: z.input<typeof chatGetInputSchema>): Promise<ConversationSnapshot>;
   sendMessage(input: z.input<typeof chatSendInputSchema>): Promise<GenerationReceipt>;

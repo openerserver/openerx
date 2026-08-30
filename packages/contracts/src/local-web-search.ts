@@ -7,6 +7,7 @@ export const LOCAL_WEB_SEARCH_V2_FEATURE_FLAG = "OPENERX_LOCAL_WEB_SEARCH_V2" as
 
 export function localWebSearchV2Enabled(value: string | undefined): boolean {
   const normalized = value?.trim().toLocaleLowerCase();
+  if (normalized === undefined || normalized === "") return true;
   return normalized === "1" || normalized === "true";
 }
 

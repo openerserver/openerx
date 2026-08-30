@@ -86,8 +86,12 @@
 35. [evidence/pbash-001-2026-08-28.md](evidence/pbash-001-2026-08-28.md)：PBASH-001 严格合同、Pi 投影、冻结执行上下文和 fake Runner 的日期化证据。
 36. [evidence/pbash-002-2026-08-28.md](evidence/pbash-002-2026-08-28.md)：PBASH-002 真实 macOS 平台沙盒、hard-link 防线、断网和进程组回收的本机证据。
 37. [evidence/pbash-007-model-ab-2026-08-28.md](evidence/pbash-007-model-ab-2026-08-28.md)：PBASH-007 固定 DeepSeek 模型、9 类任务、3 次配对的真实 Golden A/B 证据。
-38. [21-local-web-search-plan.md](21-local-web-search-plan.md)：百度 JSON/Bing HTML 的进程内轻量本地 Web Search、可信设置、退避和连续探测方案。
+38. [21-local-web-search-plan.md](21-local-web-search-plan.md)：默认启用的百度 JSON/Bing HTML 进程内轻量本地 Web Search、可信设置、退避和连续探测方案；可通过 `OPENERX_LOCAL_WEB_SEARCH_V2=0` 显式回退托管搜索。
 39. [evidence/lws-006-2026-08-29.md](evidence/lws-006-2026-08-29.md)：Stop 资源回收、Parser 性能、每日 6 次真实探测与 7 日/平台发布矩阵证据。
+40. [22-standalone-byok-deployment.md](22-standalone-byok-deployment.md)：Windows 单安装包默认 BYOK、首次 API 配置、无 OpenerX 服务端依赖与可选托管模式合同。
+41. [23-codex-style-memory-plan.md](23-codex-style-memory-plan.md)：Pi 会话能力与 OpenerX 账户级长期记忆的边界、对话级控制、显式记忆 Phase A 和后续自动学习门禁。
+42. [evidence/memory-phase-a-mvp-2026-08-30.md](evidence/memory-phase-a-mvp-2026-08-30.md)：Memory Phase A 的管理/来源删除/同步实现、类型检查、专项测试与剩余 Beta 门禁证据。
+43. [evidence/memory-phase-b-extraction-foundation-2026-08-30.md](evidence/memory-phase-b-extraction-foundation-2026-08-30.md)：Memory Phase B 的持久化空闲任务、Pi 无工具结构化抽取、外部上下文/低余额门禁与 usage 锁定证据。
 
 ## 5. V1 与未来方向边界
 
@@ -143,8 +147,13 @@ origin + Main 启动 nonce、五分钟一次性精确标签页引用、tab/docum
 递增序列防重放、导航/断连撤销、敏感字段接管和无 selector/脚本的 Adapter 确定性基础，见
 [Bridge foundation](evidence/bcu-003-browser-bridge-foundation-2026-08-28.md)。该阶段仍是局部完成：
 MV3 扩展、Native Messaging/Main owner-only 传输、可信连接 UI、真实 Bridge 烟测、签名安装权限、
-托管 Chromium 和 Windows 尚无完成证据；
+托管 Chromium 尚无完成证据；Windows 11 x64 已完成系统默认 Edge/Chrome 的本机验证，详见
+[Windows system browser evidence](evidence/bcu-003-windows-system-browser-2026-08-29.md)；
 `legacy_dom_v1` 仅作为显式 feature flag 回滚路径保留。
+
+> 当前浏览器支持边界：Windows 仅支持签名有效、作为系统默认浏览器的 Microsoft Edge 或 Google
+> Chrome。Firefox 当前明确不支持；当 Firefox 或其他未支持浏览器被设为系统默认浏览器时，Browser
+> Capability 必须 fail-closed，不得退化为整屏坐标点击或控制其他浏览器窗口。
 
 Pi Bash Broker 化采用“产品 raw-shell ToolDefinition → Capability Broker → BrokeredShellRunner →
 PlatformSandboxEngine”结构；架构和安全边界见

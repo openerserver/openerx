@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  parseWindowsBrowserCapture,
   parseWindowsBrowserInputMonitorLine,
   parseWindowsBrowserObservation,
   parseWindowsBrowserWindows,
@@ -109,6 +110,23 @@ describe("Windows system browser primitives", () => {
     );
   });
 
+  it("accepts only bounded PNG captures tied to an exact browser window", () => {
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const parsed = parseWindowsBrowserCapture(
+      JSON.stringify({ target: windowFixture(), pngBase64: png.toString("base64") }),
+    );
+    expect(parsed.target.windowId).toBe(2001);
+    expect(parsed.png.equals(png)).toBe(true);
+    expect(() =>
+      parseWindowsBrowserCapture(
+        JSON.stringify({
+          target: windowFixture(),
+          pngBase64: Buffer.from("not png").toString("base64"),
+        }),
+      ),
+    ).toThrow("BROWSER_OBSERVATION_REQUIRED");
+  });
+
   it("normalizes native keys, scroll payloads and monitor messages", () => {
     expect(windowsBrowserNativeKey("Page Down")).toBe("pagedown");
     expect(windowsBrowserNativeKey("Return")).toBe("enter");
@@ -133,6 +151,11 @@ describe("Windows system browser primitives", () => {
     expect(helper).toContain("meaningfulInput");
     expect(helper).toContain("message == 0x020A");
     expect(helper).toContain("Get-AuthenticodeSignature");
+    expect(helper).toContain("PrintWindow");
+    expect(helper).toContain("UserChoiceLatest");
+    expect(helper).toContain("Get-UrlAssociationProgId 'http'");
+    expect(helper).toContain("Get-UrlAssociationProgId 'https'");
+    expect(helper).toContain("$httpProgId.Equals($httpsProgId");
     expect(helper).not.toContain("querySelector");
     expect(helper).not.toContain("executeScript");
   });

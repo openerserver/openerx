@@ -83,7 +83,12 @@ export class ChatRepository {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#deviceId = options.deviceId ?? null;
-    migrateDatabase(this.#database);
+    try {
+      migrateDatabase(this.#database);
+    } catch (error) {
+      this.#database.close();
+      throw error;
+    }
   }
 
   close(): void {

@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('default-browser', 'windows', 'observe', 'semantic', 'native', 'monitor', 'close')]
+  [ValidateSet('default-browser', 'windows', 'observe', 'capture', 'semantic', 'native', 'monitor', 'close')]
   [string]$Command,
   [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
   [string[]]$Arguments
@@ -23,9 +23,13 @@ function Initialize-UIAutomation {
 
 function Initialize-NativeTypes {
   if ('BrowserWin32' -as [type]) { return }
-  Add-Type -TypeDefinition @'
+  Add-Type -AssemblyName System.Drawing
+  Add-Type -ReferencedAssemblies @('System.dll', 'System.Drawing.dll') -TypeDefinition @'
 using System;
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -82,6 +86,14 @@ public static class BrowserWin32 {
   }
 
   [StructLayout(LayoutKind.Sequential)]
+  public struct RECT {
+    public int left;
+    public int top;
+    public int right;
+    public int bottom;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
   public struct MSLLHOOKSTRUCT {
     public POINT pt;
     public uint mouseData;
@@ -114,6 +126,8 @@ public static class BrowserWin32 {
 
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -204,6 +218,35 @@ public static class BrowserWin32 {
       throw new InvalidOperationException("BROWSER_SURFACE_NOT_BOUND");
     }
   }
+
+  public static string CapturePng(long hwnd) {
+    IntPtr target = new IntPtr(hwnd);
+    RECT rect;
+    if (!IsWindow(target) || !GetWindowRect(target, out rect)) {
+      throw new InvalidOperationException("BROWSER_SURFACE_NOT_BOUND");
+    }
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+    if (width < 320 || height < 240 || width > 8192 || height > 8192) {
+      throw new InvalidOperationException("BROWSER_SURFACE_MISMATCH");
+    }
+    using (Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb)) {
+      using (Graphics graphics = Graphics.FromImage(bitmap)) {
+        IntPtr hdc = graphics.GetHdc();
+        try {
+          if (!PrintWindow(target, hdc, 2)) {
+            throw new InvalidOperationException("BROWSER_OBSERVATION_REQUIRED");
+          }
+        } finally {
+          graphics.ReleaseHdc(hdc);
+        }
+      }
+      using (MemoryStream stream = new MemoryStream()) {
+        bitmap.Save(stream, ImageFormat.Png);
+        return Convert.ToBase64String(stream.ToArray());
+      }
+    }
+  }
 }
 
 public static class BrowserInputMonitor {
@@ -274,6 +317,31 @@ function Decode-Text([string]$Value) {
   return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Value))
 }
 
+function Get-UrlAssociationProgId([string]$Scheme) {
+  $associationPath = "Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\$Scheme"
+  $latestPath = Join-Path $associationPath 'UserChoiceLatest'
+  $latestProgIdPath = Join-Path $latestPath 'ProgId'
+  if ((Test-Path -LiteralPath $latestPath) -or (Test-Path -LiteralPath $latestProgIdPath)) {
+    if (-not (Test-Path -LiteralPath $latestPath) -or -not (Test-Path -LiteralPath $latestProgIdPath)) {
+      Fail 'BROWSER_BACKEND_UNAVAILABLE'
+    }
+    $latestHash = (Get-ItemProperty -LiteralPath $latestPath).Hash
+    $latestProgId = (Get-ItemProperty -LiteralPath $latestProgIdPath).ProgId
+    if ([string]::IsNullOrWhiteSpace($latestHash) -or [string]::IsNullOrWhiteSpace($latestProgId)) {
+      Fail 'BROWSER_BACKEND_UNAVAILABLE'
+    }
+    return [string]$latestProgId
+  }
+
+  $choicePath = Join-Path $associationPath 'UserChoice'
+  if (-not (Test-Path -LiteralPath $choicePath)) { Fail 'BROWSER_BACKEND_UNAVAILABLE' }
+  $choice = Get-ItemProperty -LiteralPath $choicePath
+  if ([string]::IsNullOrWhiteSpace($choice.Hash) -or [string]::IsNullOrWhiteSpace($choice.ProgId)) {
+    Fail 'BROWSER_BACKEND_UNAVAILABLE'
+  }
+  return [string]$choice.ProgId
+}
+
 function Get-Pattern($Element, $Pattern) {
   $value = $null
   if ($Element.TryGetCurrentPattern($Pattern, [ref]$value)) { return $value }
@@ -282,9 +350,12 @@ function Get-Pattern($Element, $Pattern) {
 
 function Get-DefaultBrowser {
   Initialize-UIAutomation
-  $choicePath = 'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice'
-  $progId = (Get-ItemProperty -LiteralPath $choicePath).ProgId
-  if ([string]::IsNullOrWhiteSpace($progId)) { Fail 'BROWSER_BACKEND_UNAVAILABLE' }
+  $httpProgId = Get-UrlAssociationProgId 'http'
+  $httpsProgId = Get-UrlAssociationProgId 'https'
+  if (-not $httpProgId.Equals($httpsProgId, [StringComparison]::OrdinalIgnoreCase)) {
+    Fail 'BROWSER_BACKEND_UNAVAILABLE'
+  }
+  $progId = $httpsProgId
   $candidates = @()
   if ($progId -like 'MSEdgeHTM*') {
     $candidates = @(
@@ -373,6 +444,16 @@ function Get-BrowserWindows([string]$ExecutablePath, [string]$ApplicationId, [st
     }
   }
   return $result.ToArray()
+}
+
+function Get-WindowCapture([int]$ProcessId, [long]$WindowId, [string]$ApplicationId, [string]$ApplicationName, [string]$ExecutablePath, [string]$ProcessName) {
+  Initialize-UIAutomation
+  $window = Get-RootWindow $ProcessId $WindowId
+  $target = Get-WindowRecord $window $ApplicationId $ApplicationName $ExecutablePath $ProcessName
+  [pscustomobject]@{
+    target = $target
+    pngBase64 = [BrowserWin32]::CapturePng($WindowId)
+  }
 }
 
 function Get-Document($Window) {
@@ -634,6 +715,7 @@ switch ($Command) {
   'default-browser' { Get-DefaultBrowser | ConvertTo-Json -Compress -Depth 6; break }
   'windows' { ConvertTo-Json -InputObject @(Get-BrowserWindows $Arguments[0] $Arguments[1] $Arguments[2] $Arguments[3]) -Compress -Depth 6; break }
   'observe' { Get-Observation ([int]$Arguments[0]) ([long]$Arguments[1]) $Arguments[2] $Arguments[3] $Arguments[4] $Arguments[5] | ConvertTo-Json -Compress -Depth 10; break }
+  'capture' { Get-WindowCapture ([int]$Arguments[0]) ([long]$Arguments[1]) $Arguments[2] $Arguments[3] $Arguments[4] $Arguments[5] | ConvertTo-Json -Compress -Depth 8; break }
   'semantic' { Invoke-Semantic; break }
   'native' { Invoke-Native; break }
   'monitor' { [BrowserInputMonitor]::Run([long]$Arguments[1]); break }

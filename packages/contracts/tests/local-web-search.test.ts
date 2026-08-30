@@ -11,10 +11,13 @@ import {
 } from "../src";
 
 describe("local Web Search contracts", () => {
-  it("keeps the feature default-off and exposes a strict lightweight default policy", () => {
-    expect(localWebSearchV2Enabled(undefined)).toBe(false);
+  it("keeps the feature default-on with an explicit opt-out and a strict policy", () => {
+    expect(localWebSearchV2Enabled(undefined)).toBe(true);
+    expect(localWebSearchV2Enabled("")).toBe(true);
+    expect(localWebSearchV2Enabled("   ")).toBe(true);
     expect(localWebSearchV2Enabled("0")).toBe(false);
     expect(localWebSearchV2Enabled("false")).toBe(false);
+    expect(localWebSearchV2Enabled("invalid")).toBe(false);
     expect(localWebSearchV2Enabled("1")).toBe(true);
     expect(localWebSearchV2Enabled("TRUE")).toBe(true);
     expect(localWebSearchPolicySchema.parse(defaultLocalWebSearchPolicy())).toMatchObject({
