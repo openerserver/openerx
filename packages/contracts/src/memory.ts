@@ -180,6 +180,34 @@ export const memoryExtractionJobSchema = z
   })
   .strict();
 
+export const automaticMemoryCreatedEventSchema = z
+  .object({
+    eventId: entityIdSchema,
+    jobId: entityIdSchema,
+    conversationId: entityIdSchema,
+    memories: z.array(memoryEntrySchema).min(1).max(8),
+    createdAt: timestampSchema,
+  })
+  .strict()
+  .superRefine((event, context) => {
+    for (const [index, memory] of event.memories.entries()) {
+      if (memory.origin !== "automatic" || memory.status !== "active") {
+        context.addIssue({
+          code: "custom",
+          path: ["memories", index],
+          message: "Created-memory events may contain only active automatic memories",
+        });
+      }
+      if (memory.sourceConversationId !== event.conversationId) {
+        context.addIssue({
+          code: "custom",
+          path: ["memories", index, "sourceConversationId"],
+          message: "Created-memory event source conversation mismatch",
+        });
+      }
+    }
+  });
+
 export const recalledMemorySchema = z
   .object({
     id: entityIdSchema,
@@ -207,3 +235,4 @@ export type AutomaticMemoryCandidate = z.infer<typeof automaticMemoryCandidateSc
 export type AutomaticMemoryExtractionOutput = z.infer<typeof automaticMemoryExtractionOutputSchema>;
 export type MemoryExtractionJob = z.infer<typeof memoryExtractionJobSchema>;
 export type MemoryExtractionSkipReason = z.infer<typeof memoryExtractionSkipReasonSchema>;
+export type AutomaticMemoryCreatedEvent = z.infer<typeof automaticMemoryCreatedEventSchema>;

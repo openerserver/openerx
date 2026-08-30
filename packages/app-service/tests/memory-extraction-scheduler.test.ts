@@ -118,7 +118,7 @@ describe("MemoryExtractionScheduler", () => {
     chat.close();
   });
 
-  it("skips external-context and low-rate-limit conversations before model extraction", async () => {
+  it("skips external context but does not require a client-side quota signal", async () => {
     const file = databasePath();
     let now = "2026-08-30T00:00:00.000Z";
     const chat = new ChatRepository(file, { now: () => now });
@@ -127,7 +127,6 @@ describe("MemoryExtractionScheduler", () => {
       memoriesEnabled: true,
       generateMemories: true,
       idleDelayMinutes: 1,
-      minRateLimitRemainingPercent: 20,
     });
     const first = twoTurnConversation(chat, now);
     const extractor: MemoryExtractor = { extract: vi.fn(async () => ({ candidates: [] })) };
@@ -135,7 +134,6 @@ describe("MemoryExtractionScheduler", () => {
       chatRepository: chat,
       memoryRepository: memories,
       extractor,
-      rateLimitRemainingPercent: () => 10,
     });
     scheduler.handleChatEvent(first.event);
     now = "2026-08-30T00:02:00.000Z";
@@ -152,9 +150,9 @@ describe("MemoryExtractionScheduler", () => {
     );
     now = "2026-08-30T00:04:00.000Z";
     await expect(scheduler.tick()).resolves.toEqual([
-      expect.objectContaining({ status: "skipped", skipReason: "rate_limit_low" }),
+      expect.objectContaining({ status: "completed", candidateCount: 0 }),
     ]);
-    expect(extractor.extract).not.toHaveBeenCalled();
+    expect(extractor.extract).toHaveBeenCalledOnce();
     memories.close();
     chat.close();
   });

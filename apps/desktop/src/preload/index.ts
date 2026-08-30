@@ -7,6 +7,7 @@ import {
   artifactExportResultSchema,
   artifactGetInputSchema,
   artifactPreviewInputSchema,
+  automaticMemoryCreatedEventSchema,
   automationCreateInputSchema,
   automationDefinitionSchema,
   automationGetInputSchema,
@@ -58,6 +59,7 @@ import {
   deviceSessionSchema,
   diagnosticsPreviewSchema,
   emailChallengeSchema,
+  entityIdSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
   fileListInputSchema,
@@ -389,6 +391,22 @@ const bridge: DesktopBridge = {
     invokeChat(ipcChannels.memoryDelete, "memory.delete", memoryDeleteInputSchema.parse(input)),
   clearMemories: async (input) =>
     invokeChat(ipcChannels.memoryClear, "memory.clear", memoryClearInputSchema.parse(input)),
+  onAutomaticMemoryCreated: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      const parsed = automaticMemoryCreatedEventSchema.safeParse(value);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on(ipcChannels.memoryCreatedEvent, wrapped);
+    return () => ipcRenderer.removeListener(ipcChannels.memoryCreatedEvent, wrapped);
+  },
+  onMemoryNavigate: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      const parsed = entityIdSchema.safeParse(value);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on(ipcChannels.memoryNavigate, wrapped);
+    return () => ipcRenderer.removeListener(ipcChannels.memoryNavigate, wrapped);
+  },
   deleteCloudData: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.cloudDataDelete);
     return cloudDataDeletionResultSchema.parse(result);

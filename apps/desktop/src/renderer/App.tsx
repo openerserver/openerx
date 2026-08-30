@@ -1,6 +1,7 @@
 import type {
   Artifact,
   Attachment,
+  AutomaticMemoryCreatedEvent,
   BillingOverview,
   BrowserSessionDescriptor,
   ChargeRecord,
@@ -4318,6 +4319,7 @@ const memoryKindLabels: Record<MemoryKind, string> = {
 
 function MemorySettingsPanel(): React.JSX.Element {
   const queryClient = useQueryClient();
+  const location = useLocation();
   const [kind, setKind] = useState<MemoryKind>("preference");
   const [content, setContent] = useState("");
   const [query, setQuery] = useState("");
@@ -4385,6 +4387,13 @@ function MemorySettingsPanel(): React.JSX.Element {
     },
   });
   const state = settings.data;
+  const focusedMemoryId = new URLSearchParams(location.search).get("memory");
+  useEffect(() => {
+    if (!focusedMemoryId || !memories.data?.some(({ id }) => id === focusedMemoryId)) return;
+    window.requestAnimationFrame(() => {
+      document.getElementById(`memory-${focusedMemoryId}`)?.focus({ preventScroll: false });
+    });
+  }, [focusedMemoryId, memories.data]);
   const error =
     settings.error ??
     memories.error ??
@@ -4445,17 +4454,24 @@ function MemorySettingsPanel(): React.JSX.Element {
               onChange={(event) => updateSettings.mutate({ syncMemories: event.target.checked })}
             />
           </label>
-          <label className="is-disabled">
+          <label>
             <span>
               <strong>自动生成记忆</strong>
-              <small>后台抽取管线已接入；独立用量与 Beta 门禁通过前保持锁定。</small>
+              <small>对话空闲后由服务器计费并抽取；新记忆会通知你且可立即撤销。</small>
             </span>
-            <input type="checkbox" checked={state.generateMemories} disabled />
+            <input
+              type="checkbox"
+              checked={state.generateMemories}
+              disabled={!state.memoriesEnabled || updateSettings.isPending}
+              onChange={(event) =>
+                updateSettings.mutate({ generateMemories: event.target.checked })
+              }
+            />
           </label>
           <label>
             <span>
               <strong>排除外部上下文</strong>
-              <small>自动学习开放后，默认跳过使用过 Web、MCP、文件或工具搜索的对话。</small>
+              <small>默认跳过使用过 Web、MCP、文件或工具搜索的对话。</small>
             </span>
             <input
               type="checkbox"
@@ -4481,25 +4497,6 @@ function MemorySettingsPanel(): React.JSX.Element {
                 const value = event.currentTarget.valueAsNumber;
                 if (Number.isInteger(value) && value >= 1 && value <= 1_440) {
                   updateSettings.mutate({ idleDelayMinutes: value });
-                }
-              }}
-            />
-          </label>
-          <label>
-            <span>
-              <strong>最低剩余额度（%）</strong>
-              <small>接入平台剩余额度信号后，低于此阈值的后台抽取会直接跳过。</small>
-            </span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={state.minRateLimitRemainingPercent}
-              disabled={!state.memoriesEnabled || updateSettings.isPending}
-              onChange={(event) => {
-                const value = event.currentTarget.valueAsNumber;
-                if (Number.isInteger(value) && value >= 0 && value <= 100) {
-                  updateSettings.mutate({ minRateLimitRemainingPercent: value });
                 }
               }}
             />
@@ -4597,7 +4594,12 @@ function MemorySettingsPanel(): React.JSX.Element {
       ) : null}
       <section className="memory-list" aria-label="已保存记忆">
         {(memories.data ?? []).map((memory) => (
-          <article key={memory.id} className="memory-row">
+          <article
+            key={memory.id}
+            id={`memory-${memory.id}`}
+            className={`memory-row${focusedMemoryId === memory.id ? " is-highlighted" : ""}`}
+            tabIndex={-1}
+          >
             <div>
               <span>
                 {memoryKindLabels[memory.kind]}
@@ -4668,6 +4670,19 @@ type AccountSettingsSection =
   | "update"
   | "diagnostics";
 
+function requestedSettingsSection(search: string): AccountSettingsSection | null {
+  const value = new URLSearchParams(search).get("section");
+  return value === "account" ||
+    value === "billing" ||
+    value === "appearance" ||
+    value === "model" ||
+    value === "memory" ||
+    value === "update" ||
+    value === "diagnostics"
+    ? value
+    : null;
+}
+
 function AccountSettings({
   themePreference,
   onThemeChange,
@@ -4680,6 +4695,7 @@ function AccountSettings({
   onDefaultModelChange: (modelRef: string) => void;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
+  const location = useLocation();
   const account = useQuery({
     queryKey: accountKey,
     queryFn: () => window.openerx.getAccountState(),
@@ -4687,7 +4703,13 @@ function AccountSettings({
   const [email, setEmail] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [code, setCode] = useState("");
-  const [activeSection, setActiveSection] = useState<AccountSettingsSection>("account");
+  const [activeSection, setActiveSection] = useState<AccountSettingsSection>(
+    () => requestedSettingsSection(location.search) ?? "account",
+  );
+  useEffect(() => {
+    const requested = requestedSettingsSection(location.search);
+    if (requested) setActiveSection(requested);
+  }, [location.search]);
   const openSettingsSection = (section: AccountSettingsSection): void => {
     setActiveSection(section);
     window.requestAnimationFrame(() => {
@@ -6413,6 +6435,10 @@ export function App(): React.JSX.Element {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
   const [defaultModelRef, setDefaultModelRef] = useState(initialDefaultModelRef);
+  const [automaticMemoryNotice, setAutomaticMemoryNotice] =
+    useState<AutomaticMemoryCreatedEvent | null>(null);
+  const [memoryUndoPending, setMemoryUndoPending] = useState(false);
+  const [memoryUndoError, setMemoryUndoError] = useState<string | null>(null);
   const contextReturnFocus = useRef<HTMLElement | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -6482,11 +6508,45 @@ export function App(): React.JSX.Element {
     const unsubscribeNavigate = window.openerx.onAutomationNavigate((automationId) => {
       navigate(`/automations?automation=${encodeURIComponent(automationId)}`);
     });
+    const unsubscribeMemory = window.openerx.onAutomaticMemoryCreated((event) => {
+      setAutomaticMemoryNotice(event);
+      setMemoryUndoError(null);
+      void queryClient.invalidateQueries({ queryKey: ["memory", "list"] });
+    });
+    const unsubscribeMemoryNavigate = window.openerx.onMemoryNavigate((memoryId) => {
+      navigate(
+        `/settings/account?section=memory&memory=${encodeURIComponent(memoryId)}`,
+      );
+    });
     return () => {
       unsubscribeRun();
       unsubscribeNavigate();
+      unsubscribeMemory();
+      unsubscribeMemoryNavigate();
     };
   }, [navigate, queryClient]);
+  const undoAutomaticMemories = async (): Promise<void> => {
+    const notice = automaticMemoryNotice;
+    if (!notice || memoryUndoPending) return;
+    setMemoryUndoPending(true);
+    setMemoryUndoError(null);
+    try {
+      await Promise.all(
+        notice.memories.map((memory) =>
+          window.openerx.deleteMemory({
+            memoryId: memory.id,
+            idempotencyKey: `memory-notification-undo:${notice.eventId}:${memory.id}`,
+          }),
+        ),
+      );
+      await queryClient.invalidateQueries({ queryKey: ["memory", "list"] });
+      setAutomaticMemoryNotice(null);
+    } catch (error) {
+      setMemoryUndoError(userFacingError(error, "撤销自动记忆失败，请在记忆设置中重试。"));
+    } finally {
+      setMemoryUndoPending(false);
+    }
+  };
   const toggleContext = (): void => {
     if (!contextOpen && document.activeElement instanceof HTMLElement) {
       contextReturnFocus.current = document.activeElement;
@@ -6612,6 +6672,42 @@ export function App(): React.JSX.Element {
           <Route path="*" element={<Navigate to="/chat/new" replace />} />
         </Routes>
       </div>
+      {automaticMemoryNotice ? (
+        <aside className="memory-created-notice" role="status" aria-live="polite">
+          <Brain size={21} aria-hidden="true" />
+          <div>
+            <strong>已生成长期记忆</strong>
+            <span>后台新增 {automaticMemoryNotice.memories.length} 条，可随时查看或撤销。</span>
+            {memoryUndoError ? <small>{memoryUndoError}</small> : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const memoryId = automaticMemoryNotice.memories[0]?.id;
+              navigate(
+                `/settings/account?section=memory${memoryId ? `&memory=${encodeURIComponent(memoryId)}` : ""}`,
+              );
+            }}
+          >
+            查看
+          </button>
+          <button
+            type="button"
+            disabled={memoryUndoPending}
+            onClick={() => void undoAutomaticMemories()}
+          >
+            {memoryUndoPending ? "撤销中…" : "撤销"}
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="关闭自动记忆通知"
+            onClick={() => setAutomaticMemoryNotice(null)}
+          >
+            <X size={16} />
+          </button>
+        </aside>
+      ) : null}
       {contextOpen && contextConversationId ? (
         <>
           <button

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
@@ -134,6 +135,17 @@ parentPort.once("message", async (bootstrapEvent) => {
     chatRepository: repository,
     memoryRepository,
     extractor: new PiMemoryExtractor(piHost, () => mainCapabilities.automationExecutionContext()),
+    onMemoriesCreated: (memories, job) =>
+      mainPort.postMessage({
+        kind: "memory.created.event",
+        event: {
+          eventId: randomUUID(),
+          jobId: job.id,
+          conversationId: job.conversationId,
+          memories,
+          createdAt: job.completedAt ?? job.updatedAt,
+        },
+      }),
   });
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.onEvent((event) => void automationScheduler.handleChatEvent(event));

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  automaticMemoryCreatedEventFrameSchema,
   chatCommandEnvelopeSchema,
   memoryEntrySchema,
   piMemoryExtractFrameSchema,
@@ -135,5 +136,50 @@ describe("memory contracts", () => {
         },
       }),
     ).toMatchObject({ ok: true, usageRecords: [] });
+  });
+
+  it("accepts only active automatic memories in created-memory events", () => {
+    const conversationId = id("20");
+    const event = {
+      kind: "memory.created.event",
+      event: {
+        eventId: id("21"),
+        jobId: id("22"),
+        conversationId,
+        memories: [
+          {
+            id: id("23"),
+            ownerProfileId: "local-default",
+            scope: "personal",
+            kind: "preference",
+            content: "用户希望先给结论。",
+            retrievalKeys: ["结论"],
+            canonicalKey: "preference:先给结论",
+            origin: "automatic",
+            confidence: 0.93,
+            status: "active",
+            sourceConversationId: conversationId,
+            sourceMessageId: id("24"),
+            supersedesMemoryId: null,
+            expiresAt: null,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            revision: 1,
+          },
+        ],
+        createdAt: timestamp,
+      },
+    };
+
+    expect(automaticMemoryCreatedEventFrameSchema.parse(event).event.memories).toHaveLength(1);
+    expect(() =>
+      automaticMemoryCreatedEventFrameSchema.parse({
+        ...event,
+        event: {
+          ...event.event,
+          memories: [{ ...event.event.memories[0], origin: "explicit" }],
+        },
+      }),
+    ).toThrow();
   });
 });

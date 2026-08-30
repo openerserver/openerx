@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type {
+  AutomaticMemoryCreatedEvent,
   BrowserSessionDescriptor,
   ChatEvent,
   ConversationSnapshot,
@@ -297,6 +298,8 @@ function createBridge(): DesktopBridge {
     previewAutomationSchedule: vi.fn().mockResolvedValue({ occurrences: [] }),
     onAutomationRun: vi.fn().mockReturnValue(() => undefined),
     onAutomationNavigate: vi.fn().mockReturnValue(() => undefined),
+    onAutomaticMemoryCreated: vi.fn().mockReturnValue(() => undefined),
+    onMemoryNavigate: vi.fn().mockReturnValue(() => undefined),
     getConversation: vi.fn().mockResolvedValue(snapshot),
     sendMessage: vi.fn().mockResolvedValue({
       conversationId,
@@ -788,6 +791,14 @@ describe("M1 chat renderer", () => {
       memoriesEnabled: true,
       useMemories: true,
     });
+    await user.click(screen.getByRole("checkbox", { name: /自动生成记忆/ }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(bridge.updateMemorySettings)
+          .mock.calls.some(([input]) => input.generateMemories === true),
+      ).toBe(true),
+    );
     await user.type(await screen.findByLabelText("内容"), "回答时先给结论。");
     await user.click(screen.getByRole("button", { name: "保存记忆" }));
     await waitFor(() =>
@@ -800,6 +811,80 @@ describe("M1 chat renderer", () => {
       ),
     );
     expect(screen.getByText("密钥、口令、验证码、Cookie、私钥", { exact: false })).toBeTruthy();
+  });
+
+  it("notifies about automatic memories and can undo the created batch", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const memory = {
+      id: "77777777-7777-4777-8777-777777777778",
+      ownerProfileId: "local-default",
+      scope: "personal" as const,
+      kind: "preference" as const,
+      content: "回答时先给结论。",
+      retrievalKeys: ["结论"],
+      canonicalKey: "preference:回答时先给结论。",
+      origin: "automatic" as const,
+      confidence: 0.91,
+      status: "active" as const,
+      sourceConversationId: conversationId,
+      sourceMessageId: userMessageId,
+      supersedesMemoryId: null,
+      expiresAt: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    };
+    const event: AutomaticMemoryCreatedEvent = {
+      eventId: "77777777-7777-4777-8777-777777777779",
+      jobId: "77777777-7777-4777-8777-777777777780",
+      conversationId,
+      memories: [memory],
+      createdAt: timestamp,
+    };
+    let listener: ((event: AutomaticMemoryCreatedEvent) => void) | undefined;
+    vi.mocked(bridge.onAutomaticMemoryCreated).mockImplementation((next) => {
+      listener = next;
+      return () => undefined;
+    });
+    vi.mocked(bridge.getMemorySettings).mockResolvedValue({
+      ownerProfileId: "local-default",
+      memoriesEnabled: true,
+      useMemories: true,
+      generateMemories: true,
+      syncMemories: false,
+      disableOnExternalContext: true,
+      idleDelayMinutes: 30,
+      minRateLimitRemainingPercent: 20,
+      updatedAt: timestamp,
+      revision: 2,
+    });
+    vi.mocked(bridge.listMemories).mockResolvedValue([memory]);
+    vi.mocked(bridge.deleteMemory).mockResolvedValue({
+      ...memory,
+      status: "deleted",
+      revision: 2,
+    });
+    renderApp(bridge);
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(listener).toBeTypeOf("function"));
+    act(() => listener?.(event));
+    expect(await screen.findByText("已生成长期记忆")).toBeTruthy();
+    expect(screen.getByText("后台新增 1 条，可随时查看或撤销。")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "查看" }));
+    expect(await screen.findByRole("heading", { name: "长期记忆" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement?.id).toBe(`memory-${memory.id}`));
+
+    await user.click(screen.getByRole("button", { name: "撤销" }));
+    await waitFor(() =>
+      expect(bridge.deleteMemory).toHaveBeenCalledWith({
+        memoryId: memory.id,
+        idempotencyKey: `memory-notification-undo:${event.eventId}:${memory.id}`,
+      }),
+    );
+    await waitFor(() => expect(screen.queryByText("已生成长期记忆")).toBeNull());
   });
 
   it("searches, edits, filters, and clears saved memories by category", async () => {

@@ -5,10 +5,12 @@ import {
   type AppServiceAuthorization,
   type AppServiceByokConfiguration,
   type AppServiceRequest,
+  type AutomaticMemoryCreatedEvent,
   type AutomationExecutionContext,
   type AutomationRun,
   appServiceEventFrameSchema,
   appServiceResponseFrameSchema,
+  automaticMemoryCreatedEventFrameSchema,
   automationRunEventFrameSchema,
   type BrowserSessionDescriptor,
   type ChatEvent,
@@ -64,6 +66,7 @@ export class AppServiceSupervisor {
   readonly #piHostEntry: string;
   readonly #listeners = new Set<(event: ChatEvent) => void>();
   readonly #automationListeners = new Set<(run: AutomationRun) => void>();
+  readonly #memoryListeners = new Set<(event: AutomaticMemoryCreatedEvent) => void>();
   readonly #pending = new Map<string, PendingRequest>();
   #appProcess: UtilityProcess | null = null;
   #piHostProcess: UtilityProcess | null = null;
@@ -143,6 +146,13 @@ export class AppServiceSupervisor {
   onAutomationRun(listener: (run: AutomationRun) => void): () => void {
     this.#automationListeners.add(listener);
     return () => this.#automationListeners.delete(listener);
+  }
+
+  onAutomaticMemoryCreated(
+    listener: (event: AutomaticMemoryCreatedEvent) => void,
+  ): () => void {
+    this.#memoryListeners.add(listener);
+    return () => this.#memoryListeners.delete(listener);
   }
 
   setAutomationExecutionContextProvider(provider: () => Promise<AutomationExecutionContext>): void {
@@ -574,6 +584,11 @@ export class AppServiceSupervisor {
       this.#emitAutomationRun(automationEvent.data.run);
       return;
     }
+    const memoryEvent = automaticMemoryCreatedEventFrameSchema.safeParse(data);
+    if (memoryEvent.success) {
+      this.#emitAutomaticMemoryCreated(memoryEvent.data.event);
+      return;
+    }
     const event = appServiceEventFrameSchema.safeParse(data);
     if (event.success) this.#emit(event.data.event);
   }
@@ -653,5 +668,9 @@ export class AppServiceSupervisor {
 
   #emitAutomationRun(run: AutomationRun): void {
     for (const listener of this.#automationListeners) listener(run);
+  }
+
+  #emitAutomaticMemoryCreated(event: AutomaticMemoryCreatedEvent): void {
+    for (const listener of this.#memoryListeners) listener(event);
   }
 }

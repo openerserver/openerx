@@ -33,6 +33,7 @@ import {
   localWebSearchSettingsUpdateInputSchema,
 } from "./local-web-search";
 import {
+  type AutomaticMemoryCreatedEvent,
   type ConversationMemorySettings,
   conversationMemorySettingsGetInputSchema,
   conversationMemorySettingsSchema,
@@ -787,6 +788,10 @@ export interface ChatBridge {
   upsertMemory(input: z.input<typeof memoryUpsertInputSchema>): Promise<MemoryEntry>;
   deleteMemory(input: z.input<typeof memoryDeleteInputSchema>): Promise<MemoryEntry>;
   clearMemories(input: z.input<typeof memoryClearInputSchema>): Promise<MemoryClearResult>;
+  onAutomaticMemoryCreated(
+    listener: (event: AutomaticMemoryCreatedEvent) => void,
+  ): () => void;
+  onMemoryNavigate(listener: (memoryId: string) => void): () => void;
   listConversations(input?: z.input<typeof chatListInputSchema>): Promise<ConversationSummary[]>;
   getConversation(input: z.input<typeof chatGetInputSchema>): Promise<ConversationSnapshot>;
   sendMessage(input: z.input<typeof chatSendInputSchema>): Promise<GenerationReceipt>;

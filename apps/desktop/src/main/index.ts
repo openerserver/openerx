@@ -129,6 +129,7 @@ import { initializeAccountSession } from "./development-account-bootstrap";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { DesktopLoginStartupService, isBackgroundLoginStartup } from "./login-startup";
+import { memoryNotificationContent } from "./memory-notification";
 import { ModelServiceSettingsStore } from "./model-service-settings";
 import { PlatformAccountClient } from "./platform-account-client";
 import { RemoteDesktopController } from "./remote-desktop-controller";
@@ -1293,6 +1294,37 @@ app.whenReady().then(async () => {
       const window = existingWindow ?? createMainWindow(diagnostics);
       const navigate = () =>
         window.webContents.send(ipcChannels.automationNavigate, run.automationId);
+      if (existingWindow) navigate();
+      else window.webContents.once("did-finish-load", navigate);
+      window.show();
+      window.focus();
+    });
+    notification.show();
+  });
+  const notifiedMemoryEvents = new Set<string>();
+  supervisor.onAutomaticMemoryCreated((event) => {
+    diagnostics.record({
+      source: "app_service",
+      level: "info",
+      code: "memory.automatic.created",
+      attributes: {
+        eventId: event.eventId,
+        jobId: event.jobId,
+        conversationId: event.conversationId,
+        count: event.memories.length,
+      },
+    });
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(ipcChannels.memoryCreatedEvent, event);
+    }
+    if (notifiedMemoryEvents.has(event.eventId) || !Notification.isSupported()) return;
+    notifiedMemoryEvents.add(event.eventId);
+    const notification = new Notification(memoryNotificationContent(event));
+    notification.on("click", () => {
+      const existingWindow = BrowserWindow.getAllWindows()[0];
+      const window = existingWindow ?? createMainWindow(diagnostics);
+      const memoryId = event.memories[0]?.id;
+      const navigate = () => window.webContents.send(ipcChannels.memoryNavigate, memoryId);
       if (existingWindow) navigate();
       else window.webContents.once("did-finish-load", navigate);
       window.show();

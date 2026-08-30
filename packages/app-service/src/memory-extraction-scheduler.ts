@@ -104,7 +104,6 @@ export interface MemoryExtractionSchedulerOptions {
   extractor: MemoryExtractor;
   intervalMs?: number;
   maxClaimsPerTick?: number;
-  rateLimitRemainingPercent?: () => number | null | Promise<number | null>;
   onMemoriesCreated?: (memories: MemoryEntry[], job: MemoryExtractionJob) => void;
   onError?: (error: unknown, job?: MemoryExtractionJob) => void;
 }
@@ -121,7 +120,6 @@ export class MemoryExtractionScheduler {
   readonly #extractor: MemoryExtractor;
   readonly #intervalMs: number;
   readonly #maxClaimsPerTick: number;
-  readonly #rateLimitRemainingPercent?: MemoryExtractionSchedulerOptions["rateLimitRemainingPercent"];
   readonly #onMemoriesCreated: NonNullable<MemoryExtractionSchedulerOptions["onMemoriesCreated"]>;
   readonly #onError: NonNullable<MemoryExtractionSchedulerOptions["onError"]>;
   #timer: ReturnType<typeof setInterval> | null = null;
@@ -133,7 +131,6 @@ export class MemoryExtractionScheduler {
     this.#extractor = options.extractor;
     this.#intervalMs = Math.max(1_000, options.intervalMs ?? 30_000);
     this.#maxClaimsPerTick = Math.max(1, options.maxClaimsPerTick ?? 4);
-    this.#rateLimitRemainingPercent = options.rateLimitRemainingPercent;
     this.#onMemoriesCreated = options.onMemoriesCreated ?? (() => undefined);
     this.#onError = options.onError ?? (() => undefined);
   }
@@ -227,14 +224,6 @@ export class MemoryExtractionScheduler {
         this.#memoryRepository.hasExternalContext(job.conversationId)
       ) {
         return this.#memoryRepository.skipExtractionJob(job.id, "external_context");
-      }
-      const remaining = await this.#rateLimitRemainingPercent?.();
-      if (
-        remaining !== undefined &&
-        remaining !== null &&
-        remaining < settings.minRateLimitRemainingPercent
-      ) {
-        return this.#memoryRepository.skipExtractionJob(job.id, "rate_limit_low");
       }
       const output = await this.#extractor.extract({ job, snapshot, messages });
       const createdById = new Map<string, MemoryEntry>();

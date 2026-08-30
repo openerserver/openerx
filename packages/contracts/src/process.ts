@@ -7,6 +7,7 @@ import {
   timestampSchema,
 } from "./chat";
 import { errorEnvelopeSchema } from "./errors";
+import { automaticMemoryCreatedEventSchema } from "./memory";
 import { hostToolAvailabilitySchema } from "./model";
 import { remoteConnectorConfigureFrameSchema, remoteConnectorDisableFrameSchema } from "./remote";
 import { normalizedToolResultSchema, toolOperationSchema } from "./tool";
@@ -101,6 +102,13 @@ export const automationRunEventFrameSchema = z
   .object({
     kind: z.literal("automation.run.event"),
     run: automationRunSchema,
+  })
+  .strict();
+
+export const automaticMemoryCreatedEventFrameSchema = z
+  .object({
+    kind: z.literal("memory.created.event"),
+    event: automaticMemoryCreatedEventSchema,
   })
   .strict();
 
@@ -308,6 +316,7 @@ export const appServicePortFrameSchema = z.union([
   appServiceResponseFrameSchema,
   appServiceEventFrameSchema,
   automationRunEventFrameSchema,
+  automaticMemoryCreatedEventFrameSchema,
   mainAutomationContextRequestFrameSchema,
   mainAutomationContextResponseFrameSchema,
   mainCapabilityRequestFrameSchema,
@@ -332,6 +341,9 @@ export type AppServiceAuthorization = z.infer<typeof appServiceAuthorizationSche
 export type AppServiceResponseFrame = z.infer<typeof appServiceResponseFrameSchema>;
 export type AppServiceEventFrame = z.infer<typeof appServiceEventFrameSchema>;
 export type AutomationRunEventFrame = z.infer<typeof automationRunEventFrameSchema>;
+export type AutomaticMemoryCreatedEventFrame = z.infer<
+  typeof automaticMemoryCreatedEventFrameSchema
+>;
 export type AutomationExecutionContext = z.infer<typeof automationExecutionContextSchema>;
 export type MainAutomationContextRequestFrame = z.infer<
   typeof mainAutomationContextRequestFrameSchema

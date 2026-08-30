@@ -60,6 +60,8 @@ export const ipcChannels = Object.freeze({
   memoryUpsert: "memory:upsert",
   memoryDelete: "memory:delete",
   memoryClear: "memory:clear",
+  memoryCreatedEvent: "memory:created:event",
+  memoryNavigate: "memory:navigate",
   cloudDataDelete: "account:cloud-data:delete",
   chatList: "chat:conversations:list",
   chatGet: "chat:conversation:get",
