@@ -316,7 +316,9 @@ export class ChatAppService {
       case "file.search":
         return this.#requiredFiles().search(request.input.query, request.input.fileIds);
       case "file.preview":
-        return this.#requiredFiles().previewFile(request.input.personalFileId);
+        return this.#requiredFiles().previewFile(request.input.personalFileId, {
+          includeModelImages: false,
+        });
       case "file.scope.revoke":
         return this.#requiredFiles().revokeScope(request.input.scopeId);
       case "file.attach":
@@ -333,7 +335,9 @@ export class ChatAppService {
       case "artifact.get":
         return this.#requiredFiles().artifact(request.input.artifactId);
       case "artifact.preview":
-        return this.#requiredFiles().previewArtifact(request.input.artifactId);
+        return this.#requiredFiles().previewArtifact(request.input.artifactId, {
+          includeModelImages: false,
+        });
       case "artifact.export":
         return this.#requiredFiles().exportArtifact(
           request.input.artifactId,

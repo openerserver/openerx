@@ -134,7 +134,10 @@ export class FileAppService {
     };
   }
 
-  previewFile(personalFileId: string): ContentPreview {
+  previewFile(
+    personalFileId: string,
+    options: { includeModelImages?: boolean } = {},
+  ): ContentPreview {
     const parsed = this.readParsedFile(personalFileId);
     const source = isTextPreviewFormat(parsed.file.format)
       ? this.#store.read(parsed.file.objectRef).toString("utf8")
@@ -153,7 +156,7 @@ export class FileAppService {
       source,
       imageDataUrl,
       renderedSurfaces:
-        renderOfficeArtifact(this.#store.read(parsed.file.objectRef), parsed.file.format)
+        renderOfficeArtifact(this.#store.read(parsed.file.objectRef), parsed.file.format, options)
           ?.renderedSurfaces ?? [],
       parsedText: parsed.text,
       citations: parsed.citations,
@@ -211,7 +214,7 @@ export class FileAppService {
   }
 
   writeOfficeArtifact(input: OfficeArtifactWriteInput): Artifact {
-    const compiled = compileOfficeArtifact(input.spec);
+    const compiled = compileOfficeArtifact(input.spec, { includeModelImages: false });
     this.#assertSize(compiled.bytes.byteLength);
     const artifact = input.artifactId
       ? this.addArtifactVersion({
@@ -237,14 +240,18 @@ export class FileAppService {
     return this.#repository.artifact(id);
   }
 
-  previewArtifact(id: string): ContentPreview {
+  previewArtifact(id: string, options: { includeModelImages?: boolean } = {}): ContentPreview {
     const artifact = this.#repository.artifact(id);
     const version = artifact.versions.find(({ version }) => version === artifact.currentVersion);
     if (!version) throw new Error("ARTIFACT_VERSION_NOT_FOUND");
     const source = isTextPreviewFormat(artifact.format)
       ? this.#store.read(version.objectRef).toString("utf8")
       : null;
-    const rendered = renderOfficeArtifact(this.#store.read(version.objectRef), artifact.format);
+    const rendered = renderOfficeArtifact(
+      this.#store.read(version.objectRef),
+      artifact.format,
+      options,
+    );
     return {
       objectKind: "artifact",
       objectId: artifact.id,

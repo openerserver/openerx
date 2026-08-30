@@ -30,9 +30,12 @@ export interface RenderedOfficeArtifact {
   renderedSurfaces: RenderedSurface[];
 }
 
-export function compileOfficeArtifact(input: OfficeArtifactSpec): CompiledOfficeArtifact {
+export function compileOfficeArtifact(
+  input: OfficeArtifactSpec,
+  options: { includeModelImages?: boolean } = {},
+): CompiledOfficeArtifact {
   const spec = officeArtifactSpecSchema.parse(input);
-  const rendered = renderOfficeSpec(spec);
+  const rendered = renderOfficeSpec(spec, options.includeModelImages);
   const bytes =
     spec.format === "docx"
       ? compileDocx(spec)
@@ -52,6 +55,7 @@ export function compileOfficeArtifact(input: OfficeArtifactSpec): CompiledOffice
 export function renderOfficeArtifact(
   bytes: Uint8Array,
   format: SupportedFileFormat,
+  options: { includeModelImages?: boolean } = {},
 ): RenderedOfficeArtifact | null {
   if (!isOfficeFormat(format)) return null;
   const encoded = embeddedSpec(bytes, format);
@@ -59,6 +63,7 @@ export function renderOfficeArtifact(
   try {
     return renderOfficeSpec(
       officeArtifactSpecSchema.parse(JSON.parse(Buffer.from(encoded, "base64").toString("utf8"))),
+      options.includeModelImages,
     );
   } catch {
     return null;
@@ -94,7 +99,10 @@ function encodedSpec(spec: OfficeArtifactSpec): string {
   return Buffer.from(JSON.stringify(spec), "utf8").toString("base64");
 }
 
-function renderOfficeSpec(spec: OfficeArtifactSpec): RenderedOfficeArtifact {
+function renderOfficeSpec(
+  spec: OfficeArtifactSpec,
+  includeModelImages = true,
+): RenderedOfficeArtifact {
   if (spec.format === "xlsx") {
     return {
       parsedText: spec.sheets
@@ -106,7 +114,7 @@ function renderOfficeSpec(spec: OfficeArtifactSpec): RenderedOfficeArtifact {
         )
         .join("\n\n"),
       renderedSurfaces: spec.sheets.map((sheet, index) =>
-        sheetSurface(sheet, index + 1, spec.theme),
+        sheetSurface(sheet, index + 1, spec.theme, includeModelImages),
       ),
     };
   }
@@ -118,7 +126,7 @@ function renderOfficeSpec(spec: OfficeArtifactSpec): RenderedOfficeArtifact {
         )
         .join("\n\n"),
       renderedSurfaces: spec.slides.map((slide, index) =>
-        slideSurface(slide, index + 1, spec.theme),
+        slideSurface(slide, index + 1, spec.theme, includeModelImages),
       ),
     };
   }
@@ -129,7 +137,7 @@ function renderOfficeSpec(spec: OfficeArtifactSpec): RenderedOfficeArtifact {
       )
       .join("\n\n"),
     renderedSurfaces: spec.pages.map((page, index) =>
-      pageSurface(page, index + 1, spec.title, spec.theme),
+      pageSurface(page, index + 1, spec.title, spec.theme, includeModelImages),
     ),
   };
 }
@@ -139,6 +147,7 @@ function pageSurface(
   index: number,
   documentTitle: string,
   theme: { accentColor: string; backgroundColor: string },
+  includeModelImage = true,
 ): RenderedSurface {
   const lines: Array<{ text: string; kind: "heading" | "body" | "bullet" }> = [];
   if (page.heading) {
@@ -185,6 +194,7 @@ function pageSurface(
      <line x1="64" y1="92" x2="730" y2="92" stroke="#E2E8F0"/>
      ${content}${footer}
      <text x="730" y="1070" text-anchor="end" font-size="14" fill="#94A3B8">${index}</text>`,
+    includeModelImage,
   );
 }
 
@@ -192,6 +202,7 @@ function sheetSurface(
   sheet: Extract<OfficeArtifactSpec, { format: "xlsx" }>["sheets"][number],
   index: number,
   theme: { accentColor: string; backgroundColor: string },
+  includeModelImage = true,
 ): RenderedSurface {
   const columns = Math.max(1, ...sheet.rows.map((row) => row.length));
   const widths = Array.from({ length: columns }, (_, column) => {
@@ -235,6 +246,7 @@ function sheetSurface(
      <text x="54" y="52" font-size="28" font-weight="700" fill="#172033">${escapeXml(sheet.name)}</text>
      <text x="54" y="78" font-size="14" fill="#64748B">${sheet.rows.length} 行 · ${columns} 列</text>
      ${cells}`,
+    includeModelImage,
   );
 }
 
@@ -242,6 +254,7 @@ function slideSurface(
   slide: Extract<OfficeArtifactSpec, { format: "pptx" }>["slides"][number],
   index: number,
   theme: { accentColor: string; backgroundColor: string },
+  includeModelImage = true,
 ): RenderedSurface {
   const titleLines = wrapText(slide.title, 30);
   const bodyLines = [
@@ -280,6 +293,7 @@ function slideSurface(
      <rect x="82" y="305" width="128" height="6" fill="${theme.accentColor}"/>
      ${body}
      <text x="1190" y="665" text-anchor="end" font-size="16" font-weight="700" fill="#94A3B8">${String(index).padStart(2, "0")}</text>`,
+    includeModelImage,
   );
 }
 
@@ -290,9 +304,18 @@ function svgSurface(
   width: number,
   height: number,
   content: string,
+  includeModelImage: boolean,
 ): RenderedSurface {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <style>text{font-family:Arial,"PingFang SC","Microsoft YaHei",sans-serif}</style>${content}</svg>`;
+  if (!includeModelImage) {
+    return {
+      kind,
+      index,
+      label,
+      imageDataUrl: `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`,
+    };
+  }
   const modelPng = new Resvg(svg, {
     fitTo: { mode: "width", value: Math.min(width, 1_600) },
     font: { defaultFontFamily: officeCjkFont, loadSystemFonts: true },

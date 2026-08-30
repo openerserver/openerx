@@ -261,6 +261,7 @@ describe("M4 parsers and artifacts", () => {
       ).toBe(true);
       expect(
         compiled.renderedSurfaces.every(({ modelImageDataUrl }) => {
+          if (!modelImageDataUrl) return false;
           const encoded = modelImageDataUrl.split(",", 2)[1];
           return (
             modelImageDataUrl.startsWith("data:image/png;base64,") &&
@@ -298,13 +299,16 @@ describe("M4 parsers and artifacts", () => {
         theme: { accentColor: "#2563EB", backgroundColor: "#FFFFFF" },
       },
     });
-    const preview = service.previewArtifact(first.id);
+    const preview = service.previewArtifact(first.id, { includeModelImages: false });
 
     expect(first.displayName).toBe("路线图.pptx");
     expect(second).toMatchObject({ id: first.id, currentVersion: 2 });
     expect(second.versions).toHaveLength(2);
     expect(preview.parsedText).toContain("第二版");
     expect(preview.renderedSurfaces.map(({ label }) => label)).toEqual(["幻灯片 1", "幻灯片 2"]);
+    expect(
+      preview.renderedSurfaces.every(({ modelImageDataUrl }) => modelImageDataUrl === undefined),
+    ).toBe(true);
     service.close();
   });
 

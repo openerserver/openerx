@@ -307,7 +307,8 @@ export const renderedSurfaceSchema = z
       .max(10_000_000)
       .refine((value) => value.startsWith("data:image/png;base64,"), {
         message: "Expected a PNG image data URL",
-      }),
+      })
+      .optional(),
   })
   .strict();
 
