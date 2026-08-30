@@ -113,6 +113,7 @@ import {
   Notification,
   nativeImage,
   net,
+  powerMonitor,
   protocol,
   shell,
   systemPreferences,
@@ -125,6 +126,7 @@ import { AppServiceSupervisor } from "./app-service-supervisor";
 import { automationNotificationContent } from "./automation-notification";
 import {
   keepsAutomationRuntimeAliveAfterWindowClose,
+  registerAutomationPowerReconciliation,
   shouldHideMainWindowOnClose,
 } from "./background-lifecycle";
 import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
@@ -1120,6 +1122,7 @@ let backgroundTray: Tray | null = null;
 let quitRequested = false;
 let activeDiagnostics: DiagnosticsService | null = null;
 let reopenRequested = false;
+let unregisterAutomationPowerReconciliation: (() => void) | null = null;
 
 function showMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
   const window = BrowserWindow.getAllWindows()[0] ?? createMainWindow(diagnostics);
@@ -1266,6 +1269,36 @@ app.whenReady().then(async () => {
     if (!authorization) throw new Error("AUTHENTICATION_REQUIRED");
     return { authorization };
   });
+  unregisterAutomationPowerReconciliation = registerAutomationPowerReconciliation(
+    powerMonitor,
+    supervisor,
+    {
+      onSuspend: (suspendedAt) => {
+        diagnostics.record({
+          source: "desktop",
+          level: "info",
+          code: "automation.scheduler.suspended",
+          attributes: { suspendedAt },
+        });
+      },
+      onResume: ({ suspendedAt, resumedAt }) => {
+        diagnostics.record({
+          source: "desktop",
+          level: "info",
+          code: "automation.scheduler.resume_reconcile_requested",
+          attributes: { suspendedAt, resumedAt },
+        });
+      },
+      onError: (error) => {
+        diagnostics.record({
+          source: "desktop",
+          level: "error",
+          code: "automation.scheduler.resume_reconcile_failed",
+          attributes: { reason: error instanceof Error ? error.message : "unknown" },
+        });
+      },
+    },
+  );
   if (process.env.OPENERX_E2E === "1") {
     Object.assign(globalThis, {
       __openerxCrashAppServiceForTest: () => supervisor?.crashAppServiceForTest(),
@@ -1399,6 +1432,8 @@ app.whenReady().then(async () => {
 app.on("before-quit", () => {
   quitRequested = true;
   activeDiagnostics = null;
+  unregisterAutomationPowerReconciliation?.();
+  unregisterAutomationPowerReconciliation = null;
   backgroundTray?.destroy();
   backgroundTray = null;
   supervisor?.stop();

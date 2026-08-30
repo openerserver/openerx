@@ -24,6 +24,11 @@ export interface AutomationRepositoryOptions {
   idFactory?: () => string;
 }
 
+export interface AutomationDueOptions {
+  now?: string;
+  forceMissed?: boolean;
+}
+
 const activeRunStatuses: AutomationRunStatus[] = [
   "scheduled",
   "claimed",
@@ -239,6 +244,60 @@ export function previewAutomationRunTimes(
   return occurrences;
 }
 
+export function latestAutomationRunAt(
+  schedule: AutomationDefinition["schedule"],
+  firstOccurrence: string,
+  through: string,
+): string | null {
+  const firstMs = Date.parse(firstOccurrence);
+  const throughMs = Date.parse(through);
+  if (Number.isNaN(firstMs) || Number.isNaN(throughMs)) {
+    throw new Error("AUTOMATION_TIME_INVALID");
+  }
+  if (firstMs > throughMs) return null;
+  if (schedule.mode === "once") return new Date(firstMs).toISOString();
+  validateTimeZone(schedule.timezone);
+  const startMs = Date.parse(schedule.startAt);
+  if (Number.isNaN(startMs)) throw new Error("AUTOMATION_TIME_INVALID");
+  const parts = rruleParts(schedule.expression);
+  const untilMs = parts.has("UNTIL") ? Date.parse(String(parts.get("UNTIL"))) : null;
+  if (untilMs !== null && Number.isNaN(untilMs)) throw new Error("AUTOMATION_RRULE_INVALID");
+  const upperBoundMs = untilMs === null ? throughMs : Math.min(throughMs, untilMs);
+  if (upperBoundMs < startMs) return null;
+  const interval = Number(parts.get("INTERVAL") ?? "1");
+  const periodDays = (parts.get("FREQ") === "WEEKLY" ? 7 : 1) * interval;
+  const startLocal = zonedDateTimeParts(startMs, schedule.timezone);
+  const upperBoundLocal = zonedDateTimeParts(upperBoundMs, schedule.timezone);
+  let occurrence = Math.max(
+    0,
+    Math.floor((calendarDay(upperBoundLocal) - calendarDay(startLocal)) / periodDays),
+  );
+  if (parts.has("COUNT")) {
+    const count = Number(parts.get("COUNT"));
+    if (!Number.isInteger(count) || count < 1 || count > 100_000) {
+      throw new Error("AUTOMATION_RRULE_INVALID");
+    }
+    occurrence = Math.min(occurrence, count - 1);
+  }
+  let candidate =
+    occurrence === 0
+      ? startMs
+      : localTimeToInstant(addCalendarDays(startLocal, occurrence * periodDays), schedule.timezone);
+  while (candidate > upperBoundMs && occurrence > 0) {
+    occurrence -= 1;
+    candidate =
+      occurrence === 0
+        ? startMs
+        : localTimeToInstant(
+            addCalendarDays(startLocal, occurrence * periodDays),
+            schedule.timezone,
+          );
+  }
+  return candidate >= firstMs && candidate <= upperBoundMs
+    ? new Date(candidate).toISOString()
+    : null;
+}
+
 export class AutomationRepository {
   readonly #database: DatabaseSync;
   readonly #ownerProfileId: string;
@@ -413,7 +472,8 @@ export class AutomationRepository {
     return this.get(id);
   }
 
-  enqueueDue(now = this.#now()): AutomationRun[] {
+  enqueueDue(options: AutomationDueOptions = {}): AutomationRun[] {
+    const now = options.now ?? this.#now();
     const nowMs = Date.parse(now);
     if (Number.isNaN(nowMs)) throw new Error("AUTOMATION_TIME_INVALID");
     const due = this.#database
@@ -430,7 +490,13 @@ export class AutomationRepository {
       const scheduledFor = definition.nextRunAt;
       if (!scheduledFor) continue;
       const scheduledForMs = Date.parse(scheduledFor);
-      const missed = nowMs - scheduledForMs > 5 * 60_000;
+      const missed =
+        scheduledForMs < nowMs &&
+        (options.forceMissed === true || nowMs - scheduledForMs > 5 * 60_000);
+      const reconciledScheduledFor =
+        missed && definition.execution.catchUpPolicy === "latest_once"
+          ? (latestAutomationRunAt(definition.schedule, scheduledFor, now) ?? scheduledFor)
+          : scheduledFor;
       const active = this.#database
         .prepare(
           `SELECT 1 FROM automation_runs WHERE automation_id = ? AND status IN (${activeRunStatuses
@@ -440,7 +506,7 @@ export class AutomationRepository {
         .get(definition.id, ...activeRunStatuses);
       const run = this.#insertRun(
         definition,
-        scheduledFor,
+        reconciledScheduledFor,
         missed && definition.execution.catchUpPolicy === "latest_once" ? "catch_up" : "schedule",
         "schedule",
         active
@@ -456,7 +522,7 @@ export class AutomationRepository {
            SET next_run_at = ?, last_run_at = ?, updated_at = ?, revision = revision + 1
            WHERE id = ?`,
         )
-        .run(next, scheduledFor, now, definition.id);
+        .run(next, reconciledScheduledFor, now, definition.id);
       runs.push(run);
     }
     return runs;

@@ -8,10 +8,12 @@ import {
   type AutomaticMemoryCreatedEvent,
   type AutomationExecutionContext,
   type AutomationRun,
+  type AutomationSchedulerReconcileFrame,
   appServiceEventFrameSchema,
   appServiceResponseFrameSchema,
   automaticMemoryCreatedEventFrameSchema,
   automationRunEventFrameSchema,
+  automationSchedulerReconcileFrameSchema,
   type BrowserSessionDescriptor,
   type ChatEvent,
   type HostToolAvailability,
@@ -157,6 +159,20 @@ export class AppServiceSupervisor {
 
   setAutomationExecutionContextProvider(provider: () => Promise<AutomationExecutionContext>): void {
     this.#automationExecutionContextProvider = provider;
+  }
+
+  async reconcileAutomationsAfterWake(
+    input: Pick<AutomationSchedulerReconcileFrame, "suspendedAt" | "resumedAt">,
+  ): Promise<void> {
+    const frame = automationSchedulerReconcileFrameSchema.parse({
+      kind: "automation.scheduler.reconcile",
+      reason: "system_resume",
+      ...input,
+    });
+    await this.start();
+    const port = this.#mainPort;
+    if (!port) throw new Error("App Service is unavailable");
+    port.postMessage(frame);
   }
 
   crashAppServiceForTest(): void {

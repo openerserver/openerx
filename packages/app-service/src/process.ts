@@ -6,6 +6,7 @@ import {
   appServiceBootstrapSchema,
   appServiceRequestFrameSchema,
   automationCommandEnvelopeSchema,
+  automationSchedulerReconcileFrameSchema,
   chatCommandEnvelopeSchema,
   type ErrorEnvelope,
   remoteApplyCommandRequestFrameSchema,
@@ -218,6 +219,14 @@ parentPort.once("message", async (bootstrapEvent) => {
 
   mainPort.on("message", async (event) => {
     if (mainCapabilities.handleMessage(event.data)) return;
+    const automationReconcile = automationSchedulerReconcileFrameSchema.safeParse(event.data);
+    if (automationReconcile.success) {
+      const { suspendedAt, resumedAt } = automationReconcile.data;
+      void automationScheduler
+        .reconcileAfterWake({ suspendedAt, resumedAt })
+        .catch(() => undefined);
+      return;
+    }
     const remoteConfiguration = remoteConnectorConfigureFrameSchema.safeParse(event.data);
     if (remoteConfiguration.success) {
       remoteAuthorization = remoteConfiguration.data.authorization;

@@ -102,6 +102,9 @@ AutomationRun，旧运行保持不可变审计记录。
 - 同一自动化默认 `maxConcurrentRuns = 1`；上一次仍在运行时，新一次记为 `skipped_overlap`，不排无限队列。
 - 桌面主机离线期间默认不补跑；恢复后把已过期触发记为 `missed`。可选 `catchUpPolicy = latest_once`，
   只补最近一次且需要用户显式开启。
+- Electron Main 监听系统 `suspend` / `resume`，恢复后立即把休眠窗口交给 App Service 对账；休眠期间到期的
+  触发不受常规定时扫描的 5 分钟容差影响。对账合并离线积压，不逐条重放；`latest_once` 的
+  `scheduledFor` 必须指向恢复时刻之前最近的一次计划时间。
 - 自动重试仅覆盖确定可重试的瞬时错误，默认指数退避 1 分钟、5 分钟、30 分钟，最多 3 次；
   权限拒绝、余额不足、配置失效和结果不确定不自动重试。
 

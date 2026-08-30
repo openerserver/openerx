@@ -8,7 +8,7 @@ import type {
   ChatEvent,
   GenerationReceipt,
 } from "@openerx/contracts";
-import type { AutomationRepository } from "@openerx/storage";
+import type { AutomationDueOptions, AutomationRepository } from "@openerx/storage";
 
 const transientRetryDelaysMs = [60_000, 5 * 60_000, 30 * 60_000] as const;
 
@@ -110,6 +110,11 @@ export interface AutomationSchedulerOptions {
   onRunChanged?: (run: AutomationRun) => void;
 }
 
+export interface AutomationWakeWindow {
+  suspendedAt: string | null;
+  resumedAt: string;
+}
+
 export class AutomationScheduler {
   readonly #repository: AutomationRepository;
   readonly #dispatcher: AutomationDispatcher;
@@ -120,6 +125,7 @@ export class AutomationScheduler {
   readonly #onRunChanged: (run: AutomationRun) => void;
   #timer: ReturnType<typeof setInterval> | null = null;
   #ticking = false;
+  #queuedTick: AutomationDueOptions | null = null;
 
   constructor(options: AutomationSchedulerOptions) {
     if (!options.hostId.trim()) throw new Error("AUTOMATION_HOST_REQUIRED");
@@ -134,8 +140,11 @@ export class AutomationScheduler {
 
   start(): void {
     if (this.#timer) return;
-    void this.tick();
-    this.#timer = setInterval(() => void this.tick(), this.#intervalMs);
+    void this.tick().catch((error: unknown) => this.#onError(error));
+    this.#timer = setInterval(
+      () => void this.tick().catch((error: unknown) => this.#onError(error)),
+      this.#intervalMs,
+    );
     this.#timer.unref?.();
   }
 
@@ -145,12 +154,31 @@ export class AutomationScheduler {
     this.#timer = null;
   }
 
-  async tick(): Promise<AutomationRun[]> {
-    if (this.#ticking) return [];
+  async reconcileAfterWake(window: AutomationWakeWindow): Promise<AutomationRun[]> {
+    const resumedAtMs = Date.parse(window.resumedAt);
+    const suspendedAtMs = window.suspendedAt === null ? null : Date.parse(window.suspendedAt);
+    if (
+      Number.isNaN(resumedAtMs) ||
+      (suspendedAtMs !== null && (Number.isNaN(suspendedAtMs) || suspendedAtMs > resumedAtMs))
+    ) {
+      throw new Error("AUTOMATION_WAKE_WINDOW_INVALID");
+    }
+    return await this.tick({ now: window.resumedAt, forceMissed: true });
+  }
+
+  async tick(options: AutomationDueOptions = {}): Promise<AutomationRun[]> {
+    if (this.#ticking) {
+      this.#queuedTick = {
+        ...this.#queuedTick,
+        ...options,
+        forceMissed: this.#queuedTick?.forceMissed === true || options.forceMissed === true,
+      };
+      return [];
+    }
     this.#ticking = true;
     const dispatched: AutomationRun[] = [];
     try {
-      for (const run of this.#repository.enqueueDue()) {
+      for (const run of this.#repository.enqueueDue(options)) {
         if (run.status === "missed" || run.status === "skipped_overlap") this.#notify(run);
       }
       for (let index = 0; index < this.#maxClaimsPerTick; index += 1) {
@@ -185,6 +213,9 @@ export class AutomationScheduler {
       return dispatched;
     } finally {
       this.#ticking = false;
+      const queued = this.#queuedTick;
+      this.#queuedTick = null;
+      if (queued) void this.tick(queued).catch((error: unknown) => this.#onError(error));
     }
   }
 

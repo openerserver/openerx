@@ -84,6 +84,7 @@ export function AutomationsPage({
   const [targetConversationId, setTargetConversationId] = useState("");
   const [editorModelRef, setEditorModelRef] = useState(defaultModelRef);
   const [retryPolicy, setRetryPolicy] = useState<"none" | "transient_3">("none");
+  const [catchUpPolicy, setCatchUpPolicy] = useState<"skip" | "latest_once">("skip");
   const [frequency, setFrequency] = useState<"once" | "daily" | "weekly">("daily");
   const [startAt, setStartAt] = useState(defaultStartAtInput);
   const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -142,6 +143,7 @@ export function AutomationsPage({
     setScheduleTimeZone(localTimeZone);
     setEditorModelRef(defaultModelRef);
     setRetryPolicy("none");
+    setCatchUpPolicy("skip");
   };
   const openEdit = (item: AutomationDefinition): void => {
     setEditorMode("edit");
@@ -162,6 +164,7 @@ export function AutomationsPage({
     setScheduleTimeZone(item.schedule.timezone);
     setEditorModelRef(item.execution.modelRef);
     setRetryPolicy(item.execution.retryPolicy);
+    setCatchUpPolicy(item.execution.catchUpPolicy);
   };
   const create = useMutation({
     mutationFn: () => {
@@ -171,7 +174,7 @@ export function AutomationsPage({
         name,
         prompt,
         kind,
-        execution: { modelRef: editorModelRef, retryPolicy },
+        execution: { modelRef: editorModelRef, retryPolicy, catchUpPolicy },
         ...(kind === "heartbeat"
           ? {
               target: {
@@ -208,7 +211,7 @@ export function AutomationsPage({
             branchId: null,
             workspaceGrantIds: [],
           },
-          execution: { modelRef: editorModelRef, retryPolicy },
+          execution: { modelRef: editorModelRef, retryPolicy, catchUpPolicy },
         },
       });
     },
@@ -377,6 +380,16 @@ export function AutomationsPage({
                 <option value="transient_3">瞬时错误重试 3 次</option>
               </select>
             </label>
+            <label>
+              <span>休眠期间错过执行</span>
+              <select
+                value={catchUpPolicy}
+                onChange={(event) => setCatchUpPolicy(event.target.value as typeof catchUpPolicy)}
+              >
+                <option value="skip">记录为已错过，不补跑</option>
+                <option value="latest_once">唤醒后只补最近一次</option>
+              </select>
+            </label>
           </div>
           {kind === "heartbeat" ? (
             <label>
@@ -531,6 +544,14 @@ export function AutomationsPage({
                 <div>
                   <dt>时区</dt>
                   <dd>{selected.schedule.timezone}</dd>
+                </div>
+                <div>
+                  <dt>错过执行</dt>
+                  <dd>
+                    {selected.execution.catchUpPolicy === "latest_once"
+                      ? "唤醒后补最近一次"
+                      : "记录并跳过"}
+                  </dd>
                 </div>
               </dl>
               <section className="automation-runs">

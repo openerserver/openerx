@@ -4,6 +4,7 @@ import {
   automationCommandEnvelopeSchema,
   automationDefinitionSchema,
   automationRunEventFrameSchema,
+  automationSchedulerReconcileFrameSchema,
   parseAutomationCommandResult,
 } from "../src";
 
@@ -92,6 +93,25 @@ describe("automation contracts", () => {
     });
 
     expect(event.run).toMatchObject({ status: "needs_attention", actionRequired: true });
+  });
+
+  it("validates system-resume reconciliation windows", () => {
+    expect(
+      automationSchedulerReconcileFrameSchema.parse({
+        kind: "automation.scheduler.reconcile",
+        reason: "system_resume",
+        suspendedAt: "2026-08-30T01:00:00.000Z",
+        resumedAt: "2026-08-30T01:03:00.000Z",
+      }),
+    ).toMatchObject({ reason: "system_resume" });
+    expect(() =>
+      automationSchedulerReconcileFrameSchema.parse({
+        kind: "automation.scheduler.reconcile",
+        reason: "system_resume",
+        suspendedAt: "2026-08-30T01:04:00.000Z",
+        resumedAt: "2026-08-30T01:03:00.000Z",
+      }),
+    ).toThrow();
   });
 
   it("accepts update and schedule-preview commands with strict results", () => {

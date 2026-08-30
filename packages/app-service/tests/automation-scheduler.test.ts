@@ -86,6 +86,133 @@ describe("AutomationScheduler", () => {
     repository.close();
   });
 
+  it("reconciles wake-up misses and dispatches only the latest opted-in catch-up", async () => {
+    let now = "2026-08-29T01:00:00.000Z";
+    const repository = new AutomationRepository(databasePath(), { now: () => now });
+    const skipped = repository.create({
+      name: "Skip after sleep",
+      prompt: "Skip stale work",
+      kind: "standalone",
+      schedule: {
+        mode: "rrule",
+        expression: "FREQ=DAILY",
+        timezone: "UTC",
+        startAt: "2026-08-29T02:00:00.000Z",
+      },
+    });
+    const caughtUp = repository.create({
+      name: "Catch up after sleep",
+      prompt: "Run the latest work",
+      kind: "standalone",
+      schedule: {
+        mode: "rrule",
+        expression: "FREQ=DAILY",
+        timezone: "UTC",
+        startAt: "2026-08-29T02:00:00.000Z",
+      },
+      execution: { catchUpPolicy: "latest_once" },
+    });
+    const dispatch = vi.fn().mockResolvedValue({
+      conversationId: "00000000-0000-4000-8000-000000000090",
+      assistantMessageId: "00000000-0000-4000-8000-000000000092",
+    });
+    const onRunChanged = vi.fn();
+    const scheduler = new AutomationScheduler({
+      repository,
+      dispatcher: { dispatch },
+      hostId: "host-a",
+      onRunChanged,
+    });
+
+    now = "2026-08-31T05:00:00.000Z";
+    await expect(
+      scheduler.reconcileAfterWake({
+        suspendedAt: "2026-08-29T01:30:00.000Z",
+        resumedAt: now,
+      }),
+    ).resolves.toMatchObject([
+      {
+        automationId: caughtUp.id,
+        trigger: "catch_up",
+        status: "running",
+        scheduledFor: "2026-08-31T02:00:00.000Z",
+      },
+    ]);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(repository.listRuns(skipped.id)).toMatchObject([
+      { status: "missed", scheduledFor: "2026-08-29T02:00:00.000Z" },
+    ]);
+    expect(onRunChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ automationId: skipped.id, status: "missed" }),
+    );
+    await expect(
+      scheduler.reconcileAfterWake({
+        suspendedAt: "2026-08-31T06:00:00.000Z",
+        resumedAt: "2026-08-31T05:00:00.000Z",
+      }),
+    ).rejects.toThrow("AUTOMATION_WAKE_WINDOW_INVALID");
+    repository.close();
+  });
+
+  it("queues wake reconciliation when a regular tick is already dispatching", async () => {
+    let now = "2026-08-29T01:00:00.000Z";
+    const repository = new AutomationRepository(databasePath(), { now: () => now });
+    repository.create({
+      name: "Already dispatching",
+      prompt: "Hold the first tick open",
+      kind: "standalone",
+      schedule: {
+        mode: "once",
+        expression: "2026-08-29T02:00:00.000Z",
+        timezone: "UTC",
+        startAt: "2026-08-29T02:00:00.000Z",
+      },
+    });
+    const afterWake = repository.create({
+      name: "Due during sleep",
+      prompt: "Reconcile after the first tick",
+      kind: "standalone",
+      schedule: {
+        mode: "once",
+        expression: "2026-08-29T02:01:00.000Z",
+        timezone: "UTC",
+        startAt: "2026-08-29T02:01:00.000Z",
+      },
+    });
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const dispatch = vi.fn().mockImplementation(async () => {
+      await dispatchGate;
+      return {
+        conversationId: "00000000-0000-4000-8000-000000000090",
+        assistantMessageId: "00000000-0000-4000-8000-000000000092",
+      };
+    });
+    const scheduler = new AutomationScheduler({
+      repository,
+      dispatcher: { dispatch },
+      hostId: "host-a",
+    });
+
+    now = "2026-08-29T02:00:00.000Z";
+    const regularTick = scheduler.tick();
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    now = "2026-08-29T02:02:00.000Z";
+    await scheduler.reconcileAfterWake({
+      suspendedAt: "2026-08-29T02:00:30.000Z",
+      resumedAt: now,
+    });
+    releaseDispatch?.();
+    await regularTick;
+
+    await vi.waitFor(() =>
+      expect(repository.listRuns(afterWake.id)[0]).toMatchObject({ status: "missed" }),
+    );
+    repository.close();
+  });
+
   it("moves permission waits to needs_attention and cancels the waiting generation", async () => {
     const now = "2026-08-29T02:00:00.000Z";
     const repository = new AutomationRepository(databasePath(), { now: () => now });

@@ -2421,6 +2421,7 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "新建自动化" }));
     await user.type(screen.getByLabelText("名称"), "每日巡检");
     await user.type(screen.getByLabelText("任务描述"), "检查项目并运行测试");
+    await user.selectOptions(screen.getByLabelText("休眠期间错过执行"), "latest_once");
     await user.click(screen.getByRole("button", { name: "创建自动化" }));
 
     await waitFor(() => expect(bridge.createAutomation).toHaveBeenCalledTimes(1));
@@ -2428,7 +2429,7 @@ describe("M1 chat renderer", () => {
       name: "每日巡检",
       prompt: "检查项目并运行测试",
       kind: "standalone",
-      execution: { modelRef: "platform/byok" },
+      execution: { modelRef: "platform/byok", catchUpPolicy: "latest_once" },
       schedule: { mode: "rrule", expression: "FREQ=DAILY" },
     });
   });
@@ -2501,6 +2502,7 @@ describe("M1 chat renderer", () => {
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole("button", { name: /每日巡检/ }));
+    expect(screen.getByText("记录并跳过")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "编辑" }));
     expect(await screen.findByRole("heading", { name: "编辑自动化" })).toBeTruthy();
     await waitFor(() => expect(bridge.previewAutomationSchedule).toHaveBeenCalled());
@@ -2508,6 +2510,7 @@ describe("M1 chat renderer", () => {
     const nameInput = screen.getByLabelText("名称");
     await user.clear(nameInput);
     await user.type(nameInput, "每日安全巡检");
+    await user.selectOptions(screen.getByLabelText("休眠期间错过执行"), "latest_once");
     await user.click(screen.getByRole("button", { name: "保存修改" }));
 
     await waitFor(() =>
@@ -2515,7 +2518,10 @@ describe("M1 chat renderer", () => {
         expect.objectContaining({
           automationId: automation.id,
           revision: 3,
-          changes: expect.objectContaining({ name: "每日安全巡检" }),
+          changes: expect.objectContaining({
+            name: "每日安全巡检",
+            execution: expect.objectContaining({ catchUpPolicy: "latest_once" }),
+          }),
         }),
       ),
     );

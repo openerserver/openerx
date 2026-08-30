@@ -241,6 +241,70 @@ describe("AutomationRepository", () => {
     repository.close();
   });
 
+  it("marks a just-due occurrence missed when reconciliation follows system sleep", () => {
+    let now = "2026-08-29T01:00:00.000Z";
+    const repository = new AutomationRepository(databasePath(), {
+      now: () => now,
+      idFactory: ids(),
+    });
+    const automation = repository.create({
+      name: "Wake reconciliation",
+      prompt: "Do not silently replay after sleep",
+      kind: "standalone",
+      schedule: {
+        mode: "once",
+        expression: "2026-08-29T02:00:00.000Z",
+        timezone: "UTC",
+        startAt: "2026-08-29T02:00:00.000Z",
+      },
+    });
+
+    now = "2026-08-29T02:01:00.000Z";
+    expect(repository.enqueueDue({ now, forceMissed: true })).toMatchObject([
+      { status: "missed", scheduledFor: "2026-08-29T02:00:00.000Z" },
+    ]);
+    expect(repository.get(automation.id)).toMatchObject({
+      lastRunAt: "2026-08-29T02:00:00.000Z",
+      nextRunAt: null,
+    });
+    repository.close();
+  });
+
+  it("catches up only the latest occurrence after an offline backlog", () => {
+    let now = "2026-08-29T01:00:00.000Z";
+    const repository = new AutomationRepository(databasePath(), {
+      now: () => now,
+      idFactory: ids(),
+    });
+    const automation = repository.create({
+      name: "Latest only",
+      prompt: "Run only the most recent offline occurrence",
+      kind: "standalone",
+      schedule: {
+        mode: "rrule",
+        expression: "FREQ=DAILY",
+        timezone: "UTC",
+        startAt: "2026-08-29T02:00:00.000Z",
+      },
+      execution: { catchUpPolicy: "latest_once" },
+    });
+
+    now = "2026-08-31T05:00:00.000Z";
+    expect(repository.enqueueDue({ now, forceMissed: true })).toMatchObject([
+      {
+        status: "scheduled",
+        trigger: "catch_up",
+        scheduledFor: "2026-08-31T02:00:00.000Z",
+      },
+    ]);
+    expect(repository.get(automation.id)).toMatchObject({
+      lastRunAt: "2026-08-31T02:00:00.000Z",
+      nextRunAt: "2026-09-01T02:00:00.000Z",
+    });
+    expect(repository.enqueueDue({ now, forceMissed: true })).toEqual([]);
+    repository.close();
+  });
+
   it("skips a second manual run while the first is queued", () => {
     const now = "2026-08-29T01:00:00.000Z";
     const repository = new AutomationRepository(databasePath(), {

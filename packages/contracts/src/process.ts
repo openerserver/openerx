@@ -105,6 +105,20 @@ export const automationRunEventFrameSchema = z
   })
   .strict();
 
+export const automationSchedulerReconcileFrameSchema = z
+  .object({
+    kind: z.literal("automation.scheduler.reconcile"),
+    reason: z.literal("system_resume"),
+    suspendedAt: timestampSchema.nullable(),
+    resumedAt: timestampSchema,
+  })
+  .strict()
+  .refine(
+    ({ suspendedAt, resumedAt }) =>
+      suspendedAt === null || Date.parse(suspendedAt) <= Date.parse(resumedAt),
+    "AUTOMATION_WAKE_WINDOW_INVALID",
+  );
+
 export const automaticMemoryCreatedEventFrameSchema = z
   .object({
     kind: z.literal("memory.created.event"),
@@ -316,6 +330,7 @@ export const appServicePortFrameSchema = z.union([
   appServiceResponseFrameSchema,
   appServiceEventFrameSchema,
   automationRunEventFrameSchema,
+  automationSchedulerReconcileFrameSchema,
   automaticMemoryCreatedEventFrameSchema,
   mainAutomationContextRequestFrameSchema,
   mainAutomationContextResponseFrameSchema,
@@ -341,6 +356,9 @@ export type AppServiceAuthorization = z.infer<typeof appServiceAuthorizationSche
 export type AppServiceResponseFrame = z.infer<typeof appServiceResponseFrameSchema>;
 export type AppServiceEventFrame = z.infer<typeof appServiceEventFrameSchema>;
 export type AutomationRunEventFrame = z.infer<typeof automationRunEventFrameSchema>;
+export type AutomationSchedulerReconcileFrame = z.infer<
+  typeof automationSchedulerReconcileFrameSchema
+>;
 export type AutomaticMemoryCreatedEventFrame = z.infer<
   typeof automaticMemoryCreatedEventFrameSchema
 >;
