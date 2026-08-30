@@ -4,7 +4,7 @@ Date: 2026-08-30 (Asia/Shanghai)
 
 ## Outcome
 
-Status: `REAL-MODEL EXECUTED / QUALITY GATE FAILED`
+Status: `REAL-MODEL FIX VERIFIED / GOLDEN AND HOLDOUT PASSED`
 
 OpenerX now has a reproducible real-model Golden evaluator for the two model-dependent memory paths:
 
@@ -12,11 +12,11 @@ OpenerX now has a reproducible real-model Golden evaluator for the two model-dep
 - historical duplicate/conflict semantic clustering.
 
 The ignored local `.env` was populated from a previously supplied DeepSeek credential without displaying or
-committing it. The final run made 16 real provider calls through the same local Model Gateway and Pi provider path
-used by the existing PBASH evaluator. The model completed every case with authoritative usage, but automatic
-extraction failed its precision and safety gates.
+committing it. All real runs use the same local Model Gateway and Pi provider path as the existing PBASH evaluator.
+The first fixed-set run exposed a real memory-control false positive. After a prompt fix and deterministic source
+guard, both the original fixed set and a separate denial/opt-out holdout passed without guard intervention.
 
-## Real-model result
+## Baseline real-model result
 
 - configured model: `deepseek-v4-flash`;
 - effective model: `platform/deepseek-v4-flash`;
@@ -34,6 +34,23 @@ denied that it was the user's preference, and instructed the system not to remem
 the quoted false fact, but incorrectly converted the user's denial/control sentence into one durable `preference`
 and one `workflow`. This is a real memory-control false positive, not a parser, schema, credential, or transport
 failure.
+
+The failing baseline and the implementation that produced it are preserved in Git commit `91dc2fc`. Its
+machine-readable report remains `memory-model-golden-2026-08-30.json` and is not overwritten by the fixed run.
+
+## Fixed real-model results
+
+The fixed evaluator uses the same `deepseek-v4-flash`, `medium` thinking level, Golden digest, scoring thresholds,
+and production prompt/validation path.
+
+| Dataset | Calls | Model precision / recall | End-to-end precision / recall | Safety FP | Guard drops | Total Tokens | Gate |
+| --- | ---: | --- | --- | ---: | ---: | ---: | --- |
+| `memory-semantic-golden-v1` | 16 | 100% / 100% | 100% / 100% | 0 | 0 | 11,826 | PASS |
+| `memory-semantic-holdout-v1` | 6 | 100% / 100% | 100% / 100% | 0 | 0 | 4,550 | PASS |
+
+The Golden rerun also retained semantic-clustering precision/recall/F1 at 100%. Both fixed runs reported zero
+sensitive leaks, invalid/truncated outputs, and model/provider errors. `guard drops = 0` is important: the improved
+model prompt itself produced no unsafe candidates; the deterministic guard remains a defense-in-depth backstop.
 
 ## Golden dataset
 
@@ -58,6 +75,11 @@ message IDs defensible. Cases 02–04 were rewritten so the first message contai
 second contains only a temporary request. The calibration report is retained separately and is not presented as
 the final score.
 
+`memory-semantic-holdout-v1` has six new extraction cases that were not used to identify the baseline failure:
+five strict safety negatives plus one mixed safe-positive/quoted-denial case. It covers Chinese and English quoted
+content, colleague attribution, temporary current-turn instructions, backward opt-out, and whole-conversation
+opt-out. Its SHA-256 is `f0866a92cce591cc6c9db6be951efc49df0fbb29bbb615901e7510f0dce3888c`.
+
 ## Gates
 
 The evaluator fails closed unless all conditions pass:
@@ -81,19 +103,31 @@ Each case runs in a fresh no-tool Pi Session at production `medium` thinking lev
 that the former `low` setting was unsupported by the current DeepSeek catalog (`off | medium`) and failed before
 any provider call; production extraction/clustering and the evaluator now use the supported `medium` level.
 
+The fix adds two aligned controls:
+
+- the production prompt states that memory-control, denial, temporary-scope, quoted external content, and later
+  opt-out language are not durable preference/workflow facts;
+- a deterministic shared policy computes blocked source message IDs. Pi Host removes candidates sourced from those
+  messages before returning them, while Storage independently refuses an ineligible automatic source so another
+  caller cannot bypass the host guard. A backward-reference opt-out blocks the immediately preceding source; a
+  whole-conversation opt-out blocks every source in the extraction frame.
+
 The machine-readable report deliberately excludes user text, memory content, full prompts, raw model output,
 temporary paths, and credentials. It retains only dataset digest, case metadata, expected/predicted label keys,
 error flags/codes, duration, configured/effective model identity, and provider-reported Token aggregates.
-Sensitive-canary detection scans
-the complete raw response in memory before parsing, including content, retrieval keys, and other JSON fields.
+Sensitive-canary detection scans the complete raw response in memory before parsing, including content, retrieval
+keys, and other JSON fields. Fixed reports additionally retain model label keys, post-guard label keys, and the
+number of guard rejections, never candidate text.
 
 ## Execution
 
 With a real server-side DeepSeek credential available in the ignored root `.env`, reproduce with:
 
 ```powershell
-npm run eval:memory:model -- --repetitions=1 --output=docs/v2/evidence/memory-model-golden-2026-08-30.json
+npm run eval:memory:model -- --repetitions=1 --output=docs/v2/evidence/memory-model-golden-fixed-2026-08-30.json
 ```
+
+Use `--dataset=tests/v2/golden/memory-semantic-holdout-v1.json` to run the separate holdout.
 
 The command exits `2` when any quality or safety gate fails and `1` for evaluator/configuration failure. For
 diagnostic runs, `--allow-gate-failure=true` preserves the JSON report while returning success; such a run must
@@ -105,21 +139,22 @@ still be reported as failed when `evaluation.gate.passed` is false.
 - perfect labels pass all gates;
 - missed labels, duplicate predictions, semantically wrong content, safety false positives, sensitive output,
   invalid output, and model errors fail closed;
-- Contracts + Storage + Pi Host + evaluator contract: 28 files, 156 tests passed;
+- post-fix Contracts + Storage + Pi Host + evaluator contract: 29 files, 162 tests passed;
 - App Service extraction/semantic-rotation schedulers: 2 files, 11 tests passed; Observability: 1 file, 3 tests passed;
 - Contracts, Storage, Pi Host, App Service, and Observability strict TypeScript checks passed;
 - the standalone Vite evaluator bundle builds successfully;
 - a no-credential probe produced `DEEPSEEK_API_KEY_INVALID`, zero provider calls, zero Tokens, and a failed gate;
 - a real one-case preflight produced the expected cluster relationship with no error and provider-reported usage;
-- post-run targeted App Service, Pi Host, and evaluator regression: 4 files, 22 tests passed;
-- the final machine-readable result is `memory-model-golden-2026-08-30.json`; the earlier label-calibration result
-  is `memory-model-golden-calibration-2026-08-30.json`.
+- the baseline machine-readable result is `memory-model-golden-2026-08-30.json`; the earlier label-calibration result
+  is `memory-model-golden-calibration-2026-08-30.json`;
+- the fixed rerun is `memory-model-golden-fixed-2026-08-30.json` and the independent holdout result is
+  `memory-model-holdout-fixed-2026-08-30.json`.
 
 An additional full App Service attempt passed 10 of 11 files and 61 of 62 tests. Its unrelated Office artifact
 workflow exceeded its explicit 15-second per-test limit on Windows and then hit `EPERM` during temporary-directory
 cleanup. The memory scheduler test and App Service typecheck both pass; this evaluator work does not change the
 Office path.
 
-The failed safety case should be addressed by treating memory-storage control statements and explicit denials as
-non-memory, then validated against new holdout denial/injection cases before rerunning this fixed set. Phase C
-should not begin while this fail-closed extraction gate is red.
+The model-dependent extraction and clustering gates are now green for both the fixed set and the new holdout.
+This is a one-run development signal, not a release claim across model drift; future prompt/model changes should
+rerun both datasets, and release qualification should add repetitions plus a larger independently authored corpus.

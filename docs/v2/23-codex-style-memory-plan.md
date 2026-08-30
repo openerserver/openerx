@@ -1,6 +1,6 @@
 # OpenerX Codex 风格记忆方案
 
-> 状态：`PHASE B MODEL GOLDEN EXECUTED / GATE FAILED`
+> 状态：`PHASE B MODEL GOLDEN + HOLDOUT PASSED`
 >
 > 日期：2026-08-30（Asia/Shanghai）
 >
@@ -14,9 +14,10 @@
 > 确定性 consolidation 基础、跨设备并发 conflict slot 收敛、新抽取候选的模型语义关系标注和
 > 人工确认闭环，以及每日 consolidation 后最多 40 条 active 存量记忆的有界语义扫描。v27 已按
 > 同类型块组合持久化轮转游标，使超过单批上限的稳定目录最终得到全组合覆盖。固定版本 Golden
-> 数据集、真实 Provider 运行器和 fail-closed 精度/安全门禁也已落盘并完成 16-case 真实调用：聚类
-> precision/recall 均为 100%，抽取 precision 75%、recall 100%，因 2 个安全误报未过门禁。跨设备
-> 完整来源图仍待完成。
+> 数据集、真实 Provider 运行器和 fail-closed 精度/安全门禁也已落盘。基线真实调用发现的 2 个
+> 记忆控制误报已通过共享 source guard 和提示约束修复；原 16-case Golden 与新增 6-case holdout 的
+> 模型原始输出及端到端 precision/recall 均达到 100%，安全误报、泄漏、无效输出和模型错误均为 0。
+> 跨设备完整来源图仍待完成。
 
 ## 1. 结论
 
@@ -336,7 +337,8 @@ Phase A 通过后，用户已经可以可靠地说“记住……”并在新对
 - `已完成（有界存量语义扫描）`：每日/数量阈值 consolidation 完成后，`pi.memory.cluster` 对最多 40 条 active 存量记忆生成最多 20 个高置信关系对；v26 双记忆快照、双方 stale 校验、可恢复重复合并、显式冲突替代和 Settings 来源标注已接通；模型失败不回滚确定性 consolidation；
 - `已完成（全目录分片轮转）`：v27 持久化 block-pair 游标；同类型记忆按 20 条分块并枚举所有块内/块间组合，单次最多 40 条、每轮默认推进 2 批；跨进程重启续跑、完整周期回绕、失败不推进和分批服务端去重均已覆盖；
 - `已完成（Golden 基础设施）`：16 个固定脱敏用例覆盖抽取、重复/冲突聚类、负例、提示注入和凭证 canary；运行器复用生产提示词、Schema 与关系校验，结果只保留标签、错误码、时延和 Token 汇总；
-- `已执行（门禁失败）`：`deepseek-v4-flash` 完成 16 次真实调用；聚类 precision/recall/F1 均为 100%，抽取 precision 75%、recall 100%、F1 85.71%；提示注入否认/不记忆语句被误抽取为 preference/workflow，形成 2 个安全误报；敏感泄漏、无效输出和模型错误均为 0；
+- `已修复并复评通过`：基线 16 次真实调用发现否认/不记忆语句产生 2 个安全误报；生产提示词现明确排除记忆控制、否认、临时范围、外部引用和向后撤回语句，Pi Host 输出过滤与 Storage 落库拒绝复用同一确定性 source guard；
+- `已完成（真实 Golden + holdout）`：固定 16-case 复跑的聚类与抽取模型原始/端到端 precision、recall、F1 均为 100%；新增 6-case 中英双语 denial/opt-out holdout 同样为 100%；两轮 guard 均未丢弃 candidate，安全误报、敏感泄漏、无效输出和模型错误均为 0；
 - `待完成`：跨设备完整多来源链接和 1,000 条延迟基准。
 
 ### Phase C：检索增强（按评测决定）
@@ -394,10 +396,9 @@ Codex 记忆是另一个宿主的生成状态，账户、版本、格式和控�
 
 Phase A 已完成，Phase B 已开放自动抽取、通知、本地多来源追溯、确定性 conflict slot 替代和
 无模型参与的定期 consolidation，并已完成跨设备槽位的确定性收敛、模糊聚类人工确认、全目录
-分片轮转和 Golden 真实评测。下一步应把“不要记住、这不是我的偏好”等记忆控制/否认语句明确
-排除，并增加未用于本轮调试的 holdout 安全用例验证泛化；门禁转绿后再完成来源同步并决定是否进入
-Phase C。整体仍保持 OpenerX 已批准的 Pi 边界：Pi 继续是唯一 agent harness，产品数据继续独立于
-Pi Session。
+分片轮转和 Golden/holdout 真实评测；记忆控制误报已修复且两套门禁转绿。下一步应完成跨设备完整
+来源同步和 1,000 条延迟基准，并扩大独立语料与重复运行来覆盖模型漂移，再决定是否进入 Phase C。
+整体仍保持 OpenerX 已批准的 Pi 边界：Pi 继续是唯一 agent harness，产品数据继续独立于 Pi Session。
 
 参考：
 

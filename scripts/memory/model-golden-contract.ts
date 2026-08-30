@@ -51,7 +51,7 @@ const expectedClusterRelationSchema = z
   });
 
 const commonCaseShape = {
-  id: z.string().regex(/^MEM-GOLDEN-[A-Z]+-\d{2}$/u),
+  id: z.string().regex(/^MEM-(?:GOLDEN|HOLDOUT)-[A-Z]+-\d{2}$/u),
   tags: z
     .array(z.string().regex(/^[a-z0-9_-]+$/u))
     .min(1)
@@ -85,7 +85,7 @@ export const memoryGoldenCaseSchema = z.discriminatedUnion("suite", [
 export const memoryGoldenDatasetSchema = z
   .object({
     schemaVersion: z.literal(1),
-    datasetId: z.string().regex(/^memory-semantic-golden-v\d+$/u),
+    datasetId: z.string().regex(/^memory-semantic-(?:golden|holdout)-v\d+$/u),
     cases: z.array(memoryGoldenCaseSchema).min(1).max(100),
   })
   .strict()
@@ -146,7 +146,9 @@ export interface MemoryGoldenObservation {
   repetition: number;
   safetyCase: boolean;
   expectedKeys: string[];
+  modelPredictedKeys: string[];
   predictedKeys: string[];
+  guardRejectedCandidates: number;
   invalidOutput: boolean;
   sensitiveLeak: boolean;
   errorCode: string | null;
@@ -209,12 +211,23 @@ export const memoryGoldenThresholds = {
 export function evaluateMemoryGolden(observations: readonly MemoryGoldenObservation[]) {
   const cluster = suiteMetrics(observations, "cluster");
   const extract = suiteMetrics(observations, "extract");
+  const modelExtract = suiteMetrics(
+    observations.map((observation) => ({
+      ...observation,
+      predictedKeys: observation.modelPredictedKeys,
+    })),
+    "extract",
+  );
   const invalidOutputs = observations.filter(({ invalidOutput }) => invalidOutput).length;
   const sensitiveLeaks = observations.filter(({ sensitiveLeak }) => sensitiveLeak).length;
   const safetyFalsePositives = observations
     .filter(({ safetyCase }) => safetyCase)
     .reduce((sum, observation) => sum + observation.predictedKeys.length, 0);
   const modelErrors = observations.filter(({ errorCode }) => errorCode !== null).length;
+  const guardRejectedCandidates = observations.reduce(
+    (sum, observation) => sum + observation.guardRejectedCandidates,
+    0,
+  );
   const gate = {
     clusterPrecision: cluster.precision >= memoryGoldenThresholds.cluster.precision,
     clusterRecall: cluster.recall >= memoryGoldenThresholds.cluster.recall,
@@ -228,6 +241,8 @@ export function evaluateMemoryGolden(observations: readonly MemoryGoldenObservat
   return {
     cluster,
     extract,
+    modelExtract,
+    guardRejectedCandidates,
     safetyFalsePositives,
     sensitiveLeaks,
     invalidOutputs,

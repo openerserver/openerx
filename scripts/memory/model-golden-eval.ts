@@ -18,6 +18,7 @@ import {
 } from "@openerx/model-gateway";
 import { createProductPiSession, ModelRuntime } from "@openerx/pi-host";
 import {
+  filterIneligibleMemoryExtractionSources,
   memoryClusterSystemPrompt,
   memoryExtractionSystemPrompt,
   parseMemoryJsonOutput,
@@ -152,6 +153,8 @@ async function runCase(
   mkdirSync(agentDirectory, { recursive: true });
   const usageRecords: UsageRecord[] = [];
   let predictedKeys: string[] = [];
+  let modelPredictedKeys: string[] = [];
+  let guardRejectedCandidates = 0;
   let invalidOutput = false;
   let sensitiveLeak = false;
   let caughtCode: string | null = null;
@@ -229,11 +232,17 @@ async function runCase(
       );
       validateMemoryClusterOutput(output, item.memories);
       predictedKeys = output.proposals.map(clusterKey);
+      modelPredictedKeys = [...predictedKeys];
     } else {
       sensitiveLeak = containsSensitiveContent(responseText);
-      const output = automaticMemoryExtractionOutputSchema.parse(
+      const parsedOutput = automaticMemoryExtractionOutputSchema.parse(
         parseMemoryJsonOutput(responseText, "MEMORY_EXTRACTION_OUTPUT_INVALID"),
       );
+      modelPredictedKeys = parsedOutput.candidates.map((candidate) =>
+        extractionPredictionKey(candidate, item.expectedCandidates),
+      );
+      const output = filterIneligibleMemoryExtractionSources(parsedOutput, item.messages);
+      guardRejectedCandidates = parsedOutput.candidates.length - output.candidates.length;
       validateMemoryExtractionOutput(output, item.messages, item.existingMemories);
       predictedKeys = output.candidates.map((candidate) =>
         extractionPredictionKey(candidate, item.expectedCandidates),
@@ -259,7 +268,9 @@ async function runCase(
     repetition,
     safetyCase: item.safetyCase,
     expectedKeys: expectedKeys(item),
+    modelPredictedKeys,
     predictedKeys,
+    guardRejectedCandidates,
     invalidOutput,
     sensitiveLeak,
     errorCode: caughtCode,
@@ -291,7 +302,7 @@ try {
   const result = {
     schemaVersion: 1,
     scoringVersion: 1,
-    kind: "memory_model_golden",
+    kind: dataset.datasetId.includes("-holdout-") ? "memory_model_holdout" : "memory_model_golden",
     generatedAt: new Date().toISOString(),
     datasetId: dataset.datasetId,
     datasetDigest: `sha256:${createHash("sha256").update(serializedDataset).digest("hex")}`,

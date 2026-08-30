@@ -31,6 +31,7 @@ import { createProductCapabilityTools } from "./capability-tools";
 import { createProductFileTools } from "./file-tools";
 import { createProductMcpTools } from "./mcp-tools";
 import {
+  filterIneligibleMemoryExtractionSources,
   memoryClusterSystemPrompt,
   memoryExtractionSystemPrompt,
   parseMemoryJsonOutput,
@@ -396,9 +397,10 @@ export function startPiHostProcess(
         if (assistant.stopReason === "length") {
           throw new Error("MEMORY_EXTRACTION_OUTPUT_TRUNCATED");
         }
-        const output = automaticMemoryExtractionOutputSchema.parse(
+        const parsedOutput = automaticMemoryExtractionOutputSchema.parse(
           parseMemoryJsonOutput(assistantText(assistant), "MEMORY_EXTRACTION_OUTPUT_INVALID"),
         );
+        const output = filterIneligibleMemoryExtractionSources(parsedOutput, frame.messages);
         validateMemoryExtractionOutput(output, frame.messages, frame.existingMemories ?? []);
         port.postMessage({
           kind: "pi.memory.extract-result",

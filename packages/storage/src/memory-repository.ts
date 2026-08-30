@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   type AutomaticMemoryCandidate,
+  automaticMemoryBlockedSourceIds,
   type ConversationMemorySettings,
   type ConversationMemorySettingsUpdateInput,
   conversationMemorySettingsSchema,
@@ -1376,6 +1377,45 @@ export class MemoryRepository {
     return rows.map((row) => this.#extractionJobFromRow(row));
   }
 
+  #assertAutomaticSourceEligible(sourceMessageId: string, conversationId: string): void {
+    const source = this.#database
+      .prepare(`SELECT role, status, conversation_id FROM messages WHERE id = ?`)
+      .get(sourceMessageId) as
+      | { role: string; status: string; conversation_id: string }
+      | undefined;
+    if (
+      source?.role !== "user" ||
+      source.status !== "completed" ||
+      source.conversation_id !== conversationId
+    ) {
+      throw new Error("MEMORY_CANDIDATE_SOURCE_INVALID");
+    }
+    const rows = this.#database
+      .prepare(
+        `SELECT m.id AS message_id, p.text
+         FROM messages m
+         LEFT JOIN message_parts p ON p.message_id = m.id
+         WHERE m.conversation_id = ? AND m.role = 'user' AND m.status = 'completed'
+         ORDER BY m.position, p.position`,
+      )
+      .all(conversationId) as Array<{ message_id: string; text: string | null }>;
+    const messagesById = new Map<string, string[]>();
+    for (const row of rows) {
+      const parts = messagesById.get(row.message_id) ?? [];
+      if (row.text !== null) parts.push(row.text);
+      messagesById.set(row.message_id, parts);
+    }
+    const blockedSourceIds = automaticMemoryBlockedSourceIds(
+      [...messagesById].map(([messageId, parts]) => ({
+        messageId,
+        text: parts.join("\n"),
+      })),
+    );
+    if (blockedSourceIds.has(sourceMessageId)) {
+      throw new Error("MEMORY_CANDIDATE_SOURCE_INELIGIBLE");
+    }
+  }
+
   ingestAutomaticCandidate(input: {
     candidate: AutomaticMemoryCandidate;
     conversationId: string;
@@ -1406,6 +1446,7 @@ export class MemoryRepository {
     if (target.canonicalKey === proposedCanonicalKey) {
       return { memory: this.upsertAutomatic(input), review: null };
     }
+    this.#assertAutomaticSourceEligible(candidate.sourceMessageId, input.conversationId);
     const review = this.#transaction(() => {
       const settings = this.settings();
       const conversationSettings = this.conversationSettings(input.conversationId);
@@ -1414,18 +1455,6 @@ export class MemoryRepository {
       }
       if (conversationSettings.generateMemories === false) {
         throw new Error("MEMORY_CONVERSATION_GENERATION_DISABLED");
-      }
-      const source = this.#database
-        .prepare(`SELECT role, status, conversation_id FROM messages WHERE id = ?`)
-        .get(candidate.sourceMessageId) as
-        | { role: string; status: string; conversation_id: string }
-        | undefined;
-      if (
-        source?.role !== "user" ||
-        source.status !== "completed" ||
-        source.conversation_id !== input.conversationId
-      ) {
-        throw new Error("MEMORY_CANDIDATE_SOURCE_INVALID");
       }
       const existing = this.#database
         .prepare(
@@ -1478,6 +1507,7 @@ export class MemoryRepository {
     const candidate = input.candidate;
     assertSafeMemoryContent(candidate.content);
     if (candidate.confidence < 0.72) throw new Error("MEMORY_CANDIDATE_LOW_CONFIDENCE");
+    this.#assertAutomaticSourceEligible(candidate.sourceMessageId, input.conversationId);
     const key = canonicalKey(candidate.kind, candidate.content);
     return this.#idempotent(
       "memory.upsert-automatic",
@@ -1491,18 +1521,6 @@ export class MemoryRepository {
         }
         if (conversationSettings.generateMemories === false) {
           throw new Error("MEMORY_CONVERSATION_GENERATION_DISABLED");
-        }
-        const source = this.#database
-          .prepare(`SELECT role, status, conversation_id FROM messages WHERE id = ?`)
-          .get(candidate.sourceMessageId) as
-          | { role: string; status: string; conversation_id: string }
-          | undefined;
-        if (
-          source?.role !== "user" ||
-          source.status !== "completed" ||
-          source.conversation_id !== input.conversationId
-        ) {
-          throw new Error("MEMORY_CANDIDATE_SOURCE_INVALID");
         }
         const now = this.#now();
         const duplicate = this.#database

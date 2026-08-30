@@ -13,6 +13,9 @@ import {
 const dataset = memoryGoldenDatasetSchema.parse(
   JSON.parse(readFileSync(path.resolve("tests/v2/golden/memory-semantic-golden-v1.json"), "utf8")),
 );
+const holdout = memoryGoldenDatasetSchema.parse(
+  JSON.parse(readFileSync(path.resolve("tests/v2/golden/memory-semantic-holdout-v1.json"), "utf8")),
+);
 
 function perfectObservations(): MemoryGoldenObservation[] {
   return dataset.cases.map((item) => {
@@ -26,7 +29,9 @@ function perfectObservations(): MemoryGoldenObservation[] {
       repetition: 1,
       safetyCase: item.safetyCase,
       expectedKeys: [...keys],
+      modelPredictedKeys: [...keys],
       predictedKeys: [...keys],
+      guardRejectedCandidates: 0,
       invalidOutput: false,
       sensitiveLeak: false,
       errorCode: null,
@@ -69,12 +74,21 @@ describe("memory model Golden contract", () => {
     expect(clusterKey(firstRelation)).toMatch(/^(?:duplicate|conflict)\|[0-9a-f-]+\|[0-9a-f-]+$/u);
   });
 
+  it("loads a separate denial and opt-out holdout without changing the fixed Golden set", () => {
+    expect(holdout.datasetId).toBe("memory-semantic-holdout-v1");
+    expect(holdout.cases).toHaveLength(6);
+    expect(holdout.cases.filter(({ safetyCase }) => safetyCase)).toHaveLength(5);
+    expect(holdout.cases.every(({ suite }) => suite === "extract")).toBe(true);
+  });
+
   it("passes exact predictions and aggregates provider-reported usage", () => {
     const observations = perfectObservations();
     const result = evaluateMemoryGolden(observations);
     expect(result).toMatchObject({
       cluster: { precision: 1, recall: 1, f1: 1 },
       extract: { precision: 1, recall: 1, f1: 1 },
+      modelExtract: { precision: 1, recall: 1, f1: 1 },
+      guardRejectedCandidates: 0,
       safetyFalsePositives: 0,
       sensitiveLeaks: 0,
       invalidOutputs: 0,
@@ -91,10 +105,11 @@ describe("memory model Golden contract", () => {
 
   it("fails closed on safety false positives, leaks, invalid output, and missed labels", () => {
     const observations = perfectObservations();
-    const safety = observations.find(({ safetyCase }) => safetyCase);
+    const safety = observations.find(({ safetyCase, suite }) => safetyCase && suite === "extract");
     const positive = observations.find(({ expectedKeys }) => expectedKeys.length > 0);
     if (!safety || !positive) throw new Error("Golden fixture is incomplete");
     safety.predictedKeys = ["duplicate|forged-left|forged-right"];
+    safety.modelPredictedKeys = [...safety.predictedKeys];
     safety.sensitiveLeak = true;
     safety.invalidOutput = true;
     safety.errorCode = "MEMORY_CLUSTER_OUTPUT_INVALID";
@@ -112,6 +127,21 @@ describe("memory model Golden contract", () => {
       noModelErrors: false,
       passed: false,
     });
+  });
+
+  it("reports raw model false positives while allowing the deterministic guard to protect output", () => {
+    const observations = perfectObservations();
+    const safety = observations.find(({ safetyCase, suite }) => safetyCase && suite === "extract");
+    if (!safety) throw new Error("Golden safety fixture is incomplete");
+    safety.modelPredictedKeys = ["preference|blocked-source|none|none"];
+    safety.predictedKeys = [];
+    safety.guardRejectedCandidates = 1;
+
+    const result = evaluateMemoryGolden(observations);
+    expect(result.modelExtract.falsePositives).toBe(1);
+    expect(result.guardRejectedCandidates).toBe(1);
+    expect(result.safetyFalsePositives).toBe(0);
+    expect(result.gate.passed).toBe(true);
   });
 
   it("treats duplicate predictions and semantically wrong extraction content as false positives", () => {

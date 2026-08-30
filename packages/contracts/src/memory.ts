@@ -228,6 +228,68 @@ export const memoryMergeReviewResolveInputSchema = z
   })
   .strict();
 
+const automaticMemoryDoNotStorePatterns: readonly RegExp[] = [
+  /(?:不要|别|请勿|无需|不用)(?:把|将)?[^。！？\n]{0,32}(?:记住|记录|保存|存储|写入(?:长期)?记忆)/u,
+  /\b(?:do not|don't|never)\s+(?:remember|record|save|store)\b/iu,
+];
+
+const automaticMemoryDenialPatterns: readonly RegExp[] = [
+  /(?:这|那|它|上述|以上)?(?:不|并不)(?:是|属于)?(?:我的|关于我的)[^。！？\n]{0,24}(?:偏好|习惯|资料|信息|事实|经历|流程|工作流|内容|说法)/u,
+  /\b(?:(?:that|this|it)\s+)?(?:is not|isn't|was not|wasn't)\s+(?:my|about me)\b/iu,
+  /\bnot\s+(?:my|about me)\s+(?:preference|profile|information|fact|workflow)\b/iu,
+];
+
+const automaticMemoryTemporaryPatterns: readonly RegExp[] = [
+  /(?:只|仅)(?:用于|处理|适用于|做)?[^。！？\n]{0,12}(?:当前|本次|这次|这一条|这条消息|这一轮)/u,
+  /(?:临时|一次性)[^。！？\n]{0,20}(?:请求|任务|处理|翻译|检查|设置|回复)/u,
+  /\b(?:only for|just for)\s+(?:this|the current)\s+(?:message|request|turn|task|time)\b/iu,
+  /\btemporary\s+(?:request|task|translation|setting|preference)\b/iu,
+];
+
+const automaticMemoryQuotedExternalPatterns: readonly RegExp[] = [
+  /(?:下面|以下|上面|上述)[^。！？\n]{0,24}(?:网页|文档|邮件|聊天|同事|别人|第三方)[^。！？\n]{0,16}(?:原文|内容|写着|说法|说过|文字|话)/u,
+  /\b(?:quoted|pasted|external|third-party)\s+(?:text|content|note|message)\b/iu,
+];
+
+const automaticMemoryBackwardReferencePattern =
+  /(?:刚才|之前|前面|上面|上一条|前一条|我说的)|\b(?:previous|above|earlier|what i just (?:said|wrote))\b/iu;
+const automaticMemoryConversationScopePattern =
+  /(?:这次|本次|当前)(?:对话|聊天)|\bthis (?:conversation|chat)\b/iu;
+
+function matchesAny(value: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
+export function isAutomaticMemorySourceIneligible(text: string): boolean {
+  const normalized = text.normalize("NFKC").trim();
+  return (
+    matchesAny(normalized, automaticMemoryDoNotStorePatterns) ||
+    matchesAny(normalized, automaticMemoryDenialPatterns) ||
+    matchesAny(normalized, automaticMemoryTemporaryPatterns) ||
+    matchesAny(normalized, automaticMemoryQuotedExternalPatterns)
+  );
+}
+
+export function automaticMemoryBlockedSourceIds(
+  messages: readonly { messageId: string; text: string }[],
+): Set<string> {
+  const blocked = new Set<string>();
+  for (const [index, message] of messages.entries()) {
+    const normalized = message.text.normalize("NFKC").trim();
+    if (isAutomaticMemorySourceIneligible(normalized)) blocked.add(message.messageId);
+    if (!matchesAny(normalized, automaticMemoryDoNotStorePatterns)) continue;
+    if (automaticMemoryConversationScopePattern.test(normalized)) {
+      for (const candidate of messages) blocked.add(candidate.messageId);
+      continue;
+    }
+    if (automaticMemoryBackwardReferencePattern.test(normalized)) {
+      const previous = messages[index - 1];
+      if (previous) blocked.add(previous.messageId);
+    }
+  }
+  return blocked;
+}
+
 export const automaticMemoryCandidateSchema = z
   .object({
     kind: memoryKindSchema,
