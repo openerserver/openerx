@@ -3,14 +3,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { AccountSyncService, type SyncPrincipal } from "@openerx/account-sync-api";
-import { ChatRepository } from "@openerx/storage";
+import { ChatRepository, MemoryRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it } from "vitest";
 
 const temporaryDirectories: string[] = [];
 const repositories: ChatRepository[] = [];
+const memoryRepositories: MemoryRepository[] = [];
 const services: AccountSyncService[] = [];
 
 afterEach(() => {
+  for (const repository of memoryRepositories.splice(0)) repository.close();
   for (const repository of repositories.splice(0)) repository.close();
   for (const service of services.splice(0)) service.close();
   for (const directory of temporaryDirectories.splice(0)) {
@@ -34,6 +36,21 @@ function principal(accountId: string, deviceId: string): SyncPrincipal {
   return { accountId, deviceId, sessionId: randomUUID() };
 }
 
+function memoryReplica(
+  accountId: string,
+  deviceId: string,
+  now: () => string,
+): { chat: ChatRepository; memories: MemoryRepository } {
+  const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-replica-"));
+  temporaryDirectories.push(directory);
+  const databasePath = path.join(directory, "replica.sqlite");
+  const chat = new ChatRepository(databasePath, { ownerProfileId: accountId, deviceId, now });
+  const memories = new MemoryRepository(databasePath, { ownerProfileId: accountId, deviceId, now });
+  repositories.push(chat);
+  memoryRepositories.push(memories);
+  return { chat, memories };
+}
+
 function sync(repository: ChatRepository, actor: SyncPrincipal, cloud: AccountSyncService): void {
   for (const operation of repository.pendingSyncOperations()) {
     repository.acknowledgeSync(cloud.push(actor, operation));
@@ -42,6 +59,100 @@ function sync(repository: ChatRepository, actor: SyncPrincipal, cloud: AccountSy
 }
 
 describe("GT-ACCOUNT client sync replicas", () => {
+  it("converges concurrent memory conflict slots and restores the prior value after deletion", () => {
+    const cloud = new AccountSyncService(":memory:");
+    services.push(cloud);
+    const accountId = randomUUID();
+    const firstDevice = randomUUID();
+    const secondDevice = randomUUID();
+    const cleanDevice = randomUUID();
+    const first = memoryReplica(accountId, firstDevice, () => "2026-08-30T10:00:00.000Z");
+    const second = memoryReplica(accountId, secondDevice, () => "2026-08-30T10:01:00.000Z");
+    const clean = memoryReplica(accountId, cleanDevice, () => "2026-08-30T10:02:00.000Z");
+    first.memories.updateSettings({
+      memoriesEnabled: true,
+      useMemories: true,
+      syncMemories: true,
+    });
+    sync(first.chat, principal(accountId, firstDevice), cloud);
+    sync(second.chat, principal(accountId, secondDevice), cloud);
+    expect(second.memories.settings()).toMatchObject({
+      memoriesEnabled: true,
+      syncMemories: true,
+    });
+
+    const chinese = first.memories.upsert({
+      kind: "preference",
+      content: "用户偏好使用中文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-device-a-language-0001",
+    });
+    sync(first.chat, principal(accountId, firstDevice), cloud);
+    sync(second.chat, principal(accountId, secondDevice), cloud);
+    const english = second.memories.upsert({
+      kind: "preference",
+      content: "用户偏好使用英文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-device-b-language-0001",
+    });
+    const french = first.memories.upsert({
+      kind: "preference",
+      content: "用户偏好使用法文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-device-a-language-0002",
+    });
+    expect(
+      first.chat
+        .pendingSyncOperations()
+        .filter(({ objectType }) => objectType === "memory_entry")
+        .map(({ objectId }) => objectId),
+    ).toEqual([french.id]);
+    expect(
+      second.chat
+        .pendingSyncOperations()
+        .filter(({ objectType }) => objectType === "memory_entry")
+        .map(({ objectId }) => objectId),
+    ).toEqual([english.id]);
+
+    sync(second.chat, principal(accountId, secondDevice), cloud);
+    sync(first.chat, principal(accountId, firstDevice), cloud);
+    sync(second.chat, principal(accountId, secondDevice), cloud);
+    sync(clean.chat, principal(accountId, cleanDevice), cloud);
+    for (const replica of [first, second, clean]) {
+      expect(replica.memories.list({ status: "active", limit: 50 })).toEqual([
+        expect.objectContaining({ id: english.id, supersedesMemoryId: french.id }),
+      ]);
+      expect(replica.memories.get(french.id)).toMatchObject({
+        status: "superseded",
+        supersedesMemoryId: chinese.id,
+      });
+      expect(replica.memories.get(chinese.id).status).toBe("superseded");
+      expect(replica.chat.syncConflicts()).toEqual([]);
+    }
+
+    first.memories.delete({
+      memoryId: english.id,
+      idempotencyKey: "memory-device-a-undo-language-0001",
+    });
+    expect(
+      first.chat
+        .pendingSyncOperations()
+        .filter(({ objectType }) => objectType === "memory_entry")
+        .map(({ objectId, mutation }) => ({ objectId, mutation })),
+    ).toEqual([{ objectId: english.id, mutation: "delete" }]);
+    sync(first.chat, principal(accountId, firstDevice), cloud);
+    sync(second.chat, principal(accountId, secondDevice), cloud);
+    sync(clean.chat, principal(accountId, cleanDevice), cloud);
+    clean.chat.clearLocalCache();
+    sync(clean.chat, principal(accountId, cleanDevice), cloud);
+    for (const replica of [first, second, clean]) {
+      expect(replica.memories.get(english.id).status).toBe("deleted");
+      expect(replica.memories.list({ status: "active", limit: 50 })).toEqual([
+        expect.objectContaining({ id: french.id, supersedesMemoryId: chinese.id }),
+      ]);
+    }
+  });
+
   it("restores a conversation across devices and preserves model selection", () => {
     const cloud = new AccountSyncService(":memory:");
     services.push(cloud);

@@ -779,6 +779,7 @@ export class ChatRepository {
     if (this.syncConflicts().length > 0) throw new Error("SYNC_UNRESOLVED_CONFLICTS_EXIST");
     this.#transaction(() => {
       this.#database.exec(`
+        DELETE FROM memory_consolidation_runs;
         DELETE FROM memory_extraction_jobs;
         DELETE FROM memory_conversation_context;
         DELETE FROM memory_usage_events;
@@ -1252,6 +1253,121 @@ export class ChatRepository {
       );
   }
 
+  #reconcileMemoryGroup(
+    kind: string,
+    canonicalKey: string | null,
+    conflictKey: string | null,
+    now: string,
+  ): void {
+    type SlotRow = {
+      id: string;
+      origin: "explicit" | "automatic" | "consolidated";
+      status: "active" | "superseded";
+      canonical_key: string | null;
+      supersedes_memory_id: string | null;
+      expires_at: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+    const entries = (
+      conflictKey
+        ? this.#database
+            .prepare(
+              `SELECT id, origin, status, canonical_key, supersedes_memory_id,
+                      expires_at, created_at, updated_at
+               FROM memory_entries
+               WHERE owner_profile_id = ? AND kind = ? AND conflict_key = ?
+                 AND status != 'deleted'
+               ORDER BY id`,
+            )
+            .all(this.#ownerProfileId, kind, conflictKey)
+        : this.#database
+            .prepare(
+              `SELECT id, origin, status, canonical_key, supersedes_memory_id,
+                      expires_at, created_at, updated_at
+               FROM memory_entries
+               WHERE owner_profile_id = ? AND kind = ? AND canonical_key = ?
+                 AND status != 'deleted'
+               ORDER BY id`,
+            )
+            .all(this.#ownerProfileId, kind, canonicalKey)
+    ) as SlotRow[];
+    if (entries.length === 0) return;
+    const nowMs = Date.parse(now);
+    const viable = (entry: SlotRow): boolean =>
+      entry.expires_at === null || Date.parse(entry.expires_at) > nowMs;
+    const originPriority = (entry: SlotRow): number => (entry.origin === "explicit" ? 2 : 1);
+    const compare = (left: SlotRow, right: SlotRow): number => {
+      const leftViable = viable(left);
+      const rightViable = viable(right);
+      if (leftViable !== rightViable) return leftViable ? -1 : 1;
+      const priority = originPriority(right) - originPriority(left);
+      if (priority !== 0) return priority;
+      if (left.updated_at !== right.updated_at) {
+        return left.updated_at > right.updated_at ? -1 : 1;
+      }
+      if (left.created_at !== right.created_at) {
+        return left.created_at > right.created_at ? -1 : 1;
+      }
+      if (left.id === right.id) return 0;
+      return left.id > right.id ? -1 : 1;
+    };
+    const remaining = new Map(entries.map((entry) => [entry.id, entry]));
+    const ordered: SlotRow[] = [];
+    while (remaining.size > 0) {
+      const candidates = [...remaining.values()];
+      const viableCandidates = candidates.filter(viable);
+      const pool = viableCandidates.length > 0 ? viableCandidates : candidates;
+      const highestPriority = Math.max(...pool.map(originPriority));
+      const preferred = pool.filter((entry) => originPriority(entry) === highestPriority);
+      const preferredIds = new Set(preferred.map(({ id }) => id));
+      const supersededIds = new Set(
+        preferred
+          .map(({ supersedes_memory_id: supersedesMemoryId }) => supersedesMemoryId)
+          .filter(
+            (memoryId): memoryId is string => memoryId !== null && preferredIds.has(memoryId),
+          ),
+      );
+      const roots = preferred.filter(({ id }) => !supersededIds.has(id));
+      const next = [...(roots.length > 0 ? roots : preferred)].sort(compare)[0];
+      if (!next) break;
+      ordered.push(next);
+      remaining.delete(next.id);
+    }
+    const winner = entries.some(viable) ? ordered[0] : undefined;
+    const update = this.#database.prepare(
+      `UPDATE memory_entries
+       SET status = ?, supersedes_memory_id = ?, revision = revision + 1
+       WHERE id = ? AND owner_profile_id = ?`,
+    );
+    for (let index = 1; index < ordered.length; index += 1) {
+      const entry = ordered[index];
+      if (!entry) continue;
+      const supersedesMemoryId = ordered[index + 1]?.id ?? null;
+      if (entry.status === "superseded" && entry.supersedes_memory_id === supersedesMemoryId) {
+        continue;
+      }
+      update.run("superseded", supersedesMemoryId, entry.id, this.#ownerProfileId);
+    }
+    const first = ordered[0];
+    if (!first) return;
+    let firstStatus = winner ? "active" : "superseded";
+    if (firstStatus === "active" && first.canonical_key) {
+      const canonicalCollision = this.#database
+        .prepare(
+          `SELECT 1 FROM memory_entries
+           WHERE owner_profile_id = ? AND kind = ? AND canonical_key = ?
+             AND status = 'active' AND id != ? LIMIT 1`,
+        )
+        .get(this.#ownerProfileId, kind, first.canonical_key, first.id);
+      if (canonicalCollision) firstStatus = "superseded";
+    }
+    const firstSupersedesMemoryId = ordered[1]?.id ?? null;
+    if (first.status !== firstStatus || first.supersedes_memory_id !== firstSupersedesMemoryId) {
+      update.run(firstStatus, firstSupersedesMemoryId, first.id, this.#ownerProfileId);
+    }
+  }
+
   #applySyncChange(
     objectType: string,
     objectId: string,
@@ -1277,15 +1393,14 @@ export class ChatRepository {
         const now = this.#now();
         const existing = this.#database
           .prepare(
-            `SELECT kind, conflict_key, supersedes_memory_id, status
+            `SELECT kind, canonical_key, conflict_key
              FROM memory_entries WHERE id = ? AND owner_profile_id = ?`,
           )
           .get(objectId, this.#ownerProfileId) as
           | {
               kind: string;
+              canonical_key: string | null;
               conflict_key: string | null;
-              supersedes_memory_id: string | null;
-              status: string;
             }
           | undefined;
         this.#database
@@ -1294,36 +1409,13 @@ export class ChatRepository {
              WHERE id = ? AND owner_profile_id = ?`,
           )
           .run(now, objectId, this.#ownerProfileId);
-        if (
-          existing?.status === "active" &&
-          existing.conflict_key &&
-          existing.supersedes_memory_id
-        ) {
-          const active = this.#database
-            .prepare(
-              `SELECT id FROM memory_entries
-               WHERE owner_profile_id = ? AND kind = ? AND conflict_key = ?
-                 AND status = 'active' LIMIT 1`,
-            )
-            .get(this.#ownerProfileId, existing.kind, existing.conflict_key) as
-            | { id: string }
-            | undefined;
-          if (!active) {
-            this.#database
-              .prepare(
-                `UPDATE memory_entries
-                 SET status = 'active', updated_at = ?, revision = revision + 1
-                 WHERE id = ? AND owner_profile_id = ? AND kind = ? AND conflict_key = ?
-                   AND status = 'superseded'`,
-              )
-              .run(
-                now,
-                existing.supersedes_memory_id,
-                this.#ownerProfileId,
-                existing.kind,
-                existing.conflict_key,
-              );
-          }
+        if (existing && (existing.canonical_key || existing.conflict_key)) {
+          this.#reconcileMemoryGroup(
+            existing.kind,
+            existing.canonical_key,
+            existing.conflict_key,
+            now,
+          );
         }
       }
       if (objectType === "memory_settings") {
@@ -1385,43 +1477,19 @@ export class ChatRepository {
       if (memory.ownerProfileId !== this.#ownerProfileId || memory.id !== objectId) {
         throw new Error("ACCOUNT_SCOPE_VIOLATION");
       }
-      const protectedExplicit =
-        memory.status === "active" && memory.origin === "automatic"
-          ? (this.#database
-              .prepare(
-                `SELECT id FROM memory_entries
-                 WHERE owner_profile_id = ? AND kind = ? AND status = 'active'
-                   AND origin = 'explicit' AND id != ?
-                   AND ((? IS NOT NULL AND canonical_key = ?)
-                     OR (? IS NOT NULL AND conflict_key = ?))
-                 LIMIT 1`,
-              )
-              .get(
-                this.#ownerProfileId,
-                memory.kind,
-                memory.id,
-                memory.canonicalKey,
-                memory.canonicalKey,
-                memory.conflictKey,
-                memory.conflictKey,
-              ) as { id: string } | undefined)
-          : undefined;
-      if (protectedExplicit) {
-        memory = memoryEntrySchema.parse({ ...receivedMemory, status: "superseded" });
-      } else if (
+      if (
         memory.status === "active" &&
         (memory.canonicalKey !== null || memory.conflictKey !== null)
       ) {
-        this.#database
+        const existingActive = this.#database
           .prepare(
-            `UPDATE memory_entries
-             SET status = 'superseded', updated_at = ?, revision = revision + 1
+            `SELECT id FROM memory_entries
              WHERE owner_profile_id = ? AND kind = ? AND status = 'active' AND id != ?
                AND ((? IS NOT NULL AND canonical_key = ?)
-                 OR (? IS NOT NULL AND conflict_key = ?))`,
+                 OR (? IS NOT NULL AND conflict_key = ?))
+             LIMIT 1`,
           )
-          .run(
-            memory.updatedAt,
+          .get(
             this.#ownerProfileId,
             memory.kind,
             memory.id,
@@ -1430,6 +1498,9 @@ export class ChatRepository {
             memory.conflictKey,
             memory.conflictKey,
           );
+        if (existingActive) {
+          memory = memoryEntrySchema.parse({ ...receivedMemory, status: "superseded" });
+        }
       }
       this.#database
         .prepare(
@@ -1471,6 +1542,14 @@ export class ChatRepository {
           memory.updatedAt,
           memory.revision,
         );
+      if (memory.canonicalKey !== null || memory.conflictKey !== null) {
+        this.#reconcileMemoryGroup(
+          memory.kind,
+          memory.canonicalKey,
+          memory.conflictKey,
+          this.#now(),
+        );
+      }
       if (memory.sourceConversationId) {
         this.#database
           .prepare(

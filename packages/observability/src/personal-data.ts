@@ -223,6 +223,14 @@ export class PersonalDataExporter {
                 updated_at AS updatedAt, completed_at AS completedAt
          FROM memory_extraction_jobs ORDER BY created_at, id`,
       ),
+      memoryConsolidationRuns: rows(
+        database,
+        `SELECT id, reason, status, active_count AS activeCount, expired_count AS expiredCount,
+                repaired_count AS repairedCount, last_error_code AS lastErrorCode,
+                started_at AS startedAt, updated_at AS updatedAt,
+                completed_at AS completedAt
+         FROM memory_consolidation_runs ORDER BY started_at, id`,
+      ),
       memoryConversationContext: rows(
         database,
         `SELECT conversation_id AS conversationId,
@@ -274,6 +282,7 @@ export class PersonalDataExporter {
       memorySettings: [],
       conversationMemorySettings: [],
       memoryExtractionJobs: [],
+      memoryConsolidationRuns: [],
       memoryConversationContext: [],
       memorySourceLinks: [],
       memories: [],

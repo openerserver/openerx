@@ -6,6 +6,7 @@ import {
   type ConversationMemorySettingsUpdateInput,
   conversationMemorySettingsSchema,
   type MemoryClearResult,
+  type MemoryConsolidationRun,
   type MemoryDeleteInput,
   type MemoryEntry,
   type MemoryExtractionJob,
@@ -17,6 +18,7 @@ import {
   type MemorySourceLink,
   type MemoryUpsertInput,
   memoryClearResultSchema,
+  memoryConsolidationRunSchema,
   memoryEntrySchema,
   memoryExtractionJobSchema,
   memorySettingsSchema,
@@ -45,6 +47,12 @@ export interface MemoryRepositoryOptions {
   deviceId?: string | null;
   now?: () => string;
   idFactory?: () => string;
+}
+
+export interface MemoryConsolidationClaimOptions {
+  intervalMs?: number;
+  activeLimit?: number;
+  staleAfterMs?: number;
 }
 
 function normalize(value: string): string {
@@ -156,15 +164,15 @@ export class MemoryRepository {
         this.#queueSync("memory_settings", this.#ownerProfileId, "upsert", updated, now);
       }
       if (!current.syncMemories && updated.syncMemories) {
-        const active = (
+        const memories = (
           this.#database
             .prepare(
               `SELECT * FROM memory_entries
-               WHERE owner_profile_id = ? AND status = 'active' ORDER BY updated_at DESC, id`,
+               WHERE owner_profile_id = ? AND status != 'deleted' ORDER BY updated_at DESC, id`,
             )
             .all(this.#ownerProfileId) as SqlRow[]
         ).map((row) => this.#entryFromRow(row));
-        for (const memory of active) {
+        for (const memory of memories) {
           this.#queueSync("memory_entry", memory.id, "upsert", memory, now);
         }
         const conversationSettings = (
@@ -360,9 +368,7 @@ export class MemoryRepository {
       const id = existing ? String(existing.id) : (input.id ?? this.#idFactory());
       const conflictKey =
         input.conflictKey === undefined ? (existingEntry?.conflictKey ?? null) : input.conflictKey;
-      const conflict = conflictKey
-        ? this.#activeConflict(input.kind, conflictKey, id)
-        : undefined;
+      const conflict = conflictKey ? this.#activeConflict(input.kind, conflictKey, id) : undefined;
       const createdAt = existingEntry?.createdAt ?? now;
       const revision = existingEntry ? existingEntry.revision + 1 : 1;
       const entry = memoryEntrySchema.parse({
@@ -395,7 +401,7 @@ export class MemoryRepository {
         updatedAt: now,
         revision,
       });
-      const superseded = conflict ? this.#markSuperseded(conflict, now) : undefined;
+      if (conflict) this.#markSuperseded(conflict, now);
       this.#database
         .prepare(
           `INSERT INTO memory_entries
@@ -447,9 +453,6 @@ export class MemoryRepository {
         });
       }
       if (settings.syncMemories) {
-        if (superseded) {
-          this.#queueSync("memory_entry", superseded.id, "upsert", superseded, now);
-        }
         this.#queueSync("memory_entry", entry.id, "upsert", entry, now);
       }
       return entry;
@@ -468,12 +471,9 @@ export class MemoryRepository {
         )
         .run(now, input.memoryId, this.#ownerProfileId);
       const deleted = this.get(input.memoryId);
-      const restored = this.#restoreSupersededEntry(entry, now);
+      this.#restoreSupersededEntry(entry, now);
       if (this.settings().syncMemories) {
         this.#queueSync("memory_entry", deleted.id, "delete", null, now);
-        if (restored) {
-          this.#queueSync("memory_entry", restored.id, "upsert", restored, now);
-        }
       }
       return deleted;
     });
@@ -589,9 +589,7 @@ export class MemoryRepository {
         `SELECT external_context_used FROM memory_conversation_context
          WHERE owner_profile_id = ? AND conversation_id = ?`,
       )
-      .get(this.#ownerProfileId, conversationId) as
-      | { external_context_used: number }
-      | undefined;
+      .get(this.#ownerProfileId, conversationId) as { external_context_used: number } | undefined;
     if (Number(recorded?.external_context_used ?? 0) === 1) return true;
     const tool = this.#database
       .prepare(
@@ -624,7 +622,148 @@ export class MemoryRepository {
     });
   }
 
-  scheduleExtraction(conversationId: string, sourceAssistantMessageId: string): MemoryExtractionJob {
+  claimConsolidationRun(
+    options: MemoryConsolidationClaimOptions = {},
+  ): MemoryConsolidationRun | null {
+    return this.#transaction(() => {
+      const now = this.#now();
+      const nowMs = Date.parse(now);
+      const intervalMs = Math.max(60_000, options.intervalMs ?? 24 * 60 * 60_000);
+      const activeLimit = Math.max(1, options.activeLimit ?? 200);
+      const staleAfterMs = Math.max(60_000, options.staleAfterMs ?? 10 * 60_000);
+      const staleAt = new Date(nowMs - staleAfterMs).toISOString();
+      this.#database
+        .prepare(
+          `UPDATE memory_consolidation_runs
+           SET status = 'failed', last_error_code = 'MEMORY_CONSOLIDATION_STALE',
+               updated_at = ?, completed_at = ?
+           WHERE owner_profile_id = ? AND status = 'running' AND updated_at <= ?`,
+        )
+        .run(now, now, this.#ownerProfileId, staleAt);
+      const running = this.#database
+        .prepare(
+          `SELECT 1 FROM memory_consolidation_runs
+           WHERE owner_profile_id = ? AND status = 'running' LIMIT 1`,
+        )
+        .get(this.#ownerProfileId);
+      if (running) return null;
+      const counts = this.#database
+        .prepare(
+          `SELECT COUNT(*) AS total_count,
+                  SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_count
+           FROM memory_entries WHERE owner_profile_id = ? AND status != 'deleted'`,
+        )
+        .get(this.#ownerProfileId) as { total_count: number; active_count: number | null };
+      if (Number(counts.total_count) === 0) return null;
+      const latest = this.#database
+        .prepare(
+          `SELECT completed_at, active_count FROM memory_consolidation_runs
+           WHERE owner_profile_id = ? AND status = 'completed'
+           ORDER BY completed_at DESC, id DESC LIMIT 1`,
+        )
+        .get(this.#ownerProfileId) as { completed_at: string; active_count: number } | undefined;
+      const activeCount = Number(counts.active_count ?? 0);
+      const activeLimitDue =
+        activeCount > activeLimit && (!latest || Number(latest.active_count) <= activeLimit);
+      const dailyDue = !latest || Date.parse(latest.completed_at) <= nowMs - intervalMs;
+      if (!activeLimitDue && !dailyDue) return null;
+      const id = this.#idFactory();
+      this.#database
+        .prepare(
+          `INSERT INTO memory_consolidation_runs
+           (id, owner_profile_id, reason, status, active_count, expired_count, repaired_count,
+            last_error_code, started_at, updated_at, completed_at)
+           VALUES (?, ?, ?, 'running', ?, 0, 0, NULL, ?, ?, NULL)`,
+        )
+        .run(
+          id,
+          this.#ownerProfileId,
+          activeLimitDue ? "active_limit" : "daily",
+          activeCount,
+          now,
+          now,
+        );
+      return this.#getConsolidationRun(id);
+    });
+  }
+
+  runConsolidation(runId: string): MemoryConsolidationRun {
+    return this.#transaction(() => {
+      const run = this.#getConsolidationRun(runId);
+      if (run.status === "completed") return run;
+      if (run.status !== "running") throw new Error("MEMORY_CONSOLIDATION_RUN_NOT_RUNNING");
+      const now = this.#now();
+      const expiredActive = (
+        this.#database
+          .prepare(
+            `SELECT * FROM memory_entries
+             WHERE owner_profile_id = ? AND status = 'active'
+               AND expires_at IS NOT NULL AND expires_at <= ?
+             ORDER BY updated_at DESC, id`,
+          )
+          .all(this.#ownerProfileId, now) as SqlRow[]
+      ).map((row) => this.#entryFromRow(row));
+      this.#deleteEntries(expiredActive, now, true);
+      const remainingExpired = (
+        this.#database
+          .prepare(
+            `SELECT * FROM memory_entries
+             WHERE owner_profile_id = ? AND status != 'deleted'
+               AND expires_at IS NOT NULL AND expires_at <= ?
+             ORDER BY updated_at DESC, id`,
+          )
+          .all(this.#ownerProfileId, now) as SqlRow[]
+      ).map((row) => this.#entryFromRow(row));
+      this.#deleteEntries(remainingExpired, now);
+      const repairedCount = this.#repairSupersedesLinks(now);
+      const expiredCount = expiredActive.length + remainingExpired.length;
+      this.#database
+        .prepare(
+          `UPDATE memory_consolidation_runs
+           SET status = 'completed', expired_count = ?, repaired_count = ?,
+               last_error_code = NULL, updated_at = ?, completed_at = ?
+           WHERE id = ? AND owner_profile_id = ? AND status = 'running'`,
+        )
+        .run(expiredCount, repairedCount, now, now, runId, this.#ownerProfileId);
+      this.#database
+        .prepare(
+          `DELETE FROM memory_consolidation_runs
+           WHERE owner_profile_id = ? AND id NOT IN (
+             SELECT id FROM memory_consolidation_runs
+             WHERE owner_profile_id = ? ORDER BY started_at DESC, id DESC LIMIT 100
+           )`,
+        )
+        .run(this.#ownerProfileId, this.#ownerProfileId);
+      return this.#getConsolidationRun(runId);
+    });
+  }
+
+  failConsolidationRun(runId: string, errorCode: string): MemoryConsolidationRun {
+    const now = this.#now();
+    this.#database
+      .prepare(
+        `UPDATE memory_consolidation_runs
+         SET status = 'failed', last_error_code = ?, updated_at = ?, completed_at = ?
+         WHERE id = ? AND owner_profile_id = ? AND status = 'running'`,
+      )
+      .run(errorCode.slice(0, 200), now, now, runId, this.#ownerProfileId);
+    return this.#getConsolidationRun(runId);
+  }
+
+  listConsolidationRuns(limit = 50): MemoryConsolidationRun[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM memory_consolidation_runs
+         WHERE owner_profile_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`,
+      )
+      .all(this.#ownerProfileId, Math.max(1, Math.min(limit, 100))) as SqlRow[];
+    return rows.map((row) => this.#consolidationRunFromRow(row));
+  }
+
+  scheduleExtraction(
+    conversationId: string,
+    sourceAssistantMessageId: string,
+  ): MemoryExtractionJob {
     const settings = this.settings();
     const conversationSettings = this.conversationSettings(conversationId);
     if (
@@ -717,10 +856,7 @@ export class MemoryRepository {
     return this.#getExtractionJob(jobId);
   }
 
-  skipExtractionJob(
-    jobId: string,
-    reason: MemoryExtractionSkipReason,
-  ): MemoryExtractionJob {
+  skipExtractionJob(jobId: string, reason: MemoryExtractionSkipReason): MemoryExtractionJob {
     const now = this.#now();
     this.#database
       .prepare(
@@ -791,9 +927,7 @@ export class MemoryRepository {
           throw new Error("MEMORY_CONVERSATION_GENERATION_DISABLED");
         }
         const source = this.#database
-          .prepare(
-            `SELECT role, status, conversation_id FROM messages WHERE id = ?`,
-          )
+          .prepare(`SELECT role, status, conversation_id FROM messages WHERE id = ?`)
           .get(candidate.sourceMessageId) as
           | { role: string; status: string; conversation_id: string }
           | undefined;
@@ -856,7 +990,7 @@ export class MemoryRepository {
           updatedAt: now,
           revision: 1,
         });
-        const superseded = conflict ? this.#markSuperseded(conflict, now) : undefined;
+        if (conflict) this.#markSuperseded(conflict, now);
         this.#database
           .prepare(
             `INSERT INTO memory_entries
@@ -894,9 +1028,6 @@ export class MemoryRepository {
           createdAt: now,
         });
         if (settings.syncMemories) {
-          if (superseded) {
-            this.#queueSync("memory_entry", superseded.id, "upsert", superseded, now);
-          }
           this.#queueSync("memory_entry", entry.id, "upsert", entry, now);
         }
         return entry;
@@ -1015,27 +1146,113 @@ export class MemoryRepository {
   }
 
   #restoreSupersededEntry(entry: MemoryEntry, now: string): MemoryEntry | undefined {
-    if (entry.status !== "active" || !entry.conflictKey || !entry.supersedesMemoryId) {
+    if (
+      entry.status !== "active" ||
+      (!entry.conflictKey && !entry.canonicalKey) ||
+      !entry.supersedesMemoryId
+    ) {
       return undefined;
     }
-    if (this.#activeConflict(entry.kind, entry.conflictKey)) return undefined;
-    const row = this.#database
+    const activeEquivalent = this.#database
       .prepare(
-        `SELECT * FROM memory_entries
-         WHERE id = ? AND owner_profile_id = ? AND status = 'superseded'`,
+        `SELECT 1 FROM memory_entries
+         WHERE owner_profile_id = ? AND kind = ? AND status = 'active' AND id != ?
+           AND ((? IS NOT NULL AND canonical_key = ?)
+             OR (? IS NOT NULL AND conflict_key = ?))
+         LIMIT 1`,
       )
-      .get(entry.supersedesMemoryId, this.#ownerProfileId) as SqlRow | undefined;
-    if (!row) return undefined;
-    const previous = this.#entryFromRow(row);
-    if (previous.kind !== entry.kind || previous.conflictKey !== entry.conflictKey) return undefined;
-    this.#database
-      .prepare(
-        `UPDATE memory_entries
-         SET status = 'active', updated_at = ?, revision = revision + 1
-         WHERE id = ? AND owner_profile_id = ? AND status = 'superseded'`,
-      )
-      .run(now, previous.id, this.#ownerProfileId);
-    return this.get(previous.id);
+      .get(
+        this.#ownerProfileId,
+        entry.kind,
+        entry.id,
+        entry.canonicalKey,
+        entry.canonicalKey,
+        entry.conflictKey,
+        entry.conflictKey,
+      );
+    if (activeEquivalent) return undefined;
+    const seen = new Set([entry.id]);
+    let previousId: string | null = entry.supersedesMemoryId;
+    while (previousId && !seen.has(previousId)) {
+      seen.add(previousId);
+      const row = this.#database
+        .prepare(
+          `SELECT * FROM memory_entries
+           WHERE id = ? AND owner_profile_id = ?`,
+        )
+        .get(previousId, this.#ownerProfileId) as SqlRow | undefined;
+      if (!row) return undefined;
+      const previous = this.#entryFromRow(row);
+      const sameCanonical =
+        entry.canonicalKey !== null && previous.canonicalKey === entry.canonicalKey;
+      const sameConflict = entry.conflictKey !== null && previous.conflictKey === entry.conflictKey;
+      if (previous.kind !== entry.kind || (!sameCanonical && !sameConflict)) {
+        return undefined;
+      }
+      const expired =
+        previous.expiresAt !== null && Date.parse(previous.expiresAt) <= Date.parse(now);
+      if (previous.status === "superseded" && !expired) {
+        this.#database
+          .prepare(
+            `UPDATE memory_entries
+             SET status = 'active', updated_at = ?, revision = revision + 1
+             WHERE id = ? AND owner_profile_id = ? AND status = 'superseded'`,
+          )
+          .run(now, previous.id, this.#ownerProfileId);
+        return this.get(previous.id);
+      }
+      previousId = previous.supersedesMemoryId;
+    }
+    return undefined;
+  }
+
+  #repairSupersedesLinks(now: string): number {
+    const entries = (
+      this.#database
+        .prepare(
+          `SELECT * FROM memory_entries
+           WHERE owner_profile_id = ? AND status != 'deleted'
+           ORDER BY id`,
+        )
+        .all(this.#ownerProfileId) as SqlRow[]
+    ).map((row) => this.#entryFromRow(row));
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    let repaired = 0;
+    for (const entry of entries) {
+      if (!entry.supersedesMemoryId) continue;
+      const previous = byId.get(entry.supersedesMemoryId);
+      let invalid =
+        previous?.status !== "superseded" ||
+        previous?.kind !== entry.kind ||
+        !(
+          (entry.canonicalKey !== null && previous?.canonicalKey === entry.canonicalKey) ||
+          (entry.conflictKey !== null && previous?.conflictKey === entry.conflictKey)
+        );
+      if (!invalid) {
+        const seen = new Set([entry.id]);
+        let cursor: MemoryEntry | undefined = entry;
+        while (cursor?.supersedesMemoryId) {
+          if (seen.has(cursor.supersedesMemoryId)) {
+            invalid = true;
+            break;
+          }
+          seen.add(cursor.supersedesMemoryId);
+          cursor = byId.get(cursor.supersedesMemoryId);
+        }
+      }
+      if (!invalid) continue;
+      this.#database
+        .prepare(
+          `UPDATE memory_entries
+           SET supersedes_memory_id = NULL, updated_at = ?, revision = revision + 1
+           WHERE id = ? AND owner_profile_id = ? AND status != 'deleted'`,
+        )
+        .run(now, entry.id, this.#ownerProfileId);
+      const updated = this.get(entry.id);
+      byId.set(updated.id, updated);
+      repaired += 1;
+    }
+    return repaired;
   }
 
   #deleteEntries(entries: MemoryEntry[], now: string, restoreSuperseded = false): void {
@@ -1046,14 +1263,9 @@ export class MemoryRepository {
     );
     for (const entry of entries) {
       statement.run(now, entry.id, this.#ownerProfileId);
-      const restored = restoreSuperseded
-        ? this.#restoreSupersededEntry(entry, now)
-        : undefined;
+      if (restoreSuperseded) this.#restoreSupersededEntry(entry, now);
       if (syncMemories) {
         this.#queueSync("memory_entry", entry.id, "delete", null, now);
-        if (restored) {
-          this.#queueSync("memory_entry", restored.id, "upsert", restored, now);
-        }
       }
     }
   }
@@ -1157,12 +1369,34 @@ export class MemoryRepository {
 
   #getExtractionJob(jobId: string): MemoryExtractionJob {
     const row = this.#database
-      .prepare(
-        `SELECT * FROM memory_extraction_jobs WHERE id = ? AND owner_profile_id = ?`,
-      )
+      .prepare(`SELECT * FROM memory_extraction_jobs WHERE id = ? AND owner_profile_id = ?`)
       .get(jobId, this.#ownerProfileId) as SqlRow | undefined;
     if (!row) throw new Error("MEMORY_EXTRACTION_JOB_NOT_FOUND");
     return this.#extractionJobFromRow(row);
+  }
+
+  #getConsolidationRun(runId: string): MemoryConsolidationRun {
+    const row = this.#database
+      .prepare(`SELECT * FROM memory_consolidation_runs WHERE id = ? AND owner_profile_id = ?`)
+      .get(runId, this.#ownerProfileId) as SqlRow | undefined;
+    if (!row) throw new Error("MEMORY_CONSOLIDATION_RUN_NOT_FOUND");
+    return this.#consolidationRunFromRow(row);
+  }
+
+  #consolidationRunFromRow(row: SqlRow): MemoryConsolidationRun {
+    return memoryConsolidationRunSchema.parse({
+      id: row.id,
+      ownerProfileId: row.owner_profile_id,
+      reason: row.reason,
+      status: row.status,
+      activeCount: Number(row.active_count),
+      expiredCount: Number(row.expired_count),
+      repairedCount: Number(row.repaired_count),
+      lastErrorCode: row.last_error_code,
+      startedAt: row.started_at,
+      updatedAt: row.updated_at,
+      completedAt: row.completed_at,
+    });
   }
 
   #extractionJobFromRow(row: SqlRow): MemoryExtractionJob {

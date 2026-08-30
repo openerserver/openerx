@@ -198,6 +198,97 @@ describe("MemoryRepository", () => {
     repository.close();
   });
 
+  it("consolidates expired memories and restores an unexpired superseded value", () => {
+    let now = "2026-08-30T00:00:00.000Z";
+    const repository = new MemoryRepository(databasePath(), {
+      now: () => now,
+      idFactory: ids(),
+    });
+    repository.updateSettings({ memoriesEnabled: true, useMemories: true });
+    const chinese = repository.upsert({
+      kind: "preference",
+      content: "用户偏好使用中文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-consolidation-chinese-0001",
+    });
+    const temporaryEnglish = repository.upsert({
+      kind: "preference",
+      content: "今天上午使用英文回复。",
+      conflictKey: "response.language",
+      expiresAt: "2026-08-30T00:30:00.000Z",
+      idempotencyKey: "memory-consolidation-english-0001",
+    });
+    const temporaryFrench = repository.upsert({
+      kind: "preference",
+      content: "本次项目期间使用法文回复。",
+      conflictKey: "response.language",
+      expiresAt: "2026-08-30T01:00:00.000Z",
+      idempotencyKey: "memory-consolidation-french-0001",
+    });
+
+    now = "2026-08-30T02:00:00.000Z";
+    const claimed = repository.claimConsolidationRun();
+    expect(claimed).toMatchObject({ reason: "daily", status: "running" });
+    const completed = repository.runConsolidation(claimed?.id ?? "");
+    expect(completed).toMatchObject({
+      status: "completed",
+      expiredCount: 2,
+      repairedCount: 0,
+      completedAt: now,
+    });
+    expect(repository.get(temporaryFrench.id).status).toBe("deleted");
+    expect(repository.get(temporaryEnglish.id).status).toBe("deleted");
+    expect(repository.get(chinese.id).status).toBe("active");
+    expect(repository.claimConsolidationRun()).toBeNull();
+    repository.close();
+  });
+
+  it("repairs broken supersede links and recovers stale consolidation runs", () => {
+    let now = "2026-08-30T00:00:00.000Z";
+    const repository = new MemoryRepository(databasePath(), {
+      now: () => now,
+      idFactory: ids(),
+    });
+    repository.updateSettings({ memoriesEnabled: true });
+    const first = repository.upsert({
+      kind: "workflow",
+      content: "修改后先运行类型检查。",
+      conflictKey: "development.validation",
+      idempotencyKey: "memory-consolidation-first-0001",
+    });
+    const second = repository.upsert({
+      kind: "workflow",
+      content: "修改后先运行类型检查和专项测试。",
+      conflictKey: "development.validation",
+      idempotencyKey: "memory-consolidation-second-0001",
+    });
+    repository.delete({
+      memoryId: first.id,
+      idempotencyKey: "memory-consolidation-break-link-0001",
+    });
+    const stale = repository.claimConsolidationRun();
+    expect(stale?.status).toBe("running");
+
+    now = "2026-08-30T00:11:00.000Z";
+    const recovered = repository.claimConsolidationRun();
+    expect(recovered).toMatchObject({ status: "running", reason: "daily" });
+    expect(repository.listConsolidationRuns()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: stale?.id,
+          status: "failed",
+          lastErrorCode: "MEMORY_CONSOLIDATION_STALE",
+        }),
+      ]),
+    );
+    expect(repository.runConsolidation(recovered?.id ?? "")).toMatchObject({
+      status: "completed",
+      repairedCount: 1,
+    });
+    expect(repository.get(second.id).supersedesMemoryId).toBeNull();
+    repository.close();
+  });
+
   it("merges duplicate automatic memories while retaining independent source conversations", () => {
     const file = databasePath();
     const chat = new ChatRepository(file);
@@ -416,5 +507,53 @@ describe("MemoryRepository", () => {
       syncMemories: false,
     });
     database.close();
+  });
+
+  it("uploads the full supersede chain when sync is enabled after local writes", () => {
+    const file = databasePath();
+    const repository = new MemoryRepository(file, {
+      ownerProfileId: "10000000-0000-4000-8000-000000000001",
+      deviceId: "20000000-0000-4000-8000-000000000002",
+      idFactory: ids(),
+    });
+    repository.updateSettings({ memoriesEnabled: true });
+    const chinese = repository.upsert({
+      kind: "preference",
+      content: "用户偏好中文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-chain-before-sync-0001",
+    });
+    const english = repository.upsert({
+      kind: "preference",
+      content: "用户偏好英文回复。",
+      conflictKey: "response.language",
+      idempotencyKey: "memory-chain-before-sync-0002",
+    });
+    repository.updateSettings({ syncMemories: true });
+    repository.close();
+
+    const database = new DatabaseSync(file, { readOnly: true });
+    const rows = database
+      .prepare(
+        `SELECT object_id, payload_json FROM sync_outbox
+         WHERE object_type = 'memory_entry' ORDER BY rowid`,
+      )
+      .all() as Array<{ object_id: string; payload_json: string }>;
+    database.close();
+    expect(new Set(rows.map(({ object_id: objectId }) => objectId))).toEqual(
+      new Set([english.id, chinese.id]),
+    );
+    const statusById = new Map(
+      rows.map(({ object_id: objectId, payload_json: payload }) => [
+        objectId,
+        JSON.parse(payload).status,
+      ]),
+    );
+    expect(statusById).toEqual(
+      new Map([
+        [english.id, "active"],
+        [chinese.id, "superseded"],
+      ]),
+    );
   });
 });

@@ -1,6 +1,6 @@
 # OpenerX Codex 风格记忆方案
 
-> 状态：`PHASE B DETERMINISTIC SUPERSEDE IMPLEMENTED / CONSOLIDATION PENDING`
+> 状态：`PHASE B DETERMINISTIC CONSOLIDATION + SYNC CONVERGENCE IMPLEMENTED / SEMANTIC MERGE PENDING`
 >
 > 日期：2026-08-30（Asia/Shanghai）
 >
@@ -10,8 +10,9 @@
 > 2026-08-30 实施检查点：Phase A 显式记忆闭环已完成；Phase B 的持久化空闲任务、运行时调度、
 > `pi.memory.extract` 无工具内存 Session、严格候选校验、自动生成开关、系统/应用内通知和撤销入口
 > 已接通。模型调用由服务端权威计费并以 extraction job 去重，客户端暂不依赖额度或剩余用量信号。
-> 当前已完成本地多来源证据链接，以及基于严格 `conflictKey` 的可撤销替代；模糊语义合并、定期
-> consolidation、跨设备并发 conflict slot 收敛、完整来源图和真实模型 Golden 仍待完成。
+> 当前已完成本地多来源证据链接、基于严格 `conflictKey` 的可撤销替代，以及每日/数量阈值触发的
+> 确定性 consolidation 基础，以及跨设备并发 conflict slot 收敛；模糊语义合并、跨设备完整来源图
+> 和真实模型 Golden 仍待完成。
 
 ## 1. 结论
 
@@ -313,7 +314,9 @@ Phase A 通过后，用户已经可以可靠地说“记住……”并在新对
 - `已完成`：平台请求使用 extraction job 稳定去重键，权威 usage 由服务端落库；按当前计费架构不增加客户端额度门禁；
 - `已完成（本地基础）`：canonical 重复项累积多来源链接；删除来源对话时，仅在没有其他来源后删除记忆，Settings 可按需查看和跳转来源；
 - `已完成（确定性冲突）`：v23 conflict slot 唯一约束、显式优先、自动值替代、supersede 链、手动/来源删除撤销、同步投影保护和 UI 替代提示；
-- `待完成`：模糊语义聚类与人工确认、跨设备并发 conflict slot 收敛、完整多来源链接、每日 consolidation、真实模型 Golden 评测和 1,000 条延迟基准。
+- `已完成（确定性 consolidation 基础）`：v24 持久化运行记录、每日/active > 200 调度、stale run 恢复、过期 tombstone、有效前序恢复、断链/循环修复和最近 100 次审计；
+- `已完成（跨设备槽位收敛）`：strict conflict slot/精确 canonical 组确定性选主、显式优先、到达顺序无关、离线共同前序零伪冲突、全新缓存重建和 tombstone 后前值恢复；
+- `待完成`：需要模型判断的模糊语义聚类与人工确认、跨设备完整多来源链接、真实模型 Golden 评测和 1,000 条延迟基准。
 
 ### Phase C：检索增强（按评测决定）
 
@@ -363,8 +366,9 @@ Codex 记忆是另一个宿主的生成状态，账户、版本、格式和控�
 
 ## 14. 最终推荐
 
-Phase A 已完成，Phase B 已开放自动抽取、通知、本地多来源追溯和确定性 conflict slot 替代。下一条
-实现切片应集中在定期 consolidation、跨设备并发收敛和 Golden 评测，再根据结果决定是否进入 Phase C。整体仍保持
+Phase A 已完成，Phase B 已开放自动抽取、通知、本地多来源追溯、确定性 conflict slot 替代和
+无模型参与的定期 consolidation，并已完成跨设备槽位的确定性收敛。下一条实现切片应集中在
+模糊聚类人工确认、完整来源同步和 Golden 评测，再根据结果决定是否进入 Phase C。整体仍保持
 OpenerX 已批准的 Pi 边界：Pi 继续是唯一 agent harness，产品数据继续独立于 Pi Session。
 
 参考：

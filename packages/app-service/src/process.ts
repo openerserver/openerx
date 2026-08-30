@@ -31,6 +31,7 @@ import { AutomationAppService } from "./automation-app-service";
 import { AutomationScheduler, ChatAutomationDispatcher } from "./automation-scheduler";
 import { ChatAppService } from "./chat-app-service";
 import { MainCapabilityClient } from "./main-capability-client";
+import { MemoryConsolidationScheduler } from "./memory-consolidation-scheduler";
 import { MemoryExtractionScheduler, PiMemoryExtractor } from "./memory-extraction-scheduler";
 import { MessagePortPiHostClient } from "./pi-host-client";
 import { HttpAccountSyncTransport, SyncCoordinator } from "./sync-coordinator";
@@ -147,6 +148,9 @@ parentPort.once("message", async (bootstrapEvent) => {
         },
       }),
   });
+  const memoryConsolidationScheduler = new MemoryConsolidationScheduler({
+    repository: memoryRepository,
+  });
   service.onEvent((event) => mainPort.postMessage({ kind: "app-service.event", event }));
   service.onEvent((event) => void automationScheduler.handleChatEvent(event));
   service.onEvent((event) => memoryExtractionScheduler.handleChatEvent(event));
@@ -164,6 +168,7 @@ parentPort.once("message", async (bootstrapEvent) => {
   service.initialize();
   automationScheduler.start();
   memoryExtractionScheduler.start();
+  memoryConsolidationScheduler.start();
   let remoteAuthorization: AppServiceAuthorization | null = null;
 
   remotePort.on("message", async (event) => {
@@ -262,6 +267,7 @@ parentPort.once("message", async (bootstrapEvent) => {
     nonce: bootstrap.nonce,
   });
   process.once("exit", () => {
+    memoryConsolidationScheduler.stop();
     memoryExtractionScheduler.stop();
     automationScheduler.stop();
     automationRepository.close();

@@ -136,9 +136,7 @@ export const memoryClearResultSchema = z
   })
   .strict();
 
-export const memorySourcesListInputSchema = z
-  .object({ memoryId: entityIdSchema })
-  .strict();
+export const memorySourcesListInputSchema = z.object({ memoryId: entityIdSchema }).strict();
 
 export const memorySourceLinkSchema = z
   .object({
@@ -207,6 +205,25 @@ export const memoryExtractionJobSchema = z
   })
   .strict();
 
+export const memoryConsolidationReasonSchema = z.enum(["daily", "active_limit"]);
+export const memoryConsolidationRunStatusSchema = z.enum(["running", "completed", "failed"]);
+
+export const memoryConsolidationRunSchema = z
+  .object({
+    id: entityIdSchema,
+    ownerProfileId: z.string().min(1),
+    reason: memoryConsolidationReasonSchema,
+    status: memoryConsolidationRunStatusSchema,
+    activeCount: z.number().int().nonnegative(),
+    expiredCount: z.number().int().nonnegative(),
+    repairedCount: z.number().int().nonnegative(),
+    lastErrorCode: z.string().min(1).max(200).nullable(),
+    startedAt: timestampSchema,
+    updatedAt: timestampSchema,
+    completedAt: timestampSchema.nullable(),
+  })
+  .strict();
+
 export const automaticMemoryCreatedEventSchema = z
   .object({
     eventId: entityIdSchema,
@@ -263,4 +280,6 @@ export type AutomaticMemoryCandidate = z.infer<typeof automaticMemoryCandidateSc
 export type AutomaticMemoryExtractionOutput = z.infer<typeof automaticMemoryExtractionOutputSchema>;
 export type MemoryExtractionJob = z.infer<typeof memoryExtractionJobSchema>;
 export type MemoryExtractionSkipReason = z.infer<typeof memoryExtractionSkipReasonSchema>;
+export type MemoryConsolidationReason = z.infer<typeof memoryConsolidationReasonSchema>;
+export type MemoryConsolidationRun = z.infer<typeof memoryConsolidationRunSchema>;
 export type AutomaticMemoryCreatedEvent = z.infer<typeof automaticMemoryCreatedEventSchema>;

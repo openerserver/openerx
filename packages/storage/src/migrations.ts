@@ -1194,6 +1194,30 @@ const migrations: readonly Migration[] = [
         WHERE status = 'active' AND conflict_key IS NOT NULL;
     `,
   },
+  {
+    version: 24,
+    checksum: "memory-consolidation-runs-v24-20260830",
+    sql: `
+      CREATE TABLE memory_consolidation_runs (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        reason TEXT NOT NULL CHECK (reason IN ('daily', 'active_limit')),
+        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+        active_count INTEGER NOT NULL CHECK (active_count >= 0),
+        expired_count INTEGER NOT NULL DEFAULT 0 CHECK (expired_count >= 0),
+        repaired_count INTEGER NOT NULL DEFAULT 0 CHECK (repaired_count >= 0),
+        last_error_code TEXT,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      ) STRICT;
+      CREATE UNIQUE INDEX memory_consolidation_runs_running_idx
+        ON memory_consolidation_runs(owner_profile_id)
+        WHERE status = 'running';
+      CREATE INDEX memory_consolidation_runs_history_idx
+        ON memory_consolidation_runs(owner_profile_id, started_at DESC, id);
+    `,
+  },
 ];
 
 export function migrateDatabase(

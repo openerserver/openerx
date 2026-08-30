@@ -11,6 +11,34 @@ const memoryId = "30000000-0000-4000-8000-000000000003";
 const conversationId = "70000000-0000-4000-8000-000000000007";
 const changedAt = "2026-08-30T00:00:00.000Z";
 
+function conflictMemory(
+  id: string,
+  content: string,
+  updatedAt: string,
+  supersedesMemoryId: string | null = null,
+) {
+  return {
+    id,
+    ownerProfileId: owner,
+    scope: "personal" as const,
+    kind: "preference" as const,
+    content,
+    retrievalKeys: [content],
+    canonicalKey: `preference:${id}`,
+    conflictKey: "response.language",
+    origin: "explicit" as const,
+    confidence: 1,
+    status: "active" as const,
+    sourceConversationId: null,
+    sourceMessageId: null,
+    supersedesMemoryId,
+    expiresAt: null,
+    createdAt: updatedAt,
+    updatedAt,
+    revision: 1,
+  };
+}
+
 afterEach(() => {
   for (const directory of directories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
@@ -18,6 +46,153 @@ afterEach(() => {
 });
 
 describe("memory account sync", () => {
+  it("derives the same conflict-slot winner regardless of pull order and restores the loser", () => {
+    const firstDirectory = mkdtempSync(path.join(tmpdir(), "openerx-memory-order-a-"));
+    const secondDirectory = mkdtempSync(path.join(tmpdir(), "openerx-memory-order-b-"));
+    directories.push(firstDirectory, secondDirectory);
+    const firstFile = path.join(firstDirectory, "sync.sqlite");
+    const secondFile = path.join(secondDirectory, "sync.sqlite");
+    const firstChat = new ChatRepository(firstFile, { ownerProfileId: owner, deviceId: device });
+    const secondChat = new ChatRepository(secondFile, {
+      ownerProfileId: owner,
+      deviceId: "20000000-0000-4000-8000-000000000020",
+    });
+    const firstMemories = new MemoryRepository(firstFile, {
+      ownerProfileId: owner,
+      deviceId: device,
+    });
+    const secondMemories = new MemoryRepository(secondFile, {
+      ownerProfileId: owner,
+      deviceId: "20000000-0000-4000-8000-000000000020",
+    });
+    const olderId = "30000000-0000-4000-8000-000000000040";
+    const newerId = "30000000-0000-4000-8000-000000000041";
+    const changes = [
+      {
+        cursor: "cursor:1" as const,
+        accountId: owner,
+        objectType: "memory_entry" as const,
+        objectId: olderId,
+        revision: 1,
+        tombstone: false,
+        payloadVersion: 1 as const,
+        payload: conflictMemory(olderId, "用户偏好中文回复。", "2026-08-30T00:00:00.000Z"),
+        operationId: "40000000-0000-4000-8000-000000000040",
+        changedAt,
+        retainUntil: null,
+      },
+      {
+        cursor: "cursor:2" as const,
+        accountId: owner,
+        objectType: "memory_entry" as const,
+        objectId: newerId,
+        revision: 1,
+        tombstone: false,
+        payloadVersion: 1 as const,
+        payload: conflictMemory(newerId, "用户偏好英文回复。", "2026-08-30T00:01:00.000Z"),
+        operationId: "40000000-0000-4000-8000-000000000041",
+        changedAt,
+        retainUntil: null,
+      },
+    ];
+    firstChat.applySyncPull({ changes, nextCursor: "cursor:2" });
+    secondChat.applySyncPull({ changes: [...changes].reverse(), nextCursor: "cursor:2" });
+
+    for (const memories of [firstMemories, secondMemories]) {
+      expect(memories.list({ status: "active", limit: 50 })).toEqual([
+        expect.objectContaining({ id: newerId, supersedesMemoryId: olderId }),
+      ]);
+      expect(memories.get(olderId).status).toBe("superseded");
+    }
+    const tombstone = {
+      cursor: "cursor:3" as const,
+      accountId: owner,
+      objectType: "memory_entry" as const,
+      objectId: newerId,
+      revision: 2,
+      tombstone: true,
+      payloadVersion: 1 as const,
+      payload: null,
+      operationId: "40000000-0000-4000-8000-000000000042",
+      changedAt,
+      retainUntil: "2026-09-29T00:00:00.000Z",
+    };
+    firstChat.applySyncPull({ changes: [tombstone], nextCursor: "cursor:3" });
+    secondChat.applySyncPull({ changes: [tombstone], nextCursor: "cursor:3" });
+    expect(firstMemories.get(olderId).status).toBe("active");
+    expect(secondMemories.get(olderId).status).toBe("active");
+    firstMemories.close();
+    secondMemories.close();
+    firstChat.close();
+    secondChat.close();
+  });
+
+  it("keeps an explicit canonical duplicate active over a newer automatic duplicate", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-canonical-sync-"));
+    directories.push(directory);
+    const file = path.join(directory, "sync.sqlite");
+    const chat = new ChatRepository(file, { ownerProfileId: owner, deviceId: device });
+    const memories = new MemoryRepository(file, { ownerProfileId: owner, deviceId: device });
+    const explicitId = "30000000-0000-4000-8000-000000000050";
+    const automaticId = "30000000-0000-4000-8000-000000000051";
+    const canonicalKey = "preference:canonical-language";
+    const payloads = [
+      {
+        ...conflictMemory(automaticId, "用户偏好中文回复。", "2026-08-30T00:02:00.000Z"),
+        canonicalKey,
+        conflictKey: null,
+        origin: "automatic" as const,
+        confidence: 0.9,
+      },
+      {
+        ...conflictMemory(explicitId, "用户偏好中文回复。", changedAt),
+        canonicalKey,
+        conflictKey: null,
+      },
+    ];
+    chat.applySyncPull({
+      changes: payloads.map((payload, index) => ({
+        cursor: `cursor:${index + 1}` as `cursor:${number}`,
+        accountId: owner,
+        objectType: "memory_entry" as const,
+        objectId: payload.id,
+        revision: 1,
+        tombstone: false,
+        payloadVersion: 1 as const,
+        payload,
+        operationId: `40000000-0000-4000-8000-${String(index + 50).padStart(12, "0")}`,
+        changedAt,
+        retainUntil: null,
+      })),
+      nextCursor: "cursor:2",
+    });
+
+    expect(memories.list({ status: "active", limit: 50 })).toEqual([
+      expect.objectContaining({ id: explicitId, supersedesMemoryId: automaticId }),
+    ]);
+    chat.applySyncPull({
+      changes: [
+        {
+          cursor: "cursor:3",
+          accountId: owner,
+          objectType: "memory_entry",
+          objectId: explicitId,
+          revision: 2,
+          tombstone: true,
+          payloadVersion: 1,
+          payload: null,
+          operationId: "40000000-0000-4000-8000-000000000052",
+          changedAt,
+          retainUntil: "2026-09-29T00:00:00.000Z",
+        },
+      ],
+      nextCursor: "cursor:3",
+    });
+    expect(memories.get(automaticId).status).toBe("active");
+    memories.close();
+    chat.close();
+  });
+
   it("protects explicit conflict slots and restores a synced predecessor on tombstone", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-conflict-sync-"));
     directories.push(directory);

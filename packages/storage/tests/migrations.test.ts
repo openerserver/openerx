@@ -14,6 +14,30 @@ afterEach(() => {
 });
 
 describe("database migrations", () => {
+  it("adds persistent memory consolidation runs with one running job per profile", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-consolidation-migration-"));
+    directories.push(directory);
+    const database = new DatabaseSync(path.join(directory, "openerx.sqlite"));
+    migrateDatabase(database, { throughVersion: 23 });
+    migrateDatabase(database);
+
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_consolidation_runs'",
+        )
+        .get(),
+    ).toEqual({ name: "memory_consolidation_runs" });
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'memory_consolidation_runs_running_idx'",
+        )
+        .get(),
+    ).toEqual({ name: "memory_consolidation_runs_running_idx" });
+    database.close();
+  });
+
   it("adds a nullable conflict slot with one active value per kind", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-conflict-migration-"));
     directories.push(directory);
