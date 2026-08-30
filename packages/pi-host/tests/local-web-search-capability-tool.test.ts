@@ -42,6 +42,8 @@ describe("local Web Search Pi projection", () => {
     });
     const search = tools.find(({ name }) => name === "openerx_web_search");
     if (!search) throw new Error("local Web Search tool missing");
+    expect(search.description).toContain("plan of distinct evidence angles");
+    expect(search.description).toContain("stop when the collected sources adequately support");
 
     const schema = JSON.stringify(search.parameters);
     expect(schema).toContain("query");

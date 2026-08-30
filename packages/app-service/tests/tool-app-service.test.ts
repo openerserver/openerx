@@ -476,7 +476,7 @@ describe("ToolAppService", () => {
 
     try {
       const research = await prepare(
-        "搜索网络并调研最近一周 AI 行业的重要动态，核实信息并附上来源",
+        "搜索网络：先制定覆盖不同角度的检索计划，再调研最近一周 AI 行业的重要动态，核实信息并附上来源",
       );
       expect(research.initialToolNames).toContain("openerx_web_search");
 

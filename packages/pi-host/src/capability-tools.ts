@@ -304,7 +304,7 @@ export function createProductCapabilityTools(input: {
       name: "openerx_web_search",
       label: "Search the Web",
       description:
-        "Search current Web information through the configured local OpenerX search provider with sources.",
+        "Search current Web information through the configured local OpenerX search provider with sources. For multi-query research, follow a plan of distinct evidence angles, avoid duplicate queries, and stop when the collected sources adequately support the answer.",
       parameters: Type.Object(
         {
           query: Type.String({ minLength: 1, maxLength: 1_000 }),

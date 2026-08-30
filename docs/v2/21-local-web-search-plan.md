@@ -95,7 +95,7 @@ User prompt
 
 ### 5.1 一次搜索的固定步骤
 
-1. Broker 校验 `web.search` Scope、Turn 预算和冻结策略。
+1. Broker 校验 `web.search` Scope 和冻结策略；多次检索由模型侧调研计划控制，不设置单轮调用次数门禁。
 2. Gateway 按可信设置选定一个 Provider；模型不能指定 Provider。
 3. Provider 用固定 origin、path 和允许的参数构造 URL。
 4. `ControlledSearchFetch` 发出一个 HTTPS GET，默认不跟随 SERP 重定向。
@@ -270,7 +270,6 @@ interface LocalWebSearchPolicy {
   allowProviderFallback: boolean;
   locale: string;
   safeSearch: "off" | "moderate" | "strict";
-  maxCallsPerTurn: number;
   maxResultsPerCall: number;
   requestTimeoutMs: number;
   toolTimeoutMs: number;
@@ -280,8 +279,9 @@ interface LocalWebSearchPolicy {
 }
 ```
 
-Provider order、fallback 和预算在 Prompt 前冻结。同一 Generation 中设置变更只影响下一次
-Generation。
+Provider order、fallback、单次结果/字节/超时边界在 Prompt 前冻结。同一 Generation 中设置变更
+只影响下一次 Generation。多次检索的角度、去重与停止条件由模型侧调研计划控制，不以固定调用次数
+截断。
 
 ### 7.3 Provider interface
 

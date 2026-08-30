@@ -301,7 +301,7 @@ describe("lightweight local Web Search", () => {
     expect(response.push('{"feed":{"entry":[]}}')).toBe(false);
   });
 
-  it("executes one Baidu JSON request and projects identical model/UI sources", async () => {
+  it("does not impose a per-turn call-count cap on distinct Baidu JSON searches", async () => {
     const get = vi.fn<ControlledSearchHttpClient["get"]>(async (_request) => ({
       statusCode: 200,
       contentType: "application/json;charset=utf-8",
@@ -315,7 +315,7 @@ describe("lightweight local Web Search", () => {
       now: () => Date.parse("2026-08-29T00:00:00.000Z"),
     });
     const coordinator = new LocalWebSearchCoordinator([provider]);
-    const configuration = freezeLocalWebSearchPolicy(policy({ maxCallsPerTurn: 1 }));
+    const configuration = freezeLocalWebSearchPolicy(policy());
     const result = await coordinator.search({
       generationId: "generation-search-0001",
       query: "  OpenERX  ",
@@ -354,14 +354,23 @@ describe("lightweight local Web Search", () => {
         resultCount: 1,
       },
     });
-    await expect(
-      coordinator.search({
-        generationId: "generation-search-0001",
-        query: "second call",
-        configuration,
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toMatchObject({ code: "LOCAL_SEARCH_CALL_BUDGET_EXCEEDED" });
+    const additional = await Promise.all(
+      ["second angle", "third angle", "fourth angle", "fifth angle"].map((query) =>
+        coordinator.search({
+          generationId: "generation-search-0001",
+          query,
+          configuration,
+          signal: new AbortController().signal,
+        }),
+      ),
+    );
+    expect(additional).toHaveLength(4);
+    expect(additional).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ data: expect.objectContaining({ executionPerformed: true }) }),
+      ]),
+    );
+    expect(get).toHaveBeenCalledTimes(5);
   });
 
   it("reuses identical searches inside one Generation and clears the turn cache", async () => {
@@ -392,7 +401,7 @@ describe("lightweight local Web Search", () => {
       search,
     };
     const coordinator = new LocalWebSearchCoordinator([provider]);
-    const configuration = freezeLocalWebSearchPolicy(policy({ maxCallsPerTurn: 3 }));
+    const configuration = freezeLocalWebSearchPolicy(policy());
     const input = {
       generationId: "generation-search-cache",
       query: "OpenERX",
@@ -657,7 +666,7 @@ describe("lightweight local Web Search", () => {
   it("detects policy mutation even if an untrusted caller bypasses the frozen type", () => {
     const configuration = freezeLocalWebSearchPolicy(policy());
     const tampered = {
-      policy: { ...configuration.policy, maxCallsPerTurn: 9 },
+      policy: { ...configuration.policy, maxResultsPerCall: 9 },
       policyDigest: configuration.policyDigest,
     };
     const coordinator = new LocalWebSearchCoordinator([new FakeLocalWebSearchProvider()]);

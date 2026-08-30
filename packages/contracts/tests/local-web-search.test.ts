@@ -28,7 +28,6 @@ describe("local Web Search contracts", () => {
       allowProviderFallback: false,
       locale: "zh-CN",
       safeSearch: "moderate",
-      maxCallsPerTurn: 3,
       maxResultsPerCall: 8,
       requestTimeoutMs: 4_000,
       toolTimeoutMs: 5_000,
@@ -65,7 +64,6 @@ describe("local Web Search contracts", () => {
       "LOCAL_SEARCH_POLICY_MISMATCH",
       "LOCAL_SEARCH_PROVIDER_CHALLENGE",
       "LOCAL_SEARCH_RESPONSE_TOO_LARGE",
-      "LOCAL_SEARCH_CALL_BUDGET_EXCEEDED",
       "LOCAL_SEARCH_FAKE_PROVIDER_ONLY",
     ]) {
       expect(localWebSearchErrorCodeSchema.safeParse(code).success).toBe(true);

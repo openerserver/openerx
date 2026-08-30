@@ -30,7 +30,6 @@ export const localWebSearchPolicySchema = z
     allowProviderFallback: z.boolean(),
     locale: z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/u),
     safeSearch: z.enum(["off", "moderate", "strict"]),
-    maxCallsPerTurn: z.number().int().min(1).max(10),
     maxResultsPerCall: z.number().int().min(1).max(20),
     requestTimeoutMs: z.number().int().min(100).max(30_000),
     toolTimeoutMs: z.number().int().min(100).max(60_000),
@@ -104,7 +103,6 @@ export const localWebSearchErrorCodeSchema = z.enum([
   "LOCAL_SEARCH_NO_RESULTS",
   "LOCAL_SEARCH_SOURCE_URL_INVALID",
   "LOCAL_SEARCH_POLICY_MISMATCH",
-  "LOCAL_SEARCH_CALL_BUDGET_EXCEEDED",
 ]);
 
 export const selectableLocalWebSearchProviderIdSchema = z.enum([
@@ -178,7 +176,6 @@ export function defaultLocalWebSearchPolicy(): LocalWebSearchPolicy {
     allowProviderFallback: false,
     locale: "zh-CN",
     safeSearch: "moderate",
-    maxCallsPerTurn: 3,
     maxResultsPerCall: 8,
     requestTimeoutMs: 4_000,
     toolTimeoutMs: 5_000,

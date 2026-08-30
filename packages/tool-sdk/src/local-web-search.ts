@@ -81,7 +81,6 @@ function canonicalPolicy(policy: LocalWebSearchPolicy): string {
     allowProviderFallback: policy.allowProviderFallback,
     locale: policy.locale,
     safeSearch: policy.safeSearch,
-    maxCallsPerTurn: policy.maxCallsPerTurn,
     maxResultsPerCall: policy.maxResultsPerCall,
     requestTimeoutMs: policy.requestTimeoutMs,
     toolTimeoutMs: policy.toolTimeoutMs,
@@ -339,7 +338,6 @@ function cachedResult(
 
 export class LocalWebSearchCoordinator {
   readonly #providers = new Map<LocalWebSearchProviderId, LocalSearchProvider>();
-  readonly #callsByGeneration = new Map<string, number>();
   readonly #turnCacheByGeneration = new Map<string, Map<string, NormalizedToolResult>>();
   readonly #healthByProvider = new Map<LocalWebSearchProviderId, ProviderHealth>();
   readonly #now: () => number;
@@ -432,11 +430,6 @@ export class LocalWebSearchCoordinator {
     this.#assertPolicy(input.configuration);
     const { policy } = input.configuration;
     if (!policy.enabled) throw new LocalWebSearchError("LOCAL_SEARCH_DISABLED");
-    const callCount = this.#callsByGeneration.get(input.generationId) ?? 0;
-    if (callCount >= policy.maxCallsPerTurn) {
-      throw new LocalWebSearchError("LOCAL_SEARCH_CALL_BUDGET_EXCEEDED");
-    }
-    this.#callsByGeneration.set(input.generationId, callCount + 1);
     const query = normalizeQuery({
       query: input.query,
       ...(input.recencyDays === undefined ? {} : { recencyDays: input.recencyDays }),
@@ -607,7 +600,6 @@ export class LocalWebSearchCoordinator {
   }
 
   clearGeneration(generationId: string): void {
-    this.#callsByGeneration.delete(generationId);
     this.#turnCacheByGeneration.delete(generationId);
   }
 

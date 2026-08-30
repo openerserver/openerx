@@ -404,8 +404,13 @@ describe("Pi AgentSession composition", () => {
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     modelRuntime.registerNativeProvider(faux.provider);
     faux.setResponses([
-      (context) =>
-        fauxAssistantMessage(`Pi context messages: ${context.messages.length}; response: 巴黎。`),
+      (context) => {
+        expect(context.systemPrompt).toContain("plan of distinct evidence angles");
+        expect(context.systemPrompt).toContain("search count itself is not the stopping criterion");
+        return fauxAssistantMessage(
+          `Pi context messages: ${context.messages.length}; response: 巴黎。`,
+        );
+      },
     ]);
     const { session } = await createProductPiSession({
       cwd,

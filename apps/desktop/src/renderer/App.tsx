@@ -87,7 +87,7 @@ import remarkGfm from "remark-gfm";
 import { AutomationsPage } from "./AutomationsPage";
 
 const suggestions = [
-  "搜索网络并调研最近一周 AI 行业的重要动态，核实信息并附上来源",
+  "搜索网络：先制定覆盖不同角度的检索计划，再调研最近一周 AI 行业的重要动态，核实信息并附上来源",
   "检查我选择的文件或文件夹，找出问题并给出可验证的改进方案",
   "搜索最新资料，制作一份 AI 工具选型报告，同时生成对比表格、DOCX 和汇报 PPT",
   "计算一家月营收 100 万元、成本 65 万元公司的三种增长情景，并生成可下载的 Excel 分析表",
@@ -1732,6 +1732,7 @@ function FilesAndArtifacts(): React.JSX.Element {
         : window.openerx.previewArtifact({ artifactId: selected.id });
     },
     enabled: selected !== null,
+    retry: false,
   });
   const saveArtifact = useMutation({
     mutationFn: async (artifactId: string) => await window.openerx.saveArtifact({ artifactId }),
@@ -2442,7 +2443,11 @@ function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
                     </a>
                   );
                 })}
-                {call.errorCode ? <p className="inline-error">{call.errorCode}</p> : null}
+                {call.errorCode ? (
+                  <p className="inline-error">
+                    {toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}
+                  </p>
+                ) : null}
               </section>
             );
           }
