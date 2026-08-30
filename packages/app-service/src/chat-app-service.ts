@@ -140,6 +140,8 @@ export class ChatAppService {
       }
       case "memory.list":
         return this.#requiredMemories().list(request.input);
+      case "memory.sources.list":
+        return this.#requiredMemories().sources(request.input.memoryId);
       case "memory.upsert": {
         const result = this.#requiredMemories().upsert(request.input);
         await this.#syncIfAuthorized(authorization);

@@ -41,6 +41,7 @@ import {
   type MemoryClearResult,
   type MemoryEntry,
   type MemorySettings,
+  type MemorySourceLink,
   memoryClearInputSchema,
   memoryClearResultSchema,
   memoryDeleteInputSchema,
@@ -48,6 +49,8 @@ import {
   memoryListInputSchema,
   memorySettingsSchema,
   memorySettingsUpdateInputSchema,
+  memorySourceLinkSchema,
+  memorySourcesListInputSchema,
   memoryUpsertInputSchema,
 } from "./memory";
 import { defaultThinkingLevel, thinkingLevelSchema } from "./model";
@@ -337,6 +340,9 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     })
     .strict(),
   z.object({ command: z.literal("memory.list"), input: memoryListInputSchema }).strict(),
+  z
+    .object({ command: z.literal("memory.sources.list"), input: memorySourcesListInputSchema })
+    .strict(),
   z.object({ command: z.literal("memory.upsert"), input: memoryUpsertInputSchema }).strict(),
   z.object({ command: z.literal("memory.delete"), input: memoryDeleteInputSchema }).strict(),
   z.object({ command: z.literal("memory.clear"), input: memoryClearInputSchema }).strict(),
@@ -550,6 +556,7 @@ export interface ChatCommandResultMap {
   "memory.conversation.settings.get": ConversationMemorySettings;
   "memory.conversation.settings.update": ConversationMemorySettings;
   "memory.list": MemoryEntry[];
+  "memory.sources.list": MemorySourceLink[];
   "memory.upsert": MemoryEntry;
   "memory.delete": MemoryEntry;
   "memory.clear": MemoryClearResult;
@@ -636,6 +643,9 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "memory.list":
       parsed = z.array(memoryEntrySchema).parse(value);
+      break;
+    case "memory.sources.list":
+      parsed = z.array(memorySourceLinkSchema).max(200).parse(value);
       break;
     case "memory.upsert":
     case "memory.delete":
@@ -785,6 +795,9 @@ export interface ChatBridge {
     input: z.input<typeof conversationMemorySettingsUpdateInputSchema>,
   ): Promise<ConversationMemorySettings>;
   listMemories(input?: z.input<typeof memoryListInputSchema>): Promise<MemoryEntry[]>;
+  listMemorySources(
+    input: z.input<typeof memorySourcesListInputSchema>,
+  ): Promise<MemorySourceLink[]>;
   upsertMemory(input: z.input<typeof memoryUpsertInputSchema>): Promise<MemoryEntry>;
   deleteMemory(input: z.input<typeof memoryDeleteInputSchema>): Promise<MemoryEntry>;
   clearMemories(input: z.input<typeof memoryClearInputSchema>): Promise<MemoryClearResult>;

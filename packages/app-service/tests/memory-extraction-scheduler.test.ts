@@ -156,4 +156,67 @@ describe("MemoryExtractionScheduler", () => {
     memories.close();
     chat.close();
   });
+
+  it("retains a new conversation source without notifying an existing canonical memory again", async () => {
+    const file = databasePath();
+    let now = "2026-08-30T00:00:00.000Z";
+    const chat = new ChatRepository(file, { now: () => now });
+    const memories = new MemoryRepository(file, { now: () => now });
+    memories.updateSettings({
+      memoriesEnabled: true,
+      generateMemories: true,
+      idleDelayMinutes: 1,
+    });
+    const original = chat.createGeneration({
+      text: "我一直希望技术方案先给明确结论，再给必要细节。",
+      idempotencyKey: "memory-existing-source-0001",
+    });
+    const existing = memories.upsertAutomatic({
+      candidate: {
+        kind: "preference",
+        content: "用户希望技术方案先给结论。",
+        retrievalKeys: ["技术方案", "结论"],
+        confidence: 0.94,
+        sourceMessageId: original.receipt.userMessageId ?? "",
+      },
+      conversationId: original.receipt.conversationId,
+      jobId: "10000000-0000-4000-8000-000000000201",
+    });
+    const later = twoTurnConversation(chat, now);
+    const extractor: MemoryExtractor = {
+      extract: vi.fn(async () => ({
+        candidates: [
+          {
+            kind: "preference" as const,
+            content: "用户希望技术方案先给结论。",
+            retrievalKeys: ["技术方案", "结论"],
+            confidence: 0.91,
+            sourceMessageId: later.first.receipt.userMessageId ?? "",
+          },
+        ],
+      })),
+    };
+    const created = vi.fn();
+    const scheduler = new MemoryExtractionScheduler({
+      chatRepository: chat,
+      memoryRepository: memories,
+      extractor,
+      onMemoriesCreated: created,
+    });
+    scheduler.handleChatEvent(later.event);
+
+    now = "2026-08-30T00:02:00.000Z";
+    await expect(scheduler.tick()).resolves.toEqual([
+      expect.objectContaining({ status: "completed", candidateCount: 0 }),
+    ]);
+    expect(created).not.toHaveBeenCalled();
+    expect(memories.sources(existing.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ conversationId: original.receipt.conversationId }),
+        expect.objectContaining({ conversationId: later.first.receipt.conversationId }),
+      ]),
+    );
+    memories.close();
+    chat.close();
+  });
 });

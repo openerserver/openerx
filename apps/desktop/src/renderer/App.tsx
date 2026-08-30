@@ -14,6 +14,7 @@ import type {
   LocalWebSearchSettingsState,
   McpServerAuthorizationState,
   McpServerConfig,
+  MemoryEntry,
   MemoryKind,
   Message,
   ModelCatalogEntry,
@@ -4317,6 +4318,62 @@ const memoryKindLabels: Record<MemoryKind, string> = {
   ongoing_context: "持续上下文",
 };
 
+function MemorySourceDetails({ memory }: { memory: MemoryEntry }): React.JSX.Element | null {
+  const [expanded, setExpanded] = useState(false);
+  const navigate = useNavigate();
+  const sources = useQuery({
+    queryKey: ["memory", memory.id, "sources"],
+    queryFn: () => window.openerx.listMemorySources({ memoryId: memory.id }),
+    enabled: expanded,
+    retry: false,
+  });
+  if (!memory.sourceConversationId) return null;
+  return (
+    <div className="memory-source-details">
+      <button
+        type="button"
+        className="memory-source-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        {expanded ? "收起来源" : "查看来源"}
+      </button>
+      {expanded ? (
+        sources.isPending ? (
+          <small>正在读取来源…</small>
+        ) : sources.error ? (
+          <small>来源读取失败：{sources.error.message}</small>
+        ) : sources.data?.length === 0 ? (
+          <small>暂无可用来源。</small>
+        ) : (
+          <ul className="memory-source-list">
+            {(sources.data ?? []).map((source) => (
+              <li key={source.conversationId}>
+                <button
+                  type="button"
+                  disabled={source.conversationDeletedAt !== null}
+                  onClick={() => navigate(`/chat/${source.conversationId}`)}
+                >
+                  {source.conversationTitle ?? `对话 ${source.conversationId.slice(0, 8)}`}
+                </button>
+                <small>
+                  {source.origin === "explicit"
+                    ? "显式保存"
+                    : source.origin === "automatic"
+                      ? "自动抽取"
+                      : "合并来源"}
+                  {source.conversationDeletedAt ? " · 对话已删除" : ""}
+                  {` · ${new Date(source.createdAt).toLocaleString()}`}
+                </small>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : null}
+    </div>
+  );
+}
+
 function MemorySettingsPanel(): React.JSX.Element {
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -4608,10 +4665,8 @@ function MemorySettingsPanel(): React.JSX.Element {
               <p>{memory.content}</p>
               <small>
                 更新于 {new Date(memory.updatedAt).toLocaleString()}
-                {memory.sourceConversationId
-                  ? ` · 来源对话 ${memory.sourceConversationId.slice(0, 8)}`
-                  : ""}
               </small>
+              <MemorySourceDetails memory={memory} />
             </div>
             <div className="memory-row-actions">
               <button

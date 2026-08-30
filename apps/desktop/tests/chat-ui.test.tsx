@@ -281,6 +281,7 @@ function createBridge(): DesktopBridge {
     }),
     updateConversationMemorySettings: vi.fn(),
     listMemories: vi.fn().mockResolvedValue([]),
+    listMemorySources: vi.fn().mockResolvedValue([]),
     upsertMemory: vi.fn(),
     deleteMemory: vi.fn(),
     clearMemories: vi.fn(),
@@ -860,6 +861,19 @@ describe("M1 chat renderer", () => {
       revision: 2,
     });
     vi.mocked(bridge.listMemories).mockResolvedValue([memory]);
+    vi.mocked(bridge.listMemorySources).mockResolvedValue([
+      {
+        memoryId: memory.id,
+        ownerProfileId: "local-default",
+        conversationId,
+        messageId: userMessageId,
+        origin: "automatic",
+        confidence: 0.91,
+        conversationTitle: "记忆来源对话",
+        conversationDeletedAt: null,
+        createdAt: timestamp,
+      },
+    ]);
     vi.mocked(bridge.deleteMemory).mockResolvedValue({
       ...memory,
       status: "deleted",
@@ -876,6 +890,8 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "查看" }));
     expect(await screen.findByRole("heading", { name: "长期记忆" })).toBeTruthy();
     await waitFor(() => expect(document.activeElement?.id).toBe(`memory-${memory.id}`));
+    await user.click(screen.getByRole("button", { name: "查看来源" }));
+    expect(await screen.findByRole("button", { name: "记忆来源对话" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "撤销" }));
     await waitFor(() =>

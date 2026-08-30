@@ -3,6 +3,7 @@ import {
   automaticMemoryCreatedEventFrameSchema,
   chatCommandEnvelopeSchema,
   memoryEntrySchema,
+  parseChatCommandResult,
   piMemoryExtractFrameSchema,
   piMemoryExtractResultFrameSchema,
   piPromptFrameSchema,
@@ -42,6 +43,30 @@ describe("memory contracts", () => {
         },
       }).command,
     ).toBe("memory.upsert");
+    expect(
+      chatCommandEnvelopeSchema.parse({
+        command: "memory.sources.list",
+        input: { memoryId: id("16") },
+      }).command,
+    ).toBe("memory.sources.list");
+  });
+
+  it("returns bounded, account-scoped memory source links", () => {
+    expect(
+      parseChatCommandResult("memory.sources.list", [
+        {
+          memoryId: id("30"),
+          ownerProfileId: "local-default",
+          conversationId: id("31"),
+          messageId: id("32"),
+          origin: "automatic",
+          confidence: 0.93,
+          conversationTitle: "来源对话",
+          conversationDeletedAt: null,
+          createdAt: timestamp,
+        },
+      ]),
+    ).toEqual([expect.objectContaining({ conversationId: id("31") })]);
   });
 
   it("carries bounded recalled memories into a Pi prompt frame", () => {

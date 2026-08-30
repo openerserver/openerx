@@ -229,6 +229,12 @@ export class PersonalDataExporter {
                 external_context_used AS externalContextUsed, updated_at AS updatedAt
          FROM memory_conversation_context ORDER BY updated_at, conversation_id`,
       ),
+      memorySourceLinks: rows(
+        database,
+        `SELECT memory_id AS memoryId, conversation_id AS conversationId,
+                message_id AS messageId, origin, confidence, created_at AS createdAt
+         FROM memory_source_links ORDER BY created_at, memory_id, conversation_id`,
+      ),
       memories: rows(
         database,
         `SELECT id, kind, content, retrieval_keys_json AS retrievalKeys,
@@ -268,6 +274,7 @@ export class PersonalDataExporter {
       conversationMemorySettings: [],
       memoryExtractionJobs: [],
       memoryConversationContext: [],
+      memorySourceLinks: [],
       memories: [],
     };
   }

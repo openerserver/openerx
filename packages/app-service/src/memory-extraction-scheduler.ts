@@ -234,7 +234,12 @@ export class MemoryExtractionScheduler {
             conversationId: job.conversationId,
             jobId: job.id,
           });
-          if (memory.origin === "automatic") createdById.set(memory.id, memory);
+          if (
+            memory.origin === "automatic" &&
+            memory.sourceConversationId === job.conversationId
+          ) {
+            createdById.set(memory.id, memory);
+          }
         } catch (error) {
           if (!rejectedCandidateCodes.has(this.#errorCode(error))) throw error;
         }

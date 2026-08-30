@@ -1157,6 +1157,33 @@ const migrations: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 22,
+    checksum: "memory-source-links-v22-20260830",
+    sql: `
+      CREATE TABLE memory_source_links (
+        memory_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+        owner_profile_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        message_id TEXT,
+        origin TEXT NOT NULL CHECK (origin IN ('explicit', 'automatic', 'consolidated')),
+        confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (owner_profile_id, memory_id, conversation_id)
+      ) STRICT;
+      CREATE INDEX memory_source_links_memory_idx
+        ON memory_source_links(owner_profile_id, memory_id, created_at DESC);
+      CREATE INDEX memory_source_links_conversation_idx
+        ON memory_source_links(owner_profile_id, conversation_id, memory_id);
+
+      INSERT INTO memory_source_links
+        (memory_id, owner_profile_id, conversation_id, message_id, origin, confidence, created_at)
+      SELECT id, owner_profile_id, source_conversation_id, source_message_id,
+             origin, confidence, created_at
+      FROM memory_entries
+      WHERE source_conversation_id IS NOT NULL;
+    `,
+  },
 ];
 
 export function migrateDatabase(

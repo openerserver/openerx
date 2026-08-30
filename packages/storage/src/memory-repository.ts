@@ -14,11 +14,13 @@ import {
   type MemoryListInput,
   type MemorySettings,
   type MemorySettingsUpdateInput,
+  type MemorySourceLink,
   type MemoryUpsertInput,
   memoryClearResultSchema,
   memoryEntrySchema,
   memoryExtractionJobSchema,
   memorySettingsSchema,
+  memorySourceLinkSchema,
   type RecalledMemory,
   recalledMemorySchema,
   redactSensitiveText,
@@ -294,6 +296,22 @@ export class MemoryRepository {
     return this.#entryFromRow(row);
   }
 
+  sources(memoryId: string): MemorySourceLink[] {
+    this.get(memoryId);
+    const rows = this.#database
+      .prepare(
+        `SELECT links.*, conversations.title AS conversation_title,
+                conversations.deleted_at AS conversation_deleted_at
+         FROM memory_source_links AS links
+         LEFT JOIN conversations ON conversations.id = links.conversation_id
+         WHERE links.memory_id = ? AND links.owner_profile_id = ?
+         ORDER BY links.created_at DESC, links.conversation_id
+         LIMIT 200`,
+      )
+      .all(memoryId, this.#ownerProfileId) as SqlRow[];
+    return rows.map((row) => this.#sourceLinkFromRow(row));
+  }
+
   search(query: string, limit = 8): MemoryEntry[] {
     const queryTokens = new Set(tokens(query));
     const normalizedQuery = normalize(query);
@@ -407,6 +425,16 @@ export class MemoryRepository {
           entry.updatedAt,
           entry.revision,
         );
+      if (input.sourceConversationId) {
+        this.#recordSourceLink({
+          memoryId: entry.id,
+          conversationId: input.sourceConversationId,
+          messageId: input.sourceMessageId ?? null,
+          origin: "explicit",
+          confidence: 1,
+          createdAt: now,
+        });
+      }
       if (this.settings().syncMemories) {
         this.#queueSync("memory_entry", entry.id, "upsert", entry, now);
       }
@@ -466,18 +494,60 @@ export class MemoryRepository {
       idempotencyKey,
       memoryClearResultSchema,
       () => {
-        const active = (
+        const affected = (
           this.#database
             .prepare(
-              `SELECT * FROM memory_entries
-               WHERE owner_profile_id = ? AND source_conversation_id = ? AND status != 'deleted'
-               ORDER BY updated_at DESC, id`,
+              `SELECT DISTINCT entries.* FROM memory_entries AS entries
+               INNER JOIN memory_source_links AS links ON links.memory_id = entries.id
+               WHERE entries.owner_profile_id = ? AND links.owner_profile_id = ?
+                 AND links.conversation_id = ? AND entries.status != 'deleted'
+               ORDER BY entries.updated_at DESC, entries.id`,
             )
-            .all(this.#ownerProfileId, conversationId) as SqlRow[]
+            .all(this.#ownerProfileId, this.#ownerProfileId, conversationId) as SqlRow[]
         ).map((row) => this.#entryFromRow(row));
         const now = this.#now();
-        this.#deleteEntries(active, now);
-        return memoryClearResultSchema.parse({ deleted: active.length, clearedAt: now });
+        this.#database
+          .prepare(
+            `DELETE FROM memory_source_links
+             WHERE owner_profile_id = ? AND conversation_id = ?`,
+          )
+          .run(this.#ownerProfileId, conversationId);
+        const deleted: MemoryEntry[] = [];
+        const syncMemories = this.settings().syncMemories;
+        for (const entry of affected) {
+          const replacement = this.#database
+            .prepare(
+              `SELECT * FROM memory_source_links
+               WHERE owner_profile_id = ? AND memory_id = ?
+               ORDER BY created_at DESC, conversation_id LIMIT 1`,
+            )
+            .get(this.#ownerProfileId, entry.id) as SqlRow | undefined;
+          if (!replacement) {
+            deleted.push(entry);
+            continue;
+          }
+          if (entry.sourceConversationId !== conversationId) continue;
+          this.#database
+            .prepare(
+              `UPDATE memory_entries
+               SET source_conversation_id = ?, source_message_id = ?, updated_at = ?,
+                   revision = revision + 1
+               WHERE id = ? AND owner_profile_id = ?`,
+            )
+            .run(
+              String(replacement.conversation_id),
+              replacement.message_id === null ? null : String(replacement.message_id),
+              now,
+              entry.id,
+              this.#ownerProfileId,
+            );
+          if (syncMemories) {
+            const updated = this.get(entry.id);
+            this.#queueSync("memory_entry", updated.id, "upsert", updated, now);
+          }
+        }
+        this.#deleteEntries(deleted, now);
+        return memoryClearResultSchema.parse({ deleted: deleted.length, clearedAt: now });
       },
     );
   }
@@ -716,14 +786,25 @@ export class MemoryRepository {
         ) {
           throw new Error("MEMORY_CANDIDATE_SOURCE_INVALID");
         }
+        const now = this.#now();
         const duplicate = this.#database
           .prepare(
             `SELECT * FROM memory_entries
              WHERE owner_profile_id = ? AND kind = ? AND canonical_key = ? AND status = 'active'`,
           )
           .get(this.#ownerProfileId, candidate.kind, key) as SqlRow | undefined;
-        if (duplicate) return this.#entryFromRow(duplicate);
-        const now = this.#now();
+        if (duplicate) {
+          const entry = this.#entryFromRow(duplicate);
+          this.#recordSourceLink({
+            memoryId: entry.id,
+            conversationId: input.conversationId,
+            messageId: candidate.sourceMessageId,
+            origin: "automatic",
+            confidence: candidate.confidence,
+            createdAt: now,
+          });
+          return entry;
+        }
         const expiresAt =
           candidate.kind === "ongoing_context"
             ? new Date(Date.parse(now) + 90 * 86_400_000).toISOString()
@@ -777,6 +858,14 @@ export class MemoryRepository {
             entry.updatedAt,
             entry.revision,
           );
+        this.#recordSourceLink({
+          memoryId: entry.id,
+          conversationId: input.conversationId,
+          messageId: candidate.sourceMessageId,
+          origin: "automatic",
+          confidence: candidate.confidence,
+          createdAt: now,
+        });
         if (settings.syncMemories) {
           this.#queueSync("memory_entry", entry.id, "upsert", entry, now);
         }
@@ -897,6 +986,54 @@ export class MemoryRepository {
       generateMemories: row.generate_memories === null ? null : Number(row.generate_memories) === 1,
       updatedAt: row.updated_at,
       revision: Number(row.revision),
+    });
+  }
+
+  #recordSourceLink(input: {
+    memoryId: string;
+    conversationId: string;
+    messageId: string | null;
+    origin: MemoryEntry["origin"];
+    confidence: number;
+    createdAt: string;
+  }): void {
+    this.#database
+      .prepare(
+        `INSERT INTO memory_source_links
+         (memory_id, owner_profile_id, conversation_id, message_id, origin, confidence, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner_profile_id, memory_id, conversation_id) DO UPDATE SET
+           message_id = COALESCE(excluded.message_id, memory_source_links.message_id),
+           origin = CASE
+             WHEN memory_source_links.origin = 'explicit' THEN 'explicit'
+             WHEN excluded.origin = 'explicit' THEN 'explicit'
+             WHEN memory_source_links.origin = 'consolidated' THEN 'consolidated'
+             ELSE excluded.origin
+           END,
+           confidence = MAX(memory_source_links.confidence, excluded.confidence)`,
+      )
+      .run(
+        input.memoryId,
+        this.#ownerProfileId,
+        input.conversationId,
+        input.messageId,
+        input.origin,
+        input.confidence,
+        input.createdAt,
+      );
+  }
+
+  #sourceLinkFromRow(row: SqlRow): MemorySourceLink {
+    return memorySourceLinkSchema.parse({
+      memoryId: row.memory_id,
+      ownerProfileId: row.owner_profile_id,
+      conversationId: row.conversation_id,
+      messageId: row.message_id,
+      origin: row.origin,
+      confidence: Number(row.confidence),
+      conversationTitle: row.conversation_title ?? null,
+      conversationDeletedAt: row.conversation_deleted_at ?? null,
+      createdAt: row.created_at,
     });
   }
 

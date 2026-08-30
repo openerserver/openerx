@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { MemoryRepository } from "../src";
+import { ChatRepository, MemoryRepository } from "../src";
 
 const directories: string[] = [];
 
@@ -160,6 +160,85 @@ describe("MemoryRepository", () => {
     ).toBe(1);
     expect(repository.get(preference.id).status).toBe("deleted");
     repository.close();
+  });
+
+  it("merges duplicate automatic memories while retaining independent source conversations", () => {
+    const file = databasePath();
+    const chat = new ChatRepository(file);
+    const first = chat.createGeneration({
+      text: "我希望所有技术方案先给结论，再给必要细节。",
+      idempotencyKey: "memory-source-chat-0001",
+    });
+    const second = chat.createGeneration({
+      text: "再次确认，我偏好技术方案先给结论，再给必要细节。",
+      idempotencyKey: "memory-source-chat-0002",
+    });
+    const repository = new MemoryRepository(file, {
+      now: () => "2026-08-30T00:00:00.000Z",
+      idFactory: ids(),
+    });
+    repository.updateSettings({ memoriesEnabled: true, generateMemories: true });
+    const candidate = {
+      kind: "preference" as const,
+      content: "用户希望技术方案先给结论。",
+      retrievalKeys: ["技术方案", "结论"],
+      confidence: 0.94,
+      sourceMessageId: first.receipt.userMessageId ?? "",
+    };
+    const memory = repository.upsertAutomatic({
+      candidate,
+      conversationId: first.receipt.conversationId,
+      jobId: "10000000-0000-4000-8000-000000000101",
+    });
+    const duplicate = repository.upsertAutomatic({
+      candidate: {
+        ...candidate,
+        confidence: 0.9,
+        sourceMessageId: second.receipt.userMessageId ?? "",
+      },
+      conversationId: second.receipt.conversationId,
+      jobId: "10000000-0000-4000-8000-000000000102",
+    });
+
+    expect(duplicate.id).toBe(memory.id);
+    expect(repository.sources(memory.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ conversationId: first.receipt.conversationId }),
+        expect.objectContaining({ conversationId: second.receipt.conversationId }),
+      ]),
+    );
+    expect(
+      repository.upsert({
+        id: memory.id,
+        kind: memory.kind,
+        content: memory.content,
+        idempotencyKey: "memory-source-explicit-edit-0001",
+      }).origin,
+    ).toBe("explicit");
+    expect(repository.sources(memory.id).map(({ origin }) => origin)).toEqual([
+      "automatic",
+      "automatic",
+    ]);
+    expect(
+      repository.deleteBySourceConversation(
+        first.receipt.conversationId,
+        "memory-source-delete-0001",
+      ),
+    ).toMatchObject({ deleted: 0 });
+    expect(repository.get(memory.id)).toMatchObject({
+      status: "active",
+      sourceConversationId: second.receipt.conversationId,
+    });
+    expect(repository.sources(memory.id)).toHaveLength(1);
+    expect(
+      repository.deleteBySourceConversation(
+        second.receipt.conversationId,
+        "memory-source-delete-0002",
+      ),
+    ).toMatchObject({ deleted: 1 });
+    expect(repository.get(memory.id).status).toBe("deleted");
+    repository.close();
+    chat.close();
   });
 
   it("queues account-scoped settings, upserts, and tombstones for sync", () => {

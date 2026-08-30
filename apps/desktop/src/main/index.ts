@@ -65,6 +65,7 @@ import {
   memoryDeleteInputSchema,
   memoryListInputSchema,
   memorySettingsUpdateInputSchema,
+  memorySourcesListInputSchema,
   memoryUpsertInputSchema,
   modelServiceSettingsUpdateSchema,
   permissionListInputSchema,
@@ -696,6 +697,11 @@ function registerIpcHandlers(
     true,
   );
   registerChatHandler(ipcChannels.memoryList, "memory.list", memoryListInputSchema);
+  registerChatHandler(
+    ipcChannels.memorySourcesList,
+    "memory.sources.list",
+    memorySourcesListInputSchema,
+  );
   registerChatHandler(
     ipcChannels.memoryUpsert,
     "memory.upsert",

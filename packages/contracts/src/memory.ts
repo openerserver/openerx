@@ -128,6 +128,24 @@ export const memoryClearResultSchema = z
   })
   .strict();
 
+export const memorySourcesListInputSchema = z
+  .object({ memoryId: entityIdSchema })
+  .strict();
+
+export const memorySourceLinkSchema = z
+  .object({
+    memoryId: entityIdSchema,
+    ownerProfileId: z.string().min(1),
+    conversationId: entityIdSchema,
+    messageId: entityIdSchema.nullable(),
+    origin: memoryOriginSchema,
+    confidence: z.number().min(0).max(1),
+    conversationTitle: z.string().min(1).max(500).nullable(),
+    conversationDeletedAt: timestampSchema.nullable(),
+    createdAt: timestampSchema,
+  })
+  .strict();
+
 export const automaticMemoryCandidateSchema = z
   .object({
     kind: memoryKindSchema,
@@ -230,6 +248,7 @@ export type MemoryListInput = z.infer<typeof memoryListInputSchema>;
 export type MemoryUpsertInput = z.infer<typeof memoryUpsertInputSchema>;
 export type MemoryDeleteInput = z.infer<typeof memoryDeleteInputSchema>;
 export type MemoryClearResult = z.infer<typeof memoryClearResultSchema>;
+export type MemorySourceLink = z.infer<typeof memorySourceLinkSchema>;
 export type RecalledMemory = z.infer<typeof recalledMemorySchema>;
 export type AutomaticMemoryCandidate = z.infer<typeof automaticMemoryCandidateSchema>;
 export type AutomaticMemoryExtractionOutput = z.infer<typeof automaticMemoryExtractionOutputSchema>;

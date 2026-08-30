@@ -432,6 +432,18 @@ describe("ChatAppService", () => {
         idempotencyKey: "app-memory-source-0001",
       },
     })) as { id: string };
+    expect(
+      await service.handle({
+        command: "memory.sources.list",
+        input: { memoryId: sourced.id },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        memoryId: sourced.id,
+        conversationId: receipt.conversationId,
+        origin: "explicit",
+      }),
+    ]);
     await service.handle({
       command: "chat.delete",
       input: { conversationId: receipt.conversationId, forgetSourceMemories: true },

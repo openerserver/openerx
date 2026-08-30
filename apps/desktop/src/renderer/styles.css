@@ -5115,6 +5115,47 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.memory-source-details {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+}
+
+.memory-row button.memory-source-toggle {
+  padding: 0;
+  color: var(--workspace-accent-strong);
+  font-size: 11px;
+}
+
+.memory-source-list {
+  display: grid;
+  gap: 5px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-source-list li {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+}
+
+.memory-row .memory-source-list button {
+  max-width: 420px;
+  padding: 0;
+  overflow: hidden;
+  color: var(--workspace-text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-row .memory-source-list button:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
 .memory-row button {
   flex: none;
   color: var(--danger, #c54444);

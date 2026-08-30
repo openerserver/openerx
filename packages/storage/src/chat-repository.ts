@@ -1386,6 +1386,33 @@ export class ChatRepository {
           memory.updatedAt,
           memory.revision,
         );
+      if (memory.sourceConversationId) {
+        this.#database
+          .prepare(
+            `INSERT INTO memory_source_links
+             (memory_id, owner_profile_id, conversation_id, message_id,
+              origin, confidence, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(owner_profile_id, memory_id, conversation_id) DO UPDATE SET
+               message_id = COALESCE(excluded.message_id, memory_source_links.message_id),
+               origin = CASE
+                 WHEN memory_source_links.origin = 'explicit' THEN 'explicit'
+                 WHEN excluded.origin = 'explicit' THEN 'explicit'
+                 WHEN memory_source_links.origin = 'consolidated' THEN 'consolidated'
+                 ELSE excluded.origin
+               END,
+               confidence = MAX(memory_source_links.confidence, excluded.confidence)`,
+          )
+          .run(
+            memory.id,
+            memory.ownerProfileId,
+            memory.sourceConversationId,
+            memory.sourceMessageId,
+            memory.origin,
+            memory.confidence,
+            memory.createdAt,
+          );
+      }
       return;
     }
     if (objectType === "memory_conversation_settings") {

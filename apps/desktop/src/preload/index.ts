@@ -80,6 +80,7 @@ import {
   memoryDeleteInputSchema,
   memoryListInputSchema,
   memorySettingsUpdateInputSchema,
+  memorySourcesListInputSchema,
   memoryUpsertInputSchema,
   modelCatalogEntrySchema,
   modelServiceSettingsSchema,
@@ -385,6 +386,12 @@ const bridge: DesktopBridge = {
     ),
   listMemories: async (input = {}) =>
     invokeChat(ipcChannels.memoryList, "memory.list", memoryListInputSchema.parse(input)),
+  listMemorySources: async (input) =>
+    invokeChat(
+      ipcChannels.memorySourcesList,
+      "memory.sources.list",
+      memorySourcesListInputSchema.parse(input),
+    ),
   upsertMemory: async (input) =>
     invokeChat(ipcChannels.memoryUpsert, "memory.upsert", memoryUpsertInputSchema.parse(input)),
   deleteMemory: async (input) =>

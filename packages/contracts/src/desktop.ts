@@ -57,6 +57,7 @@ export const ipcChannels = Object.freeze({
   memoryConversationSettingsGet: "memory:conversation-settings:get",
   memoryConversationSettingsUpdate: "memory:conversation-settings:update",
   memoryList: "memory:list",
+  memorySourcesList: "memory:sources:list",
   memoryUpsert: "memory:upsert",
   memoryDelete: "memory:delete",
   memoryClear: "memory:clear",

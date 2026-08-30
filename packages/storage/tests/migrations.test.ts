@@ -14,6 +14,45 @@ afterEach(() => {
 });
 
 describe("database migrations", () => {
+  it("backfills primary memory provenance into multi-source links", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-source-migration-"));
+    directories.push(directory);
+    const database = new DatabaseSync(path.join(directory, "openerx.sqlite"));
+    migrateDatabase(database, { throughVersion: 21 });
+    const now = "2026-08-30T00:00:00.000Z";
+    const conversationId = "10000000-0000-4000-8000-000000000001";
+    const memoryId = "10000000-0000-4000-8000-000000000002";
+    database
+      .prepare(
+        `INSERT INTO memory_entries
+         (id, owner_profile_id, scope, kind, content, retrieval_keys_json, canonical_key,
+          origin, confidence, status, source_conversation_id, source_message_id,
+          supersedes_memory_id, expires_at, created_at, updated_at, revision)
+         VALUES (?, 'local-default', 'personal', 'preference', '先给结论。', '[]',
+                 'preference:test', 'automatic', 0.9, 'active', ?, NULL,
+                 NULL, NULL, ?, ?, 1)`,
+      )
+      .run(memoryId, conversationId, now, now);
+
+    migrateDatabase(database);
+
+    expect(
+      database
+        .prepare(
+          `SELECT memory_id, owner_profile_id, conversation_id, origin, confidence
+           FROM memory_source_links WHERE memory_id = ?`,
+        )
+        .get(memoryId),
+    ).toEqual({
+      memory_id: memoryId,
+      owner_profile_id: "local-default",
+      conversation_id: conversationId,
+      origin: "automatic",
+      confidence: 0.9,
+    });
+    database.close();
+  });
+
   it("moves legacy image-generation scopes and requests off web.search", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-migration-"));
     directories.push(directory);
