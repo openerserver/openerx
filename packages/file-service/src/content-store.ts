@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 export interface StoredObject {
@@ -40,6 +47,11 @@ export class ContentStore {
 
   read(objectRef: string): Buffer {
     return readFileSync(this.resolve(objectRef));
+  }
+
+  remove(objectRef: string): void {
+    const absolutePath = this.resolve(objectRef);
+    if (existsSync(absolutePath)) unlinkSync(absolutePath);
   }
 
   #target(bytes: Uint8Array): StoredObject {

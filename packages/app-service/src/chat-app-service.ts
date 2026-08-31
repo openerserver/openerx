@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AppServiceAuthorization,
   AppServiceByokConfiguration,
+  Artifact,
   ChatCommandEnvelope,
   ChatEvent,
   ConversationSnapshot,
@@ -84,6 +85,7 @@ export class ChatAppService {
   initialize(): ChatEvent[] {
     const recovered = this.#repository.recoverInterrupted();
     this.#tools?.initialize();
+    this.#pruneDisposableArtifacts();
     for (const event of recovered) this.#emit(event);
     return recovered;
   }
@@ -331,7 +333,7 @@ export class ChatAppService {
       case "artifact.newVersion":
         return this.#requiredFiles().addArtifactVersion(request.input);
       case "artifact.list":
-        return this.#requiredFiles().listArtifacts();
+        return this.#deliverableArtifacts(request.input.conversationId);
       case "artifact.get":
         return this.#requiredFiles().artifact(request.input.artifactId);
       case "artifact.preview":
@@ -880,6 +882,7 @@ export class ChatAppService {
         errorCode: launchErrorCode,
       });
       this.#tools?.completeGeneration(generationId, "failed", launchErrorCode);
+      this.#pruneDisposableArtifacts();
       this.#forgetGeneration(generationId);
       this.#skills?.completeGeneration(generationId, "failed", launchErrorCode);
       if (event) this.#emit(event);
@@ -918,6 +921,7 @@ export class ChatAppService {
             : "failed",
         frame.errorCode,
       );
+      this.#pruneDisposableArtifacts();
       this.#forgetGeneration(frame.generationId);
       void this.#syncIfAuthorized(authorization);
     }
@@ -1117,6 +1121,24 @@ export class ChatAppService {
       this.#generationByMessage.delete(messageId);
       this.#remoteAuthorityByMessage.delete(messageId);
     }
+  }
+
+  #deliverableArtifacts(conversationId?: string): Artifact[] {
+    const artifacts = this.#requiredFiles().listArtifacts();
+    if (!this.#tools) return conversationId ? [] : artifacts;
+    const retention = this.#requiredToolsRepository().artifactRetention(conversationId);
+    if (conversationId) {
+      const deliverableIds = new Set(retention.deliverableIds);
+      return artifacts.filter(({ id }) => deliverableIds.has(id));
+    }
+    const disposableIds = new Set(retention.disposableIds);
+    return artifacts.filter(({ id }) => !disposableIds.has(id));
+  }
+
+  #pruneDisposableArtifacts(): number {
+    if (!this.#files || !this.#tools) return 0;
+    const { disposableIds } = this.#requiredToolsRepository().artifactRetention();
+    return disposableIds.length > 0 ? this.#files.deleteArtifacts(disposableIds) : 0;
   }
 
   async #syncIfAuthorized(authorization: AppServiceAuthorization | undefined): Promise<void> {

@@ -287,6 +287,7 @@ export const officeArtifactWriteInputSchema = z
   .object({
     artifactId: entityIdSchema.optional(),
     displayName: z.string().trim().min(1).max(240),
+    purpose: z.enum(["deliverable", "intermediate"]).optional(),
     spec: officeArtifactSpecSchema,
   })
   .strict();
@@ -398,7 +399,9 @@ export const artifactNewVersionInputSchema = artifactCreateInputSchema
   .omit({ displayName: true })
   .extend({ artifactId: entityIdSchema })
   .strict();
-export const artifactListInputSchema = z.object({}).strict();
+export const artifactListInputSchema = z
+  .object({ conversationId: entityIdSchema.optional() })
+  .strict();
 export const artifactGetInputSchema = z.object({ artifactId: entityIdSchema }).strict();
 export const artifactPreviewInputSchema = artifactGetInputSchema;
 export const artifactExportPrivilegedInputSchema = artifactGetInputSchema
@@ -472,7 +475,7 @@ export interface FileBridge {
   previewFile(input: z.input<typeof filePreviewInputSchema>): Promise<ContentPreview>;
   revokeFileScope(input: z.input<typeof fileRevokeScopeInputSchema>): Promise<FileScope>;
   attachFile(input: z.input<typeof fileAttachInputSchema>): Promise<Attachment>;
-  listArtifacts(): Promise<Artifact[]>;
+  listArtifacts(input?: z.input<typeof artifactListInputSchema>): Promise<Artifact[]>;
   getArtifact(input: z.input<typeof artifactGetInputSchema>): Promise<Artifact>;
   previewArtifact(input: z.input<typeof artifactPreviewInputSchema>): Promise<ContentPreview>;
   saveArtifact(input: z.input<typeof artifactGetInputSchema>): Promise<ArtifactExportResult | null>;

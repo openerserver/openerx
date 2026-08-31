@@ -2783,6 +2783,10 @@ h1 {
   grid-template-columns: minmax(0, 1fr) 300px;
 }
 
+.conversation-workspace.rail-is-open.artifact-preview-is-open {
+  grid-template-columns: minmax(0, 1fr) clamp(480px, 42vw, 680px);
+}
+
 .conversation-workspace .conversation-page {
   position: relative;
   display: grid;
@@ -2992,6 +2996,152 @@ h1 {
   border-left: 1px solid var(--workspace-border);
 }
 
+.conversation-rail-preview {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+}
+
+.conversation-rail-preview .conversation-rail-header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  padding: 16px 18px;
+}
+
+.artifact-preview-back,
+.artifact-preview-toolbar button,
+.artifact-preview-state button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--workspace-muted-strong);
+  background: transparent;
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+}
+
+.artifact-preview-back {
+  width: 32px;
+  padding: 0;
+  border-color: transparent;
+}
+
+.artifact-preview-back:hover,
+.artifact-preview-toolbar button:hover,
+.artifact-preview-state button:hover,
+.artifact-preview-modes button.is-active {
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+}
+
+.artifact-preview-toolbar {
+  display: flex;
+  min-height: 52px;
+  padding: 9px 18px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--workspace-border);
+}
+
+.artifact-preview-toolbar > button {
+  padding: 0 11px;
+}
+
+.artifact-preview-modes {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.artifact-preview-modes button {
+  min-height: 30px;
+  padding: 0 10px;
+  border-color: transparent;
+}
+
+.artifact-preview-body {
+  min-height: 0;
+  padding: 18px;
+  overflow: auto;
+  background: var(--workspace-bg);
+}
+
+.artifact-preview-body > pre {
+  min-height: 100%;
+  margin: 0;
+  padding: 18px;
+  overflow: auto;
+  color: var(--workspace-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+}
+
+.artifact-preview-body > iframe {
+  width: 100%;
+  min-height: 70vh;
+  background: #fff;
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+}
+
+.artifact-preview-body .office-preview-surfaces {
+  grid-template-columns: minmax(0, 1fr);
+  max-height: none;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.artifact-preview-body .artifact-markdown-preview {
+  min-height: 100%;
+  padding: 24px clamp(20px, 5vw, 44px);
+  color: var(--workspace-text);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+}
+
+.standalone-image-preview {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+}
+
+.artifact-preview-header > div {
+  overflow: hidden;
+}
+
+.artifact-preview-header strong,
+.artifact-preview-header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-preview-state {
+  display: grid;
+  min-height: 180px;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: var(--workspace-muted);
+  text-align: center;
+}
+
 .conversation-rail-header,
 .rail-section-heading {
   display: flex;
@@ -3138,6 +3288,10 @@ h1 {
     grid-template-columns: minmax(0, 1fr) 260px;
   }
 
+  .conversation-workspace.rail-is-open.artifact-preview-is-open {
+    grid-template-columns: minmax(0, 1fr) minmax(420px, 46vw);
+  }
+
   .conversation-workspace .conversation-page {
     padding-right: 20px;
     padding-left: 20px;
@@ -3167,6 +3321,10 @@ h1 {
     right: 0;
     width: min(320px, 88vw);
     box-shadow: -16px 0 36px rgb(28 28 34 / 18%);
+  }
+
+  .conversation-rail-preview {
+    width: min(680px, 96vw);
   }
 
   .conversation-workspace .conversation-page {

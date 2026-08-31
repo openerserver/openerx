@@ -236,6 +236,14 @@ export class FileAppService {
     return this.#repository.listArtifacts();
   }
 
+  deleteArtifacts(artifactIds: string[]): number {
+    const objectRefs = this.#repository.deleteArtifacts(artifactIds);
+    for (const objectRef of objectRefs) {
+      if (this.#repository.objectReferenceCount(objectRef) === 0) this.#store.remove(objectRef);
+    }
+    return artifactIds.length;
+  }
+
   artifact(id: string): Artifact {
     return this.#repository.artifact(id);
   }

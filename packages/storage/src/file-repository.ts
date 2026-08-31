@@ -483,6 +483,50 @@ export class FileRepository {
     return rows.map(({ id }) => this.artifact(id));
   }
 
+  deleteArtifacts(artifactIds: string[]): string[] {
+    const uniqueIds = [...new Set(artifactIds)];
+    if (uniqueIds.length === 0) return [];
+    const placeholders = uniqueIds.map(() => "?").join(", ");
+    return this.#transaction(() => {
+      const versions = this.#database
+        .prepare(
+          `SELECT av.id, av.object_ref
+           FROM artifact_versions av
+           JOIN artifacts a ON a.id = av.artifact_id
+           WHERE a.owner_profile_id = ? AND a.id IN (${placeholders})`,
+        )
+        .all(this.#ownerProfileId, ...uniqueIds) as Array<{ id: string; object_ref: string }>;
+      const ownedIds = (
+        this.#database
+          .prepare(
+            `SELECT id FROM artifacts WHERE owner_profile_id = ? AND id IN (${placeholders})`,
+          )
+          .all(this.#ownerProfileId, ...uniqueIds) as Array<{ id: string }>
+      ).map(({ id }) => id);
+      if (ownedIds.length === 0) return [];
+      const ownedPlaceholders = ownedIds.map(() => "?").join(", ");
+      for (const { id } of versions) this.#queueSyncDelete("artifact_version", id, this.#now());
+      for (const artifactId of ownedIds) this.#queueSyncDelete("artifact", artifactId, this.#now());
+      this.#database
+        .prepare(
+          `DELETE FROM artifacts WHERE owner_profile_id = ? AND id IN (${ownedPlaceholders})`,
+        )
+        .run(this.#ownerProfileId, ...ownedIds);
+      return [...new Set(versions.map(({ object_ref }) => object_ref))];
+    });
+  }
+
+  objectReferenceCount(objectRef: string): number {
+    const row = this.#database
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM personal_files WHERE object_ref = ?) +
+           (SELECT COUNT(*) FROM artifact_versions WHERE object_ref = ?) AS reference_count`,
+      )
+      .get(objectRef, objectRef) as { reference_count: number };
+    return Number(row.reference_count);
+  }
+
   syncObject(operation: SyncOperation): {
     objectId: string;
     checksumSha256: string;
@@ -782,6 +826,44 @@ export class FileRepository {
         objectId,
         Number(state?.cloud_revision ?? 0) + Number(pending.count),
         JSON.stringify(payload),
+        `sync:${operationId}`,
+        createdAt,
+      );
+  }
+
+  #queueSyncDelete(
+    objectType: "artifact" | "artifact_version",
+    objectId: string,
+    createdAt: string,
+  ): void {
+    if (!this.#syncEnabled() || !this.#deviceId) return;
+    this.#database
+      .prepare(
+        `DELETE FROM sync_outbox
+         WHERE account_id = ? AND object_type = ? AND object_id = ? AND status = 'pending'`,
+      )
+      .run(this.#ownerProfileId, objectType, objectId);
+    const state = this.#database
+      .prepare(
+        `SELECT cloud_revision FROM sync_object_state
+         WHERE account_id = ? AND object_type = ? AND object_id = ?`,
+      )
+      .get(this.#ownerProfileId, objectType, objectId) as SqlRow | undefined;
+    const operationId = this.#idFactory();
+    this.#database
+      .prepare(
+        `INSERT INTO sync_outbox
+         (operation_id, account_id, device_id, object_type, object_id, mutation,
+          base_revision, payload_version, payload_json, idempotency_key, created_at, status)
+         VALUES (?, ?, ?, ?, ?, 'delete', ?, 1, NULL, ?, ?, 'pending')`,
+      )
+      .run(
+        operationId,
+        this.#ownerProfileId,
+        this.#deviceId,
+        objectType,
+        objectId,
+        Number(state?.cloud_revision ?? 0),
         `sync:${operationId}`,
         createdAt,
       );

@@ -6,6 +6,7 @@ import type {
   BrowserSessionDescriptor,
   ChargeRecord,
   ChatEvent,
+  ContentPreview,
   ConversationSnapshot,
   ConversationSummary,
   DeviceSession,
@@ -38,6 +39,7 @@ import { defaultByokModelConfiguration } from "@openerx/contracts";
 import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/model";
 import {
   ArrowClockwise,
+  ArrowLeft,
   ArrowUp,
   Brain,
   CaretDown,
@@ -1691,6 +1693,60 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function ContentPreviewRenderer({
+  preview,
+  previewMode,
+  ariaLabel,
+}: {
+  preview: ContentPreview;
+  previewMode: "preview" | "source";
+  ariaLabel: string;
+}): React.JSX.Element {
+  if (preview.renderedSurfaces.length > 0 && previewMode === "preview") {
+    return (
+      <section className="office-preview-surfaces" aria-label={ariaLabel}>
+        {preview.renderedSurfaces.map((surface) => (
+          <figure key={`${surface.kind}-${surface.index}`}>
+            <figcaption>{surface.label}</figcaption>
+            <img src={surface.imageDataUrl} alt={`${preview.displayName} ${surface.label}`} />
+          </figure>
+        ))}
+      </section>
+    );
+  }
+
+  if (preview.imageDataUrl && previewMode === "preview") {
+    return (
+      <img
+        className="standalone-image-preview"
+        src={preview.imageDataUrl}
+        alt={preview.displayName}
+      />
+    );
+  }
+
+  if (preview.format === "html" && previewMode === "preview" && preview.source) {
+    return (
+      <iframe
+        title="HTML 隔离预览"
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+        srcDoc={preview.source}
+      />
+    );
+  }
+
+  if (preview.format === "markdown" && previewMode === "preview") {
+    return (
+      <article className="markdown-body artifact-markdown-preview">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{preview.parsedText}</ReactMarkdown>
+      </article>
+    );
+  }
+
+  return <pre>{previewMode === "source" ? preview.source : preview.parsedText}</pre>;
+}
+
 function FilesAndArtifacts(): React.JSX.Element {
   const [selected, setSelected] = useState<{
     kind: "personal_file" | "artifact";
@@ -2042,29 +2098,12 @@ function FilesAndArtifacts(): React.JSX.Element {
           {saveArtifact.data ? (
             <p className="inline-success">已保存 {saveArtifact.data.fileName}</p>
           ) : null}
-          {preview.data?.renderedSurfaces.length && previewMode === "preview" ? (
-            <section className="office-preview-surfaces" aria-label="成果视觉预览">
-              {preview.data.renderedSurfaces.map((surface) => (
-                <figure key={`${surface.kind}-${surface.index}`}>
-                  <figcaption>{surface.label}</figcaption>
-                  <img
-                    src={surface.imageDataUrl}
-                    alt={`${preview.data.displayName} ${surface.label}`}
-                  />
-                </figure>
-              ))}
-            </section>
-          ) : preview.data?.format === "html" &&
-            previewMode === "preview" &&
-            preview.data.source ? (
-            <iframe
-              title="HTML 隔离预览"
-              sandbox="allow-scripts"
-              referrerPolicy="no-referrer"
-              srcDoc={preview.data.source}
+          {preview.data ? (
+            <ContentPreviewRenderer
+              preview={preview.data}
+              previewMode={previewMode}
+              ariaLabel="成果视觉预览"
             />
-          ) : preview.data ? (
-            <pre>{previewMode === "source" ? preview.data.source : preview.data.parsedText}</pre>
           ) : (
             <p className="muted-copy">正在准备预览…</p>
           )}
@@ -3034,15 +3073,134 @@ function ConversationRail({
   artifacts,
   files,
   workItems,
+  selectedArtifactId,
+  onSelectArtifact,
+  onBackToOverview,
   onAddSource,
   onClose,
 }: {
   artifacts: Artifact[];
   files: PersonalFile[];
   workItems: WorkItem[];
+  selectedArtifactId: string | null;
+  onSelectArtifact: (artifactId: string) => void;
+  onBackToOverview: () => void;
   onAddSource: () => void;
   onClose: () => void;
 }): React.JSX.Element {
+  const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview");
+  const selectedArtifact = artifacts.find(({ id }) => id === selectedArtifactId) ?? null;
+  const preview = useQuery({
+    queryKey: ["content-preview", "artifact", selectedArtifactId, selectedArtifact?.currentVersion],
+    queryFn: () => {
+      if (!selectedArtifactId) throw new Error("No artifact selected");
+      return window.openerx.previewArtifact({ artifactId: selectedArtifactId });
+    },
+    enabled: selectedArtifactId !== null,
+    retry: false,
+  });
+  const saveArtifact = useMutation({
+    mutationFn: async (artifactId: string) => await window.openerx.saveArtifact({ artifactId }),
+  });
+  useEffect(() => {
+    if (!selectedArtifactId) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") onBackToOverview();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onBackToOverview, selectedArtifactId]);
+
+  if (selectedArtifactId) {
+    return (
+      <aside className="conversation-rail conversation-rail-preview" aria-label="成果预览">
+        <header className="conversation-rail-header artifact-preview-header">
+          <button
+            type="button"
+            className="artifact-preview-back"
+            aria-label="返回输出内容"
+            onClick={onBackToOverview}
+          >
+            <ArrowLeft size={17} weight="regular" />
+          </button>
+          <div>
+            <strong>
+              {selectedArtifact?.displayName ?? preview.data?.displayName ?? "正在加载…"}
+            </strong>
+            <span>
+              {selectedArtifact
+                ? `${selectedArtifact.format.toUpperCase()} · v${selectedArtifact.currentVersion}`
+                : "受控成果预览"}
+            </span>
+          </div>
+          <button type="button" className="icon-button" aria-label="隐藏成果预览" onClick={onClose}>
+            <X size={17} weight="regular" />
+          </button>
+        </header>
+        <div className="artifact-preview-toolbar">
+          {preview.data && preview.data.source !== null ? (
+            <fieldset className="artifact-preview-modes" aria-label="预览模式">
+              <button
+                type="button"
+                className={previewMode === "preview" ? "is-active" : ""}
+                aria-pressed={previewMode === "preview"}
+                onClick={() => setPreviewMode("preview")}
+              >
+                预览
+              </button>
+              <button
+                type="button"
+                className={previewMode === "source" ? "is-active" : ""}
+                aria-pressed={previewMode === "source"}
+                onClick={() => setPreviewMode("source")}
+              >
+                源码
+              </button>
+            </fieldset>
+          ) : (
+            <span />
+          )}
+          <button
+            type="button"
+            disabled={!selectedArtifact || saveArtifact.isPending}
+            onClick={() => selectedArtifact && saveArtifact.mutate(selectedArtifact.id)}
+          >
+            <DownloadSimple size={15} />
+            {saveArtifact.isPending ? "保存中…" : "下载 / 另存"}
+          </button>
+        </div>
+        <section className="artifact-preview-body" aria-live="polite">
+          {preview.error ? (
+            <div className="artifact-preview-state">
+              <p className="inline-error">
+                {userFacingError(preview.error, "暂时无法预览成果，请重试。")}
+              </p>
+              <button type="button" onClick={() => void preview.refetch()}>
+                重试
+              </button>
+            </div>
+          ) : preview.data ? (
+            <ContentPreviewRenderer
+              preview={preview.data}
+              previewMode={previewMode}
+              ariaLabel={`${preview.data.displayName} 视觉预览`}
+            />
+          ) : (
+            <div className="artifact-preview-state">正在准备预览…</div>
+          )}
+          {saveArtifact.error ? (
+            <p className="inline-error">
+              {userFacingError(saveArtifact.error, "成果保存失败，请重试。")}
+            </p>
+          ) : null}
+          {saveArtifact.data ? (
+            <p className="inline-success">已保存 {saveArtifact.data.fileName}</p>
+          ) : null}
+        </section>
+      </aside>
+    );
+  }
+
   return (
     <aside className="conversation-rail" aria-label="成果与来源">
       <header className="conversation-rail-header">
@@ -3065,7 +3223,16 @@ function ConversationRail({
         {artifacts.length > 0 ? (
           <div className="rail-list">
             {artifacts.slice(0, 6).map((artifact) => (
-              <NavLink className="rail-item" to="/files" key={artifact.id}>
+              <button
+                className="rail-item"
+                type="button"
+                key={artifact.id}
+                aria-label={`预览 ${artifact.displayName}`}
+                onClick={() => {
+                  setPreviewMode("preview");
+                  onSelectArtifact(artifact.id);
+                }}
+              >
                 <FolderSimple size={18} weight="regular" />
                 <span>
                   <strong>{artifact.displayName}</strong>
@@ -3073,7 +3240,7 @@ function ConversationRail({
                     {artifact.format.toUpperCase()} · v{artifact.currentVersion}
                   </small>
                 </span>
-              </NavLink>
+              </button>
             ))}
           </div>
         ) : (
@@ -3145,6 +3312,7 @@ function ChatPage({
   const previousConversationIdRef = useRef(conversationId);
   const [following, setFollowing] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   const snapshot = useQuery({
     queryKey: chatKeys.conversation(conversationId),
     queryFn: () => window.openerx.getConversation({ conversationId }),
@@ -3156,8 +3324,9 @@ function ChatPage({
     enabled: Boolean(conversationId),
   });
   const artifacts = useQuery({
-    queryKey: ["artifacts"],
-    queryFn: () => window.openerx.listArtifacts(),
+    queryKey: ["artifacts", "conversation", conversationId],
+    queryFn: () => window.openerx.listArtifacts({ conversationId }),
+    enabled: Boolean(conversationId),
   });
   const ready = Boolean(snapshot.data);
   const hasRunningMessage =
@@ -3171,6 +3340,7 @@ function ChatPage({
     followingRef.current = true;
     lastMessageListScrollTopRef.current = 0;
     setFollowing(true);
+    setSelectedArtifactId(null);
   }, [conversationId]);
   useEffect(() => {
     if (!ready) return;
@@ -3237,7 +3407,9 @@ function ChatPage({
   }
   const filesById = new Map((conversationFiles.data ?? []).map((file) => [file.id, file] as const));
   return (
-    <main className={`conversation-workspace ${railOpen ? "rail-is-open" : ""}`}>
+    <main
+      className={`conversation-workspace ${railOpen ? "rail-is-open" : ""} ${selectedArtifactId ? "artifact-preview-is-open" : ""}`}
+    >
       <section className="conversation-page" aria-label="对话工作区">
         <ConversationToolbar
           snapshot={snapshot.data}
@@ -3312,8 +3484,14 @@ function ChatPage({
           artifacts={artifacts.data ?? []}
           files={conversationFiles.data ?? []}
           workItems={workItems.data ?? []}
+          selectedArtifactId={selectedArtifactId}
+          onSelectArtifact={setSelectedArtifactId}
+          onBackToOverview={() => setSelectedArtifactId(null)}
           onAddSource={onToggleContext}
-          onClose={() => setRailOpen(false)}
+          onClose={() => {
+            setSelectedArtifactId(null);
+            setRailOpen(false);
+          }}
         />
       ) : null}
     </main>
@@ -6891,6 +7069,7 @@ export function App(): React.JSX.Element {
       } else {
         void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
         void queryClient.invalidateQueries({ queryKey: ["chat", "list"] });
+        void queryClient.invalidateQueries({ queryKey: ["artifacts"] });
       }
     };
     const unsubscribe = window.openerx.onChatEvent(applyEvent);

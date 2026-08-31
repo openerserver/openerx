@@ -8,6 +8,7 @@ import {
   accountStateSchema,
   accountVerifyCodeInputSchema,
   artifactGetInputSchema,
+  artifactListInputSchema,
   artifactPreviewInputSchema,
   artifactSchema,
   automationCommandEnvelopeSchema,
@@ -863,7 +864,7 @@ function registerIpcHandlers(
   registerChatHandler(ipcChannels.filePreview, "file.preview", filePreviewInputSchema);
   registerChatHandler(ipcChannels.fileScopeRevoke, "file.scope.revoke", fileRevokeScopeInputSchema);
   registerChatHandler(ipcChannels.fileAttach, "file.attach", fileAttachInputSchema);
-  registerChatHandler(ipcChannels.artifactList, "artifact.list", emptyInputSchema);
+  registerChatHandler(ipcChannels.artifactList, "artifact.list", artifactListInputSchema);
   registerChatHandler(ipcChannels.artifactGet, "artifact.get", artifactGetInputSchema);
   registerChatHandler(ipcChannels.artifactPreview, "artifact.preview", artifactPreviewInputSchema);
   registerChatHandler(ipcChannels.toolWorkItemsList, "tool.workItems.list", toolListInputSchema);

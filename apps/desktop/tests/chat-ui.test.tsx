@@ -2040,6 +2040,75 @@ describe("M1 chat renderer", () => {
     expect(within(rail).getByRole("heading", { name: "本次运行" })).toBeTruthy();
   });
 
+  it("previews a current-task deliverable inside the conversation without navigating to files", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const artifactId = "99999999-9999-4999-8999-999999999991";
+    vi.mocked(bridge.listArtifacts).mockResolvedValue([
+      {
+        id: artifactId,
+        ownerProfileId: "local-default",
+        displayName: "selection-report.docx",
+        format: "docx",
+        mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        currentVersion: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        revision: 1,
+        versions: [
+          {
+            id: "99999999-9999-4999-8999-999999999992",
+            artifactId,
+            version: 1,
+            sizeBytes: 1_024,
+            checksumSha256: "d".repeat(64),
+            objectRef: `objects/sha256/dd/${"d".repeat(64)}`,
+            sourcePersonalFileId: null,
+            createdAt: timestamp,
+          },
+        ],
+      },
+    ]);
+    const surface = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString("base64")}`;
+    vi.mocked(bridge.previewArtifact).mockResolvedValue({
+      objectKind: "artifact",
+      objectId: artifactId,
+      displayName: "selection-report.docx",
+      format: "docx",
+      source: null,
+      imageDataUrl: null,
+      renderedSurfaces: [
+        {
+          kind: "page",
+          index: 1,
+          label: "第 1 页",
+          imageDataUrl: surface,
+        },
+      ],
+      parsedText: "report",
+      citations: [],
+    });
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "预览 selection-report.docx" }));
+
+    expect(await screen.findByRole("complementary", { name: "成果预览" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Markdown 验收" })).toBeTruthy();
+    expect(await screen.findByRole("img", { name: "selection-report.docx 第 1 页" })).toBeTruthy();
+    expect(bridge.previewArtifact).toHaveBeenCalledWith({ artifactId });
+    expect(bridge.listArtifacts).toHaveBeenCalledWith({ conversationId });
+    expect(screen.queryByRole("heading", { name: "个人文件与成果" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "返回输出内容" }));
+    expect(await screen.findByRole("heading", { name: "输出内容" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "预览 selection-report.docx" }));
+    expect(await screen.findByRole("complementary", { name: "成果预览" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("heading", { name: "输出内容" })).toBeTruthy();
+  });
+
   it("replays rich Items for the selected historical Run without exposing raw reasoning", async () => {
     cleanup();
     const bridge = createBridge();

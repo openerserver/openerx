@@ -124,11 +124,16 @@ export function createProductFileTools(input: {
       promptSnippet: "Create or version text, Markdown, code, JSON, YAML, CSV, or HTML artifacts.",
       promptGuidelines: [
         "Never overwrite an artifact. Pass artifactId to append a new immutable version.",
+        "Set purpose to deliverable only for files the user should keep. Set it to intermediate for probes, scratch files, validation fixtures, drafts, and temporary fallbacks.",
+        "Do not create ping or test artifacts to check tool availability. If an intermediate artifact is unavoidable, mark it intermediate.",
       ],
       parameters: Type.Object(
         {
           artifactId: Type.Optional(Type.String({ format: "uuid" })),
           displayName: Type.String({ minLength: 1, maxLength: 240 }),
+          purpose: Type.Optional(
+            Type.Union([Type.Literal("deliverable"), Type.Literal("intermediate")]),
+          ),
           format: Type.Union(
             ["text", "markdown", "code", "json", "yaml", "csv", "html"].map((value) =>
               Type.Literal(value),
@@ -145,6 +150,7 @@ export function createProductFileTools(input: {
           input: {
             ...(params.artifactId ? { artifactId: params.artifactId } : {}),
             displayName: params.displayName,
+            purpose: params.purpose ?? "deliverable",
             format: params.format,
             mediaType: params.mediaType,
             content: params.content,
@@ -161,11 +167,16 @@ export function createProductFileTools(input: {
       promptGuidelines: [
         "Use an existing artifactId to edit by appending a complete immutable version; never claim an in-place overwrite.",
         "Keep each requested page or slide within its bounded layout. If visual validation reports overflow, shorten or split the content and retry.",
+        "Set purpose to deliverable only for the final files the user should keep. Mark probes, layout tests, scratch workbooks, and temporary fallbacks as intermediate.",
+        "Do not create ping or test artifacts to check tool availability.",
       ],
       parameters: Type.Object(
         {
           artifactId: Type.Optional(Type.String({ format: "uuid" })),
           displayName: Type.String({ minLength: 1, maxLength: 240 }),
+          purpose: Type.Optional(
+            Type.Union([Type.Literal("deliverable"), Type.Literal("intermediate")]),
+          ),
           spec: Type.Union([
             Type.Object(
               {
@@ -239,6 +250,7 @@ export function createProductFileTools(input: {
         const officeInput = officeArtifactWriteInputSchema.parse({
           ...(params.artifactId ? { artifactId: params.artifactId } : {}),
           displayName: params.displayName,
+          purpose: params.purpose ?? "deliverable",
           spec: params.spec,
         });
         const result = await request(_toolCallId, "openerx_office_artifact", {

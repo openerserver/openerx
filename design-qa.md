@@ -19,6 +19,41 @@
 
 final result: passed
 
+## Conversation-inline artifact preview — 2026-08-31
+
+### Evidence
+
+- Source visual truth: `C:/Users/alexe/AppData/Local/Temp/codex-clipboard-2bb44d4e-417f-4c67-bca5-ad60bbce03e2.png` (1843 × 1222 px, density 1.5). It shows the pre-change conversation with the output list in the right rail.
+- Rendered implementation: `C:/Users/alexe/Documents/ChatGPT/openerx/.codex-temp/artifact-inline-preview-implementation.png` (1839 × 1137 px, 1226 × 758 CSS px at density 1.5). It shows the same conversation after selecting the XLSX deliverable.
+- Full-view comparison input: `C:/Users/alexe/Documents/ChatGPT/openerx/.codex-temp/artifact-inline-preview-comparison.png` (3682 × 1222 px). Source and implementation remain at native density and are placed together at matching approximately 1840 px window widths.
+- State: light theme, signed out, AI tool-selection conversation, first retained deliverable selected. The source represents the overview state and the implementation represents the requested next state; this intentional state change is the feature under review.
+- Focused comparison was not required because the source does not contain a selected-artifact design state. The full-view comparison keeps the complete right-rail transition readable, while the implementation capture is large enough to inspect its header, toolbar, sheet labels, and rendered tables directly.
+
+### Findings
+
+- No actionable P0, P1, or P2 findings remain.
+- Fonts and typography: the preview keeps the existing system-sans stack, compact rail metadata, and product heading weights. Long filenames truncate in the conversation toolbar but remain complete in the preview header. Spreadsheet text remains legible at the native capture density.
+- Spacing and layout rhythm: selecting an output expands the right rail into a bounded split view while keeping the conversation, history, and composer in place. The preview header, action bar, and independently scrolling canvas form a clear hierarchy; two rendered worksheets stack with consistent gaps and no horizontal page overflow.
+- Colors and visual tokens: the implementation reuses the existing neutral workspace, border, surface, accent, radius, and shadow tokens. The blue inside the sheet images belongs to the generated workbook rather than a new application token.
+- Image quality and asset fidelity: Office previews use the existing rendered worksheet surfaces at full available width. Both sheets are sharp, uncropped, and free of placeholder or synthetic UI assets. Existing Phosphor icons are reused for back, close, and download actions.
+- Copy and content: the preview shows the real filename, format, immutable version, worksheet names, and `下载 / 另存` action. The overview now retains only four task deliverables; legacy `ping`/`test` intermediates are removed from metadata and their unreferenced controlled bytes are deleted.
+- Interaction and accessibility: output rows are semantic buttons with explicit preview labels; back and close actions have accessible names; `Escape` returns to the output list; preview/source controls expose pressed state; loading, error, retry, and save feedback remain announced.
+- Responsive behavior: at the captured 1226 × 758 CSS viewport, the conversation remains usable beside a 515 px preview and the document has no horizontal overflow. The existing narrow breakpoint turns the preview into a right-side overlay rather than squeezing the conversation indefinitely.
+
+### Comparison history
+
+- First comparison found no P0/P1/P2 visual issue, so no corrective visual iteration was required. The implementation intentionally changes the source overview into a selected-artifact split view; the stable left navigation and conversation anchors make that transition spatially predictable.
+
+### Verification
+
+- Desktop package build passed for Windows x64.
+- TypeScript checks passed for contracts, storage, Pi host, app service, and desktop.
+- Targeted tests passed for conversation-scoped deliverable retention, startup deletion that preserves imported source files, controlled-byte removal, and inline Office preview including button return and `Escape` return.
+- Native renderer metrics: conversation 453 px, preview 515 px, two worksheet images at 478 px each, zero horizontal document overflow, and zero captured renderer console errors.
+- The broader renderer run passed 42 of 45 tests; three unrelated existing async-fixture tests failed while waiting for model, Skill, and Web Search mock data.
+
+final result: passed
+
 ## Codex-style full settings workspace — 2026-08-30
 
 ### Evidence

@@ -24,6 +24,68 @@ afterEach(() => {
 });
 
 describe("ToolRepository", () => {
+  it("keeps only current deliverables and marks intermediate or superseded artifacts disposable", () => {
+    const { chat, tools } = fixture();
+    const generation = chat.createGeneration({
+      text: "生成报告",
+      idempotencyKey: "chat-artifact-retention-0001",
+    });
+    const projection = tools.createProjection({
+      conversationId: generation.receipt.conversationId,
+      messageId: generation.receipt.assistantMessageId,
+      branchId: generation.receipt.branchId,
+      title: "生成报告",
+      selectedModelRef: "platform/auto",
+      thinkingLevel: generation.thinkingLevel,
+      piPackageVersion: "0.84.4",
+      piHostContractVersion: 10,
+    });
+    const recordArtifact = (
+      piCallRef: string,
+      artifactId: string,
+      displayName: string,
+      purpose?: "deliverable" | "intermediate",
+    ): void => {
+      const { toolCall } = tools.createToolCall({
+        runId: projection.run.id,
+        piCallRef,
+        toolName: "openerx_artifact_write",
+        source: "openerx",
+        risk: "L3",
+        idempotencyKey: `artifact-retention-${piCallRef}`,
+        input: {
+          operation: "artifact.write",
+          input: {
+            displayName,
+            ...(purpose ? { purpose } : {}),
+            format: "markdown",
+            mediaType: "text/markdown",
+            content: displayName,
+          },
+        },
+        inputSummary: displayName,
+        targetSummary: "新成果",
+      });
+      tools.markToolCall(toolCall.id, "completed", {
+        resultSummary: displayName,
+        resultContent: [{ type: "artifact", artifactId }],
+      });
+    };
+    const deliverableId = "10000000-0000-4000-8000-000000000001";
+    const intermediateId = "10000000-0000-4000-8000-000000000002";
+    const legacyPingId = "10000000-0000-4000-8000-000000000003";
+    recordArtifact("deliverable", deliverableId, "report.md", "deliverable");
+    recordArtifact("intermediate", intermediateId, "layout-draft.md", "intermediate");
+    recordArtifact("legacy-ping", legacyPingId, "ping11.md");
+
+    expect(tools.artifactRetention(generation.receipt.conversationId)).toEqual({
+      deliverableIds: [deliverableId],
+      disposableIds: expect.arrayContaining([intermediateId, legacyPingId]),
+    });
+    chat.close();
+    tools.close();
+  });
+
   it("persists trusted local Web Search settings per profile", () => {
     const { databasePath, chat, tools } = fixture();
     expect(tools.localWebSearchSettings()).toBeNull();

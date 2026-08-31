@@ -669,6 +669,7 @@ export const piFileToolOperationSchema = z.discriminatedUnion("operation", [
         .object({
           artifactId: entityIdSchema.optional(),
           displayName: z.string().trim().min(1).max(240),
+          purpose: z.enum(["deliverable", "intermediate"]).optional(),
           format: z.enum(["text", "markdown", "code", "json", "yaml", "csv", "html"]),
           mediaType: z.string().min(1).max(200),
           content: z.string().max(5_000_000),

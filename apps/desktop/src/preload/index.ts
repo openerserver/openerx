@@ -6,6 +6,7 @@ import {
   accountVerifyCodeInputSchema,
   artifactExportResultSchema,
   artifactGetInputSchema,
+  artifactListInputSchema,
   artifactPreviewInputSchema,
   automaticMemoryCreatedEventSchema,
   automationCreateInputSchema,
@@ -596,7 +597,8 @@ const bridge: DesktopBridge = {
     ),
   attachFile: async (input) =>
     invokeChat(ipcChannels.fileAttach, "file.attach", fileAttachInputSchema.parse(input)),
-  listArtifacts: async () => invokeChat(ipcChannels.artifactList, "artifact.list", {}),
+  listArtifacts: async (input = {}) =>
+    invokeChat(ipcChannels.artifactList, "artifact.list", artifactListInputSchema.parse(input)),
   getArtifact: async (input) =>
     invokeChat(ipcChannels.artifactGet, "artifact.get", artifactGetInputSchema.parse(input)),
   previewArtifact: async (input) =>

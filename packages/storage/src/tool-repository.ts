@@ -48,6 +48,18 @@ export interface ToolRepositoryOptions {
   idFactory?: () => string;
 }
 
+export interface ArtifactRetention {
+  deliverableIds: string[];
+  disposableIds: string[];
+}
+
+function legacyTransientArtifactName(displayName: string): boolean {
+  const normalized = displayName.trim().toLowerCase();
+  return /^(?:ping(?:[-_. ]*\d+)?|(?:tmp|temp|scratch|probe|health-?check)(?:[-_. ]|\d|$)|test(?:[-_. ]|\d))/u.test(
+    normalized,
+  );
+}
+
 export interface ToolProjection {
   workItem: WorkItem;
   run: ExecutionRun;
@@ -1253,6 +1265,79 @@ export class ToolRepository {
           )
           .all(this.#ownerProfileId, limit);
     return (rows as SqlRow[]).map((row) => this.#workItem(row));
+  }
+
+  artifactRetention(conversationId?: string): ArtifactRetention {
+    const rows = this.#database
+      .prepare(
+        `SELECT tc.*, wi.conversation_id
+         FROM tool_calls tc
+         JOIN execution_runs er ON er.id = tc.run_id
+         JOIN work_items wi ON wi.id = er.work_item_id
+         WHERE wi.owner_profile_id = ?
+           AND tc.status = 'completed'
+           AND tc.tool_name IN ('openerx_artifact_write', 'openerx_office_artifact')
+           ${conversationId ? "AND wi.conversation_id = ?" : ""}
+         ORDER BY tc.completed_at DESC, tc.updated_at DESC, tc.id DESC`,
+      )
+      .all(
+        ...(conversationId ? [this.#ownerProfileId, conversationId] : [this.#ownerProfileId]),
+      ) as Array<SqlRow & { conversation_id: string }>;
+    const latestByArtifact = new Map<
+      string,
+      {
+        artifactId: string;
+        conversationId: string;
+        displayName: string;
+        format: string;
+        purpose: "deliverable" | "intermediate";
+      }
+    >();
+    for (const row of rows) {
+      const call = this.#toolCall(row);
+      const operation = call.input;
+      if (
+        !operation ||
+        (operation.operation !== "artifact.write" &&
+          operation.operation !== "artifact.office.write")
+      ) {
+        continue;
+      }
+      const purpose = operation.input.purpose === "intermediate" ? "intermediate" : "deliverable";
+      const displayName = operation.input.displayName;
+      const format =
+        operation.operation === "artifact.write"
+          ? operation.input.format
+          : operation.input.spec.format;
+      for (const part of call.resultContent) {
+        if (part.type !== "artifact" || latestByArtifact.has(part.artifactId)) continue;
+        latestByArtifact.set(part.artifactId, {
+          artifactId: part.artifactId,
+          conversationId: row.conversation_id,
+          displayName,
+          format,
+          purpose,
+        });
+      }
+    }
+
+    const deliverableIds: string[] = [];
+    const disposableIds: string[] = [];
+    const latestByOutput = new Set<string>();
+    for (const reference of latestByArtifact.values()) {
+      const outputKey = `${reference.conversationId}\u0000${reference.format}\u0000${reference.displayName.trim().toLowerCase()}`;
+      if (
+        reference.purpose === "intermediate" ||
+        legacyTransientArtifactName(reference.displayName) ||
+        latestByOutput.has(outputKey)
+      ) {
+        disposableIds.push(reference.artifactId);
+        continue;
+      }
+      latestByOutput.add(outputKey);
+      deliverableIds.push(reference.artifactId);
+    }
+    return { deliverableIds, disposableIds };
   }
 
   listMcpServers(): McpServerConfig[] {
