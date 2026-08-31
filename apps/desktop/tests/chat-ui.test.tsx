@@ -1398,6 +1398,68 @@ describe("M1 chat renderer", () => {
     expect(bridge.listFiles).toHaveBeenCalledWith({ conversationId });
     expect(bridge.listArtifacts).toHaveBeenCalledWith({ conversationId });
     expect(screen.queryByRole("heading", { name: "未关联对话" })).toBeNull();
+    expect(group.querySelector(".library-item-list")).toBeTruthy();
+    expect(group.querySelector(".library-grid")).toBeNull();
+  });
+
+  it("searches conversation files and paginates library groups", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const conversationIds = Array.from(
+      { length: 7 },
+      (_, index) => `11111111-1111-4111-8${String(index).padStart(3, "0")}-111111111111`,
+    );
+    const libraryFiles = conversationIds.map(
+      (_conversationId, index): PersonalFile => ({
+        id: `22222222-2222-4222-8${String(index).padStart(3, "0")}-222222222222`,
+        ownerProfileId: "local-default",
+        displayName: `budget-${index + 1}.xlsx`,
+        format: "xlsx",
+        mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        sizeBytes: 1_024 + index,
+        checksumSha256: `${index + 1}`.repeat(64).slice(0, 64),
+        objectRef: `objects/sha256/${String(index + 1).padStart(2, "0")}/${`${index + 1}`.repeat(64).slice(0, 64)}`,
+        sourceScopeId: null,
+        sourceRelativePath: `budget-${index + 1}.xlsx`,
+        parseStatus: "ready",
+        parseErrorCode: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        revision: 1,
+      }),
+    );
+    vi.mocked(bridge.listConversations).mockResolvedValue(
+      conversationIds.map((id, index) => ({
+        ...snapshot.conversation,
+        id,
+        title: `预算项目 ${index + 1}`,
+        revision: index + 1,
+        lastMessagePreview: `预算文件 ${index + 1}`,
+        messageCount: 2,
+      })),
+    );
+    vi.mocked(bridge.listFiles).mockImplementation(async (input) => {
+      if (!input?.conversationId) return libraryFiles;
+      const index = conversationIds.indexOf(input.conversationId);
+      return index >= 0 && libraryFiles[index] ? [libraryFiles[index]] : [];
+    });
+    vi.mocked(bridge.listArtifacts).mockResolvedValue([]);
+
+    renderApp(bridge, "/files");
+    const user = userEvent.setup();
+
+    expect(await screen.findByText("第 1 / 2 页")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "预算项目 1" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "预算项目 7" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByRole("link", { name: "预算项目 7" })).toBeTruthy();
+
+    await user.type(screen.getByRole("searchbox", { name: "搜索文件、成果或对话" }), "budget-2");
+    expect(await screen.findByRole("link", { name: "预算项目 2" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "预算项目 7" })).toBeNull();
+    expect(screen.queryByLabelText("文件列表分页")).toBeNull();
+    expect(screen.getByText("找到 1 个对话 · 1 项")).toBeTruthy();
   });
 
   it("shows HTML source and an isolated preview without bridge privileges", async () => {

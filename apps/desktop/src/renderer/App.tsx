@@ -40,6 +40,7 @@ import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/mode
 import {
   ArrowClockwise,
   ArrowLeft,
+  ArrowRight,
   ArrowUp,
   Brain,
   CaretDown,
@@ -1693,6 +1694,12 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const libraryConversationPageSize = 6;
+
+function libraryTextMatches(query: string, values: Array<string | null | undefined>): boolean {
+  return values.some((value) => value?.toLocaleLowerCase("zh-CN").includes(query));
+}
+
 function ContentPreviewRenderer({
   preview,
   previewMode,
@@ -1754,6 +1761,8 @@ function FilesAndArtifacts(): React.JSX.Element {
   } | null>(null);
   const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview");
   const [fileNotice, setFileNotice] = useState<string | null>(null);
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [libraryPage, setLibraryPage] = useState(1);
   const files = useQuery({ queryKey: ["files", "all"], queryFn: () => window.openerx.listFiles() });
   const artifacts = useQuery({
     queryKey: ["artifacts"],
@@ -1809,6 +1818,84 @@ function FilesAndArtifacts(): React.JSX.Element {
   const unlinkedFiles = (files.data ?? []).filter(({ id }) => !linkedFileIds.has(id));
   const unlinkedArtifacts = (artifacts.data ?? []).filter(({ id }) => !linkedArtifactIds.has(id));
   const totalItemCount = (files.data?.length ?? 0) + (artifacts.data?.length ?? 0);
+  const normalizedLibrarySearch = librarySearch.trim().toLocaleLowerCase("zh-CN");
+  const filteredConversationLibrary = useMemo(
+    () =>
+      (conversationLibrary.data ?? []).flatMap((group) => {
+        if (!normalizedLibrarySearch) return [group];
+        const conversationMatches = libraryTextMatches(normalizedLibrarySearch, [
+          group.conversation.title,
+          group.conversation.lastMessagePreview,
+        ]);
+        const groupFiles = conversationMatches
+          ? group.files
+          : group.files.filter((file) =>
+              libraryTextMatches(normalizedLibrarySearch, [
+                file.displayName,
+                file.format,
+                file.sourceRelativePath,
+              ]),
+            );
+        const groupArtifacts = conversationMatches
+          ? group.artifacts
+          : group.artifacts.filter((artifact) =>
+              libraryTextMatches(normalizedLibrarySearch, [
+                artifact.displayName,
+                artifact.format,
+                artifact.mediaType,
+              ]),
+            );
+        return groupFiles.length > 0 || groupArtifacts.length > 0
+          ? [{ ...group, files: groupFiles, artifacts: groupArtifacts }]
+          : [];
+      }),
+    [conversationLibrary.data, normalizedLibrarySearch],
+  );
+  const filteredUnlinkedFiles = useMemo(
+    () =>
+      normalizedLibrarySearch
+        ? unlinkedFiles.filter((file) =>
+            libraryTextMatches(normalizedLibrarySearch, [
+              file.displayName,
+              file.format,
+              file.sourceRelativePath,
+            ]),
+          )
+        : unlinkedFiles,
+    [normalizedLibrarySearch, unlinkedFiles],
+  );
+  const filteredUnlinkedArtifacts = useMemo(
+    () =>
+      normalizedLibrarySearch
+        ? unlinkedArtifacts.filter((artifact) =>
+            libraryTextMatches(normalizedLibrarySearch, [
+              artifact.displayName,
+              artifact.format,
+              artifact.mediaType,
+            ]),
+          )
+        : unlinkedArtifacts,
+    [normalizedLibrarySearch, unlinkedArtifacts],
+  );
+  const libraryPageCount = Math.max(
+    1,
+    Math.ceil(filteredConversationLibrary.length / libraryConversationPageSize),
+  );
+  const visibleLibraryPage = Math.min(libraryPage, libraryPageCount);
+  const pagedConversationLibrary = filteredConversationLibrary.slice(
+    (visibleLibraryPage - 1) * libraryConversationPageSize,
+    visibleLibraryPage * libraryConversationPageSize,
+  );
+  const filteredLibraryItemCount =
+    filteredConversationLibrary.reduce(
+      (count, group) => count + group.files.length + group.artifacts.length,
+      0,
+    ) +
+    filteredUnlinkedFiles.length +
+    filteredUnlinkedArtifacts.length;
+  useEffect(() => {
+    if (libraryPage > libraryPageCount) setLibraryPage(libraryPageCount);
+  }, [libraryPage, libraryPageCount]);
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles(),
     onSuccess: async (selectedFiles) => {
@@ -1874,6 +1961,38 @@ function FilesAndArtifacts(): React.JSX.Element {
       <p className="library-scope-note">
         同一文件用于多个对话时会分别显示；直接从本页添加的内容会先归入“未关联对话”。
       </p>
+      <div className="library-toolbar">
+        <label className="library-search" htmlFor="library-search-input">
+          <MagnifyingGlass size={18} aria-hidden="true" />
+          <input
+            id="library-search-input"
+            type="search"
+            aria-label="搜索文件、成果或对话"
+            value={librarySearch}
+            placeholder="搜索文件、成果或对话"
+            onChange={(event) => {
+              setLibrarySearch(event.target.value);
+              setLibraryPage(1);
+            }}
+          />
+          {librarySearch ? (
+            <button
+              type="button"
+              aria-label="清除资料库搜索"
+              onClick={() => {
+                setLibrarySearch("");
+                setLibraryPage(1);
+              }}
+            >
+              <X size={15} />
+            </button>
+          ) : null}
+        </label>
+        <span aria-live="polite">
+          {normalizedLibrarySearch ? "找到" : "共"} {filteredConversationLibrary.length} 个对话 ·{" "}
+          {filteredLibraryItemCount} 项
+        </span>
+      </div>
       <div className="library-feedback" aria-live="polite">
         {fileNotice && !chooseFiles.error && !chooseDirectory.error ? (
           <p className="inline-success">{fileNotice}</p>
@@ -1900,10 +2019,14 @@ function FilesAndArtifacts(): React.JSX.Element {
       <section className="library-section" aria-labelledby="conversation-files-title">
         <div className="library-section-title">
           <h2 id="conversation-files-title">按对话</h2>
-          <span>{conversationLibrary.data?.length ?? 0} 个对话</span>
+          <span>
+            {normalizedLibrarySearch
+              ? `${filteredConversationLibrary.length} 个匹配对话`
+              : `${conversationLibrary.data?.length ?? 0} 个对话`}
+          </span>
         </div>
         <div className="conversation-library-list">
-          {conversationLibrary.data?.map(
+          {pagedConversationLibrary.map(
             ({ conversation, files: groupFiles, artifacts: groupArtifacts }) => (
               <article
                 className="conversation-library-group"
@@ -1930,7 +2053,7 @@ function FilesAndArtifacts(): React.JSX.Element {
                     {groupFiles.length} 个文件 · {groupArtifacts.length} 个成果
                   </span>
                 </header>
-                <div className="library-grid">
+                <div className="library-item-list">
                   {groupFiles.map((file: PersonalFile) => (
                     <button
                       type="button"
@@ -1977,12 +2100,34 @@ function FilesAndArtifacts(): React.JSX.Element {
           )}
         </div>
       </section>
+      {libraryPageCount > 1 ? (
+        <nav className="library-pagination" aria-label="文件列表分页">
+          <button
+            type="button"
+            disabled={visibleLibraryPage === 1}
+            onClick={() => setLibraryPage((page) => Math.max(1, page - 1))}
+          >
+            <ArrowLeft size={15} /> 上一页
+          </button>
+          <span>
+            第 {visibleLibraryPage} / {libraryPageCount} 页
+          </span>
+          <button
+            type="button"
+            disabled={visibleLibraryPage === libraryPageCount}
+            onClick={() => setLibraryPage((page) => Math.min(libraryPageCount, page + 1))}
+          >
+            下一页 <ArrowRight size={15} />
+          </button>
+        </nav>
+      ) : null}
       {conversationLibrary.isPending ? <p className="muted-copy">正在整理对话文件…</p> : null}
-      {!conversationLibrary.isPending && unlinkedFiles.length + unlinkedArtifacts.length > 0 ? (
+      {!conversationLibrary.isPending &&
+      filteredUnlinkedFiles.length + filteredUnlinkedArtifacts.length > 0 ? (
         <section className="library-section" aria-labelledby="unlinked-files-title">
           <div className="library-section-title">
             <h2 id="unlinked-files-title">未关联对话</h2>
-            <span>{unlinkedFiles.length + unlinkedArtifacts.length} 项</span>
+            <span>{filteredUnlinkedFiles.length + filteredUnlinkedArtifacts.length} 项</span>
           </div>
           <article className="conversation-library-group conversation-library-unlinked">
             <header>
@@ -1994,8 +2139,8 @@ function FilesAndArtifacts(): React.JSX.Element {
                 </div>
               </div>
             </header>
-            <div className="library-grid">
-              {unlinkedFiles.map((file) => (
+            <div className="library-item-list">
+              {filteredUnlinkedFiles.map((file) => (
                 <button
                   type="button"
                   className="library-card"
@@ -2017,7 +2162,7 @@ function FilesAndArtifacts(): React.JSX.Element {
                   </span>
                 </button>
               ))}
-              {unlinkedArtifacts.map((artifact) => (
+              {filteredUnlinkedArtifacts.map((artifact) => (
                 <button
                   type="button"
                   className="library-card"
@@ -2038,6 +2183,19 @@ function FilesAndArtifacts(): React.JSX.Element {
             </div>
           </article>
         </section>
+      ) : null}
+      {!conversationLibrary.isPending &&
+      normalizedLibrarySearch &&
+      filteredConversationLibrary.length === 0 &&
+      filteredUnlinkedFiles.length === 0 &&
+      filteredUnlinkedArtifacts.length === 0 ? (
+        <div className="empty-state empty-state-compact empty-state-without-action">
+          <MagnifyingGlass size={25} />
+          <div>
+            <strong>没有匹配内容</strong>
+            <p>请尝试文件名、成果格式或对话标题中的其他关键词。</p>
+          </div>
+        </div>
       ) : null}
       {!files.isPending &&
       !artifacts.isPending &&
