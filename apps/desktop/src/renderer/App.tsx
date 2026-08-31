@@ -1703,6 +1703,56 @@ function FilesAndArtifacts(): React.JSX.Element {
     queryKey: ["artifacts"],
     queryFn: () => window.openerx.listArtifacts(),
   });
+  const conversations = useQuery({
+    queryKey: chatKeys.list(true),
+    queryFn: () => window.openerx.listConversations({ includeArchived: true }),
+  });
+  const conversationSignature =
+    conversations.data?.map(({ id, revision }) => `${id}:${revision}`).join("|") ?? "pending";
+  const conversationLibrary = useQuery({
+    queryKey: ["library", "by-conversation", conversationSignature],
+    enabled: conversations.data !== undefined,
+    queryFn: async () => {
+      const groups = await Promise.all(
+        (conversations.data ?? []).map(async (conversation) => {
+          const [conversationFiles, conversationArtifacts] = await Promise.all([
+            window.openerx.listFiles({ conversationId: conversation.id }),
+            window.openerx.listArtifacts({ conversationId: conversation.id }),
+          ]);
+          return {
+            conversation,
+            files: conversationFiles,
+            artifacts: conversationArtifacts,
+          };
+        }),
+      );
+      return groups.filter(
+        ({ files: groupFiles, artifacts: groupArtifacts }) =>
+          groupFiles.length > 0 || groupArtifacts.length > 0,
+      );
+    },
+  });
+  const linkedFileIds = useMemo(
+    () =>
+      new Set(
+        (conversationLibrary.data ?? []).flatMap(({ files: groupFiles }) =>
+          groupFiles.map(({ id }) => id),
+        ),
+      ),
+    [conversationLibrary.data],
+  );
+  const linkedArtifactIds = useMemo(
+    () =>
+      new Set(
+        (conversationLibrary.data ?? []).flatMap(({ artifacts: groupArtifacts }) =>
+          groupArtifacts.map(({ id }) => id),
+        ),
+      ),
+    [conversationLibrary.data],
+  );
+  const unlinkedFiles = (files.data ?? []).filter(({ id }) => !linkedFileIds.has(id));
+  const unlinkedArtifacts = (artifacts.data ?? []).filter(({ id }) => !linkedArtifactIds.has(id));
+  const totalItemCount = (files.data?.length ?? 0) + (artifacts.data?.length ?? 0);
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles(),
     onSuccess: async (selectedFiles) => {
@@ -1743,7 +1793,7 @@ function FilesAndArtifacts(): React.JSX.Element {
         <div>
           <p className="eyebrow">本地优先 · 可同步对象</p>
           <h1>个人文件与成果</h1>
-          <p>原始路径权限与受控副本分离；生成成果按版本保留，不静默覆盖。</p>
+          <p>按对话集中查看附件与生成成果；成果按版本保留，不静默覆盖。</p>
         </div>
         <div className="library-header-actions">
           <button
@@ -1766,97 +1816,186 @@ function FilesAndArtifacts(): React.JSX.Element {
         </div>
       </header>
       <p className="library-scope-note">
-        文件夹授权只覆盖你明确选择的目录；撤销原始路径权限后，已导入的受控副本仍会保留。
+        同一文件用于多个对话时会分别显示；直接从本页添加的内容会先归入“未关联对话”。
       </p>
       <div className="library-feedback" aria-live="polite">
         {fileNotice && !chooseFiles.error && !chooseDirectory.error ? (
           <p className="inline-success">{fileNotice}</p>
         ) : null}
-        {files.error || chooseFiles.error || chooseDirectory.error ? (
+        {files.error ||
+        artifacts.error ||
+        conversations.error ||
+        conversationLibrary.error ||
+        chooseFiles.error ||
+        chooseDirectory.error ? (
           <p className="inline-error">
             {userFacingError(
-              files.error ?? chooseFiles.error ?? chooseDirectory.error,
+              files.error ??
+                artifacts.error ??
+                conversations.error ??
+                conversationLibrary.error ??
+                chooseFiles.error ??
+                chooseDirectory.error,
               "暂时无法读取或添加文件，请重试。",
             )}
           </p>
         ) : null}
       </div>
-      <section className="library-section" aria-labelledby="personal-files-title">
+      <section className="library-section" aria-labelledby="conversation-files-title">
         <div className="library-section-title">
-          <h2 id="personal-files-title">个人文件</h2>
-          <span>{files.data?.length ?? 0}</span>
+          <h2 id="conversation-files-title">按对话</h2>
+          <span>{conversationLibrary.data?.length ?? 0} 个对话</span>
         </div>
-        <div className="library-grid">
-          {files.data?.map((file: PersonalFile) => (
-            <button
-              type="button"
-              className="library-card"
-              key={file.id}
-              onClick={() => {
-                setSelected({ kind: "personal_file", id: file.id });
-                setPreviewMode("preview");
-              }}
-            >
-              <FileText size={24} />
-              <strong>{file.displayName}</strong>
-              <span>
-                {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
-              </span>
-              <span>
-                {file.parseStatus === "ready" ? "引用已就绪" : (file.parseErrorCode ?? "解析中")}
-              </span>
-            </button>
-          ))}
+        <div className="conversation-library-list">
+          {conversationLibrary.data?.map(
+            ({ conversation, files: groupFiles, artifacts: groupArtifacts }) => (
+              <article
+                className="conversation-library-group"
+                key={conversation.id}
+                aria-labelledby={`library-conversation-${conversation.id}`}
+              >
+                <header>
+                  <div className="conversation-library-title">
+                    <ChatCircle size={19} />
+                    <div>
+                      <NavLink
+                        id={`library-conversation-${conversation.id}`}
+                        to={`/chat/${conversation.id}`}
+                      >
+                        {conversation.title}
+                      </NavLink>
+                      <span>
+                        {conversation.archivedAt ? "已归档 · " : ""}
+                        更新于 {formatUpdatedAt(conversation.updatedAt)}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="conversation-library-count">
+                    {groupFiles.length} 个文件 · {groupArtifacts.length} 个成果
+                  </span>
+                </header>
+                <div className="library-grid">
+                  {groupFiles.map((file: PersonalFile) => (
+                    <button
+                      type="button"
+                      className="library-card"
+                      key={`file-${file.id}`}
+                      onClick={() => {
+                        setSelected({ kind: "personal_file", id: file.id });
+                        setPreviewMode("preview");
+                      }}
+                    >
+                      <FileText size={24} />
+                      <strong>{file.displayName}</strong>
+                      <span>
+                        文件 · {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
+                      </span>
+                      <span>
+                        {file.parseStatus === "ready"
+                          ? "引用已就绪"
+                          : (file.parseErrorCode ?? "解析中")}
+                      </span>
+                    </button>
+                  ))}
+                  {groupArtifacts.map((artifact) => (
+                    <button
+                      type="button"
+                      className="library-card"
+                      key={`artifact-${artifact.id}`}
+                      onClick={() => {
+                        setSelected({ kind: "artifact", id: artifact.id });
+                        setPreviewMode("preview");
+                      }}
+                    >
+                      <FolderSimple size={24} />
+                      <strong>{artifact.displayName}</strong>
+                      <span>
+                        成果 · {artifact.format.toUpperCase()} · v{artifact.currentVersion}
+                      </span>
+                      <span>{artifact.versions.length} 个不可变版本</span>
+                    </button>
+                  ))}
+                </div>
+              </article>
+            ),
+          )}
         </div>
-        {!files.isPending && files.data?.length === 0 ? (
-          <div className="empty-state empty-state-compact empty-state-without-action">
-            <FileText size={25} />
-            <div>
-              <strong>还没有个人文件</strong>
-              <p>
-                使用页面右上角添加文件或受控文件夹后，就可以在对话中引用内容。支持
-                PDF、Office、图片、文本和代码。
-              </p>
-            </div>
-          </div>
-        ) : null}
       </section>
-      <section className="library-section" aria-labelledby="artifacts-title">
-        <div className="library-section-title">
-          <h2 id="artifacts-title">成果</h2>
-          <span>{artifacts.data?.length ?? 0}</span>
-        </div>
-        <div className="library-grid">
-          {artifacts.data?.map((artifact) => (
-            <button
-              type="button"
-              className="library-card"
-              key={artifact.id}
-              onClick={() => {
-                setSelected({ kind: "artifact", id: artifact.id });
-                setPreviewMode("preview");
-              }}
-            >
-              <FolderSimple size={24} />
-              <strong>{artifact.displayName}</strong>
-              <span>
-                {artifact.format.toUpperCase()} · v{artifact.currentVersion}
-              </span>
-              <span>{artifact.versions.length} 个不可变版本</span>
-            </button>
-          ))}
-        </div>
-        {!artifacts.isPending && artifacts.data?.length === 0 ? (
-          <div className="empty-state empty-state-compact">
-            <FolderSimple size={25} />
-            <div>
-              <strong>还没有生成成果</strong>
-              <p>对话中生成并保存的报告、表格和其他文件会出现在这里，并按版本保留。</p>
-            </div>
-            <NavLink to="/chat/new">开始一个新任务</NavLink>
+      {conversationLibrary.isPending ? <p className="muted-copy">正在整理对话文件…</p> : null}
+      {!conversationLibrary.isPending && unlinkedFiles.length + unlinkedArtifacts.length > 0 ? (
+        <section className="library-section" aria-labelledby="unlinked-files-title">
+          <div className="library-section-title">
+            <h2 id="unlinked-files-title">未关联对话</h2>
+            <span>{unlinkedFiles.length + unlinkedArtifacts.length} 项</span>
           </div>
-        ) : null}
-      </section>
+          <article className="conversation-library-group conversation-library-unlinked">
+            <header>
+              <div className="conversation-library-title">
+                <FolderSimple size={19} />
+                <div>
+                  <strong>资料库直接添加</strong>
+                  <span>在对话中使用后，会同时显示到对应对话下</span>
+                </div>
+              </div>
+            </header>
+            <div className="library-grid">
+              {unlinkedFiles.map((file) => (
+                <button
+                  type="button"
+                  className="library-card"
+                  key={`unlinked-file-${file.id}`}
+                  onClick={() => {
+                    setSelected({ kind: "personal_file", id: file.id });
+                    setPreviewMode("preview");
+                  }}
+                >
+                  <FileText size={24} />
+                  <strong>{file.displayName}</strong>
+                  <span>
+                    文件 · {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
+                  </span>
+                  <span>
+                    {file.parseStatus === "ready"
+                      ? "引用已就绪"
+                      : (file.parseErrorCode ?? "解析中")}
+                  </span>
+                </button>
+              ))}
+              {unlinkedArtifacts.map((artifact) => (
+                <button
+                  type="button"
+                  className="library-card"
+                  key={`unlinked-artifact-${artifact.id}`}
+                  onClick={() => {
+                    setSelected({ kind: "artifact", id: artifact.id });
+                    setPreviewMode("preview");
+                  }}
+                >
+                  <FolderSimple size={24} />
+                  <strong>{artifact.displayName}</strong>
+                  <span>
+                    成果 · {artifact.format.toUpperCase()} · v{artifact.currentVersion}
+                  </span>
+                  <span>{artifact.versions.length} 个不可变版本</span>
+                </button>
+              ))}
+            </div>
+          </article>
+        </section>
+      ) : null}
+      {!files.isPending &&
+      !artifacts.isPending &&
+      !conversationLibrary.isPending &&
+      totalItemCount === 0 ? (
+        <div className="empty-state empty-state-compact">
+          <FolderSimple size={25} />
+          <div>
+            <strong>还没有文件或成果</strong>
+            <p>添加文件，或在对话中生成报告、表格和其他成果后，就可以按对话查找。</p>
+          </div>
+          <NavLink to="/chat/new">开始一个新任务</NavLink>
+        </div>
+      ) : null}
       {selected ? (
         <section className="content-preview" aria-labelledby="content-preview-title">
           <header>

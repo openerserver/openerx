@@ -1327,6 +1327,79 @@ describe("M1 chat renderer", () => {
     expect(screen.getByText(/工具：Skill 脚本执行器/)).toBeTruthy();
   });
 
+  it("groups personal files and deliverables by conversation in the library", async () => {
+    const bridge = createBridge();
+    const personalFileId = crypto.randomUUID();
+    const artifactId = crypto.randomUUID();
+    const personalFile: PersonalFile = {
+      id: personalFileId,
+      ownerProfileId: "local-default",
+      displayName: "research.pdf",
+      format: "pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 2_048,
+      checksumSha256: "d".repeat(64),
+      objectRef: `objects/sha256/dd/${"d".repeat(64)}`,
+      sourceScopeId: crypto.randomUUID(),
+      sourceRelativePath: "research.pdf",
+      parseStatus: "ready",
+      parseErrorCode: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    };
+    const artifact = {
+      id: artifactId,
+      ownerProfileId: "local-default",
+      displayName: "summary.docx",
+      format: "docx" as const,
+      mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      currentVersion: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+      versions: [
+        {
+          id: crypto.randomUUID(),
+          artifactId,
+          version: 1,
+          sizeBytes: 4_096,
+          checksumSha256: "e".repeat(64),
+          objectRef: `objects/sha256/ee/${"e".repeat(64)}`,
+          sourcePersonalFileId: personalFileId,
+          createdAt: timestamp,
+        },
+      ],
+    };
+    vi.mocked(bridge.listConversations).mockResolvedValue([
+      {
+        ...snapshot.conversation,
+        lastMessagePreview: "整理调研资料",
+        messageCount: 2,
+      },
+    ]);
+    vi.mocked(bridge.listFiles).mockImplementation(async (input) =>
+      input?.conversationId === conversationId || input?.conversationId === undefined
+        ? [personalFile]
+        : [],
+    );
+    vi.mocked(bridge.listArtifacts).mockImplementation(async (input) =>
+      input?.conversationId === conversationId || input?.conversationId === undefined
+        ? [artifact]
+        : [],
+    );
+
+    renderApp(bridge, "/files");
+
+    const group = await screen.findByRole("article", { name: "Markdown 验收" });
+    expect(within(group).getByRole("button", { name: /research\.pdf/ })).toBeTruthy();
+    expect(within(group).getByRole("button", { name: /summary\.docx/ })).toBeTruthy();
+    expect(within(group).getByText("1 个文件 · 1 个成果")).toBeTruthy();
+    expect(bridge.listFiles).toHaveBeenCalledWith({ conversationId });
+    expect(bridge.listArtifacts).toHaveBeenCalledWith({ conversationId });
+    expect(screen.queryByRole("heading", { name: "未关联对话" })).toBeNull();
+  });
+
   it("shows HTML source and an isolated preview without bridge privileges", async () => {
     const bridge = createBridge();
     const personalFileId = crypto.randomUUID();
