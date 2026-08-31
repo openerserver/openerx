@@ -3,6 +3,11 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    watch: {
+      ignored: ["**/out/**"],
+    },
+  },
   build: {
     sourcemap: process.env.OPENERX_RELEASE_MODE !== "1",
   },
