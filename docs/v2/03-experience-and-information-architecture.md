@@ -26,7 +26,6 @@ V1 的主界面由三部分组成：
 | 搜索 | 搜索对话、消息、文件和成果 | V1 |
 | 最近对话 | 返回和继续历史 | V1 |
 | 个人文件/成果 | 管理上传文件和生成成果 | V1，可作为次级页面 |
-| 助手/技能 | 选择或管理个人能力 | V1 最小版 |
 | 设置 | 账户同步、模型、用量与账单、Remote 设备、权限、数据、外观和诊断 | V1 |
 
 不设置 Dashboard、项目、团队、Agent 控制台、审批中心或管理员中心作为 V1 主导航。
@@ -39,13 +38,14 @@ V1 的主界面由三部分组成：
 | `/chat/:conversationId` | 历史或当前对话 |
 | `/search` | 个人搜索 |
 | `/files` | 个人文件与成果 |
-| `/assistants` | 个人助手与技能 |
+| `/assistants` | 兼容入口，重定向到设置中的助手与 Skill |
 | `/settings/account` | 账户、设备、Remote 配对和云同步 |
 | `/settings/models` | 平台模型目录和默认选择 |
 | `/settings/usage` | Token 与费用记录 |
 | `/settings/billing` | 额度、积分、充值余额、消费和月度账单 |
 | `/settings/recharge` | 创建充值订单并查看支付结果 |
 | `/settings/tools` | 工具、MCP、浏览器、Shell 和权限 |
+| `/settings/account?section=assistants` | 个人助手与 Skill 管理 |
 | `/settings/*` | 个人设置 |
 
 React Renderer 使用应用内部路由。V1 不以公开 Web 站点作为主客户端入口，但业务路由不得依赖 Electron 私有全局对象，以便测试和未来复用。

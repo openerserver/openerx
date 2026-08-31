@@ -73,7 +73,8 @@ try {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] });
   }, sourceDirectory);
 
-  await page.getByRole("link", { name: "助手与 Skill" }).click();
+  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("button", { name: "助手与 Skill" }).click();
   await page.getByRole("heading", { name: "助手与 Skill" }).waitFor();
   await page.getByRole("button", { name: "安装 Skill" }).click();
   const card = page.locator(".skill-card").filter({ hasText: "E2E report" });
@@ -108,7 +109,8 @@ try {
     .nth(1)
     .waitFor();
 
-  await page.getByRole("link", { name: "助手与 Skill" }).click();
+  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("button", { name: "助手与 Skill" }).click();
   await page.waitForURL(/#\/assistants$/);
   await page.reload();
   await page.getByRole("heading", { name: "助手与 Skill" }).waitFor();

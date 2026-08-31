@@ -1310,6 +1310,13 @@ describe("M1 chat renderer", () => {
     vi.mocked(bridge.listSkills).mockResolvedValue([skillInstallation]);
     renderApp(bridge);
     const user = userEvent.setup();
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("选择 Skill") as HTMLSelectElement).querySelector(
+          `option[value="${skillInstallation.id}"]`,
+        ),
+      ).toBeTruthy(),
+    );
     await user.selectOptions(await screen.findByLabelText("选择 Skill"), skillInstallation.id);
     await user.type(screen.getByLabelText("发送消息"), "生成报告");
     await user.click(screen.getByRole("button", { name: "发送" }));
@@ -1322,7 +1329,11 @@ describe("M1 chat renderer", () => {
     vi.mocked(managementBridge.listSkills).mockResolvedValue([skillInstallation]);
     renderApp(managementBridge, "/assistants");
     expect(await screen.findByRole("heading", { name: "助手与 Skill" })).toBeTruthy();
-    expect(screen.getByText("结构化报告")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
+    expect(screen.getByRole("button", { name: "助手与 Skill" }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+    expect(await screen.findByText("结构化报告")).toBeTruthy();
     expect(screen.getByText(/OpenerX 内置 Skill/)).toBeTruthy();
     expect(screen.getByText(/工具：Skill 脚本执行器/)).toBeTruthy();
   });
@@ -2659,6 +2670,7 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "清除搜索" }));
     expect(screen.getByText("结构化报告")).toBeTruthy();
 
+    await user.click(screen.getByRole("button", { name: "返回应用" }));
     await user.click(screen.getByRole("link", { name: /搜索/ }));
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("搜索关键词")));
     await user.click(screen.getByRole("link", { name: "新对话" }));

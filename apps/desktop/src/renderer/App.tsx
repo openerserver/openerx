@@ -3842,63 +3842,53 @@ function SkillCenter(): React.JSX.Element {
   );
 
   return (
-    <main className="skill-center-page">
+    <section
+      className="settings-section-panel skill-center-page"
+      id="assistants-section"
+      tabIndex={-1}
+      aria-label="助手与 Skill 设置"
+    >
       <header className="skill-center-header">
         <div>
-          <p className="eyebrow">可扩展能力</p>
-          <h1>助手与 Skill</h1>
-          <p>为对话增加专门的工作方式；只有在使用时才会加载，并始终遵循当前权限。</p>
+          <h2>Skill</h2>
+          <p>Skill 会为助手增加专门的工作方式。仅在任务需要时加载，并始终遵循当前权限。</p>
         </div>
-        <div className="skill-install-controls">
-          <label>
-            安装范围
-            <select
-              value={scope}
-              onChange={(event) => setScope(event.target.value as typeof scope)}
-            >
-              <option value="personal">个人</option>
-              <option value="workspace">本机默认工作区</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="primary-action"
-            onClick={() => install.mutate()}
-            disabled={install.isPending}
-          >
-            <Plus size={16} weight="bold" /> 安装 Skill
-          </button>
-        </div>
+        <button
+          type="button"
+          className="primary-action skill-install-button"
+          onClick={() => install.mutate()}
+          disabled={install.isPending}
+        >
+          <Plus size={16} weight="bold" /> 安装 Skill
+        </button>
       </header>
-      <p className="skill-scope-note" aria-live="polite">
-        安装目标：{scope === "personal" ? "当前个人账户" : "本机默认工作区（default）"}。
-        工作区安装只在这个本机工作区中可用。
-      </p>
 
-      <section className="skill-summary" aria-label="Skill 概览">
-        <div>
-          <strong>{skills.data?.length ?? 0}</strong>
-          <span>安装记录</span>
-        </div>
-        <div>
-          <strong>{skills.data?.filter(({ enabled }) => enabled).length ?? 0}</strong>
-          <span>已启用</span>
-        </div>
-        <div>
-          <strong>{invocations.data?.length ?? 0}</strong>
-          <span>最近调用</span>
-        </div>
-      </section>
-
-      <div className="skill-filter">
-        <MagnifyingGlass size={17} />
-        <input
-          aria-label="搜索 Skill"
-          placeholder="按名称或用途搜索"
-          value={skillQuery}
-          onChange={(event) => setSkillQuery(event.target.value)}
-        />
+      <div className="skill-toolbar">
+        <label className="skill-filter">
+          <MagnifyingGlass size={17} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="搜索 Skill"
+            placeholder="搜索已安装的 Skill"
+            value={skillQuery}
+            onChange={(event) => setSkillQuery(event.target.value)}
+          />
+        </label>
+        <label className="skill-scope-control">
+          <span>安装到</span>
+          <select
+            aria-label="Skill 安装范围"
+            value={scope}
+            onChange={(event) => setScope(event.target.value as typeof scope)}
+          >
+            <option value="personal">个人</option>
+            <option value="workspace">默认工作区</option>
+          </select>
+        </label>
       </div>
+      <p className="skill-scope-note" aria-live="polite">
+        新 Skill 将安装到{scope === "personal" ? "当前个人账户" : "本机默认工作区"}。
+      </p>
 
       {skills.isPending ? <p>正在读取 Skill…</p> : null}
       {skills.error ? (
@@ -3937,20 +3927,42 @@ function SkillCenter(): React.JSX.Element {
             skill.approvedPermissionDigest !== skill.permissionDigest;
           return (
             <article className={`skill-card skill-state-${skill.packageState}`} key={skill.id}>
-              <header>
-                <div>
-                  <span className={`skill-trust trust-${skill.trust}`}>
-                    {skill.trust === "bundled" ? "内置" : "已验证来源"}
+              <header className="skill-card-header">
+                <div className="skill-identity">
+                  <span className="skill-icon" aria-hidden="true">
+                    <Sparkle size={18} weight="fill" />
                   </span>
-                  <h2>{skillName(skill)}</h2>
-                  <p>{skillDescription(skill)}</p>
+                  <div>
+                    <div className="skill-card-meta">
+                      <span className={`skill-trust trust-${skill.trust}`}>
+                        {skill.trust === "bundled" ? "内置" : "已验证来源"}
+                      </span>
+                      <span>v{skill.version}</span>
+                    </div>
+                    <h3>{skillName(skill)}</h3>
+                    <p>{skillDescription(skill)}</p>
+                  </div>
                 </div>
-                <span className={`skill-enabled ${skill.enabled ? "is-enabled" : ""}`}>
-                  {skill.enabled ? "已启用" : "已停用"}
-                </span>
+                <div className="skill-primary-control">
+                  <span className={`skill-enabled ${skill.enabled ? "is-enabled" : ""}`}>
+                    {skill.enabled ? "已启用" : "已停用"}
+                  </span>
+                  <button
+                    type="button"
+                    className={`skill-toggle ${skill.enabled ? "is-on" : ""}`}
+                    aria-label={`${skill.enabled ? "停用" : "启用"} ${skillName(skill)}`}
+                    aria-pressed={skill.enabled}
+                    onClick={() =>
+                      enable.mutate({ installationId: skill.id, enabled: !skill.enabled })
+                    }
+                    disabled={skill.packageState !== "installed" || approvalRequired}
+                  >
+                    <span />
+                  </button>
+                </div>
               </header>
               <details className="skill-technical-details">
-                <summary>技术信息与权限</summary>
+                <summary>权限与详情</summary>
                 <dl className="skill-metadata">
                   <div>
                     <dt>范围</dt>
@@ -4014,15 +4026,6 @@ function SkillCenter(): React.JSX.Element {
                     审核并批准权限
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={() =>
-                    enable.mutate({ installationId: skill.id, enabled: !skill.enabled })
-                  }
-                  disabled={skill.packageState !== "installed" || approvalRequired}
-                >
-                  {skill.enabled ? "禁用" : "启用"}
-                </button>
                 <button
                   type="button"
                   onClick={() =>
@@ -4092,23 +4095,28 @@ function SkillCenter(): React.JSX.Element {
         />
       ) : null}
 
-      <section className="skill-activity" aria-label="Skill 调用记录">
-        <h2>最近调用</h2>
-        {(invocations.data ?? []).map((invocation) => (
-          <div key={invocation.id}>
-            <strong>
-              {(skills.data ?? []).find(({ id }) => id === invocation.installationId)
-                ?.displayName ?? invocation.installationId.slice(0, 8)}
-            </strong>
-            <span>
-              {skillInvocationLabel(invocation.trigger)} · {skillInvocationLabel(invocation.status)}{" "}
-              · {skillReasonLabel(invocation.reason)}
-            </span>
-          </div>
-        ))}
-        {invocations.data?.length === 0 ? <p>还没有 Skill 调用。</p> : null}
-      </section>
-    </main>
+      <details className="skill-activity" aria-label="Skill 调用记录">
+        <summary>
+          <span>最近调用</span>
+          <small>{invocations.data?.length ?? 0} 条记录</small>
+        </summary>
+        <div className="skill-activity-list">
+          {(invocations.data ?? []).map((invocation) => (
+            <div key={invocation.id}>
+              <strong>
+                {(skills.data ?? []).find(({ id }) => id === invocation.installationId)
+                  ?.displayName ?? invocation.installationId.slice(0, 8)}
+              </strong>
+              <span>
+                {skillInvocationLabel(invocation.trigger)} ·{" "}
+                {skillInvocationLabel(invocation.status)} · {skillReasonLabel(invocation.reason)}
+              </span>
+            </div>
+          ))}
+          {invocations.data?.length === 0 ? <p>还没有 Skill 调用。</p> : null}
+        </div>
+      </details>
+    </section>
   );
 }
 
@@ -5229,6 +5237,7 @@ type AccountSettingsSection =
   | "billing"
   | "appearance"
   | "model"
+  | "assistants"
   | "tools"
   | "memory"
   | "update"
@@ -5239,6 +5248,7 @@ const accountSettingsSectionLabels: Record<AccountSettingsSection, string> = {
   billing: "费用与账单",
   appearance: "外观",
   model: "模型",
+  assistants: "助手与 Skill",
   tools: "工具",
   memory: "记忆",
   update: "更新",
@@ -5250,6 +5260,7 @@ const accountSettingsSectionGroupLabels: Record<AccountSettingsSection, string> 
   billing: "账户费用",
   appearance: "主题与显示",
   model: "模型服务",
+  assistants: "助手与扩展能力",
   tools: "可用工具",
   memory: "长期记忆",
   update: "应用更新",
@@ -5262,6 +5273,7 @@ function requestedSettingsSection(search: string): AccountSettingsSection | null
     value === "billing" ||
     value === "appearance" ||
     value === "model" ||
+    value === "assistants" ||
     value === "tools" ||
     value === "memory" ||
     value === "update" ||
@@ -5478,11 +5490,13 @@ function AccountSettings({
               </section>
             ) : null}
             {settingsSectionMatches("model") ||
+            settingsSectionMatches("assistants") ||
             settingsSectionMatches("tools") ||
             settingsSectionMatches("memory") ? (
               <section className="settings-nav-group">
                 <p>智能与能力</p>
                 {renderSettingsNavButton("model", <SlidersHorizontal size={18} />)}
+                {renderSettingsNavButton("assistants", <Sparkle size={18} />)}
                 {renderSettingsNavButton("tools", <TerminalWindow size={18} />)}
                 {renderSettingsNavButton("memory", <Brain size={18} />)}
               </section>
@@ -5501,9 +5515,11 @@ function AccountSettings({
         </nav>
         <div className="settings-section-content">
           <h1 className="settings-content-title">{accountSettingsSectionLabels[activeSection]}</h1>
-          <h2 className="settings-content-section-title">
-            {accountSettingsSectionGroupLabels[activeSection]}
-          </h2>
+          {activeSection !== "assistants" ? (
+            <h2 className="settings-content-section-title">
+              {accountSettingsSectionGroupLabels[activeSection]}
+            </h2>
+          ) : null}
           {activeSection === "account" ? (
             <section
               className="settings-card settings-account-primary"
@@ -5605,6 +5621,7 @@ function AccountSettings({
               <ModelSettings value={defaultModelRef} onChange={onDefaultModelChange} />
             </div>
           ) : null}
+          {activeSection === "assistants" ? <SkillCenter /> : null}
           {activeSection === "tools" ? <ToolCenter showTitle={false} /> : null}
           {activeSection === "memory" ? (
             <div className="settings-section-panel" id="memory-section" tabIndex={-1}>
@@ -7042,10 +7059,6 @@ function Sidebar({
             <ArrowClockwise size={17} />
             <span>自动化</span>
           </NavLink>
-          <NavLink to="/assistants">
-            <Sparkle size={17} />
-            <span>助手与 Skill</span>
-          </NavLink>
           <NavLink to="/settings">
             <GearSix size={17} />
             <span>设置</span>
@@ -7114,7 +7127,8 @@ export function App(): React.JSX.Element {
   const contextReturnFocus = useRef<HTMLElement | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
-  const settingsOpen = location.pathname.startsWith("/settings");
+  const settingsOpen =
+    location.pathname.startsWith("/settings") || location.pathname === "/assistants";
   const lastNonSettingsLocation = useRef("/chat/new");
   const contextConversationId = /^\/chat\/([^/]+)$/u.exec(location.pathname)?.[1] ?? null;
   useEffect(() => {
@@ -7336,7 +7350,10 @@ export function App(): React.JSX.Element {
             path="/automations"
             element={<AutomationsPage defaultModelRef={defaultModelRef} />}
           />
-          <Route path="/assistants" element={<SkillCenter />} />
+          <Route
+            path="/assistants"
+            element={<Navigate to="/settings/account?section=assistants" replace />}
+          />
           <Route path="/settings" element={<Navigate to="/settings/account" replace />} />
           <Route path="/settings/billing" element={<BillingSettings />} />
           <Route
