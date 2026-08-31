@@ -109,54 +109,47 @@ try {
     .innerText();
   assert.match(desktopAssistantText, /桌面窗口捕获完成：已捕获目标应用窗口/u);
 
-  await page.getByRole("link", { name: "任务与工具" }).click();
-  await page.getByRole("heading", { name: "任务与工具" }).waitFor();
-  await page.getByText("已完成").first().waitFor();
-  let localSearchPanel = page.getByLabel("本地 Web Search");
-  await localSearchPanel.getByText("本地搜索已启用（默认）", { exact: true }).waitFor();
+  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("button", { name: "工具" }).click();
+  await page.getByRole("heading", { name: "工具" }).waitFor();
+  let localSearchRow = page.locator(".tool-library-row").filter({ hasText: "本地 Web Search" });
+  await localSearchRow.getByRole("button", { name: "设置" }).click();
+  let localSearchPanel = page.getByRole("dialog", { name: "本地 Web Search" });
   await localSearchPanel.getByLabel("Web Search Provider").selectOption("direct:bing-html");
   await localSearchPanel.getByLabel("Web Search 结果语言").selectOption("en-US");
   await localSearchPanel.getByLabel("Web Search SafeSearch").selectOption("strict");
-  await localSearchPanel.getByRole("button", { name: "保存搜索设置" }).click();
-  await localSearchPanel
-    .getByText("搜索设置已保存；正在运行的对话仍使用启动时冻结的策略。", {
-      exact: true,
-    })
-    .waitFor();
+  await localSearchPanel.getByRole("button", { name: "保存设置" }).click();
+  await localSearchPanel.getByText("搜索设置已保存。", { exact: true }).waitFor();
   await page.reload();
-  await page.getByRole("heading", { name: "任务与工具" }).waitFor();
-  localSearchPanel = page.getByLabel("本地 Web Search");
+  await page.getByRole("heading", { name: "工具" }).waitFor();
+  localSearchRow = page.locator(".tool-library-row").filter({ hasText: "本地 Web Search" });
+  await localSearchRow.getByRole("button", { name: "设置" }).click();
+  localSearchPanel = page.getByRole("dialog", { name: "本地 Web Search" });
   assert.equal(
     await localSearchPanel.getByLabel("Web Search Provider").inputValue(),
     "direct:bing-html",
   );
   assert.equal(await localSearchPanel.getByLabel("Web Search 结果语言").inputValue(), "en-US");
   assert.equal(await localSearchPanel.getByLabel("Web Search SafeSearch").inputValue(), "strict");
-  await localSearchPanel.getByRole("button", { name: "清缓存并重置退避" }).click();
-  await localSearchPanel
-    .getByText("已清除本轮缓存并重置 Provider 退避状态。", { exact: true })
-    .waitFor();
+  await localSearchPanel.getByRole("button", { name: "重置搜索服务" }).click();
+  await localSearchPanel.getByText("已清除缓存并重置搜索服务。", { exact: true }).waitFor();
   console.log(
     "E2E_LOCAL_WEB_SEARCH_SETTINGS_OK provider=direct:bing-html locale=en-US safe=strict persisted=pass reset=pass",
   );
-  await page.getByText("查看能力与运行状态", { exact: true }).click();
-  const browserCard = page.getByText("隔离浏览器", { exact: true }).locator("..");
-  await browserCard.getByText("运行时可用", { exact: true }).waitFor();
-  const shellCard = page.getByText("Shell / 代码", { exact: true }).locator("..");
-  const desktopCard = page.getByText("桌面控制", { exact: true }).locator("..");
-  const shellStatus = await shellCard.locator(".tool-runtime-status").innerText();
-  const desktopStatus = await desktopCard.locator(".tool-runtime-status").innerText();
-  const desktopReason =
-    (await desktopCard.locator(".tool-runtime-reason").count()) > 0
-      ? await desktopCard.locator(".tool-runtime-reason").innerText()
-      : null;
-  assert.ok(["运行时可用", "部分可用", "需要设置", "不可用"].includes(shellStatus));
-  assert.ok(["运行时可用", "部分可用", "需要设置", "不可用"].includes(desktopStatus));
+  await localSearchPanel.getByRole("button", { name: "关闭工具设置" }).click();
+  const browserRow = page.locator(".tool-library-row").filter({ hasText: "浏览器操作" });
+  await browserRow.getByText("已启用", { exact: true }).waitFor();
+  const shellRow = page.locator(".tool-library-row").filter({ hasText: "终端" });
+  const desktopRow = page.locator(".tool-library-row").filter({ hasText: "桌面控制" });
+  const shellStatus = await shellRow.locator(".tool-library-status").innerText();
+  const desktopStatus = await desktopRow.locator(".tool-library-status").innerText();
+  assert.ok(["已启用", "部分可用", "未配置", "不可用"].includes(shellStatus));
+  assert.ok(["已启用", "部分可用", "未配置", "不可用"].includes(desktopStatus));
   console.log(
     "E2E_TOOLS_OK auto-isolated-browser-open-type-screenshot-download-close-upload-per-call-projection",
   );
   console.log(
-    `E2E_DESKTOP_READINESS_OK browser=运行时可用 shell=${shellStatus} desktop=${desktopStatus} reason=${desktopReason ?? "none"} native_window_capture=pass`,
+    `E2E_DESKTOP_READINESS_OK browser=已启用 shell=${shellStatus} desktop=${desktopStatus} native_window_capture=pass`,
   );
 } finally {
   await application?.close().catch(() => undefined);

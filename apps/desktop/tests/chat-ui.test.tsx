@@ -1805,7 +1805,7 @@ describe("M1 chat renderer", () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("搜索关键词")));
 
     await user.keyboard("{Control>},{/Control}");
-    expect(await screen.findByRole("heading", { name: "设置" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "账户" })).toBeTruthy();
   });
 
   it("keeps new chat fixed while navigation and history share one scroll region", async () => {
@@ -1907,43 +1907,49 @@ describe("M1 chat renderer", () => {
     renderApp(createBridge(), "/settings/account");
     const user = userEvent.setup();
 
-    expect(await screen.findByRole("heading", { name: "设置" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "账户" })).toBeTruthy();
     const settingsWorkspace = document.querySelector(".settings-account-page");
     const mainContent = document.getElementById("main-content");
+    const appShell = document.querySelector(".app-shell");
     expect(settingsWorkspace).toBeTruthy();
+    expect(appShell?.classList).toContain("settings-is-open");
     expect(mainContent?.classList).toContain("app-main-settings");
-    expect(settingsWorkspace?.querySelector(".settings-page-header")).toBeTruthy();
+    expect(settingsWorkspace?.querySelector(".settings-page-header")).toBeNull();
     expect(settingsWorkspace?.querySelector(".settings-section-nav")).toBeTruthy();
     expect(settingsWorkspace?.querySelector(".settings-section-content")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
+    expect(screen.getByRole("button", { name: "返回应用" })).toBeTruthy();
+    const settingsSearch = screen.getByRole("searchbox", { name: "搜索设置" });
+    await user.type(settingsSearch, "工具");
+    expect(screen.getByRole("button", { name: "工具" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "账户" })).toBeNull();
+    await user.clear(settingsSearch);
     expect(screen.queryByLabelText("发送消息")).toBeNull();
     await user.click(screen.getByRole("button", { name: "外观" }));
     await waitFor(() => expect(document.activeElement?.id).toBe("appearance-section"));
-    expect(screen.getByRole("heading", { name: "外观" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "外观", level: 1 })).toBeTruthy();
     expect(screen.getByRole("button", { name: "外观" }).getAttribute("aria-current")).toBe("page");
 
     await user.click(screen.getByRole("button", { name: "诊断与数据" }));
     const diagnostics = document.getElementById("diagnostics-section") as HTMLElement;
     await waitFor(() => expect(document.activeElement).toBe(diagnostics));
     expect(screen.getByLabelText("诊断与数据导出")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "返回应用" }));
+    expect(await screen.findByLabelText("发送消息")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "主导航" })).toBeTruthy();
   });
 
   it("nests billing under settings instead of the primary sidebar", async () => {
     cleanup();
     renderApp(createBridge(), "/settings/account");
     const user = userEvent.setup();
-    const mainNavigation = screen.getByRole("navigation", { name: "主导航" });
-
-    expect(within(mainNavigation).queryByRole("link", { name: "费用与账单" })).toBeNull();
-    expect(within(mainNavigation).getByRole("link", { name: "设置" }).classList).toContain(
-      "active",
-    );
+    expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
 
     await user.click(await screen.findByRole("button", { name: "费用与账单" }));
     await user.click(await screen.findByRole("link", { name: "查看费用与账单" }));
     expect(await screen.findByRole("heading", { name: "费用与账单" })).toBeTruthy();
-    expect(within(mainNavigation).getByRole("link", { name: "设置" }).classList).toContain(
-      "active",
-    );
+    expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
   });
 
   it("focuses and contains the context drawer, maps raw errors, then restores focus", async () => {
@@ -2381,16 +2387,18 @@ describe("M1 chat renderer", () => {
       expiresAt: null,
       reason: null,
     });
-    renderApp(bridge, "/tasks");
+    renderApp(bridge, "/settings/account?section=tools");
     const user = userEvent.setup();
 
-    await user.click(await screen.findByText("MCP 服务与高级连接"));
+    const mcpRow = (await screen.findByText("项目知识库")).closest("article");
+    if (!mcpRow) throw new Error("MCP tool row missing");
+    await user.click(within(mcpRow).getByRole("button", { name: "设置" }));
     expect(await screen.findByText("需要浏览器授权")).toBeTruthy();
     expect(screen.queryByLabelText("MCP OAuth Client Secret")).toBeNull();
     await user.click(screen.getByRole("button", { name: "在浏览器中授权" }));
     await waitFor(() => expect(bridge.authorizeMcpServer).toHaveBeenCalledWith({ serverId }));
-    expect(await screen.findByText("OAuth 授权完成，MCP 服务已连接。")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "重新授权" })).toBeTruthy();
+    expect(await screen.findByText("OAuth 授权完成，工具已连接。")).toBeTruthy();
+    expect(screen.getByText("已授权")).toBeTruthy();
   });
 
   it("shows runtime desktop capability status and permission reasons instead of a static catalog", async () => {
@@ -2420,31 +2428,32 @@ describe("M1 chat renderer", () => {
         checkedAt: timestamp,
       },
     ]);
-    renderApp(bridge, "/tasks");
+    renderApp(bridge, "/settings/account?section=tools");
     const user = userEvent.setup();
 
-    await user.click(await screen.findByText("查看能力与运行状态"));
-    const browserCard = screen.getByText("隔离浏览器").closest("article");
-    const shellCard = screen.getByText("Shell / 代码").closest("article");
-    const desktopCard = screen.getByText("桌面控制").closest("article");
-    if (!browserCard || !shellCard || !desktopCard) throw new Error("tool card missing");
-    expect(within(browserCard).getByText("运行时可用")).toBeTruthy();
-    expect(within(shellCard).getByText("需要设置")).toBeTruthy();
-    expect(within(shellCard).getByText("需先授权一个可写工作区")).toBeTruthy();
-    expect(within(shellCard).getByText("阶段：Local Alpha")).toBeTruthy();
-    expect(within(shellCard).getByText("网络：默认拒绝")).toBeTruthy();
-    expect(within(desktopCard).getByText("部分可用")).toBeTruthy();
-    expect(within(desktopCard).getByText("需在系统设置中允许辅助功能")).toBeTruthy();
-    await user.click(within(desktopCard).getByRole("button", { name: "请求辅助功能权限" }));
+    const browserRow = (await screen.findByText("浏览器操作")).closest("article");
+    const shellRow = screen.getByText("终端").closest("article");
+    const desktopRow = screen.getByText("桌面控制").closest("article");
+    if (!browserRow || !shellRow || !desktopRow) throw new Error("tool row missing");
+    expect(await within(browserRow).findByText("已启用")).toBeTruthy();
+    expect(await within(shellRow).findByText("未配置")).toBeTruthy();
+    expect(await within(desktopRow).findByText("部分可用")).toBeTruthy();
+
+    await user.click(within(shellRow).getByRole("button", { name: "设置" }));
+    expect(await screen.findByText("需先授权一个可写工作区")).toBeTruthy();
+    expect(screen.getByText("阶段：Local Alpha")).toBeTruthy();
+    expect(screen.getByText("网络：默认拒绝")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "关闭工具设置" }));
+
+    await user.click(within(desktopRow).getByRole("button", { name: "设置" }));
+    expect(await screen.findByText("需在系统设置中允许辅助功能")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "请求辅助功能权限" }));
     await waitFor(() =>
       expect(bridge.requestDesktopNativePermission).toHaveBeenCalledWith({
         permission: "accessibility",
       }),
     );
-    expect(await screen.findByText("系统设置已打开；授权后请返回并刷新能力状态。")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: "刷新能力状态" }));
-    await waitFor(() => expect(bridge.listToolRuntimeReadiness).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText("系统设置已打开；授权后请返回并刷新工具状态。")).toBeTruthy();
   });
 
   it("keeps local Web Search Provider choice and runtime reset in the trusted tool center", async () => {
@@ -2491,16 +2500,15 @@ describe("M1 chat renderer", () => {
         lastFailureAt: null,
       })),
     });
-    renderApp(bridge, "/tasks");
+    renderApp(bridge, "/settings/account?section=tools");
     const user = userEvent.setup();
 
-    const panel = (await screen.findByRole("heading", { name: "本地 Web Search" })).closest(
-      "section",
-    );
-    if (!panel) throw new Error("local Web Search panel missing");
+    const searchRow = (await screen.findByText("本地 Web Search")).closest("article");
+    if (!searchRow) throw new Error("local Web Search row missing");
+    await user.click(within(searchRow).getByRole("button", { name: "设置" }));
+    const panel = await screen.findByRole("dialog", { name: "本地 Web Search" });
     expect(within(panel).getByText("退避中")).toBeTruthy();
     expect(within(panel).getByText(/LOCAL_SEARCH_RATE_LIMITED/u)).toBeTruthy();
-    expect(within(panel).getByText(/不启动浏览器/u)).toBeTruthy();
 
     await user.selectOptions(
       within(panel).getByLabelText("Web Search Provider"),
@@ -2508,7 +2516,7 @@ describe("M1 chat renderer", () => {
     );
     await user.selectOptions(within(panel).getByLabelText("Web Search 结果语言"), "en-US");
     await user.selectOptions(within(panel).getByLabelText("Web Search SafeSearch"), "strict");
-    await user.click(within(panel).getByRole("button", { name: "保存搜索设置" }));
+    await user.click(within(panel).getByRole("button", { name: "保存设置" }));
     await waitFor(() =>
       expect(bridge.updateLocalWebSearchSettings).toHaveBeenCalledWith({
         providerId: "direct:bing-html",
@@ -2516,17 +2524,15 @@ describe("M1 chat renderer", () => {
         safeSearch: "strict",
       }),
     );
-    expect(
-      await within(panel).findByText("搜索设置已保存；正在运行的对话仍使用启动时冻结的策略。"),
-    ).toBeTruthy();
+    expect(await within(panel).findByText("搜索设置已保存。")).toBeTruthy();
 
-    await user.click(within(panel).getByRole("button", { name: "清缓存并重置退避" }));
+    await user.click(within(panel).getByRole("button", { name: "重置搜索服务" }));
     await waitFor(() => expect(bridge.resetLocalWebSearchRuntime).toHaveBeenCalledWith());
-    expect(await within(panel).findByText("已清除本轮缓存并重置 Provider 退避状态。")).toBeTruthy();
+    expect(await within(panel).findByText("已清除缓存并重置搜索服务。")).toBeTruthy();
     expect(within(panel).queryByText("退避中")).toBeNull();
   });
 
-  it("keeps browser takeover controls in the trusted tool center without embedding page data", async () => {
+  it("shows browser as a configurable tool without exposing active browser sessions", async () => {
     cleanup();
     const bridge = createBridge();
     const sessionId = "77777777-7777-4777-8777-777777777777";
@@ -2563,26 +2569,42 @@ describe("M1 chat renderer", () => {
       session = { ...session, state: "active" };
       return session;
     });
-    renderApp(bridge, "/tasks");
-    const user = userEvent.setup();
-
-    expect(await screen.findByText("Google Chrome")).toBeTruthy();
-    expect(screen.getByText("机器默认浏览器")).toBeTruthy();
-    expect(screen.getByText("独立窗口 · 系统辅助功能")).toBeTruthy();
+    renderApp(bridge, "/settings/account?section=tools");
+    expect(await screen.findByText("浏览器操作")).toBeTruthy();
+    expect(screen.queryByText("Google Chrome")).toBeNull();
+    expect(screen.queryByText("机器默认浏览器")).toBeNull();
+    expect(screen.queryByText("独立窗口 · 系统辅助功能")).toBeNull();
     expect(screen.queryByText("com.google.Chrome")).toBeNull();
     expect(document.querySelector("iframe")).toBeNull();
+    expect(bridge.listBrowserComputerUseSessions).not.toHaveBeenCalled();
+    expect(bridge.pauseBrowserComputerUseSession).not.toHaveBeenCalled();
+    expect(bridge.resumeBrowserComputerUseSession).not.toHaveBeenCalled();
+  });
 
-    await user.click(screen.getByRole("button", { name: "我来接管" }));
-    await waitFor(() =>
-      expect(bridge.pauseBrowserComputerUseSession).toHaveBeenCalledWith({ sessionId }),
-    );
-    expect(await screen.findByText("用户接管中")).toBeTruthy();
+  it("filters the tool catalog and opens the MCP add flow without a recent-items section", async () => {
+    cleanup();
+    const bridge = createBridge();
+    renderApp(bridge, "/settings/account?section=tools");
+    const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "恢复自动操作" }));
-    await waitFor(() =>
-      expect(bridge.resumeBrowserComputerUseSession).toHaveBeenCalledWith({ sessionId }),
-    );
-    expect(await screen.findByText("自动操作中")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "工具" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "工具" })).toBeNull();
+    expect(screen.getByRole("button", { name: "工具" })).toBeTruthy();
+    expect(screen.queryByText("最近添加")).toBeNull();
+
+    const search = screen.getByRole("searchbox", { name: "搜索工具" });
+    await user.type(search, "浏览器");
+    expect(screen.getByText("浏览器操作")).toBeTruthy();
+    expect(screen.queryByText("本地 Web Search")).toBeNull();
+
+    await user.clear(search);
+    await user.click(screen.getByRole("tab", { name: "MCP" }));
+    expect(screen.getByText("MCP 服务")).toBeTruthy();
+    expect(screen.queryByText("浏览器操作")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "添加工具" }));
+    expect(await screen.findByRole("dialog", { name: "添加工具" })).toBeTruthy();
+    expect(screen.getByLabelText("连接方式")).toBeTruthy();
   });
 
   it("requires explicit confirmation before revoking Skill permissions and disabling it", async () => {

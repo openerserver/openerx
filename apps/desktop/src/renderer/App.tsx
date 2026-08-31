@@ -3,7 +3,6 @@ import type {
   Attachment,
   AutomaticMemoryCreatedEvent,
   BillingOverview,
-  BrowserSessionDescriptor,
   ChargeRecord,
   ChatEvent,
   ContentPreview,
@@ -30,7 +29,6 @@ import type {
   TokenAggregateField,
   ToolRuntimeCapability,
   ToolRuntimeReadiness,
-  ToolRuntimeStatus,
   UsageRecord,
   WorkItem,
   WorkItemDetail,
@@ -250,32 +248,32 @@ const toolCatalog = [
   {
     namespace: "files",
     capability: "file",
-    name: "文件与成果",
-    detail: "受 Scope 限制的读取、检索、转换与版本",
+    name: "文件访问",
+    detail: "读取、创建、编辑和管理本地文件与文件夹",
   },
   {
     namespace: "platform",
     capability: "web.search",
-    name: "Web 搜索",
-    detail: "第一方检索与可打开来源",
+    name: "本地 Web Search",
+    detail: "使用本地搜索引擎在网页中搜索信息",
   },
   {
     namespace: "platform",
     capability: "image.generate",
-    name: "图片生成",
-    detail: "账户鉴权的平台图片生成",
+    name: "图像生成",
+    detail: "使用 AI 生成图像并保存到本地",
   },
   {
     namespace: "local",
     capability: "browser",
-    name: "隔离浏览器",
-    detail: "独立 Profile 的导航与交互",
+    name: "浏览器操作",
+    detail: "自动控制独立浏览器打开页面并完成交互",
   },
   {
     namespace: "local",
     capability: "shell",
-    name: "Shell / 代码",
-    detail: "授权工作区内的可停止进程",
+    name: "终端",
+    detail: "在本地终端中执行命令并获取输出",
   },
   {
     namespace: "local",
@@ -286,25 +284,10 @@ const toolCatalog = [
   {
     namespace: "mcp",
     capability: "mcp",
-    name: "MCP",
-    detail: "STDIO 与 Streamable HTTP 服务",
+    name: "MCP 服务",
+    detail: "添加并连接 STDIO 或 Streamable HTTP 工具服务",
   },
 ] as const;
-
-const toolNamespaceLabels: Record<(typeof toolCatalog)[number]["namespace"], string> = {
-  builtin: "内置",
-  files: "文件",
-  platform: "在线服务",
-  local: "本机",
-  mcp: "外部连接",
-};
-
-const toolRuntimeStatusLabels: Record<ToolRuntimeStatus, string> = {
-  available: "运行时可用",
-  degraded: "部分可用",
-  authorization_required: "需要设置",
-  unavailable: "不可用",
-};
 
 const toolRuntimeReasonLabels: Record<string, string> = {
   PLATFORM_ENDPOINT_NOT_CONFIGURED: "未配置平台服务地址",
@@ -336,16 +319,6 @@ function toolRuntimeReason(reason: string | null): string | null {
   return toolRuntimeReasonLabels[reason] ?? "运行状态暂不可确认";
 }
 
-const browserSessionStateLabels: Record<BrowserSessionDescriptor["state"], string> = {
-  opening: "正在打开",
-  active: "自动操作中",
-  paused_for_user: "用户接管中",
-  detached: "已解除控制",
-  closing: "正在关闭",
-  closed: "已关闭",
-  failed: "连接已中断",
-};
-
 const localWebSearchProviderStatusLabels: Record<
   LocalWebSearchProviderRuntimeState["status"],
   string
@@ -356,47 +329,12 @@ const localWebSearchProviderStatusLabels: Record<
   unavailable: "不可用",
 };
 
-function browserApplicationLabel(applicationId: string): string {
-  const labels: Record<string, string> = {
-    "com.apple.Safari": "Safari",
-    "com.apple.SafariTechnologyPreview": "Safari Technology Preview",
-    "com.brave.Browser": "Brave",
-    "com.google.Chrome": "Google Chrome",
-    "com.google.Chrome.beta": "Google Chrome Beta",
-    "com.google.Chrome.canary": "Google Chrome Canary",
-    "com.microsoft.edgemac": "Microsoft Edge",
-    "org.mozilla.firefox": "Firefox",
-    "org.chromium.Chromium": "Chromium",
-  };
-  return labels[applicationId] ?? "系统默认浏览器";
-}
-
-function browserBackendLabel(session: BrowserSessionDescriptor): string {
-  return session.backend === "system_default" ? "机器默认浏览器" : "Electron 安全 Chromium";
-}
-
-function browserControlPathLabel(session: BrowserSessionDescriptor): string {
-  if (session.controlPath === "os_accessibility") return "独立窗口 · 系统辅助功能";
-  if (session.controlPath === "connected_browser_bridge") return "独立标签页 · 浏览器桥接";
-  return "独立窗口 · Chromium 语义控制";
-}
-
 const mcpAuthorizationLabels: Record<McpServerAuthorizationState["status"], string> = {
   not_required: "无需 OAuth",
   authorization_required: "需要浏览器授权",
   authorized: "已授权",
   unavailable: "OAuth 不可用",
 };
-
-function mcpAuthorizationReason(reason: string | null): string | null {
-  if (!reason) return null;
-  if (reason === "MCP_OAUTH_LEGACY_CLIENT_CREDENTIALS_UNSUPPORTED") {
-    return "旧版客户端凭证不再支持，请移除后重新添加并授权";
-  }
-  if (reason === "MCP_CREDENTIAL_REQUIRED") return "缺少本机 OAuth 凭证配置";
-  if (reason === "MCP_OAUTH_CREDENTIAL_INVALID") return "本机 OAuth 凭证已损坏，请重新添加";
-  return "授权状态暂不可用";
-}
 
 function modelCapabilities(model: ModelCatalogEntry): string {
   return Object.entries(model.capabilities)
@@ -5291,9 +5229,32 @@ type AccountSettingsSection =
   | "billing"
   | "appearance"
   | "model"
+  | "tools"
   | "memory"
   | "update"
   | "diagnostics";
+
+const accountSettingsSectionLabels: Record<AccountSettingsSection, string> = {
+  account: "账户",
+  billing: "费用与账单",
+  appearance: "外观",
+  model: "模型",
+  tools: "工具",
+  memory: "记忆",
+  update: "更新",
+  diagnostics: "诊断与数据",
+};
+
+const accountSettingsSectionGroupLabels: Record<AccountSettingsSection, string> = {
+  account: "登录与账户",
+  billing: "账户费用",
+  appearance: "主题与显示",
+  model: "模型服务",
+  tools: "可用工具",
+  memory: "长期记忆",
+  update: "应用更新",
+  diagnostics: "诊断与个人数据",
+};
 
 function requestedSettingsSection(search: string): AccountSettingsSection | null {
   const value = new URLSearchParams(search).get("section");
@@ -5301,6 +5262,7 @@ function requestedSettingsSection(search: string): AccountSettingsSection | null
     value === "billing" ||
     value === "appearance" ||
     value === "model" ||
+    value === "tools" ||
     value === "memory" ||
     value === "update" ||
     value === "diagnostics"
@@ -5313,11 +5275,13 @@ function AccountSettings({
   onThemeChange,
   defaultModelRef,
   onDefaultModelChange,
+  onClose,
 }: {
   themePreference: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
   defaultModelRef: string;
   onDefaultModelChange: (modelRef: string) => void;
+  onClose: () => void;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -5331,6 +5295,7 @@ function AccountSettings({
   const [activeSection, setActiveSection] = useState<AccountSettingsSection>(
     () => requestedSettingsSection(location.search) ?? "account",
   );
+  const [settingsSearch, setSettingsSearch] = useState("");
   useEffect(() => {
     const requested = requestedSettingsSection(location.search);
     if (requested) setActiveSection(requested);
@@ -5343,6 +5308,31 @@ function AccountSettings({
       );
     });
   };
+  const normalizedSettingsSearch = settingsSearch.trim().toLocaleLowerCase();
+  const settingsSectionMatches = (section: AccountSettingsSection): boolean =>
+    !normalizedSettingsSearch ||
+    accountSettingsSectionLabels[section].toLocaleLowerCase().includes(normalizedSettingsSearch);
+  const renderSettingsNavButton = (
+    section: AccountSettingsSection,
+    icon: ReactNode,
+  ): React.JSX.Element | null => {
+    if (!settingsSectionMatches(section)) return null;
+    const label = accountSettingsSectionLabels[section];
+    return (
+      <button
+        type="button"
+        className={activeSection === section ? "is-active" : ""}
+        aria-current={activeSection === section ? "page" : undefined}
+        onClick={() => openSettingsSection(section)}
+      >
+        {icon}
+        <span>{label}</span>
+      </button>
+    );
+  };
+  const settingsSearchHasMatches = (
+    Object.keys(accountSettingsSectionLabels) as AccountSettingsSection[]
+  ).some(settingsSectionMatches);
   const signedIn = account.data?.status === "signed_in";
   const devices = useQuery({
     queryKey: ["account", "devices"],
@@ -5460,80 +5450,60 @@ function AccountSettings({
   const state = account.data;
   return (
     <main className="settings-page settings-account-page">
-      <header className="settings-page-header">
-        <div>
-          <h1>设置</h1>
-          <p>管理账户、外观、模型与桌面应用偏好。</p>
-        </div>
-        <kbd aria-label="打开设置快捷键">Ctrl + ,</kbd>
-      </header>
       <div className="settings-workbench">
         <nav className="settings-section-nav" aria-label="设置分区">
-          <button
-            type="button"
-            className={activeSection === "account" ? "is-active" : ""}
-            aria-current={activeSection === "account" ? "page" : undefined}
-            onClick={() => openSettingsSection("account")}
-          >
-            <UserCircle size={17} />
-            <span>账户</span>
+          <button type="button" className="settings-back-button" onClick={onClose}>
+            <ArrowLeft size={18} />
+            <span>返回应用</span>
           </button>
-          <button
-            type="button"
-            className={activeSection === "billing" ? "is-active" : ""}
-            aria-current={activeSection === "billing" ? "page" : undefined}
-            onClick={() => openSettingsSection("billing")}
-          >
-            <Receipt size={17} />
-            <span>费用与账单</span>
-          </button>
-          <button
-            type="button"
-            className={activeSection === "appearance" ? "is-active" : ""}
-            aria-current={activeSection === "appearance" ? "page" : undefined}
-            onClick={() => openSettingsSection("appearance")}
-          >
-            <Sun size={17} />
-            <span>外观</span>
-          </button>
-          <button
-            type="button"
-            className={activeSection === "model" ? "is-active" : ""}
-            aria-current={activeSection === "model" ? "page" : undefined}
-            onClick={() => openSettingsSection("model")}
-          >
-            <SlidersHorizontal size={17} />
-            <span>模型</span>
-          </button>
-          <button
-            type="button"
-            className={activeSection === "memory" ? "is-active" : ""}
-            aria-current={activeSection === "memory" ? "page" : undefined}
-            onClick={() => openSettingsSection("memory")}
-          >
-            <Brain size={17} />
-            <span>记忆</span>
-          </button>
-          <button
-            type="button"
-            className={activeSection === "update" ? "is-active" : ""}
-            aria-current={activeSection === "update" ? "page" : undefined}
-            onClick={() => openSettingsSection("update")}
-          >
-            <ArrowClockwise size={17} />
-            <span>更新</span>
-          </button>
-          <button
-            type="button"
-            className={activeSection === "diagnostics" ? "is-active" : ""}
-            aria-current={activeSection === "diagnostics" ? "page" : undefined}
-            onClick={() => openSettingsSection("diagnostics")}
-          >
-            <DownloadSimple size={17} />
-            <span>诊断与数据</span>
-          </button>
+          <label className="settings-search-field">
+            <MagnifyingGlass size={18} aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="搜索设置"
+              placeholder="搜索设置..."
+              value={settingsSearch}
+              onChange={(event) => setSettingsSearch(event.target.value)}
+            />
+          </label>
+          <div className="settings-nav-scroll">
+            {settingsSectionMatches("account") ||
+            settingsSectionMatches("appearance") ||
+            settingsSectionMatches("billing") ? (
+              <section className="settings-nav-group">
+                <p>个人</p>
+                {renderSettingsNavButton("account", <UserCircle size={18} />)}
+                {renderSettingsNavButton("appearance", <Sun size={18} />)}
+                {renderSettingsNavButton("billing", <Receipt size={18} />)}
+              </section>
+            ) : null}
+            {settingsSectionMatches("model") ||
+            settingsSectionMatches("tools") ||
+            settingsSectionMatches("memory") ? (
+              <section className="settings-nav-group">
+                <p>智能与能力</p>
+                {renderSettingsNavButton("model", <SlidersHorizontal size={18} />)}
+                {renderSettingsNavButton("tools", <TerminalWindow size={18} />)}
+                {renderSettingsNavButton("memory", <Brain size={18} />)}
+              </section>
+            ) : null}
+            {settingsSectionMatches("update") || settingsSectionMatches("diagnostics") ? (
+              <section className="settings-nav-group">
+                <p>应用</p>
+                {renderSettingsNavButton("update", <ArrowClockwise size={18} />)}
+                {renderSettingsNavButton("diagnostics", <DownloadSimple size={18} />)}
+              </section>
+            ) : null}
+            {!settingsSearchHasMatches ? (
+              <p className="settings-search-empty">没有匹配的设置</p>
+            ) : null}
+          </div>
         </nav>
         <div className="settings-section-content">
+          <h1 className="settings-content-title">{accountSettingsSectionLabels[activeSection]}</h1>
+          <h2 className="settings-content-section-title">
+            {accountSettingsSectionGroupLabels[activeSection]}
+          </h2>
           {activeSection === "account" ? (
             <section
               className="settings-card settings-account-primary"
@@ -5635,6 +5605,7 @@ function AccountSettings({
               <ModelSettings value={defaultModelRef} onChange={onDefaultModelChange} />
             </div>
           ) : null}
+          {activeSection === "tools" ? <ToolCenter showTitle={false} /> : null}
           {activeSection === "memory" ? (
             <div className="settings-section-panel" id="memory-section" tabIndex={-1}>
               <MemorySettingsPanel />
@@ -6195,9 +6166,27 @@ function BillingSettings(): React.JSX.Element {
   );
 }
 
-function ToolCenter(): React.JSX.Element {
+type ToolCenterCategory = "all" | "builtin" | "mcp" | "browser" | "search" | "system";
+
+type ToolCenterRow = {
+  id: string;
+  name: string;
+  detail: string;
+  source: string;
+  category: Exclude<ToolCenterCategory, "all">;
+  capability: ToolRuntimeCapability;
+  status: string;
+  statusTone: "enabled" | "warning" | "muted";
+  enabled: boolean;
+  mcpServerId?: string;
+};
+
+function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.JSX.Element {
   const queryClient = useQueryClient();
-  const mcpDetailsRef = useRef<HTMLDetailsElement>(null);
+  const [searchText, setSearchText] = useState("");
+  const [activeCategory, setActiveCategory] = useState<ToolCenterCategory>("all");
+  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [mcpNotice, setMcpNotice] = useState<string | null>(null);
   const [nativePermissionNotice, setNativePermissionNotice] = useState<string | null>(null);
   const [mcpName, setMcpName] = useState("");
@@ -6214,18 +6203,7 @@ function ToolCenter(): React.JSX.Element {
     locale: "zh-CN",
     safeSearch: "moderate",
   });
-  const workItems = useQuery({
-    queryKey: ["tools", "work-items"],
-    queryFn: () => window.openerx.listWorkItems({ limit: 100 }),
-  });
-  const scopes = useQuery({
-    queryKey: ["tools", "scopes"],
-    queryFn: () => window.openerx.listCapabilityScopes(),
-  });
-  const permissions = useQuery({
-    queryKey: ["tools", "permissions", "pending"],
-    queryFn: () => window.openerx.listPermissionRequests({ status: "pending" }),
-  });
+
   const runtimeReadiness = useQuery({
     queryKey: ["tools", "runtime-readiness"],
     queryFn: () => window.openerx.listToolRuntimeReadiness(),
@@ -6234,6 +6212,15 @@ function ToolCenter(): React.JSX.Element {
     queryKey: ["tools", "local-web-search", "settings"],
     queryFn: () => window.openerx.getLocalWebSearchSettings(),
   });
+  const mcpServers = useQuery({
+    queryKey: ["tools", "mcp-servers"],
+    queryFn: () => window.openerx.listMcpServers(),
+  });
+  const mcpAuthorization = useQuery({
+    queryKey: ["tools", "mcp-authorization"],
+    queryFn: () => window.openerx.listMcpServerAuthorizationStates(),
+  });
+
   useEffect(() => {
     if (!localWebSearchSettings.data) return;
     setLocalWebSearchDraft({
@@ -6242,6 +6229,7 @@ function ToolCenter(): React.JSX.Element {
       safeSearch: localWebSearchSettings.data.safeSearch,
     });
   }, [localWebSearchSettings.data]);
+
   const saveLocalWebSearchSettings = useMutation({
     mutationFn: (input: LocalWebSearchSettingsSelection) =>
       window.openerx.updateLocalWebSearchSettings(input),
@@ -6251,7 +6239,7 @@ function ToolCenter(): React.JSX.Element {
         state,
       );
       await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
-      setLocalWebSearchNotice("搜索设置已保存；正在运行的对话仍使用启动时冻结的策略。");
+      setLocalWebSearchNotice("搜索设置已保存。");
     },
   });
   const resetLocalWebSearchRuntime = useMutation({
@@ -6262,37 +6250,7 @@ function ToolCenter(): React.JSX.Element {
         state,
       );
       await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
-      setLocalWebSearchNotice("已清除本轮缓存并重置 Provider 退避状态。");
-    },
-  });
-  const browserSessions = useQuery({
-    queryKey: ["tools", "browser-computer-use", "sessions"],
-    queryFn: () => window.openerx.listBrowserComputerUseSessions(),
-    refetchInterval: 1_000,
-  });
-  const pauseBrowserSession = useMutation({
-    mutationFn: (sessionId: string) => window.openerx.pauseBrowserComputerUseSession({ sessionId }),
-    onSuccess: (session) => {
-      queryClient.setQueryData<BrowserSessionDescriptor[]>(
-        ["tools", "browser-computer-use", "sessions"],
-        (current = []) => [
-          ...current.filter(({ sessionId }) => sessionId !== session.sessionId),
-          session,
-        ],
-      );
-    },
-  });
-  const resumeBrowserSession = useMutation({
-    mutationFn: (sessionId: string) =>
-      window.openerx.resumeBrowserComputerUseSession({ sessionId }),
-    onSuccess: (session) => {
-      queryClient.setQueryData<BrowserSessionDescriptor[]>(
-        ["tools", "browser-computer-use", "sessions"],
-        (current = []) => [
-          ...current.filter(({ sessionId }) => sessionId !== session.sessionId),
-          session,
-        ],
-      );
+      setLocalWebSearchNotice("已清除缓存并重置搜索服务。");
     },
   });
   const requestNativePermission = useMutation({
@@ -6304,22 +6262,10 @@ function ToolCenter(): React.JSX.Element {
         state.status === "granted"
           ? "系统权限已生效。"
           : state.settingsOpened
-            ? "系统设置已打开；授权后请返回并刷新能力状态。"
+            ? "系统设置已打开；授权后请返回并刷新工具状态。"
             : "当前系统无法请求该权限。",
       );
     },
-  });
-  const mcpServers = useQuery({
-    queryKey: ["tools", "mcp-servers"],
-    queryFn: () => window.openerx.listMcpServers(),
-  });
-  const mcpAuthorization = useQuery({
-    queryKey: ["tools", "mcp-authorization"],
-    queryFn: () => window.openerx.listMcpServerAuthorizationStates(),
-  });
-  const revoke = useMutation({
-    mutationFn: (scopeId: string) => window.openerx.revokeCapabilityScope({ scopeId }),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["tools", "scopes"] }),
   });
   const saveMcp = useMutation({
     mutationFn: (config: McpServerConfig) =>
@@ -6344,10 +6290,19 @@ function ToolCenter(): React.JSX.Element {
       setMcpToken("");
       setMcpOAuthClientId("");
       setMcpOAuthScope("");
+      setAddDialogOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-authorization"] });
       await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
-      setMcpNotice(`已保存 MCP 服务“${saved.name}”。`);
+      setMcpNotice(`已添加工具“${saved.name}”。`);
+    },
+  });
+  const toggleMcp = useMutation({
+    mutationFn: (server: McpServerConfig) =>
+      window.openerx.saveMcpServer({ config: { ...server, enabled: !server.enabled } }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
+      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
     },
   });
   const authorizeMcp = useMutation({
@@ -6358,17 +6313,19 @@ function ToolCenter(): React.JSX.Element {
         (current = []) => [...current.filter(({ serverId }) => serverId !== state.serverId), state],
       );
       await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
-      setMcpNotice("OAuth 授权完成，MCP 服务已连接。");
+      setMcpNotice("OAuth 授权完成，工具已连接。");
     },
   });
   const removeMcp = useMutation({
     mutationFn: (serverId: string) => window.openerx.removeMcpServer({ serverId }),
     onSuccess: async () => {
+      setSelectedToolId(null);
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
       await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
-      setMcpNotice("已移除 MCP 服务及其本机凭证引用。");
+      setMcpNotice("已移除 MCP 工具及其本机凭证引用。");
     },
   });
+
   const readinessByCapability = useMemo(
     () =>
       new Map<ToolRuntimeCapability, ToolRuntimeReadiness>(
@@ -6376,394 +6333,501 @@ function ToolCenter(): React.JSX.Element {
       ),
     [runtimeReadiness.data],
   );
+
+  const toolRows = useMemo<ToolCenterRow[]>(() => {
+    const categoryFor = (capability: ToolRuntimeCapability): Exclude<ToolCenterCategory, "all"> => {
+      if (capability === "mcp") return "mcp";
+      if (capability === "browser") return "browser";
+      if (capability === "web.search") return "search";
+      if (capability === "file" || capability === "shell" || capability === "desktop") {
+        return "system";
+      }
+      return "builtin";
+    };
+    const sourceFor = (capability: ToolRuntimeCapability): string => {
+      if (capability === "mcp") return "MCP / 外部连接";
+      if (capability === "browser") return "内置 / 浏览器";
+      if (capability === "web.search") return "内置 / 搜索";
+      if (capability === "file" || capability === "shell" || capability === "desktop") {
+        return "内置 / 文件与系统";
+      }
+      return "内置";
+    };
+    const builtins = toolCatalog
+      .filter((tool) => tool.capability !== "mcp" || !mcpServers.data?.length)
+      .map<ToolCenterRow>((tool) => {
+        const readiness = readinessByCapability.get(tool.capability);
+        const status = readiness?.status;
+        return {
+          id: `capability:${tool.capability}`,
+          name: tool.name,
+          detail: tool.detail,
+          source: sourceFor(tool.capability),
+          category: categoryFor(tool.capability),
+          capability: tool.capability,
+          status:
+            status === "available"
+              ? "已启用"
+              : status === "degraded"
+                ? "部分可用"
+                : status === "authorization_required"
+                  ? "未配置"
+                  : status === "unavailable"
+                    ? "不可用"
+                    : runtimeReadiness.isFetching
+                      ? "检测中"
+                      : "状态未知",
+          statusTone:
+            status === "available"
+              ? "enabled"
+              : status === "degraded" || status === "authorization_required"
+                ? "warning"
+                : "muted",
+          enabled: status === "available" || status === "degraded",
+        };
+      });
+    const external =
+      mcpServers.data?.map<ToolCenterRow>((server) => ({
+        id: `mcp:${server.id}`,
+        name: server.name,
+        detail:
+          server.transport === "stdio"
+            ? "通过本机进程提供外部工具"
+            : "通过网络 MCP 服务提供外部工具",
+        source: server.transport === "stdio" ? "MCP / 本机进程" : "MCP / 网络服务",
+        category: "mcp",
+        capability: "mcp",
+        status: server.enabled ? "已启用" : "已停用",
+        statusTone: server.enabled ? "enabled" : "muted",
+        enabled: server.enabled,
+        mcpServerId: server.id,
+      })) ?? [];
+    return [...builtins, ...external];
+  }, [mcpServers.data, readinessByCapability, runtimeReadiness.isFetching]);
+
+  const filteredRows = useMemo(() => {
+    const normalizedSearch = searchText.trim().toLocaleLowerCase();
+    return toolRows.filter((row) => {
+      const matchesCategory = activeCategory === "all" || row.category === activeCategory;
+      const matchesSearch =
+        !normalizedSearch ||
+        `${row.name} ${row.detail} ${row.source}`.toLocaleLowerCase().includes(normalizedSearch);
+      return matchesCategory && matchesSearch;
+    });
+  }, [activeCategory, searchText, toolRows]);
+
+  const selectedRow = toolRows.find((row) => row.id === selectedToolId) ?? null;
+  const selectedReadiness = selectedRow
+    ? readinessByCapability.get(selectedRow.capability)
+    : undefined;
+  const selectedMcp = selectedRow?.mcpServerId
+    ? mcpServers.data?.find((server) => server.id === selectedRow.mcpServerId)
+    : undefined;
+  const selectedAuthorization = selectedMcp
+    ? mcpAuthorization.data?.find(({ serverId }) => serverId === selectedMcp.id)
+    : undefined;
+
+  const categories: Array<{ id: ToolCenterCategory; label: string }> = [
+    { id: "all", label: "全部" },
+    { id: "builtin", label: "内置" },
+    { id: "mcp", label: "MCP" },
+    { id: "browser", label: "浏览器" },
+    { id: "search", label: "搜索" },
+    { id: "system", label: "文件与系统" },
+  ];
+
+  const renderToolIcon = (capability: ToolRuntimeCapability): React.JSX.Element => {
+    if (capability === "web.search") return <MagnifyingGlass size={24} />;
+    if (capability === "browser") return <Desktop size={24} />;
+    if (capability === "file") return <FolderSimple size={24} />;
+    if (capability === "shell") return <TerminalWindow size={24} />;
+    if (capability === "image.generate") return <ImageSquare size={24} />;
+    if (capability === "desktop") return <SlidersHorizontal size={24} />;
+    if (capability === "mcp") return <GearSix size={24} />;
+    if (capability === "builtin.compute") return <Brain size={24} />;
+    return <Sparkle size={24} />;
+  };
+
   return (
-    <main className="tool-center-page">
-      <header>
-        <p className="eyebrow">运行与权限</p>
-        <h1>任务与工具</h1>
-        <p>查看正在运行的任务、处理授权，并管理此设备可以使用的能力。</p>
+    <section className="tool-center-page settings-tool-center" id="tools-section" tabIndex={-1}>
+      <header className="tool-library-header">
+        <div>
+          {showTitle ? <h2>工具</h2> : null}
+          <p>添加、设置并管理 OpenerX 可以使用的工具</p>
+        </div>
+        <button type="button" className="tool-add-button" onClick={() => setAddDialogOpen(true)}>
+          <Plus size={18} weight="bold" />
+          添加工具
+        </button>
       </header>
-      <section className="tool-center-summary" aria-label="工具状态摘要">
-        <div>
-          <strong>{workItems.data?.length ?? 0}</strong>
-          <span>任务</span>
-        </div>
-        <div>
-          <strong>{permissions.data?.length ?? 0}</strong>
-          <span>待授权</span>
-        </div>
-        <div>
-          <strong>{scopes.data?.length ?? 0}</strong>
-          <span>有效授权</span>
-        </div>
-      </section>
-      <section className="local-web-search-panel" aria-label="本地 Web Search">
-        <div className="local-web-search-heading">
-          <div>
-            <h2>本地 Web Search</h2>
-            <p>由本机 App Service 直连搜索结果页，不启动浏览器，也不经过云端 Web Search。</p>
-          </div>
-          <span
-            className={`local-web-search-feature ${localWebSearchSettings.data?.featureEnabled ? "is-enabled" : ""}`}
-          >
-            {localWebSearchSettings.data?.featureEnabled
-              ? "本地搜索已启用（默认）"
-              : "本地搜索已关闭"}
-          </span>
-        </div>
-        <form
-          className="local-web-search-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            saveLocalWebSearchSettings.mutate(localWebSearchDraft);
-          }}
-        >
-          <label>
-            <span>搜索引擎</span>
-            <select
-              aria-label="Web Search Provider"
-              value={localWebSearchDraft.providerId}
-              onChange={(event) =>
-                setLocalWebSearchDraft((current) => ({
-                  ...current,
-                  providerId: event.target.value as LocalWebSearchSettingsSelection["providerId"],
-                }))
-              }
+
+      <div className="tool-library-toolbar">
+        <div className="tool-category-tabs" role="tablist" aria-label="工具分类">
+          {categories.map((category) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeCategory === category.id}
+              className={activeCategory === category.id ? "is-active" : ""}
+              key={category.id}
+              onClick={() => setActiveCategory(category.id)}
             >
-              <option value="direct:baidu-json">百度 JSON（默认）</option>
-              <option value="direct:bing-html">Bing HTML</option>
-            </select>
-          </label>
-          <label>
-            <span>结果语言</span>
-            <select
-              aria-label="Web Search 结果语言"
-              value={localWebSearchDraft.locale}
-              onChange={(event) =>
-                setLocalWebSearchDraft((current) => ({
-                  ...current,
-                  locale: event.target.value as LocalWebSearchSettingsSelection["locale"],
-                }))
-              }
-            >
-              <option value="zh-CN">简体中文</option>
-              <option value="en-US">English (US)</option>
-            </select>
-          </label>
-          <label>
-            <span>SafeSearch</span>
-            <select
-              aria-label="Web Search SafeSearch"
-              value={localWebSearchDraft.safeSearch}
-              onChange={(event) =>
-                setLocalWebSearchDraft((current) => ({
-                  ...current,
-                  safeSearch: event.target.value as LocalWebSearchSettingsSelection["safeSearch"],
-                }))
-              }
-            >
-              <option value="off">关闭</option>
-              <option value="moderate">适中（默认）</option>
-              <option value="strict">严格</option>
-            </select>
-          </label>
-          <button type="submit" disabled={saveLocalWebSearchSettings.isPending}>
-            {saveLocalWebSearchSettings.isPending ? "正在保存…" : "保存搜索设置"}
-          </button>
-        </form>
-        <div className="local-web-search-providers">
-          {localWebSearchSettings.data?.providers.map((provider) => (
-            <article key={provider.descriptor.providerId}>
-              <div>
-                <strong>{provider.descriptor.displayName}</strong>
-                {provider.selected ? <small>当前选择</small> : null}
-              </div>
-              <span className={`is-${provider.status}`}>
-                {localWebSearchProviderStatusLabels[provider.status]}
-              </span>
-              <small>
-                {provider.lastErrorCode ? `最近错误：${provider.lastErrorCode}` : "尚无运行错误"}
-                {provider.backedOffUntil
-                  ? ` · 退避至 ${new Date(provider.backedOffUntil).toLocaleTimeString()}`
-                  : ""}
-              </small>
-            </article>
+              {category.label}
+            </button>
           ))}
         </div>
-        <div className="local-web-search-footer">
-          <span>每轮缓存 · 单 Provider · 禁止自动 fallback · 模型不可选择 Provider</span>
-          <button
-            type="button"
-            disabled={resetLocalWebSearchRuntime.isPending}
-            onClick={() => resetLocalWebSearchRuntime.mutate()}
-          >
-            {resetLocalWebSearchRuntime.isPending ? "正在重置…" : "清缓存并重置退避"}
-          </button>
+        <label className="tool-search-field">
+          <MagnifyingGlass size={18} />
+          <input
+            type="search"
+            placeholder="搜索工具"
+            aria-label="搜索工具"
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+          />
+        </label>
+      </div>
+
+      {mcpNotice ? (
+        <p className="inline-success tool-library-notice" role="status">
+          {mcpNotice}
+        </p>
+      ) : null}
+
+      <section className="tool-library-table" aria-label="工具列表">
+        <div className="tool-library-row tool-library-columns" aria-hidden="true">
+          <span>工具名称</span>
+          <span>描述</span>
+          <span>来源 / 类型</span>
+          <span>状态</span>
+          <span>启用</span>
+          <span>操作</span>
         </div>
-        {localWebSearchNotice ? (
-          <p className="inline-success" role="status">
-            {localWebSearchNotice}
-          </p>
-        ) : null}
-        {localWebSearchSettings.error ||
-        saveLocalWebSearchSettings.error ||
-        resetLocalWebSearchRuntime.error ? (
-          <p className="inline-error" role="alert">
-            {userFacingError(
-              localWebSearchSettings.error ??
-                saveLocalWebSearchSettings.error ??
-                resetLocalWebSearchRuntime.error,
-              "本地搜索设置暂时不可用，请稍后重试。",
-            )}
-          </p>
+        {filteredRows.map((row) => {
+          const mcpServer = row.mcpServerId
+            ? mcpServers.data?.find((server) => server.id === row.mcpServerId)
+            : undefined;
+          return (
+            <article className="tool-library-row" key={row.id}>
+              <div className="tool-library-name">
+                <span className="tool-library-icon" aria-hidden="true">
+                  {renderToolIcon(row.capability)}
+                </span>
+                <strong>{row.name}</strong>
+              </div>
+              <p>{row.detail}</p>
+              <span className="tool-library-source">{row.source}</span>
+              <span className={`tool-library-status is-${row.statusTone}`}>{row.status}</span>
+              <label className="tool-library-switch">
+                <span className="visually-hidden">启用 {row.name}</span>
+                <input
+                  type="checkbox"
+                  checked={row.enabled}
+                  disabled={!mcpServer || toggleMcp.isPending}
+                  readOnly={!mcpServer}
+                  onChange={() => {
+                    if (mcpServer) toggleMcp.mutate(mcpServer);
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="tool-row-settings"
+                onClick={() => setSelectedToolId(row.id)}
+              >
+                <GearSix size={17} />
+                设置
+              </button>
+            </article>
+          );
+        })}
+        {!filteredRows.length ? (
+          <div className="tool-library-empty">
+            <MagnifyingGlass size={24} />
+            <strong>没有找到匹配的工具</strong>
+            <span>试试其他关键词或分类。</span>
+          </div>
         ) : null}
       </section>
-      <section className="browser-session-panel" aria-label="独立浏览器会话">
-        <div className="browser-session-heading">
-          <div>
-            <h2>独立浏览器操作</h2>
-            <p>浏览器始终在独立窗口中运行；这里不会嵌入或显示网页内容。</p>
-          </div>
-          <span>{browserSessions.data?.length ?? 0} 个会话</span>
-        </div>
-        {browserSessions.data?.length ? (
-          <div className="browser-session-list">
-            {browserSessions.data.map((session) => {
-              const pausing =
-                pauseBrowserSession.isPending &&
-                pauseBrowserSession.variables === session.sessionId;
-              const resuming =
-                resumeBrowserSession.isPending &&
-                resumeBrowserSession.variables === session.sessionId;
-              return (
-                <article className="browser-session-card" key={session.sessionId}>
-                  <div className="browser-session-card-heading">
-                    <div>
-                      <strong>{browserApplicationLabel(session.applicationId)}</strong>
-                      <span>{browserBackendLabel(session)}</span>
-                    </div>
-                    <span className={`browser-session-state is-${session.state}`}>
-                      {browserSessionStateLabels[session.state]}
-                    </span>
+
+      {selectedRow ? (
+        <div className="tool-modal-backdrop" role="presentation">
+          <section
+            className="tool-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tool-settings-title"
+          >
+            <header className="tool-modal-header">
+              <div className="tool-modal-title">
+                <span className="tool-library-icon" aria-hidden="true">
+                  {renderToolIcon(selectedRow.capability)}
+                </span>
+                <div>
+                  <h2 id="tool-settings-title">{selectedRow.name}</h2>
+                  <p>{selectedRow.detail}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭工具设置"
+                onClick={() => setSelectedToolId(null)}
+              >
+                <X size={19} />
+              </button>
+            </header>
+
+            <div className="tool-modal-summary">
+              <div>
+                <span>来源 / 类型</span>
+                <strong>{selectedRow.source}</strong>
+              </div>
+              <div>
+                <span>状态</span>
+                <strong>{selectedRow.status}</strong>
+              </div>
+            </div>
+
+            {selectedRow.capability === "web.search" ? (
+              <section className="tool-settings-section" aria-label="本地 Web Search">
+                <div className="tool-settings-heading">
+                  <div>
+                    <h3>设置</h3>
+                    <p>选择本地搜索使用的引擎、结果语言和安全级别。</p>
                   </div>
-                  <p>{browserControlPathLabel(session)}</p>
-                  {session.state === "active" || session.state === "opening" ? (
+                  <button
+                    type="button"
+                    disabled={resetLocalWebSearchRuntime.isPending}
+                    onClick={() => resetLocalWebSearchRuntime.mutate()}
+                  >
+                    {resetLocalWebSearchRuntime.isPending ? "正在重置…" : "重置搜索服务"}
+                  </button>
+                </div>
+                <form
+                  className="tool-search-settings-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    saveLocalWebSearchSettings.mutate(localWebSearchDraft);
+                  }}
+                >
+                  <label>
+                    <span>搜索引擎</span>
+                    <select
+                      aria-label="Web Search Provider"
+                      value={localWebSearchDraft.providerId}
+                      onChange={(event) =>
+                        setLocalWebSearchDraft((current) => ({
+                          ...current,
+                          providerId: event.target
+                            .value as LocalWebSearchSettingsSelection["providerId"],
+                        }))
+                      }
+                    >
+                      <option value="direct:baidu-json">百度 JSON（默认）</option>
+                      <option value="direct:bing-html">Bing HTML</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>结果语言</span>
+                    <select
+                      aria-label="Web Search 结果语言"
+                      value={localWebSearchDraft.locale}
+                      onChange={(event) =>
+                        setLocalWebSearchDraft((current) => ({
+                          ...current,
+                          locale: event.target.value as LocalWebSearchSettingsSelection["locale"],
+                        }))
+                      }
+                    >
+                      <option value="zh-CN">简体中文</option>
+                      <option value="en-US">English (US)</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>安全搜索</span>
+                    <select
+                      aria-label="Web Search SafeSearch"
+                      value={localWebSearchDraft.safeSearch}
+                      onChange={(event) =>
+                        setLocalWebSearchDraft((current) => ({
+                          ...current,
+                          safeSearch: event.target
+                            .value as LocalWebSearchSettingsSelection["safeSearch"],
+                        }))
+                      }
+                    >
+                      <option value="off">关闭</option>
+                      <option value="moderate">适中（默认）</option>
+                      <option value="strict">严格</option>
+                    </select>
+                  </label>
+                  <button
+                    type="submit"
+                    className="primary-action"
+                    disabled={saveLocalWebSearchSettings.isPending}
+                  >
+                    {saveLocalWebSearchSettings.isPending ? "正在保存…" : "保存设置"}
+                  </button>
+                </form>
+                <div className="tool-provider-list">
+                  {localWebSearchSettings.data?.providers.map((provider) => (
+                    <div key={provider.descriptor.providerId}>
+                      <span>
+                        <strong>{provider.descriptor.displayName}</strong>
+                        {provider.selected ? <small>当前选择</small> : null}
+                      </span>
+                      <span className={`is-${provider.status}`}>
+                        {localWebSearchProviderStatusLabels[provider.status]}
+                      </span>
+                      {provider.lastErrorCode ? <small>{provider.lastErrorCode}</small> : null}
+                    </div>
+                  ))}
+                </div>
+                {localWebSearchNotice ? (
+                  <p className="inline-success" role="status">
+                    {localWebSearchNotice}
+                  </p>
+                ) : null}
+                {localWebSearchSettings.error ||
+                saveLocalWebSearchSettings.error ||
+                resetLocalWebSearchRuntime.error ? (
+                  <p className="inline-error" role="alert">
+                    {userFacingError(
+                      localWebSearchSettings.error ??
+                        saveLocalWebSearchSettings.error ??
+                        resetLocalWebSearchRuntime.error,
+                      "本地搜索设置暂时不可用，请稍后重试。",
+                    )}
+                  </p>
+                ) : null}
+              </section>
+            ) : selectedMcp ? (
+              <section className="tool-settings-section">
+                <div className="tool-mcp-detail">
+                  <span>连接方式</span>
+                  <strong>
+                    {selectedMcp.transport === "stdio" ? "本机进程（STDIO）" : "网络服务（HTTP）"}
+                  </strong>
+                  <span>连接地址</span>
+                  <strong>
+                    {selectedMcp.transport === "stdio" ? selectedMcp.command : selectedMcp.url}
+                  </strong>
+                  {selectedMcp.transport === "streamable_http" ? (
+                    <>
+                      <span>认证</span>
+                      <strong>
+                        {selectedMcp.auth === "none"
+                          ? "无认证"
+                          : selectedMcp.auth === "bearer"
+                            ? "Bearer 令牌"
+                            : selectedAuthorization
+                              ? mcpAuthorizationLabels[selectedAuthorization.status]
+                              : "正在读取 OAuth 状态"}
+                      </strong>
+                    </>
+                  ) : null}
+                </div>
+                <div className="tool-modal-actions">
+                  {selectedMcp.transport === "streamable_http" && selectedMcp.auth === "oauth" ? (
                     <button
                       type="button"
-                      disabled={pausing || resumeBrowserSession.isPending}
-                      onClick={() => pauseBrowserSession.mutate(session.sessionId)}
+                      disabled={authorizeMcp.isPending || !selectedMcp.enabled}
+                      onClick={() => authorizeMcp.mutate(selectedMcp.id)}
                     >
-                      {pausing ? "正在暂停…" : "我来接管"}
-                    </button>
-                  ) : session.state === "paused_for_user" ? (
-                    <button
-                      type="button"
-                      className="primary-action"
-                      disabled={resuming || pauseBrowserSession.isPending}
-                      onClick={() => resumeBrowserSession.mutate(session.sessionId)}
-                    >
-                      {resuming ? "正在核验窗口…" : "恢复自动操作"}
+                      {authorizeMcp.isPending ? "等待浏览器授权…" : "在浏览器中授权"}
                     </button>
                   ) : null}
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="muted-copy">当前没有由 OpenerX 控制的独立浏览器窗口。</p>
-        )}
-        {browserSessions.error || pauseBrowserSession.error || resumeBrowserSession.error ? (
-          <p className="inline-error" role="alert">
-            {userFacingError(
-              browserSessions.error ?? pauseBrowserSession.error ?? resumeBrowserSession.error,
-              "浏览器会话状态暂时不可用，请稍后重试。",
-            )}
-          </p>
-        ) : null}
-      </section>
-      {!workItems.data?.length && !permissions.data?.length && !browserSessions.data?.length ? (
-        <div className="empty-state tool-empty-state">
-          <TerminalWindow size={26} />
-          <strong>当前没有运行中的任务</strong>
-          <p>从新对话描述一个目标；当任务需要文件、网络或桌面能力时，会在这里显示进度和授权。</p>
-          <NavLink to="/chat/new">开始新任务</NavLink>
-        </div>
-      ) : null}
-      <details className="tool-catalog disclosure-card" aria-label="工具目录">
-        <summary>查看能力与运行状态</summary>
-        <div className="tool-catalog-controls">
-          <span>状态来自当前桌面 Host、系统权限、账户和本机配置。</span>
-          <button
-            type="button"
-            disabled={runtimeReadiness.isFetching}
-            onClick={() => void runtimeReadiness.refetch()}
-          >
-            {runtimeReadiness.isFetching ? "检测中…" : "刷新能力状态"}
-          </button>
-        </div>
-        {nativePermissionNotice ? <p role="status">{nativePermissionNotice}</p> : null}
-        <div className="tool-catalog-grid">
-          {toolCatalog.map((tool) => {
-            const readiness = readinessByCapability.get(tool.capability);
-            const reason = toolRuntimeReason(readiness?.reason ?? null);
-            return (
-              <article key={`${tool.namespace}:${tool.name}`}>
-                <div className="tool-catalog-card-heading">
-                  <small>{toolNamespaceLabels[tool.namespace]}</small>
-                  <span
-                    className={`tool-runtime-status tool-runtime-status-${readiness?.status ?? "unknown"}`}
+                  <button
+                    type="button"
+                    className="danger-action"
+                    disabled={removeMcp.isPending}
+                    onClick={() => removeMcp.mutate(selectedMcp.id)}
                   >
-                    {readiness
-                      ? toolRuntimeStatusLabels[readiness.status]
-                      : runtimeReadiness.isFetching
-                        ? "检测中"
-                        : "状态未知"}
-                  </span>
+                    移除工具
+                  </button>
                 </div>
-                <strong>{tool.name}</strong>
-                <span>{tool.detail}</span>
-                {reason ? <span className="tool-runtime-reason">{reason}</span> : null}
-                {readiness?.details?.length ? (
-                  <ul className="tool-runtime-details">
-                    {readiness.details.map((detail) => (
+                {authorizeMcp.error ? (
+                  <p className="inline-error">
+                    {userFacingError(authorizeMcp.error, "OAuth 授权失败，请检查服务地址后重试。")}
+                  </p>
+                ) : null}
+              </section>
+            ) : (
+              <section className="tool-settings-section">
+                <h3>工具信息</h3>
+                <p>
+                  {toolRuntimeReason(selectedReadiness?.reason ?? null) ??
+                    "此工具由 OpenerX 提供，当前不需要额外设置。"}
+                </p>
+                {selectedReadiness?.details?.length ? (
+                  <ul>
+                    {selectedReadiness.details.map((detail) => (
                       <li key={detail}>{detail}</li>
                     ))}
                   </ul>
                 ) : null}
-                {tool.capability === "desktop" &&
-                readiness?.reason === "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED" ? (
+                {selectedRow.capability === "mcp" ? (
                   <button
                     type="button"
-                    className="tool-runtime-action"
+                    className="primary-action"
+                    onClick={() => {
+                      setSelectedToolId(null);
+                      setAddDialogOpen(true);
+                    }}
+                  >
+                    添加 MCP 工具
+                  </button>
+                ) : null}
+                {selectedRow.capability === "desktop" &&
+                selectedReadiness?.reason === "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED" ? (
+                  <button
+                    type="button"
                     disabled={requestNativePermission.isPending}
                     onClick={() => requestNativePermission.mutate("screen_capture")}
                   >
                     打开屏幕录制设置
                   </button>
                 ) : null}
-                {tool.capability === "desktop" &&
-                readiness?.reason === "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED" ? (
+                {selectedRow.capability === "desktop" &&
+                selectedReadiness?.reason === "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED" ? (
                   <button
                     type="button"
-                    className="tool-runtime-action"
                     disabled={requestNativePermission.isPending}
                     onClick={() => requestNativePermission.mutate("accessibility")}
                   >
                     请求辅助功能权限
                   </button>
                 ) : null}
-              </article>
-            );
-          })}
+                {nativePermissionNotice ? <p role="status">{nativePermissionNotice}</p> : null}
+              </section>
+            )}
+          </section>
         </div>
-      </details>
-      <section className="tool-center-grid">
-        <div>
-          <h2>最近任务</h2>
-          {workItems.data?.length ? (
-            workItems.data.map((workItem) => <ToolActivity key={workItem.id} workItem={workItem} />)
-          ) : (
-            <p className="muted-copy">任务开始后，执行步骤会出现在这里。</p>
-          )}
-        </div>
-        <aside>
-          <h2>本地授权</h2>
-          {scopes.data?.map((scope) => (
-            <article className="scope-card" key={scope.id}>
-              <strong>{scope.capability}</strong>
-              <span>{scope.resource}</span>
-              <small>
-                {scope.maxRisk} · {scope.sessionOnly ? "临时" : "持久"}
-              </small>
+      ) : null}
+
+      {addDialogOpen ? (
+        <div className="tool-modal-backdrop" role="presentation">
+          <section
+            className="tool-modal tool-add-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-tool-title"
+          >
+            <header className="tool-modal-header">
+              <div>
+                <h2 id="add-tool-title">添加工具</h2>
+                <p>通过 MCP 连接本机进程或网络工具服务。</p>
+              </div>
               <button
                 type="button"
-                className="danger-action"
-                disabled={revoke.isPending}
-                onClick={() => revoke.mutate(scope.id)}
+                aria-label="关闭添加工具"
+                onClick={() => setAddDialogOpen(false)}
               >
-                撤销
+                <X size={19} />
               </button>
-            </article>
-          ))}
-          {!scopes.data?.length ? <p className="muted-copy">没有有效授权。</p> : null}
-          <details
-            ref={mcpDetailsRef}
-            className="advanced-tool-settings"
-            onToggle={(event) => {
-              if (!event.currentTarget.open) return;
-              window.requestAnimationFrame(() =>
-                mcpDetailsRef.current?.scrollIntoView?.({
-                  behavior: "smooth",
-                  block: "nearest",
-                }),
-              );
-            }}
-          >
-            <summary>MCP 服务与高级连接</summary>
-            {mcpServers.data?.map((server) => {
-              const authorization = mcpAuthorization.data?.find(
-                ({ serverId }) => serverId === server.id,
-              );
-              const oauth = server.transport === "streamable_http" && server.auth === "oauth";
-              const authorizing = authorizeMcp.isPending && authorizeMcp.variables === server.id;
-              const authorizationReason = mcpAuthorizationReason(authorization?.reason ?? null);
-              return (
-                <article className="scope-card" key={server.id}>
-                  <strong>{server.name}</strong>
-                  <span>{server.transport === "stdio" ? server.command : server.url}</span>
-                  <small>
-                    {server.transport === "stdio" ? "本机 STDIO" : "Streamable HTTP"} ·{" "}
-                    {server.enabled ? "已启用" : "已禁用"}
-                    {server.transport === "streamable_http"
-                      ? ` · ${server.auth === "none" ? "无认证" : server.auth === "bearer" ? "Bearer 令牌" : "OAuth 授权码 + PKCE"}`
-                      : ""}
-                  </small>
-                  {oauth ? (
-                    <small role="status">
-                      {authorization
-                        ? mcpAuthorizationLabels[authorization.status]
-                        : "正在读取 OAuth 状态"}
-                      {authorization?.expiresAt
-                        ? ` · Token 到期 ${new Date(authorization.expiresAt).toLocaleString()}`
-                        : ""}
-                      {authorizationReason ? ` · ${authorizationReason}` : ""}
-                    </small>
-                  ) : null}
-                  {oauth ? (
-                    <button
-                      type="button"
-                      disabled={authorizing || !server.enabled}
-                      onClick={() => authorizeMcp.mutate(server.id)}
-                    >
-                      {authorizing
-                        ? "等待浏览器授权…"
-                        : authorization?.status === "authorized"
-                          ? "重新授权"
-                          : "在浏览器中授权"}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="danger-action"
-                    onClick={() => removeMcp.mutate(server.id)}
-                  >
-                    移除
-                  </button>
-                </article>
-              );
-            })}
-            {authorizeMcp.error ? (
-              <p className="inline-error">
-                {userFacingError(authorizeMcp.error, "OAuth 授权失败，请检查服务地址后重试。")}
-              </p>
-            ) : null}
-            {mcpNotice ? (
-              <p className="inline-success mcp-feedback" role="status">
-                {mcpNotice}
-              </p>
-            ) : null}
+            </header>
             <form
-              className="mcp-config-form"
+              className="mcp-config-form tool-add-form"
               aria-label="添加 MCP 服务"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -6793,10 +6857,6 @@ function ToolCenter(): React.JSX.Element {
                 saveMcp.mutate(config);
               }}
             >
-              <strong>添加服务</strong>
-              <p className="field-help">
-                MCP 会在这台设备上运行。保存前确认服务来源以及它能够访问的数据范围。
-              </p>
               <label className="mcp-field">
                 <span>显示名称</span>
                 <input
@@ -6806,7 +6866,6 @@ function ToolCenter(): React.JSX.Element {
                   onChange={(event) => setMcpName(event.target.value)}
                   required
                 />
-                <small>只用于本机界面识别，不会发送给 MCP 服务。</small>
               </label>
               <label className="mcp-field">
                 <span>连接方式</span>
@@ -6820,11 +6879,6 @@ function ToolCenter(): React.JSX.Element {
                   <option value="stdio">本机进程（STDIO）</option>
                   <option value="streamable_http">网络服务（Streamable HTTP）</option>
                 </select>
-                <small>
-                  {mcpTransport === "stdio"
-                    ? "启动本机可执行程序并通过标准输入输出通信。"
-                    : "连接 HTTPS MCP 地址；认证凭证只保存在系统凭证边界。"}
-                </small>
               </label>
               <label className="mcp-field">
                 <span>{mcpTransport === "stdio" ? "启动命令" : "服务地址"}</span>
@@ -6832,25 +6886,20 @@ function ToolCenter(): React.JSX.Element {
                   aria-label={mcpTransport === "stdio" ? "MCP 命令" : "MCP URL"}
                   placeholder={
                     mcpTransport === "stdio"
-                      ? "例如：/usr/local/bin/my-mcp"
+                      ? "例如：C:\\tools\\my-mcp.exe"
                       : "https://example.com/mcp"
                   }
                   value={mcpEndpoint}
                   onChange={(event) => setMcpEndpoint(event.target.value)}
                   required
                 />
-                <small>
-                  {mcpTransport === "stdio"
-                    ? "填写可执行文件的绝对路径；参数支持将在服务保存后配置。"
-                    : "建议使用 HTTPS；地址应直接指向 Streamable HTTP MCP 端点。"}
-                </small>
               </label>
               {mcpTransport === "stdio" ? (
                 <label className="mcp-field">
                   <span>工作目录</span>
                   <input
                     aria-label="MCP 工作目录"
-                    placeholder="例如：/Users/name/project"
+                    placeholder="例如：C:\\Users\\name\\project"
                     value={mcpCwd}
                     onChange={(event) => setMcpCwd(event.target.value)}
                     required
@@ -6870,7 +6919,6 @@ function ToolCenter(): React.JSX.Element {
                       <option value="bearer">Bearer 令牌</option>
                       <option value="oauth">OAuth 授权码（PKCE）</option>
                     </select>
-                    <small>令牌只进入系统加密凭证存储，不写入聊天数据库或诊断导出。</small>
                   </label>
                   {mcpAuth === "bearer" ? (
                     <label className="mcp-field">
@@ -6884,7 +6932,6 @@ function ToolCenter(): React.JSX.Element {
                         onChange={(event) => setMcpToken(event.target.value)}
                         required
                       />
-                      <small>令牌保存在系统凭证存储中，界面不会再次显示明文。</small>
                     </label>
                   ) : mcpAuth === "oauth" ? (
                     <>
@@ -6897,7 +6944,6 @@ function ToolCenter(): React.JSX.Element {
                           value={mcpOAuthClientId}
                           onChange={(event) => setMcpOAuthClientId(event.target.value)}
                         />
-                        <small>这里只接受公共客户端 ID；桌面端不收集 Client Secret。</small>
                       </label>
                       <label className="mcp-field">
                         <span>OAuth Scope（可选）</span>
@@ -6913,19 +6959,24 @@ function ToolCenter(): React.JSX.Element {
                   ) : null}
                 </>
               )}
-              <button type="submit" className="primary-action" disabled={saveMcp.isPending}>
-                {saveMcp.isPending ? "正在保存…" : "保存 MCP"}
-              </button>
+              <div className="tool-modal-actions">
+                <button type="button" onClick={() => setAddDialogOpen(false)}>
+                  取消
+                </button>
+                <button type="submit" className="primary-action" disabled={saveMcp.isPending}>
+                  {saveMcp.isPending ? "正在添加…" : "添加工具"}
+                </button>
+              </div>
               {saveMcp.error ? (
                 <p className="inline-error">
-                  {userFacingError(saveMcp.error, "无法保存 MCP 服务，请检查字段后重试。")}
+                  {userFacingError(saveMcp.error, "无法添加 MCP 工具，请检查字段后重试。")}
                 </p>
               ) : null}
             </form>
-          </details>
-        </aside>
-      </section>
-    </main>
+          </section>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -6986,10 +7037,6 @@ function Sidebar({
           <NavLink to="/files">
             <FolderSimple size={17} />
             <span>个人文件</span>
-          </NavLink>
-          <NavLink to="/tasks">
-            <TerminalWindow size={17} />
-            <span>任务与工具</span>
           </NavLink>
           <NavLink to="/automations">
             <ArrowClockwise size={17} />
@@ -7068,7 +7115,13 @@ export function App(): React.JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const settingsOpen = location.pathname.startsWith("/settings");
+  const lastNonSettingsLocation = useRef("/chat/new");
   const contextConversationId = /^\/chat\/([^/]+)$/u.exec(location.pathname)?.[1] ?? null;
+  useEffect(() => {
+    if (!settingsOpen) {
+      lastNonSettingsLocation.current = `${location.pathname}${location.search}`;
+    }
+  }, [location.pathname, location.search, settingsOpen]);
   useEffect(() => {
     if (location.pathname) setContextOpen(false);
   }, [location.pathname]);
@@ -7247,8 +7300,10 @@ export function App(): React.JSX.Element {
       >
         跳到主要内容
       </button>
-      <Sidebar onCollapse={() => setSidebarOpen(false)} backgroundInert={contextOpen} />
-      {!sidebarOpen ? (
+      {!settingsOpen ? (
+        <Sidebar onCollapse={() => setSidebarOpen(false)} backgroundInert={contextOpen} />
+      ) : null}
+      {!settingsOpen && !sidebarOpen ? (
         <button
           type="button"
           className="sidebar-open"
@@ -7273,7 +7328,10 @@ export function App(): React.JSX.Element {
           />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/files" element={<FilesAndArtifacts />} />
-          <Route path="/tasks" element={<ToolCenter />} />
+          <Route
+            path="/tasks"
+            element={<Navigate to="/settings/account?section=tools" replace />}
+          />
           <Route
             path="/automations"
             element={<AutomationsPage defaultModelRef={defaultModelRef} />}
@@ -7289,6 +7347,7 @@ export function App(): React.JSX.Element {
                 onThemeChange={setThemePreference}
                 defaultModelRef={defaultModelRef}
                 onDefaultModelChange={setDefaultModelRef}
+                onClose={() => navigate(lastNonSettingsLocation.current)}
               />
             }
           />

@@ -116,23 +116,27 @@ try {
   assert.equal(initial.state, "active");
   sessionId = initial.sessionId;
 
-  await page.getByRole("link", { name: "任务与工具" }).click();
-  await page.getByRole("heading", { name: "任务与工具" }).waitFor();
-  const sessionCard = page.locator(".browser-session-card").filter({ hasText: "Google Chrome" });
-  await sessionCard.getByText("自动操作中", { exact: true }).waitFor();
+  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("button", { name: "工具" }).click();
+  await page.getByRole("heading", { name: "工具" }).waitFor();
+  const browserRow = page.locator(".tool-library-row").filter({ hasText: "浏览器操作" });
+  await browserRow.waitFor();
   assert.equal(await page.locator("iframe").count(), 0);
-  const toolCenterText = await page.locator("main.tool-center-page").innerText();
+  const toolCenterText = await page.locator("section.tool-center-page").innerText();
   assert.doesNotMatch(toolCenterText, /Tool Center live fixture|127\.0\.0\.1|com\.google\.Chrome/u);
-  assert.match(toolCenterText, /机器默认浏览器/u);
-  assert.match(toolCenterText, /独立窗口 · 系统辅助功能/u);
+  assert.doesNotMatch(toolCenterText, /Google Chrome|机器默认浏览器|独立窗口 · 系统辅助功能/u);
 
-  await sessionCard.getByRole("button", { name: "我来接管" }).click();
-  await sessionCard.getByText("用户接管中", { exact: true }).waitFor();
+  await page.evaluate(
+    async (id) => await window.openerx.pauseBrowserComputerUseSession({ sessionId: id }),
+    sessionId,
+  );
   const paused = (await browserSessions(page)).find((session) => session.sessionId === sessionId);
   assert.equal(paused?.state, "paused_for_user");
 
-  await sessionCard.getByRole("button", { name: "恢复自动操作" }).click();
-  await sessionCard.getByText("自动操作中", { exact: true }).waitFor({ timeout: 90_000 });
+  await page.evaluate(
+    async (id) => await window.openerx.resumeBrowserComputerUseSession({ sessionId: id }),
+    sessionId,
+  );
   const resumed = (await browserSessions(page)).find((session) => session.sessionId === sessionId);
   assert.equal(resumed?.state, "active");
 
