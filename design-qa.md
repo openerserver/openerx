@@ -1,65 +1,69 @@
-# Codex 风格设置页 Design QA
+# Codex 风格自动化页 Design QA
 
 ## Artifacts
 
-- source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-97bfa152-9b01-4df0-a4ce-8518ad6427e0.png`
-- implementation screenshot: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\codex-style-settings-account.png`
-- tool-section screenshot: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\codex-style-settings-tools.png`
-- normalized full-view comparison: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\codex-settings-qa-comparison.png`
-- focused comparison: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\codex-settings-qa-focused.png`
+- source visual truth path: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-6216cbae-5fc3-4b50-9cfb-f5bce292bd9d.png`
+- implementation screenshot path: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-implementation-viewport.png`
+- detail screenshot path: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-detail-viewport.png`
+- editor screenshot path: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-editor-viewport.png`
+- full-view comparison evidence: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-comparison.png`
+- focused comparison evidence: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-focus-comparison.png`
+- viewport: 2239 × 1339 CSS px, light theme
 - source pixels: 2239 × 1339
-- implementation pixels / CSS viewport: 1229 × 815 at 1× density
-- state: Windows Electron app, `/settings/account`, light theme, signed-out account, no dialog open
-- density normalization: the 2239 × 1339 source was scaled proportionally to 815 px high (1363 px wide), then cropped only from the right to the 1229 px implementation width. The left settings rail and primary content origin remain intact. The implementation stayed at native 1× pixels.
+- implementation pixels: 2239 × 1329
+- density normalization: browser capture was normalized to CSS-pixel width. The 10 px height difference is capture chrome, not page cropping. The focused comparison aligns the source and implementation main-content regions; the existing OpenerX sidebar is intentionally outside the implementation harness because it was not changed.
+- state: populated automation list with active and paused tasks; no panel open for the primary comparison
 
 ## Findings
 
 - No actionable P0, P1, or P2 mismatch remains.
-- Fonts and typography: both use a compact Windows/system sans-serif stack with a 30–32 px primary title, 16 px section title, 13 px navigation labels, and restrained muted copy. Weight, hierarchy, line height, and truncation follow the reference without introducing a new display font.
-- Spacing and layout rhythm: the settings rail, return action, search field, grouped navigation, selected pill, rounded content canvas, independent scroll region, content origin, section-heading gap, and card rhythm track the reference. Tall windows retain the reference's generous 140 px content offset; windows under 900 px high reduce it to 82 px to preserve the same proportional composition.
-- Colors and visual tokens: the rail uses a low-contrast neutral surface, selected rows use a darker translucent neutral, and the content canvas remains white with quiet borders. OpenerX red is intentionally retained only for primary product actions and enabled tool switches.
-- Image quality and asset fidelity: the reference contains no product imagery or decorative raster assets. Existing Phosphor icons are used consistently; no emoji, placeholder art, CSS illustration, handcrafted SVG, or fake asset replaces a visible source asset.
-- Copy and content: navigation labels are intentionally limited to real OpenerX capabilities and grouped as “个人 / 智能与能力 / 应用”. The right-side content remains real OpenerX account/tool/model/memory/update/diagnostic functionality rather than copied Codex-only settings.
-- Accessibility and affordances: “返回应用”, settings search, section buttons, selected state, tool search, tabs, add-tool flow, and existing settings forms remain keyboard-addressable with semantic labels.
+- Fonts and typography: both screens use the existing system sans-serif stack with a restrained 34 px title, 16 px subtitle, 13–15 px controls and task labels, moderate optical weights, compact line heights, and single-line truncation for long summaries. The product-specific title “自动化” replaces the source phrase “已安排的任务” intentionally.
+- Spacing and layout rhythm: the implementation matches the reference’s centered narrow work area, generous top offset, pill search field, compact segmented filters, low-density task rows, quiet dividers, and large surrounding whitespace. Detail and editing content move into a 560 px right drawer so the primary list keeps the reference composition.
+- Colors and visual tokens: the surface stays neutral white in light mode with low-contrast borders and muted secondary copy. Black/white primary actions follow the reference. Green, amber, and outline states are limited to automation status semantics.
+- Image quality and asset fidelity: the source contains no product photography, illustration, logo, or decorative raster asset in the redesigned content region. Existing Phosphor icons provide the closest matching UI icon language; no emoji, placeholder art, handcrafted SVG, or fake raster asset is used.
+- Copy and content: source hierarchy and phrasing are adapted to real OpenerX capabilities. Each task shows name, state, schedule, next run, and prompt summary; background startup, retry, catch-up, model, heartbeat, run history, and safety copy remain available.
+- Accessibility and affordances: search, clear, filters, task rows, create/edit form, pause/resume, run-now, delete, background startup, and close actions are semantic and keyboard-addressable. Visible focus states and reduced-motion behavior are included.
 
 ## Full-view comparison evidence
 
-`codex-settings-qa-comparison.png` shows the same two-region composition: a compact settings-only rail on the left and a large rounded white canvas on the right. The rail-to-content ratio, title origin, section hierarchy, muted palette, and selected-navigation treatment align after normalization. The implementation contains more empty space because the signed-out account state has one real card, while the reference's “常规” section contains multiple populated setting groups; this is an intentional content-state difference, not layout drift.
+`automation-comparison.png` places the complete Codex reference and the browser-rendered OpenerX implementation in one comparison input. It shows the same white content canvas, centered reading column, title/search/filter sequence, lightweight task treatment, and dominant whitespace. The reference’s existing app sidebar and window chrome are not duplicated in the harness; the production OpenerX sidebar remains unchanged.
 
 ## Focused region comparison evidence
 
-`codex-settings-qa-focused.png` keeps the navigation, search, selected row, primary title, section title, and first card readable at original comparison density. It confirms that icon size, row height, label rhythm, content inset, corner treatment, and vertical hierarchy match the reference direction closely.
+`automation-focus-comparison.png` aligns the readable main-content regions in one input. It confirms the title hierarchy, search height and radius, selected-filter treatment, task-row typography, status-dot scale, muted schedule copy, divider weight, and vertical rhythm. The implementation intentionally carries more task metadata and realistic project data than the sparse reference.
 
 ## Comparison history
 
-- Initial comparison — P2: the first implementation retained too little horizontal inset at wide sizes, used a narrower maximum rail, and did not visibly emphasize the selected settings row.
-- Fix: changed the rail to `clamp(220px, 17vw, 376px)`, left-aligned the 1054 px content column with a `13vw` inset, and strengthened the neutral selected-row fill.
-- Initial comparison — P2: the fixed 140 px top inset and 54 px title gap placed content too low in the real 1229 × 815 Electron window after normalizing the reference.
-- Fix: added a height-aware breakpoint below 900 px that uses an 82 px top inset and 28 px title gap, while retaining the reference spacing on tall windows. Added explicit section headings so the title-to-card hierarchy matches Codex.
-- Post-fix evidence: `codex-settings-qa-comparison.png` and `codex-settings-qa-focused.png` show the corrected content origin, selected state, section rhythm, and first-card placement.
+- Initial capture issue: the preview harness placed the app content in the collapsed grid’s zero-width sidebar track, producing a blank screenshot.
+- Fix: added the preserved sidebar track to the harness and recaptured the same 2239 × 1339 viewport. This was a verification-harness correction; production code was unaffected.
+- Post-fix full-view evidence: `automation-implementation-viewport.png` shows the corrected centered content column and all primary controls.
+- Post-fix focused evidence: `automation-focus-comparison.png` shows no remaining actionable P0/P1/P2 drift on typography, spacing, tokens, icon quality, or copy hierarchy.
 
 ## Primary interactions tested
 
-- Settings opens as a full-window workspace without the app conversation sidebar.
-- “返回应用” restores the previous application route.
-- Settings search filters the grouped navigation and restores it when cleared.
-- Section navigation changes active content and focus.
-- Tool categories, tool search, add-tool dialog, Web Search settings, MCP OAuth state, and runtime status remain functional.
-- Billing remains nested inside settings.
+- Search narrows the list to the matching automation.
+- “已暂停” filtering returns only the paused task; “全部” restores the full list.
+- Selecting a task opens its detail drawer and loads run history.
+- “编辑” opens the populated editor and schedule preview.
+- “新建自动化” opens the creation editor; cancel closes it.
+- Background startup remains a functional checkbox/switch.
+- Browser console errors checked: none.
+- Automated renderer tests: 3 automation tests passed.
+- TypeScript check: passed.
+- Biome check for the changed TSX component: passed.
 
 ## Implementation checklist
 
-- [x] Replace the former settings header/sidebar arrangement with the Codex-style full-window shell.
-- [x] Add return-to-app and settings-search controls.
-- [x] Group only real OpenerX sections in the left rail.
-- [x] Match neutral selected-state and content-canvas styling.
-- [x] Preserve every existing settings/tool workflow.
-- [x] Add height-aware responsive spacing.
-- [x] Verify the account and tool states in the real Electron window.
-- [x] Run TypeScript and focused renderer tests.
+- [x] Replace the former card-heavy two-column page with the Codex-style reading flow.
+- [x] Add working search and status filters.
+- [x] Preserve task creation, editing, schedule preview, run-now, pause/resume, deletion, and history.
+- [x] Move secondary configuration and details into focused right drawers.
+- [x] Preserve background startup settings.
+- [x] Verify the populated list, filtering, detail, editor, and create states in the browser.
+- [x] Run targeted tests, typecheck, formatter/lint, and console checks.
 
 ## Follow-up Polish
 
-- P3: Computer Use screenshots include the Windows pointer highlight over the selected navigation row; this is capture chrome and is not rendered by OpenerX.
+- P3: a future pass could add an explicit confirmation dialog before deletion; the existing behavior remains unchanged in this redesign.
 
 final result: passed
