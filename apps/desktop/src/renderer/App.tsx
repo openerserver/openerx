@@ -210,20 +210,6 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   max: "最大",
 };
 
-type MemoryOverrideChoice = "inherit" | "on" | "off";
-
-function memoryOverrideChoice(value: boolean | null | undefined): MemoryOverrideChoice {
-  if (value === true) return "on";
-  if (value === false) return "off";
-  return "inherit";
-}
-
-function memoryOverrideValue(value: MemoryOverrideChoice): boolean | null {
-  if (value === "on") return true;
-  if (value === "off") return false;
-  return null;
-}
-
 function modelThinkingLevels(model: ModelCatalogEntry): ThinkingLevel[] {
   return model.thinkingLevels ?? ["off"];
 }
@@ -752,30 +738,6 @@ function Composer({
     queryFn: () => window.openerx.listModels(),
     retry: false,
   });
-  const globalMemorySettings = useQuery({
-    queryKey: ["memory", "settings"],
-    queryFn: () => window.openerx.getMemorySettings(),
-    retry: false,
-  });
-  const conversationMemorySettings = useQuery({
-    queryKey: ["memory", "conversation-settings", conversationId],
-    queryFn: () =>
-      window.openerx.getConversationMemorySettings({ conversationId: conversationId ?? "" }),
-    enabled: Boolean(conversationId),
-    retry: false,
-  });
-  const updateConversationMemorySettings = useMutation({
-    mutationFn: (input: { useMemories?: boolean | null; generateMemories?: boolean | null }) => {
-      if (!conversationId) throw new Error("CONVERSATION_REQUIRED");
-      return window.openerx.updateConversationMemorySettings({ conversationId, ...input });
-    },
-    onSuccess: (updated) => {
-      queryClient.setQueryData(
-        ["memory", "conversation-settings", updated.conversationId],
-        updated,
-      );
-    },
-  });
   const conversation = conversationSnapshot?.conversation;
   const compatibleConversationModels = conversation
     ? models.data?.filter(
@@ -1013,78 +975,6 @@ function Composer({
                 </select>
                 <CaretDown size={13} weight="bold" aria-hidden="true" />
               </div>
-              <div
-                className="composer-select"
-                title={
-                  globalMemorySettings.data?.memoriesEnabled
-                    ? "仅覆盖当前对话；不会修改全局记忆设置。"
-                    : "请先在设置中启用长期记忆。"
-                }
-              >
-                <Brain size={15} weight="regular" />
-                <span className="composer-select-label">
-                  记忆 ·
-                  {conversationMemorySettings.data?.useMemories === true
-                    ? "使用"
-                    : conversationMemorySettings.data?.useMemories === false
-                      ? "不使用"
-                      : "默认"}
-                </span>
-                <select
-                  aria-label="当前对话使用记忆"
-                  value={memoryOverrideChoice(conversationMemorySettings.data?.useMemories)}
-                  disabled={
-                    !globalMemorySettings.data?.memoriesEnabled ||
-                    conversationMemorySettings.isPending ||
-                    updateConversationMemorySettings.isPending
-                  }
-                  onChange={(event) =>
-                    updateConversationMemorySettings.mutate({
-                      useMemories: memoryOverrideValue(event.target.value as MemoryOverrideChoice),
-                    })
-                  }
-                >
-                  <option value="inherit">跟随全局</option>
-                  <option value="on">使用记忆</option>
-                  <option value="off">不使用记忆</option>
-                </select>
-                <CaretDown size={13} weight="bold" aria-hidden="true" />
-              </div>
-              <div
-                className="composer-select"
-                title="控制当前对话能否在自动生成开放后贡献未来记忆；全局设置仍是硬开关。"
-              >
-                <Sparkle size={15} weight="regular" />
-                <span className="composer-select-label">
-                  学习 ·
-                  {conversationMemorySettings.data?.generateMemories === true
-                    ? "允许"
-                    : conversationMemorySettings.data?.generateMemories === false
-                      ? "不允许"
-                      : "默认"}
-                </span>
-                <select
-                  aria-label="当前对话贡献未来记忆"
-                  value={memoryOverrideChoice(conversationMemorySettings.data?.generateMemories)}
-                  disabled={
-                    !globalMemorySettings.data?.memoriesEnabled ||
-                    conversationMemorySettings.isPending ||
-                    updateConversationMemorySettings.isPending
-                  }
-                  onChange={(event) =>
-                    updateConversationMemorySettings.mutate({
-                      generateMemories: memoryOverrideValue(
-                        event.target.value as MemoryOverrideChoice,
-                      ),
-                    })
-                  }
-                >
-                  <option value="inherit">跟随全局</option>
-                  <option value="on">允许贡献</option>
-                  <option value="off">不允许贡献</option>
-                </select>
-                <CaretDown size={13} weight="bold" aria-hidden="true" />
-              </div>
             </>
           ) : null}
           <div className="composer-select">
@@ -1153,14 +1043,10 @@ function Composer({
             {userFacingError(chooseFiles.error, "暂时无法添加文件，请重新选择。")}
           </p>
         ) : null}
-        {selectConversationModel.error ||
-        selectConversationThinking.error ||
-        updateConversationMemorySettings.error ? (
+        {selectConversationModel.error || selectConversationThinking.error ? (
           <p className="inline-error">
             {userFacingError(
-              selectConversationModel.error ??
-                selectConversationThinking.error ??
-                updateConversationMemorySettings.error,
+              selectConversationModel.error ?? selectConversationThinking.error,
               "当前对话设置暂时没有更新，请重试。",
             )}
           </p>
@@ -4929,7 +4815,7 @@ function MemorySettingsPanel(): React.JSX.Element {
           <label>
             <span>
               <strong>启用长期记忆</strong>
-              <small>默认关闭；关闭后不会召回，也不会提供记忆工具。</small>
+              <small>默认开启；关闭后不会召回，也不会提供记忆工具。</small>
             </span>
             <input
               type="checkbox"

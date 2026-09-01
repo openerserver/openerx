@@ -14,6 +14,62 @@ afterEach(() => {
 });
 
 describe("database migrations", () => {
+  it("enables untouched legacy memory defaults without overriding explicit choices", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-default-migration-"));
+    directories.push(directory);
+    const database = new DatabaseSync(path.join(directory, "openerx.sqlite"));
+    migrateDatabase(database, { throughVersion: 27 });
+    const insert = database.prepare(
+      `INSERT INTO memory_settings
+       (owner_profile_id, memories_enabled, use_memories, generate_memories, sync_memories,
+        disable_on_external_context, idle_delay_minutes, min_rate_limit_remaining_percent,
+        updated_at, revision)
+       VALUES (?, 0, 0, 0, 0, 1, 30, ?, '2026-08-30T00:00:00.000Z', ?)`,
+    );
+    insert.run("untouched-default", 20, 1);
+    insert.run("explicitly-disabled", 20, 2);
+    insert.run("custom-guard", 35, 1);
+
+    migrateDatabase(database);
+
+    expect(
+      database
+        .prepare(
+          `SELECT owner_profile_id AS ownerProfileId, memories_enabled AS memoriesEnabled,
+                  use_memories AS useMemories, generate_memories AS generateMemories,
+                  min_rate_limit_remaining_percent AS minimumRemaining, revision
+           FROM memory_settings ORDER BY owner_profile_id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        ownerProfileId: "custom-guard",
+        memoriesEnabled: 0,
+        useMemories: 0,
+        generateMemories: 0,
+        minimumRemaining: 35,
+        revision: 1,
+      },
+      {
+        ownerProfileId: "explicitly-disabled",
+        memoriesEnabled: 0,
+        useMemories: 0,
+        generateMemories: 0,
+        minimumRemaining: 20,
+        revision: 2,
+      },
+      {
+        ownerProfileId: "untouched-default",
+        memoriesEnabled: 1,
+        useMemories: 1,
+        generateMemories: 1,
+        minimumRemaining: 20,
+        revision: 1,
+      },
+    ]);
+    database.close();
+  });
+
   it("adds durable memory merge reviews with bounded review indexes", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-review-migration-"));
     directories.push(directory);

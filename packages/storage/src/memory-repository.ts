@@ -138,7 +138,7 @@ export class MemoryRepository {
            (owner_profile_id, memories_enabled, use_memories, generate_memories, sync_memories,
             disable_on_external_context, idle_delay_minutes,
             min_rate_limit_remaining_percent, updated_at, revision)
-           VALUES (?, 0, 0, 0, 0, 1, 30, 20, ?, 1)`,
+           VALUES (?, 1, 1, 1, 0, 1, 30, 20, ?, 1)`,
         )
         .run(this.#ownerProfileId, now);
       row = this.#database

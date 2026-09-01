@@ -260,9 +260,9 @@ function createBridge(): DesktopBridge {
     clearLocalCache: vi.fn(),
     getMemorySettings: vi.fn().mockResolvedValue({
       ownerProfileId: "local-default",
-      memoriesEnabled: false,
-      useMemories: false,
-      generateMemories: false,
+      memoriesEnabled: true,
+      useMemories: true,
+      generateMemories: true,
       syncMemories: false,
       disableOnExternalContext: true,
       idleDelayMinutes: 30,
@@ -580,7 +580,9 @@ describe("M1 chat renderer", () => {
     renderApp(bridge);
     const user = userEvent.setup();
 
-    await user.selectOptions(await screen.findByLabelText("新任务思考强度"), "off");
+    const newTaskThinking = await screen.findByLabelText("新任务思考强度");
+    await waitFor(() => expect(newTaskThinking.querySelector('option[value="off"]')).toBeTruthy());
+    await user.selectOptions(newTaskThinking, "off");
     await user.type(screen.getByLabelText("发送消息"), "快速回答");
     await user.click(screen.getByRole("button", { name: "发送" }));
     expect(bridge.sendMessage).toHaveBeenCalledWith(
@@ -802,14 +804,14 @@ describe("M1 chat renderer", () => {
     window.localStorage.removeItem("openerx.theme");
   });
 
-  it("keeps long-term memory opt-in and supports explicit memory management", async () => {
+  it("shows memory enabled by default and supports explicit memory management", async () => {
     cleanup();
     const bridge = createBridge();
     vi.mocked(bridge.updateMemorySettings).mockResolvedValue({
       ownerProfileId: "local-default",
-      memoriesEnabled: true,
+      memoriesEnabled: false,
       useMemories: true,
-      generateMemories: false,
+      generateMemories: true,
       syncMemories: false,
       disableOnExternalContext: true,
       idleDelayMinutes: 30,
@@ -841,24 +843,15 @@ describe("M1 chat renderer", () => {
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole("button", { name: "记忆" }));
-    expect(await screen.findByRole("heading", { name: "长期记忆" })).toBeTruthy();
+    expect((await screen.findAllByRole("heading", { name: "长期记忆" })).length).toBeGreaterThan(0);
     const enabled = screen.getByRole("checkbox", { name: /启用长期记忆/ });
-    expect((enabled as HTMLInputElement).checked).toBe(false);
-    expect(screen.queryByLabelText("内容")).toBeNull();
-    await user.click(enabled);
-    await waitFor(() => expect(bridge.updateMemorySettings).toHaveBeenCalled());
-    expect(vi.mocked(bridge.updateMemorySettings).mock.calls[0]?.[0]).toEqual({
-      memoriesEnabled: true,
-      useMemories: true,
-    });
-    await user.click(screen.getByRole("checkbox", { name: /自动生成记忆/ }));
-    await waitFor(() =>
-      expect(
-        vi
-          .mocked(bridge.updateMemorySettings)
-          .mock.calls.some(([input]) => input.generateMemories === true),
-      ).toBe(true),
+    expect((enabled as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("checkbox", { name: /用于回答/ }) as HTMLInputElement).checked).toBe(
+      true,
     );
+    expect(
+      (screen.getByRole("checkbox", { name: /自动生成记忆/ }) as HTMLInputElement).checked,
+    ).toBe(true);
     await user.type(await screen.findByLabelText("内容"), "回答时先给结论。");
     await user.click(screen.getByRole("button", { name: "保存记忆" }));
     await waitFor(() =>
@@ -871,6 +864,13 @@ describe("M1 chat renderer", () => {
       ),
     );
     expect(screen.getByText("密钥、口令、验证码、Cookie、私钥", { exact: false })).toBeTruthy();
+
+    await user.click(enabled);
+    await waitFor(() =>
+      expect(vi.mocked(bridge.updateMemorySettings).mock.calls[0]?.[0]).toEqual({
+        memoriesEnabled: false,
+      }),
+    );
   });
 
   it("keeps historical semantic memory suggestions behind an explicit review action", async () => {
@@ -1009,7 +1009,7 @@ describe("M1 chat renderer", () => {
     expect(screen.getByText("后台新增 1 条，可随时查看或撤销。")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "查看" }));
-    expect(await screen.findByRole("heading", { name: "长期记忆" })).toBeTruthy();
+    expect((await screen.findAllByRole("heading", { name: "长期记忆" })).length).toBeGreaterThan(0);
     await waitFor(() => expect(document.activeElement?.id).toBe(`memory-${memory.id}`));
     await user.click(screen.getByRole("button", { name: "查看来源" }));
     expect(await screen.findByRole("button", { name: "记忆来源对话" })).toBeTruthy();
@@ -1106,48 +1106,16 @@ describe("M1 chat renderer", () => {
     expect(confirm).toHaveBeenCalled();
   });
 
-  it("controls memory use and future contribution per conversation", async () => {
+  it("keeps memory and learning controls out of the composer", async () => {
     cleanup();
     const bridge = createBridge();
-    vi.mocked(bridge.getMemorySettings).mockResolvedValue({
-      ownerProfileId: "local-default",
-      memoriesEnabled: true,
-      useMemories: true,
-      generateMemories: false,
-      syncMemories: false,
-      disableOnExternalContext: true,
-      idleDelayMinutes: 30,
-      minRateLimitRemainingPercent: 20,
-      updatedAt: timestamp,
-      revision: 2,
-    });
-    vi.mocked(bridge.updateConversationMemorySettings).mockImplementation(async (input) => ({
-      conversationId,
-      ownerProfileId: "local-default",
-      useMemories: input.useMemories ?? null,
-      generateMemories: input.generateMemories ?? null,
-      updatedAt: timestamp,
-      revision: 2,
-    }));
     renderApp(bridge, `/chat/${conversationId}`);
-    const user = userEvent.setup();
+    await screen.findByLabelText("发送消息");
 
-    const useMemorySelect = (await screen.findByLabelText("当前对话使用记忆")) as HTMLSelectElement;
-    await waitFor(() => expect(useMemorySelect.disabled).toBe(false));
-    await user.selectOptions(useMemorySelect, "off");
-    await waitFor(() =>
-      expect(bridge.updateConversationMemorySettings).toHaveBeenCalledWith({
-        conversationId,
-        useMemories: false,
-      }),
-    );
-    await user.selectOptions(screen.getByLabelText("当前对话贡献未来记忆"), "off");
-    await waitFor(() =>
-      expect(bridge.updateConversationMemorySettings).toHaveBeenCalledWith({
-        conversationId,
-        generateMemories: false,
-      }),
-    );
+    expect(screen.queryByLabelText("当前对话使用记忆")).toBeNull();
+    expect(screen.queryByLabelText("当前对话贡献未来记忆")).toBeNull();
+    expect(bridge.getConversationMemorySettings).not.toHaveBeenCalled();
+    expect(bridge.updateConversationMemorySettings).not.toHaveBeenCalled();
   });
 
   it("persists the default model setting and uses it for new tasks", async () => {

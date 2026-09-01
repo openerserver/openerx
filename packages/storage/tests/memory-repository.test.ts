@@ -26,26 +26,17 @@ afterEach(() => {
 });
 
 describe("MemoryRepository", () => {
-  it("is opt-in, deduplicates explicit writes, recalls them, and forgets them", () => {
+  it("defaults memory on, deduplicates explicit writes, recalls them, and forgets them", () => {
     const repository = new MemoryRepository(databasePath(), {
       now: () => "2026-08-30T00:00:00.000Z",
       idFactory: ids(),
     });
     expect(repository.settings()).toMatchObject({
-      memoriesEnabled: false,
-      useMemories: false,
-      generateMemories: false,
+      memoriesEnabled: true,
+      useMemories: true,
+      generateMemories: true,
       syncMemories: false,
     });
-    expect(() =>
-      repository.upsert({
-        kind: "preference",
-        content: "先给结论，再给必要细节。",
-        idempotencyKey: "memory-disabled-0001",
-      }),
-    ).toThrow("MEMORY_DISABLED");
-
-    repository.updateSettings({ memoriesEnabled: true, useMemories: true });
     const first = repository.upsert({
       kind: "preference",
       content: "先给结论，再给必要细节。",
@@ -76,6 +67,20 @@ describe("MemoryRepository", () => {
     });
     expect(deleted.status).toBe("deleted");
     expect(repository.recall("请给我一个方案")).toEqual([]);
+    repository.close();
+  });
+
+  it("honors an explicit global memory opt-out", () => {
+    const repository = new MemoryRepository(databasePath());
+    repository.updateSettings({ memoriesEnabled: false });
+
+    expect(() =>
+      repository.upsert({
+        kind: "preference",
+        content: "先给结论，再给必要细节。",
+        idempotencyKey: "memory-disabled-0001",
+      }),
+    ).toThrow("MEMORY_DISABLED");
     repository.close();
   });
 

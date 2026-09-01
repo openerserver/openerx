@@ -92,8 +92,8 @@ L2 只能作为“可能有用的回忆”，不能替代 L3。任何必须始�
 - `useMemories`：允许在新 Turn 中检索和注入已有记忆；
 - `generateMemories`：允许当前对话成为未来自动记忆的来源。
 
-另有主开关 `memoriesEnabled`。主开关关闭时既不使用也不生成记忆。新用户默认关闭，首次使用
-“请记住”或进入记忆设置时进行一次清晰的启用说明。
+另有主开关 `memoriesEnabled`。主开关关闭时既不使用也不生成记忆。新用户默认开启使用与生成，
+并可随时在记忆设置中分别关闭。
 
 每个对话可以覆盖两个子开关，提供以下常用模式：
 
@@ -304,7 +304,7 @@ Phase A 通过后，用户已经可以可靠地说“记住……”并在新对
 
 当前完成状态：
 
-- `已完成`：全局 opt-in、显式 remember/list/search/forget、最多 8 条/约 1,200 token 注入预算；
+- `已完成`：全局开关、显式 remember/list/search/forget、最多 8 条/约 1,200 token 注入预算；
 - `已完成`：确定性 secret 拒绝、幂等、canonical 去重、usage ID/分数记录；
 - `已完成`：账户同步 upsert/tombstone、离线 Outbox、启用同步时补传本地记忆、同步关闭状态上传；
 - `已完成`：对话级 use/generate 覆盖及同步；全局关闭仍是硬门禁，generate 已接通 Phase B 调度；

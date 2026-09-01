@@ -1315,6 +1315,24 @@ const migrations: readonly Migration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 28,
+    checksum: "memory-default-enabled-v28-20260831",
+    sql: `
+      UPDATE memory_settings
+      SET memories_enabled = 1,
+          use_memories = 1,
+          generate_memories = 1
+      WHERE revision = 1
+        AND memories_enabled = 0
+        AND use_memories = 0
+        AND generate_memories = 0
+        AND sync_memories = 0
+        AND disable_on_external_context = 1
+        AND idle_delay_minutes = 30
+        AND min_rate_limit_remaining_percent = 20;
+    `,
+  },
 ];
 
 export function migrateDatabase(
