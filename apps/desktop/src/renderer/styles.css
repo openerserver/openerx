@@ -6659,6 +6659,9 @@ summary:focus-visible {
 .app-shell.settings-is-open.context-is-open,
 .app-shell.settings-is-open.sidebar-is-collapsed {
   grid-template-columns: minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .app-shell.sidebar-is-collapsed .sidebar {

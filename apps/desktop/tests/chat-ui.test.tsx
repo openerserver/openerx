@@ -1319,9 +1319,9 @@ describe("M1 chat renderer", () => {
     const managementBridge = createBridge();
     vi.mocked(managementBridge.listSkills).mockResolvedValue([skillInstallation]);
     renderApp(managementBridge, "/assistants");
-    expect(await screen.findByRole("heading", { name: "助手与 Skill" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "skill" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
-    expect(screen.getByRole("button", { name: "助手与 Skill" }).getAttribute("aria-current")).toBe(
+    expect(screen.getByRole("button", { name: "skill" }).getAttribute("aria-current")).toBe(
       "page",
     );
     expect(await screen.findByText("结构化报告")).toBeTruthy();

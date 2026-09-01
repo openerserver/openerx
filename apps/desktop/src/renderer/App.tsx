@@ -3746,7 +3746,7 @@ function SkillCenter(): React.JSX.Element {
       className="settings-section-panel skill-center-page"
       id="assistants-section"
       tabIndex={-1}
-      aria-label="助手与 Skill 设置"
+      aria-label="skill 设置"
     >
       <header className="skill-center-header">
         <div>
@@ -5146,7 +5146,7 @@ const accountSettingsSectionLabels: Record<AccountSettingsSection, string> = {
   billing: "费用与账单",
   appearance: "外观",
   model: "模型",
-  assistants: "助手与 Skill",
+  assistants: "skill",
   tools: "工具",
   memory: "记忆",
   update: "更新",
