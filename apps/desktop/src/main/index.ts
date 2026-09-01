@@ -140,6 +140,10 @@ import { ModelServiceSettingsStore } from "./model-service-settings";
 import { PlatformAccountClient } from "./platform-account-client";
 import { RemoteDesktopController } from "./remote-desktop-controller";
 import {
+  recoverVisibleRenderersAfterWake,
+  shouldReloadAfterRendererExit,
+} from "./renderer-recovery";
+import {
   appProtocol,
   createWindowOptions,
   isTrustedExternalUrl,
@@ -1083,6 +1087,12 @@ function registerAppProtocol(): void {
 
 function createMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
   const mainWindow = new BrowserWindow(createWindowOptions(path.join(__dirname, "preload.js")));
+  let rendererReloadPending = false;
+  mainWindows.add(mainWindow);
+
+  mainWindow.once("closed", () => {
+    mainWindows.delete(mainWindow);
+  });
 
   mainWindow.on("close", (event) => {
     if (!shouldHideMainWindowOnClose(process.platform, quitRequested)) return;
@@ -1109,6 +1119,32 @@ function createMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
     }
   });
 
+  mainWindow.webContents.on("did-finish-load", () => {
+    rendererReloadPending = false;
+  });
+
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    diagnostics.record({
+      source: "renderer",
+      level: details.reason === "clean-exit" ? "info" : "error",
+      code: "renderer.process_gone",
+      attributes: { reason: details.reason, exitCode: details.exitCode },
+    });
+    if (
+      quitRequested ||
+      rendererReloadPending ||
+      !shouldReloadAfterRendererExit(details.reason) ||
+      mainWindow.isDestroyed()
+    ) {
+      return;
+    }
+    rendererReloadPending = true;
+    setTimeout(() => {
+      if (mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+      mainWindow.webContents.reload();
+    }, 250);
+  });
+
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
@@ -1124,6 +1160,7 @@ let quitRequested = false;
 let activeDiagnostics: DiagnosticsService | null = null;
 let reopenRequested = false;
 let unregisterAutomationPowerReconciliation: (() => void) | null = null;
+const mainWindows = new Set<BrowserWindow>();
 
 function showMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
   const window = BrowserWindow.getAllWindows()[0] ?? createMainWindow(diagnostics);
@@ -1289,6 +1326,29 @@ app.whenReady().then(async () => {
           code: "automation.scheduler.resume_reconcile_requested",
           attributes: { suspendedAt, resumedAt },
         });
+        void recoverVisibleRenderersAfterWake([...mainWindows])
+          .then((results) => {
+            for (const result of results) {
+              if (result.action === "skipped") continue;
+              diagnostics.record({
+                source: "renderer",
+                level: result.action === "reloaded" ? "warning" : "info",
+                code:
+                  result.action === "reloaded"
+                    ? "renderer.wake_reloaded"
+                    : "renderer.wake_repainted",
+                ...(result.action === "reloaded" ? { attributes: { reason: result.reason } } : {}),
+              });
+            }
+          })
+          .catch((error: unknown) => {
+            diagnostics.record({
+              source: "renderer",
+              level: "error",
+              code: "renderer.wake_recovery_failed",
+              attributes: { reason: error instanceof Error ? error.message : "unknown" },
+            });
+          });
       },
       onError: (error) => {
         diagnostics.record({
