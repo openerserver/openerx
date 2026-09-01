@@ -5995,6 +5995,11 @@ h1 {
   border-color: #417748;
 }
 
+.skill-trust.trust-unverified {
+  color: var(--workspace-warning, #c87943);
+  border-color: currentColor;
+}
+
 .skill-metadata {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

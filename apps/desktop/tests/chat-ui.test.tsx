@@ -1365,6 +1365,42 @@ describe("M1 chat renderer", () => {
     expect(managementBridge.listSkillInvocations).not.toHaveBeenCalled();
   });
 
+  it("distinguishes bundled, signed, and unverified Skill sources", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const signedSkill: SkillInstallation = {
+      ...skillInstallation,
+      id: "66666666-6666-4666-8666-666666666666",
+      name: "signed-workflow",
+      displayName: "已签名工作流",
+      scope: "personal",
+      sourceKind: "archive",
+      sourceLabel: "signed-workflow.zip",
+      trust: "signed",
+    };
+    const unverifiedSkill: SkillInstallation = {
+      ...skillInstallation,
+      id: "77777777-7777-4777-8777-777777777777",
+      name: "local-workflow",
+      displayName: "本地工作流",
+      scope: "personal",
+      sourceKind: "local_directory",
+      sourceLabel: "local-workflow",
+      trust: "unverified",
+    };
+    vi.mocked(bridge.listSkills).mockResolvedValue([
+      skillInstallation,
+      signedSkill,
+      unverifiedSkill,
+    ]);
+
+    renderApp(bridge, "/assistants");
+
+    expect(await screen.findByText("内置", { selector: ".skill-trust" })).toBeTruthy();
+    expect(screen.getByText("已验证来源", { selector: ".skill-trust" })).toBeTruthy();
+    expect(screen.getByText("未验证来源", { selector: ".skill-trust" })).toBeTruthy();
+  });
+
   it("groups personal files and deliverables by conversation in the library", async () => {
     const bridge = createBridge();
     const personalFileId = crypto.randomUUID();

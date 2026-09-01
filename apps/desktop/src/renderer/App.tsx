@@ -3602,6 +3602,17 @@ function skillSourceLabel(skill: SkillInstallation): string {
   return skill.sourceKind === "built_in" ? "UWA 内置 Skill" : skill.sourceLabel;
 }
 
+function skillTrustLabel(trust: SkillInstallation["trust"]): string {
+  switch (trust) {
+    case "bundled":
+      return "内置";
+    case "signed":
+      return "已验证来源";
+    case "unverified":
+      return "未验证来源";
+  }
+}
+
 function skillPlatformLabel(platform: string): string {
   if (platform === "darwin") return "macOS";
   if (platform === "win32") return "Windows";
@@ -3819,7 +3830,7 @@ function SkillCenter(): React.JSX.Element {
                   <div>
                     <div className="skill-card-meta">
                       <span className={`skill-trust trust-${skill.trust}`}>
-                        {skill.trust === "bundled" ? "内置" : "已验证来源"}
+                        {skillTrustLabel(skill.trust)}
                       </span>
                       <span>v{skill.version}</span>
                     </div>

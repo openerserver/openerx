@@ -124,8 +124,8 @@ function responseFor(context: Context): AssistantMessage {
       ? skillContext.match(/<name>([^<]+)<\/name>/)?.[1]
       : skillContext.match(/<skill name="([^"]+)"/)?.[1];
     const skillFile = automatic
-      ? skillContext.match(/<location>([^<]+\/SKILL\.md)<\/location>/)?.[1]
-      : skillContext.match(/location="([^"]+\/SKILL\.md)"/)?.[1];
+      ? skillContext.match(/<location>([^<]+[\\/]SKILL\.md)<\/location>/)?.[1]
+      : skillContext.match(/location="([^"]+[\\/]SKILL\.md)"/)?.[1];
     if (!skillName || !skillFile) return fauxAssistantMessage("Skill 没有通过 Pi 原生展开。");
     if (automatic && toolResults.length === 0) {
       return fauxAssistantMessage(

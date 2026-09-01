@@ -55,6 +55,21 @@ async function approveScriptExecution(page) {
   }
 }
 
+async function waitForAppService(page) {
+  await page.waitForFunction(
+    async () => {
+      try {
+        await window.openerx.listSkills();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+}
+
 let application;
 try {
   application = await electron.launch({
@@ -67,27 +82,56 @@ try {
     },
   });
   const page = await application.firstWindow();
-  await page.waitForLoadState("domcontentloaded");
-  await application.evaluate(({ dialog }, selectedPath) => {
+  page.on("pageerror", (error) => console.error("E2E_SKILLS_PAGE_ERROR", error));
+  await waitForAppService(page);
+  await application.evaluate(({ dialog, ipcMain }, selectedPath) => {
     dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] });
+    ipcMain.removeHandler("model:catalog:list");
+    ipcMain.handle("model:catalog:list", () => [
+      {
+        modelRef: "platform/e2e-faux",
+        displayName: "E2E faux model",
+        version: "1.0.0",
+        capabilities: {
+          textInput: true,
+          imageInput: false,
+          fileInput: false,
+          functionCalling: true,
+          structuredOutput: true,
+        },
+        contextWindow: 128_000,
+        maxOutputTokens: 8_192,
+        status: "available",
+        priceRef: "e2e-faux",
+        priceSummary: "E2E only",
+        free: true,
+        thinkingLevels: ["off", "medium", "high"],
+      },
+    ]);
   }, sourceDirectory);
+  await page.evaluate(() =>
+    window.localStorage.setItem("openerx.defaultModelRef", "platform/e2e-faux"),
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForAppService(page);
 
   await page.getByRole("link", { name: "设置" }).click();
-  await page.getByRole("button", { name: "助手与 Skill" }).click();
-  await page.getByRole("heading", { name: "助手与 Skill" }).waitFor();
+  await page.getByRole("button", { name: "skill", exact: true }).click();
+  await page.getByRole("heading", { name: "Skill", exact: true }).waitFor();
   await page.getByRole("button", { name: "安装 Skill" }).click();
   const card = page.locator(".skill-card").filter({ hasText: "E2E report" });
   await card.waitFor();
-  await card.getByText("技术信息与权限", { exact: true }).click();
+  await card.getByText("未验证来源", { exact: true }).waitFor();
+  await card.getByText("权限与详情", { exact: true }).click();
   await card.getByText(/UWA Test/).waitFor();
   await card.getByRole("button", { name: "审核并批准权限" }).click();
-  await card.getByRole("button", { name: "启用" }).click();
+  await card.getByRole("button", { name: "启用 E2E report" }).click();
   await card.getByText("已启用", { exact: true }).waitFor();
   await card.getByRole("button", { name: "自动触发：关" }).click();
   await card.getByRole("button", { name: "自动触发：开" }).waitFor();
 
-  await page.getByRole("link", { name: "新对话", exact: true }).click();
+  await page.getByRole("button", { name: "返回应用", exact: true }).click();
   await page.waitForURL(/#\/chat\/new$/);
   await page.getByLabel("选择 Skill").selectOption({ label: "E2E report" });
   await page.getByLabel("发送消息").fill("生成验证报告 [PI_TEST_SKILL]");
@@ -109,15 +153,17 @@ try {
     .nth(1)
     .waitFor();
 
-  await page.getByRole("link", { name: "设置" }).click();
-  await page.getByRole("button", { name: "助手与 Skill" }).click();
-  await page.waitForURL(/#\/assistants$/);
-  await page.reload();
-  await page.getByRole("heading", { name: "助手与 Skill" }).waitFor();
-  const activity = page.locator(".skill-activity");
-  await activity.getByText("E2E report", { exact: true }).first().waitFor();
-  await activity.getByText(/explicit · 已完成 · 在消息输入区手动选择/).waitFor();
-  await activity.getByText(/automatic · 已完成 · Pi loaded SKILL.md/).waitFor();
+  const activity = await page.evaluate(async () => await window.openerx.listSkillInvocations());
+  assert.equal(activity.length, 2);
+  assert.deepEqual(
+    activity.map(({ trigger, status }) => ({ trigger, status })),
+    [
+      { trigger: "automatic", status: "completed" },
+      { trigger: "explicit", status: "completed" },
+    ],
+  );
+  assert.match(activity[0]?.reason ?? "", /Pi loaded SKILL\.md/);
+  assert.equal(activity[1]?.reason, "Selected from the composer");
   const bridgeBoundary = await page.evaluate(() => ({
     hasProcess: typeof process !== "undefined",
     hasRequire: typeof require !== "undefined",
