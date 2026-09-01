@@ -101,9 +101,9 @@ try {
   }
 
   const firstUserMessage = page.locator(".message-user").first();
-  await firstUserMessage.getByRole("button", { name: "编辑并分支" }).click();
+  await firstUserMessage.getByRole("button", { name: "编辑消息" }).click();
   await firstUserMessage.locator("textarea").fill("修改后的第一问");
-  await firstUserMessage.getByRole("button", { name: "保存并新建分支" }).click();
+  await firstUserMessage.getByRole("button", { name: "发送", exact: true }).click();
   await page.locator(".message-user").first().getByText("修改后的第一问").waitFor();
   await page.locator(".message-assistant[data-message-status='completed']").last().waitFor();
 

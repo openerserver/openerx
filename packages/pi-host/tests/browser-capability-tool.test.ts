@@ -36,6 +36,7 @@ describe("BCU-003 Pi browser projection", () => {
     const { browser, frames } = fixture(true);
     const schema = JSON.stringify(browser.parameters);
     expect(browser.label).toBe("Use system browser");
+    expect(browser.parameters).toMatchObject({ type: "object", anyOf: expect.any(Array) });
     expect(schema).toContain("elementRef");
     expect(schema).toContain("observationId");
     expect(schema).not.toMatch(/selector|javascript|xpath|devtools|html/u);

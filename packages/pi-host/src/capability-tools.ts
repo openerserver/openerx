@@ -78,6 +78,11 @@ export function createProductCapabilityTools(input: {
     sessionId: Type.String({ format: "uuid" }),
     observationId: Type.String({ format: "uuid" }),
   };
+  // DeepSeek (and other OpenAI-compatible providers) require every function's
+  // top-level parameters schema to be an object. A top-level Type.Union emits
+  // only `anyOf`, so a deferred browser activation made the next model round
+  // fail schema validation before it could answer. Add the required root type
+  // while preserving the action-specific branches and required fields.
   const browserComputerUseParameters = Type.Union([
     Type.Object(
       {
@@ -87,7 +92,11 @@ export function createProductCapabilityTools(input: {
           Type.Union([Type.Literal("system_default"), Type.Literal("managed_chromium")]),
         ),
         browserContextRef: Type.Optional(
-          Type.String({ minLength: 8, maxLength: 200, pattern: "^[A-Za-z0-9][A-Za-z0-9_-]+$" }),
+          Type.String({
+            minLength: 8,
+            maxLength: 200,
+            pattern: "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+          }),
         ),
       },
       { additionalProperties: false },
@@ -195,6 +204,7 @@ export function createProductCapabilityTools(input: {
       { additionalProperties: false },
     ),
   ]);
+  Object.assign(browserComputerUseParameters, { type: "object" as const });
   const useBrowserComputerUseV2 =
     input.browserComputerUseV2 ??
     browserComputerUseV2Enabled(process.env[BROWSER_COMPUTER_USE_V2_FEATURE_FLAG]);

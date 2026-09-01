@@ -2152,7 +2152,7 @@ function MessageCard({
       }),
     onSuccess: async () => {
       setEditing(false);
-      setActionNotice("已把编辑后的消息保存为新分支，原内容仍保留。");
+      setActionNotice("已提交修改，正在从这里重新生成回复。");
       await queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
     },
   });
@@ -2226,13 +2226,15 @@ function MessageCard({
               onChange={(event) => setEditText(event.target.value)}
               rows={4}
             />
-            <p className="field-help">保存会创建一个新分支，当前分支和原消息不会被覆盖。</p>
             <div>
               <button type="button" onClick={() => setEditing(false)}>
                 取消
               </button>
-              <button type="submit" disabled={!editText.trim() || edit.isPending}>
-                {edit.isPending ? "正在创建…" : "保存并新建分支"}
+              <button
+                type="submit"
+                disabled={!editText.trim() || editText.trim() === text.trim() || edit.isPending}
+              >
+                {edit.isPending ? "正在发送…" : "发送"}
               </button>
             </div>
           </form>
@@ -2321,9 +2323,13 @@ function MessageCard({
             <button
               type="button"
               className="message-action-icon"
-              aria-label="编辑并分支"
-              title="编辑并创建新分支"
-              onClick={() => setEditing(true)}
+              aria-label="编辑消息"
+              title="编辑消息"
+              onClick={() => {
+                setEditText(text);
+                setActionNotice(null);
+                setEditing(true);
+              }}
             >
               <PencilSimple size={16} weight="regular" />
             </button>
