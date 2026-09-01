@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "skills": [
+    {
+      "installationId": "00000000-0000-4000-8000-000000000701",
+      "name": "structured-report",
+      "version": "1.0.1",
+      "checksum": "b55273d0b04b0833e056ce31e090e62a7e7181912fc4d915fa83eefe45b1e331"
+    },
+    {
+      "installationId": "00000000-0000-4000-8000-000000000702",
+      "name": "documents",
+      "version": "1.0.1",
+      "checksum": "346892dc197d55bec7889193fbc1769988fba933edfe65d04c4c193f44adc424"
+    },
+    {
+      "installationId": "00000000-0000-4000-8000-000000000703",
+      "name": "spreadsheets",
+      "version": "1.0.1",
+      "checksum": "c4bb7412c1187376ac562a9bd35c4d338cb4c07d73f3df3233302c173ea48b0a"
+    },
+    {
+      "installationId": "00000000-0000-4000-8000-000000000704",
+      "name": "presentations",
+      "version": "1.0.1",
+      "checksum": "860605a2a9a81f68fa56333771c1a0936e23321818853e16157cb90212e59858"
+    },
+    {
+      "installationId": "00000000-0000-4000-8000-000000000705",
+      "name": "pdf",
+      "version": "1.0.1",
+      "checksum": "fa6979a5dcf90de5b0c5a429a9d0573b340c44fa947c6be84df35081d4bf5791"
+    }
+  ]
+}

@@ -488,6 +488,8 @@ function withUiTimeout<T>(promise: Promise<T>, timeoutMs = 8_000): Promise<T> {
   });
 }
 
+const sendReceiptTimeoutMs = 12_000;
+
 function scrollMessageListToEnd(
   messageList: HTMLElement | null,
   behavior: ScrollBehavior = "auto",
@@ -819,16 +821,19 @@ function Composer({
   }, [conversationId, newConversationModel, newConversationThinkingLevels, thinkingLevel]);
   const send = useMutation({
     mutationFn: (text: string) =>
-      window.openerx.sendMessage({
-        conversationId: conversationId ?? null,
-        text,
-        idempotencyKey: idempotencyKey("send"),
-        ...(!conversationId
-          ? { thinkingLevel, modelRef: newConversationModel?.modelRef ?? defaultModelRef }
-          : {}),
-        ...(pendingFiles.length > 0 ? { personalFileIds: pendingFiles.map(({ id }) => id) } : {}),
-        ...(skillInstallationId ? { skillInstallationId } : {}),
-      }),
+      withUiTimeout(
+        window.openerx.sendMessage({
+          conversationId: conversationId ?? null,
+          text,
+          idempotencyKey: idempotencyKey("send"),
+          ...(!conversationId
+            ? { thinkingLevel, modelRef: newConversationModel?.modelRef ?? defaultModelRef }
+            : {}),
+          ...(pendingFiles.length > 0 ? { personalFileIds: pendingFiles.map(({ id }) => id) } : {}),
+          ...(skillInstallationId ? { skillInstallationId } : {}),
+        }),
+        sendReceiptTimeoutMs,
+      ),
     onSuccess: async (receipt) => {
       setDraft("");
       setPendingFiles([]);
@@ -1126,13 +1131,16 @@ function Suggestion({
   const navigate = useNavigate();
   const send = useMutation({
     mutationFn: () =>
-      window.openerx.sendMessage({
-        conversationId: null,
-        text,
-        modelRef,
-        thinkingLevel,
-        idempotencyKey: idempotencyKey("suggestion"),
-      }),
+      withUiTimeout(
+        window.openerx.sendMessage({
+          conversationId: null,
+          text,
+          modelRef,
+          thinkingLevel,
+          idempotencyKey: idempotencyKey("suggestion"),
+        }),
+        sendReceiptTimeoutMs,
+      ),
     onSuccess: (receipt) => navigate(`/chat/${receipt.conversationId}`),
   });
   return (
@@ -4168,9 +4176,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       <div className="settings-heading">
         <div>
           <h2>模型服务</h2>
-          <p>
-            默认使用 BYOK；请求从本机直接发送到你的 OpenAI-compatible API，无需 UWA 服务端。
-          </p>
+          <p>默认使用 BYOK；请求从本机直接发送到你的 OpenAI-compatible API，无需 UWA 服务端。</p>
         </div>
       </div>
       <label htmlFor="model-service-mode">运行模式</label>

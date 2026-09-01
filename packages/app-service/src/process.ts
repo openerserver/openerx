@@ -41,7 +41,7 @@ import { ToolAppService } from "./tool-app-service";
 const parentPort = process.parentPort;
 if (!parentPort) throw new Error("App Service requires an Electron utility-process parent port");
 
-parentPort.once("message", async (bootstrapEvent) => {
+async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promise<void> {
   const bootstrap = appServiceBootstrapSchema.parse(bootstrapEvent.data);
   const [mainPort, piHostPort, remotePort] = bootstrapEvent.ports as MessagePortMain[];
   if (!mainPort || !piHostPort || !remotePort) {
@@ -283,5 +283,14 @@ parentPort.once("message", async (bootstrapEvent) => {
     automationRepository.close();
     mainCapabilities.close();
     service.close();
+  });
+}
+
+parentPort.once("message", (bootstrapEvent) => {
+  void bootstrapAppService(bootstrapEvent).catch((error: unknown) => {
+    console.error(
+      error instanceof Error ? (error.stack ?? error.message) : "APP_SERVICE_BOOTSTRAP_FAILED",
+    );
+    process.exit(1);
   });
 });

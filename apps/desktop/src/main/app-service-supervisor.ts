@@ -46,6 +46,8 @@ interface PendingRequest {
   timeout: NodeJS.Timeout;
 }
 
+const appServiceStartupTimeoutMs = 10_000;
+
 export interface MainCapabilityHost {
   execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult>;
   availability(): Promise<HostToolAvailability>;
@@ -102,11 +104,25 @@ export class AppServiceSupervisor {
   }
 
   async start(): Promise<void> {
-    if (this.#ready) return this.#ready;
-    this.#spawn();
+    if (!this.#ready) this.#spawn();
     const ready = this.#ready;
     if (!ready) throw new Error("App Service readiness was not initialized");
-    return ready;
+    return await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("APP_SERVICE_START_TIMEOUT")),
+        appServiceStartupTimeoutMs,
+      );
+      void ready.then(
+        () => {
+          clearTimeout(timeout);
+          resolve();
+        },
+        (error: unknown) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      );
+    });
   }
 
   async switchProfile(profileDirectory: string, ownerProfileId: string): Promise<void> {
@@ -150,9 +166,7 @@ export class AppServiceSupervisor {
     return () => this.#automationListeners.delete(listener);
   }
 
-  onAutomaticMemoryCreated(
-    listener: (event: AutomaticMemoryCreatedEvent) => void,
-  ): () => void {
+  onAutomaticMemoryCreated(listener: (event: AutomaticMemoryCreatedEvent) => void): () => void {
     this.#memoryListeners.add(listener);
     return () => this.#memoryListeners.delete(listener);
   }
@@ -610,12 +624,16 @@ export class AppServiceSupervisor {
   }
 
   #resolveIfReady(): void {
-    if (!this.#handshakeComplete || !this.#remoteHandshakeComplete) return;
-    this.#resolveReady?.();
-    this.#resolveReady = null;
-    this.#rejectReady = null;
-    this.#emitStatus("ready");
-    if (this.#remoteConfiguration) this.#mainPort?.postMessage(this.#remoteConfiguration);
+    if (!this.#handshakeComplete) return;
+    if (this.#resolveReady) {
+      this.#resolveReady();
+      this.#resolveReady = null;
+      this.#rejectReady = null;
+      this.#emitStatus("ready");
+    }
+    if (this.#remoteHandshakeComplete && this.#remoteConfiguration) {
+      this.#mainPort?.postMessage(this.#remoteConfiguration);
+    }
   }
 
   #handleExit(
@@ -632,6 +650,11 @@ export class AppServiceSupervisor {
     if (exitedProcess !== currentProcess) return;
     if (this.#stopping || (!this.#appProcess && !this.#piHostProcess && !this.#remoteHostProcess))
       return;
+    if (processName === "Remote Connector" && !this.#remoteConfiguration) {
+      this.#remoteHostProcess = null;
+      this.#remoteHandshakeComplete = false;
+      return;
+    }
     this.#appProcess?.kill();
     this.#piHostProcess?.kill();
     this.#remoteHostProcess?.kill();

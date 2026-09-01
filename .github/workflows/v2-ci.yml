@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24.3.0
@@ -25,6 +27,9 @@ jobs:
       - run: npm ci
       - run: npm run audit:prod:v2
       - run: npm run check:boundaries:v2
+      - run: npm run check:builtin-skills:v2
+        env:
+          OPENERX_BUILTIN_SKILL_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
       - run: npm run check:release-graph:v2
       - run: npm run check:release:v2
       - run: npm run lint:v2

@@ -16,6 +16,7 @@
   "scripts": {
     "audit:prod:v2": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org",
     "check:boundaries:v2": "node scripts/check-v2-boundaries.mjs",
+    "check:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs",
     "check:release-graph:v2": "node scripts/m9/check-release-graph.mjs",
     "check:release:v2": "node scripts/m9/check-release-readiness.mjs --mode local",
     "dev:deepseek": "vite build --config tests/v2/vite.deepseek-platform.config.mts --logLevel error && node --env-file-if-exists=.env scripts/dev-deepseek.mjs",
@@ -39,7 +40,8 @@
     "release:gate:v2": "node scripts/m9/check-release-readiness.mjs --mode publish",
     "release:manifest:v2": "vite build --config scripts/m9/vite.release-manifest.config.mts --logLevel error && node .vite/release-tools/release-manifest.mjs",
     "verify:package:v2": "npm run verify:fuses --workspace @openerx/desktop",
-    "check:v2": "npm run check:boundaries:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2 && npm run verify:release-artifacts --workspace @openerx/desktop && npm run verify:native-signature --workspace @openerx/desktop"
+    "check:v2": "npm run check:boundaries:v2 && npm run check:builtin-skills:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2 && npm run verify:release-artifacts --workspace @openerx/desktop && npm run verify:native-signature --workspace @openerx/desktop",
+    "update:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs --write"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.84.4",

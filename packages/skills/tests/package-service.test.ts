@@ -1,10 +1,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { SkillPackageManifest } from "@openerx/contracts";
 import { SkillRepository } from "@openerx/storage";
 import { zipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
-import { SkillPackageService, SkillToolAdapter } from "../src";
+import { builtInStructuredReportSkill, SkillPackageService, SkillToolAdapter } from "../src";
 
 const roots: string[] = [];
 
@@ -111,6 +112,58 @@ describe("SkillPackageService", () => {
     expect(result.summary).toContain("Quarterly review");
     expect(result.data).toMatchObject({ state: "completed", exitCode: 0 });
     await adapter.stopAll();
+    repository.close();
+  });
+
+  it("upgrades pre-rebrand bundled Skills instead of rejecting changed package contents", () => {
+    const { root, repository, service } = profile();
+    const previousManifest: SkillPackageManifest = {
+      version: "1.0.0",
+      publisher: "OpenerX",
+      tools: ["openerx_structured_data", "openerx_skill_script"],
+      mcp_servers: [],
+      permissions: [
+        {
+          capability: "shell",
+          actions: ["execute"],
+          targets: ["scripts/render.mjs"],
+          reason: "Run the bundled deterministic report outline script.",
+        },
+      ],
+      platforms: ["darwin", "win32"],
+      scripts: ["scripts/render.mjs"],
+    };
+    const previousPackagePath = path.join(root, "legacy-structured-report");
+    mkdirSync(previousPackagePath, { recursive: true });
+    repository.installVersion({
+      installationId: builtInStructuredReportSkill.installationId,
+      name: "structured-report",
+      displayName: "Structured report",
+      description: "Create a concise structured report with evidence and next actions.",
+      publisher: "OpenerX",
+      scope: "builtin",
+      workspaceId: null,
+      sourceKind: "built_in",
+      sourceLabel: "OpenerX bundled skills",
+      trust: "bundled",
+      version: "1.0.0",
+      checksumSha256: "a".repeat(64),
+      packagePath: previousPackagePath,
+      manifest: previousManifest,
+      permissionDigest: "b".repeat(64),
+      builtIn: true,
+    });
+
+    expect(() => service.seedBuiltIns()).not.toThrow();
+    expect(service.get(builtInStructuredReportSkill.installationId)).toMatchObject({
+      version: "1.0.1",
+      publisher: "UWA",
+      sourceLabel: "UWA bundled skills",
+      packageState: "installed",
+    });
+    expect(service.get(builtInStructuredReportSkill.installationId).rollbackVersions).toContain(
+      "1.0.0",
+    );
     repository.close();
   });
 

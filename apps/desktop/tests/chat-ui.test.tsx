@@ -544,6 +544,29 @@ describe("M1 chat renderer", () => {
     );
   });
 
+  it("releases the composer when the desktop send bridge stops responding", async () => {
+    cleanup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const bridge = createBridge();
+      vi.mocked(bridge.sendMessage).mockImplementation(() => new Promise(() => undefined));
+      renderApp(bridge);
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+      await user.type(screen.getByLabelText("发送消息"), "验证发送超时");
+      await user.click(screen.getByRole("button", { name: "发送" }));
+      expect(screen.getByText("发送中…")).toBeTruthy();
+
+      await act(async () => vi.advanceTimersByTime(12_001));
+
+      expect(await screen.findByText(/请求等待时间过长/u)).toBeTruthy();
+      expect(screen.getByRole<HTMLButtonElement>("button", { name: "发送" }).disabled).toBe(false);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it("starts every homepage capability showcase with the exact supported prompt", async () => {
     const prompts = [
       "搜索网络：先制定覆盖不同角度的检索计划，再调研最近一周 AI 行业的重要动态，核实信息并附上来源",

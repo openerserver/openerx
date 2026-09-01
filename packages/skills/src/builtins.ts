@@ -14,7 +14,7 @@ Use this skill when the user asks for a structured decision report.
 2. Use \`openerx_skill_script\` with \`scripts/render.mjs\` only when a deterministic heading outline is useful.
 3. Use normal UWA file and artifact tools for user data and final deliverables.
 `,
-    "agents/openai.yaml": `version: 1.0.0
+    "agents/openai.yaml": `version: 1.0.1
 display_name: Structured report
 publisher: UWA
 tools:
@@ -43,7 +43,7 @@ process.stdout.write(JSON.stringify({ title, sections: ["Executive summary", "Fi
 } as const;
 
 function officeManifest(displayName: string): string {
-  return `version: 1.0.0
+  return `version: 1.0.1
 display_name: ${displayName}
 publisher: UWA
 tools:
