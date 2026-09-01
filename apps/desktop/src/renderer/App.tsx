@@ -1040,7 +1040,7 @@ function Composer({
         {newConversationModelRequiresConfiguration ? (
           <p className="inline-error">
             使用前需要配置 OpenAI-compatible API。请前往
-            <NavLink to="/settings/account">设置 → 模型</NavLink>。
+            <NavLink to="/settings/account?section=model">设置 → 模型</NavLink>。
           </p>
         ) : null}
         {chooseFiles.error ? (
@@ -1098,7 +1098,7 @@ function NewChat({ defaultModelRef }: { defaultModelRef: string }): React.JSX.El
         <section className="settings-card" aria-label="配置模型 API">
           <h2>先配置模型 API</h2>
           <p>此安装包默认使用 BYOK，不依赖 UWA 服务器。配置 API Key 后即可开始任务。</p>
-          <NavLink className="primary-link" to="/settings/account">
+          <NavLink className="primary-link" to="/settings/account?section=model">
             前往设置 → 模型
           </NavLink>
         </section>
@@ -5153,18 +5153,6 @@ const accountSettingsSectionLabels: Record<AccountSettingsSection, string> = {
   diagnostics: "诊断与数据",
 };
 
-const accountSettingsSectionGroupLabels: Record<AccountSettingsSection, string> = {
-  account: "登录与账户",
-  billing: "账户费用",
-  appearance: "主题与显示",
-  model: "模型服务",
-  assistants: "助手与扩展能力",
-  tools: "可用工具",
-  memory: "长期记忆",
-  update: "应用更新",
-  diagnostics: "诊断与个人数据",
-};
-
 function requestedSettingsSection(search: string): AccountSettingsSection | null {
   const value = new URLSearchParams(search).get("section");
   return value === "account" ||
@@ -5411,13 +5399,10 @@ function AccountSettings({
             ) : null}
           </div>
         </nav>
-        <div className="settings-section-content">
-          <h1 className="settings-content-title">{accountSettingsSectionLabels[activeSection]}</h1>
-          {activeSection !== "assistants" ? (
-            <h2 className="settings-content-section-title">
-              {accountSettingsSectionGroupLabels[activeSection]}
-            </h2>
-          ) : null}
+        <div
+          className="settings-section-content"
+          aria-label={`${accountSettingsSectionLabels[activeSection]}设置`}
+        >
           {activeSection === "account" ? (
             <section
               className="settings-card settings-account-primary"

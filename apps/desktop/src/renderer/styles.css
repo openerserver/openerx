@@ -3906,7 +3906,7 @@ h1 {
   min-width: 0;
   min-height: 0;
   gap: 22px;
-  padding: 140px clamp(72px, 13vw, 300px) 96px;
+  padding: 28px clamp(72px, 13vw, 300px) 72px;
   overflow-y: auto;
   background: var(--workspace-surface);
   border-top: 1px solid var(--workspace-border);
@@ -3918,25 +3918,6 @@ h1 {
   width: min(100%, 1054px);
   margin-right: auto;
   margin-left: 0;
-}
-
-.settings-content-title {
-  margin-top: 0;
-  margin-bottom: 54px;
-  color: var(--workspace-text);
-  font-size: 30px;
-  font-weight: 650;
-  line-height: 1.2;
-  letter-spacing: -0.035em;
-}
-
-.settings-content-section-title {
-  margin: 0;
-  color: var(--workspace-text);
-  font-size: 16px;
-  font-weight: 650;
-  line-height: 1.35;
-  letter-spacing: -0.012em;
 }
 
 .settings-account-page .settings-section-panel,
@@ -4001,7 +3982,7 @@ h1 {
   }
 
   .settings-account-page .settings-section-content {
-    padding: 58px 30px 72px;
+    padding: 28px 30px 60px;
   }
 
   .settings-account-page .settings-tool-center .tool-library-toolbar {
@@ -4013,16 +3994,6 @@ h1 {
   .settings-account-page .settings-tool-center .tool-search-field {
     flex-basis: auto;
     width: 100%;
-  }
-}
-
-@media (max-height: 900px) and (min-width: 901px) {
-  .settings-account-page .settings-section-content {
-    padding-top: 82px;
-  }
-
-  .settings-content-title {
-    margin-bottom: 28px;
   }
 }
 
@@ -4066,7 +4037,7 @@ h1 {
   }
 
   .settings-account-page .settings-section-content {
-    padding: 34px 18px 56px;
+    padding: 24px 18px 56px;
     border-top-left-radius: 0;
   }
 }
@@ -7943,10 +7914,14 @@ summary:focus-visible {
 
 /* Codex-style capability management lives inside the settings workbench. */
 .settings-account-page .skill-center-page {
+  display: flex;
+  flex-direction: column;
   width: min(100%, 760px);
+  height: auto;
   min-height: 0;
   padding: 0;
   gap: 14px;
+  overflow: visible;
   color: var(--workspace-text);
   background: transparent;
 }
@@ -8027,17 +8002,18 @@ summary:focus-visible {
 }
 
 .settings-account-page .skill-grid {
-  display: grid;
-  gap: 0;
-  overflow: hidden;
+  display: block;
+  height: auto;
+  overflow: visible;
   background: var(--workspace-surface);
   border: 1px solid var(--workspace-border);
   border-radius: 10px;
 }
 
 .settings-account-page .skill-card {
-  display: grid;
-  gap: 0;
+  display: block;
+  height: auto;
+  min-height: 0;
   padding: 0;
   background: transparent;
   border: 0;

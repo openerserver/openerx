@@ -633,6 +633,26 @@ describe("M1 chat renderer", () => {
     );
   });
 
+  it("opens the model settings section from the model configuration prompt", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listModels).mockResolvedValue([
+      { ...thinkingModel, status: "unavailable" },
+    ]);
+    renderApp(bridge, "/chat/new");
+
+    await userEvent.setup().click(
+      await screen.findByRole("link", { name: "前往设置 → 模型" }),
+    );
+
+    expect(await screen.findByLabelText("模型设置")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "模型", level: 1 })).toBeNull();
+    expect(screen.getByRole("button", { name: "模型" }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+    expect(await screen.findByLabelText("运行模式")).toBeTruthy();
+  });
+
   it("carries images selected before a new conversation into the first send", async () => {
     cleanup();
     const bridge = createBridge();
@@ -1317,16 +1337,33 @@ describe("M1 chat renderer", () => {
     cleanup();
 
     const managementBridge = createBridge();
-    vi.mocked(managementBridge.listSkills).mockResolvedValue([skillInstallation]);
+    const secondSkill = {
+      ...skillInstallation,
+      id: "66666666-6666-4666-8666-666666666666",
+      name: "image-workflow",
+      displayName: "图像工作流",
+    };
+    vi.mocked(managementBridge.listSkills).mockResolvedValue([skillInstallation, secondSkill]);
     renderApp(managementBridge, "/assistants");
-    expect(await screen.findByRole("heading", { name: "skill" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Skill" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "skill", level: 1 })).toBeNull();
     expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
     expect(screen.getByRole("button", { name: "skill" }).getAttribute("aria-current")).toBe(
       "page",
     );
     expect(await screen.findByText("结构化报告")).toBeTruthy();
-    expect(screen.getByText(/UWA 内置 Skill/)).toBeTruthy();
-    expect(screen.getByText(/工具：Skill 脚本执行器/)).toBeTruthy();
+    expect(screen.getByText("图像工作流")).toBeTruthy();
+    expect(screen.getAllByText(/UWA 内置 Skill/)).toHaveLength(2);
+    expect(screen.getAllByText(/工具：Skill 脚本执行器/)).toHaveLength(2);
+    const skillGrid = screen.getByRole("region", { name: "已安装 Skill" });
+    const skillCards = skillGrid.querySelectorAll(".skill-card");
+    expect(skillCards).toHaveLength(2);
+    await userEvent.setup().click(within(skillCards[0] as HTMLElement).getByText("权限与详情"));
+    expect((skillCards[0]?.querySelector("details") as HTMLDetailsElement).open).toBe(true);
+    const activity = screen.getByRole("group", { name: "Skill 调用记录" });
+    expect(skillGrid.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 
   it("groups personal files and deliverables by conversation in the library", async () => {
@@ -1807,7 +1844,7 @@ describe("M1 chat renderer", () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("搜索关键词")));
 
     await user.keyboard("{Control>},{/Control}");
-    expect(await screen.findByRole("heading", { name: "账户" })).toBeTruthy();
+    expect(await screen.findByLabelText("账户设置")).toBeTruthy();
   });
 
   it("keeps new chat fixed while navigation and history share one scroll region", async () => {
@@ -1909,7 +1946,7 @@ describe("M1 chat renderer", () => {
     renderApp(createBridge(), "/settings/account");
     const user = userEvent.setup();
 
-    expect(await screen.findByRole("heading", { name: "账户" })).toBeTruthy();
+    expect(await screen.findByLabelText("账户设置")).toBeTruthy();
     const settingsWorkspace = document.querySelector(".settings-account-page");
     const mainContent = document.getElementById("main-content");
     const appShell = document.querySelector(".app-shell");
@@ -1929,7 +1966,8 @@ describe("M1 chat renderer", () => {
     expect(screen.queryByLabelText("发送消息")).toBeNull();
     await user.click(screen.getByRole("button", { name: "外观" }));
     await waitFor(() => expect(document.activeElement?.id).toBe("appearance-section"));
-    expect(screen.getByRole("heading", { name: "外观", level: 1 })).toBeTruthy();
+    expect(screen.getByLabelText("外观设置")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "外观", level: 1 })).toBeNull();
     expect(screen.getByRole("button", { name: "外观" }).getAttribute("aria-current")).toBe("page");
 
     await user.click(screen.getByRole("button", { name: "诊断与数据" }));
@@ -2625,7 +2663,8 @@ describe("M1 chat renderer", () => {
     renderApp(bridge, "/settings/account?section=tools");
     const user = userEvent.setup();
 
-    expect(await screen.findByRole("heading", { name: "工具" })).toBeTruthy();
+    expect(await screen.findByLabelText("工具设置")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "工具", level: 1 })).toBeNull();
     expect(screen.queryByRole("link", { name: "工具" })).toBeNull();
     expect(screen.getByRole("button", { name: "工具" })).toBeTruthy();
     expect(screen.queryByText("最近添加")).toBeNull();
