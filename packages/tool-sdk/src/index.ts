@@ -6,6 +6,7 @@ export * from "./brokered-bash-egress";
 export * from "./brokered-bash-environment";
 export * from "./brokered-bash-fake-adapter";
 export * from "./brokered-bash-output";
+export * from "./codex-windows-shell-adapter";
 export * from "./builtin-adapter";
 export * from "./host-adapter";
 export * from "./image-generation-adapter";

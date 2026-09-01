@@ -234,6 +234,9 @@ P0、CX-101 至 CX-109、CX-110-D1/D2/D3 与 CX-111 已按本文形成本地实�
 P0、CX-101 至 CX-109、CX-110-D1/D2/D3 与 CX-111 已完成本地实现检查点，下一步继续按桌面优先推进：
 
 1. 补 Apple 公证/stapling、DMG/Gatekeeper 和真实分发安装，但继续保持正式凭据与发布批准 Gate。
-2. 补 live Provider、第三方实网 OAuth、任意第三方 Office 预览和 Windows 原生 Shell/Desktop；全部外部证据齐备后才能更新完整 P1/PASS。
+2. 补 live Provider、第三方实网 OAuth、任意第三方 Office 预览和 Windows 原生 Desktop；Windows
+   Shell 已增加依赖本机 Codex restricted-token sandbox 的 argv 后端，证据见
+   `evidence/cx-003-windows-shell-codex-sandbox-2026-09-01.md`。全部外部证据齐备后才能更新完整
+   P1/PASS。
 
 CX-101 至 CX-107 的证据见 `docs/v2/evidence/p1-codex-alignment-cx101-107-2026-08-27.md`；CX-108 的代码、真实成果、原生打开、测试、门禁结果与限制见 `docs/v2/evidence/p1-codex-alignment-cx108-2026-08-27.md`；CX-109 的合同、迁移、Pi/File 投影、隐私边界和 Run 回放见 `docs/v2/evidence/p1-codex-alignment-cx109-2026-08-27.md`；CX-110-D1 的桌面 OAuth 进程边界、协议夹具和限制见 `docs/v2/evidence/p1-codex-alignment-cx110-desktop-oauth-2026-08-27.md`；CX-110-D2 的运行时状态、macOS 原生矩阵和真实 Electron 证据见 `docs/v2/evidence/p1-codex-alignment-cx110-desktop-runtime-2026-08-27.md`；CX-110-D3 的 Developer ID 身份、TCC、受控交互与安装生命周期见 `docs/v2/evidence/p1-codex-alignment-cx110-desktop-signed-lifecycle-2026-08-27.md`；CX-111 的审批策略、作用域和未放宽边界见 `docs/v2/evidence/p1-codex-alignment-cx111-approvals-2026-08-27.md`。

@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { ShellToolAdapter, shellToolAvailability, ToolAdapterError } from "../src";
+import {
+  codexWindowsSandboxReady,
+  ShellToolAdapter,
+  shellToolAvailability,
+  ToolAdapterError,
+} from "../src";
 
 const directories: string[] = [];
 
@@ -22,23 +27,63 @@ afterEach(() => {
 });
 
 describe("ShellToolAdapter", () => {
-  it("advertises Shell only when the macOS sandbox executable is available", () => {
+  it("requires the complete Codex Windows sandbox installation", () => {
+    expect(
+      codexWindowsSandboxReady({
+        platform: "win32",
+        codexExecutable: "C:\\Codex\\codex.exe",
+        helpersExist: true,
+        setupMarkerExists: true,
+      }),
+    ).toBe(true);
+    for (const probe of [
+      { codexExecutable: null, helpersExist: true, setupMarkerExists: true },
+      { codexExecutable: "C:\\Codex\\codex.exe", helpersExist: false, setupMarkerExists: true },
+      { codexExecutable: "C:\\Codex\\codex.exe", helpersExist: true, setupMarkerExists: false },
+    ]) {
+      expect(codexWindowsSandboxReady({ platform: "win32", ...probe })).toBe(false);
+    }
+    expect(
+      codexWindowsSandboxReady({
+        platform: "linux",
+        codexExecutable: "C:\\Codex\\codex.exe",
+        helpersExist: true,
+        setupMarkerExists: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("advertises Shell only when a supported platform sandbox is ready", () => {
     expect(shellToolAvailability({ platform: "darwin", sandboxExecutableExists: true })).toEqual({
       availableToolNames: ["openerx_shell", "openerx_shell_process"],
       unavailableReasons: {},
     });
-    for (const probe of [
-      { platform: "darwin" as const, sandboxExecutableExists: false },
-      { platform: "win32" as const, sandboxExecutableExists: true },
-    ]) {
-      expect(shellToolAvailability(probe)).toEqual({
-        availableToolNames: [],
-        unavailableReasons: {
-          openerx_shell: "SHELL_OS_SANDBOX_UNAVAILABLE",
-          openerx_shell_process: "SHELL_OS_SANDBOX_UNAVAILABLE",
-        },
-      });
-    }
+    expect(
+      shellToolAvailability({ platform: "darwin", sandboxExecutableExists: false }),
+    ).toEqual({
+      availableToolNames: [],
+      unavailableReasons: {
+        openerx_shell: "SHELL_OS_SANDBOX_UNAVAILABLE",
+        openerx_shell_process: "SHELL_OS_SANDBOX_UNAVAILABLE",
+      },
+    });
+    expect(
+      shellToolAvailability({
+        platform: "win32",
+        sandboxExecutableExists: true,
+        windowsSandboxReady: false,
+      }),
+    ).toEqual({
+      availableToolNames: [],
+      unavailableReasons: {
+        openerx_shell: "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE",
+        openerx_shell_process: "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE",
+      },
+    });
+    expect(shellToolAvailability({ platform: "win32", windowsSandboxReady: true })).toEqual({
+      availableToolNames: ["openerx_shell", "openerx_shell_process"],
+      unavailableReasons: {},
+    });
   });
 
   it("runs argv without a shell inside the approved workspace", async () => {
@@ -61,7 +106,7 @@ describe("ShellToolAdapter", () => {
     expect(result.summary).toContain("tool-ok");
     expect(result.data).toMatchObject({ state: "completed", exitCode: 0 });
     await adapter.stopAll();
-  });
+  }, 20_000);
 
   it("retains failed command output as a typed failure result", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-failure-"));
@@ -90,7 +135,7 @@ describe("ShellToolAdapter", () => {
         data: { exitCode: 3, state: "failed" },
       });
     }
-  });
+  }, 20_000);
 
   it("rejects cwd escape and refuses execution when no native sandbox exists", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
@@ -111,7 +156,7 @@ describe("ShellToolAdapter", () => {
         context(),
       ),
     ).rejects.toThrow("SHELL_CWD_OUT_OF_SCOPE");
-    if (process.platform !== "darwin") {
+    if (process.platform !== "darwin" && !codexWindowsSandboxReady()) {
       await expect(
         adapter.execute(
           {
@@ -126,11 +171,15 @@ describe("ShellToolAdapter", () => {
           },
           context(),
         ),
-      ).rejects.toThrow("SHELL_OS_SANDBOX_UNAVAILABLE");
+      ).rejects.toThrow(
+        process.platform === "win32"
+          ? "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE"
+          : "SHELL_OS_SANDBOX_UNAVAILABLE",
+      );
     }
   });
 
-  it("denies Node and Python reads outside the workspace even when network is approved", async () => {
+  it("denies Node and Python reads outside the workspace on macOS", async () => {
     if (process.platform !== "darwin") return;
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-workspace-"));
     const outside = mkdtempSync(path.join(tmpdir(), "openerx-shell-outside-"));
@@ -173,7 +222,7 @@ describe("ShellToolAdapter", () => {
     await adapter.stopAll();
   });
 
-  it("keeps network policy independent from the macOS filesystem sandbox", async () => {
+  it("keeps network policy independent from the platform filesystem sandbox", async () => {
     if (process.platform !== "darwin") return;
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-network-"));
     directories.push(workspace);
@@ -211,6 +260,71 @@ describe("ShellToolAdapter", () => {
       server.close((error) => (error ? reject(error) : resolve())),
     );
   });
+
+  it("selects the Codex offline/online identity and keeps temp inside the workspace", async () => {
+    if (!codexWindowsSandboxReady()) return;
+    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-identity-"));
+    directories.push(workspace);
+    const adapter = new ShellToolAdapter([workspace]);
+    for (const [allowNetwork, account] of [
+      [false, "codexsandboxoffline"],
+      [true, "codexsandboxonline"],
+    ] as const) {
+      const identity = await adapter.execute(
+        {
+          operation: "shell_execute",
+          cwd: workspace,
+          command: path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"),
+          args: [],
+          timeoutMs: 10_000,
+          background: false,
+          allowNetwork,
+          idempotencyKey: `shell-windows-identity-${account}`,
+        },
+        context(),
+      );
+      expect(identity.summary.trim().toLowerCase()).toMatch(new RegExp(`\\\\${account}$`, "u"));
+    }
+    const environment = await adapter.execute(
+      {
+        operation: "shell_execute",
+        cwd: workspace,
+        command: process.execPath,
+        args: ["-e", "process.stdout.write(process.env.TEMP || '')"],
+        timeoutMs: 10_000,
+        background: false,
+        allowNetwork: false,
+        idempotencyKey: "shell-windows-temp-0001",
+      },
+      context(),
+    );
+    expect(path.resolve(environment.summary)).toBe(path.resolve(workspace));
+    await adapter.stopAll();
+  }, 20_000);
+
+  it("executes in the real Windows development workspace", async () => {
+    if (!codexWindowsSandboxReady()) return;
+    const workspace = process.cwd();
+    const adapter = new ShellToolAdapter([workspace]);
+    await expect(
+      adapter.execute(
+        {
+          operation: "shell_execute",
+          cwd: workspace,
+          command: path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"),
+          args: [],
+          timeoutMs: 10_000,
+          background: false,
+          allowNetwork: false,
+          idempotencyKey: "shell-windows-real-workspace-0001",
+        },
+        context(),
+      ),
+    ).resolves.toMatchObject({
+      data: { state: "completed", isolation: "codex-windows-restricted-token" },
+    });
+    await adapter.stopAll();
+  }, 30_000);
 
   it("starts, observes, and stops a long child process", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));

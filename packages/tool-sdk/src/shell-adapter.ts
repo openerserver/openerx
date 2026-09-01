@@ -8,6 +8,11 @@ import type {
   ToolOperation,
   WorkspaceGrant,
 } from "@openerx/contracts";
+import {
+  CodexWindowsShellToolAdapter,
+  codexWindowsSandboxReady,
+  type WindowsSandboxCommandHost,
+} from "./codex-windows-shell-adapter";
 import { type ToolAdapter, ToolAdapterError, type ToolExecutionContext } from "./types";
 
 const OUTPUT_LIMIT = 2_000_000;
@@ -15,6 +20,7 @@ const OUTPUT_LIMIT = 2_000_000;
 export interface ShellAvailabilityProbe {
   platform?: NodeJS.Platform;
   sandboxExecutableExists?: boolean;
+  windowsSandboxReady?: boolean;
 }
 
 export function shellToolAvailability(probe: ShellAvailabilityProbe = {}): HostToolAvailability {
@@ -27,11 +33,23 @@ export function shellToolAvailability(probe: ShellAvailabilityProbe = {}): HostT
       unavailableReasons: {},
     };
   }
+  if (platform === "win32" && (probe.windowsSandboxReady ?? codexWindowsSandboxReady())) {
+    return {
+      availableToolNames: ["openerx_shell", "openerx_shell_process"],
+      unavailableReasons: {},
+    };
+  }
   return {
     availableToolNames: [],
     unavailableReasons: {
-      openerx_shell: "SHELL_OS_SANDBOX_UNAVAILABLE",
-      openerx_shell_process: "SHELL_OS_SANDBOX_UNAVAILABLE",
+      openerx_shell:
+        platform === "win32"
+          ? "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE"
+          : "SHELL_OS_SANDBOX_UNAVAILABLE",
+      openerx_shell_process:
+        platform === "win32"
+          ? "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE"
+          : "SHELL_OS_SANDBOX_UNAVAILABLE",
     },
   };
 }
@@ -137,6 +155,7 @@ export class ShellToolAdapter implements ToolAdapter {
   readonly operations = ["shell_execute", "shell_status", "shell_input", "shell_stop"] as const;
   readonly #workspaceRoots: string[];
   readonly #processes = new Map<string, ProcessRecord>();
+  readonly #windowsAdapter?: CodexWindowsShellToolAdapter;
 
   constructor(
     workspaceRoots: readonly string[],
@@ -144,14 +163,26 @@ export class ShellToolAdapter implements ToolAdapter {
       workspaceGrantId: string,
       conversationId: string,
     ) => WorkspaceGrant,
+    windowsHost?: WindowsSandboxCommandHost,
   ) {
     this.#workspaceRoots = workspaceRoots.map((root) => realpathSync(root));
+    if (process.platform === "win32" && (windowsHost || codexWindowsSandboxReady())) {
+      this.#windowsAdapter = new CodexWindowsShellToolAdapter(
+        workspaceRoots,
+        resolveWorkspaceGrant,
+        windowsHost,
+      );
+    }
   }
 
   async execute(
     operation: ToolOperation,
     context: ToolExecutionContext,
   ): Promise<NormalizedToolResult> {
+    if (this.#windowsAdapter) return await this.#windowsAdapter.execute(operation, context);
+    if (process.platform === "win32") {
+      throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE");
+    }
     switch (operation.operation) {
       case "shell_execute":
         return await this.#execute(operation, context);
@@ -168,6 +199,10 @@ export class ShellToolAdapter implements ToolAdapter {
   }
 
   async stopAll(): Promise<void> {
+    if (this.#windowsAdapter) {
+      await this.#windowsAdapter.stopAll();
+      return;
+    }
     await Promise.all(
       [...this.#processes.values()]
         .filter((record) => record.state === "running")

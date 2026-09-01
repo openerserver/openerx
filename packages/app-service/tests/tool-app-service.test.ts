@@ -873,7 +873,14 @@ describe("ToolAppService", () => {
       status: "available",
       reason: null,
       availableToolNames: ["openerx_shell", "openerx_shell_process"],
-      details: ["回滚路径：openerx_shell", "同一会话不会同时暴露 brokered bash"],
+      details:
+        process.platform === "win32"
+          ? [
+              "Backend：Codex Windows restricted token",
+              "隔离：受限账户 / ACL / Job Object / WFP",
+              "命令：argv 直传；网络默认拒绝",
+            ]
+          : ["回滚路径：openerx_shell", "同一会话不会同时暴露 brokered bash"],
     });
 
     service.revokeWorkspace(grant.id);

@@ -941,7 +941,13 @@ export class ToolAppService {
               "网络：默认拒绝",
               `工作区：${executionWorkspaceGrants.length} 个有效授权`,
             ]
-          : ["回滚路径：openerx_shell", "同一会话不会同时暴露 brokered bash"],
+          : process.platform === "win32"
+            ? [
+                `Backend：Codex Windows restricted token${shellHostAvailable ? "" : "（未就绪）"}`,
+                "隔离：受限账户 / ACL / Job Object / WFP",
+                "命令：argv 直传；网络默认拒绝",
+              ]
+            : ["回滚路径：openerx_shell", "同一会话不会同时暴露 brokered bash"],
       ),
       readiness(
         "desktop",
