@@ -333,6 +333,95 @@ describe("CapabilityBroker", () => {
     repository.close();
   });
 
+  it("grants revocable full access to one conversation and bypasses later per-call approvals", async () => {
+    const { chat, repository, projection } = fixture();
+    const execute = vi.fn(async () => ({
+      summary: "desktop action",
+      content: [{ type: "text" as const, text: "desktop action" }],
+      data: {},
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: false,
+      durationMs: 1,
+    }));
+    const broker = new CapabilityBroker(repository, [{ operations: ["desktop"], execute }]);
+    const selected = repository.setPermissionMode({
+      conversationId: projection.conversationId,
+      mode: "full_access",
+    });
+    expect(selected).toMatchObject({ mode: "full_access", scopeId: expect.any(String) });
+    const scope = repository.activeScopes("full_access")[0];
+    expect(scope).toMatchObject({
+      conversationId: projection.conversationId,
+      maxRisk: "L5",
+      revokedAt: null,
+    });
+
+    expect(
+      (
+        await broker.execute(projection, {
+          operation: "desktop",
+          action: "submit",
+          application: "Notes",
+          idempotencyKey: "full-access-high-impact-0001",
+        })
+      ).status,
+    ).toBe("completed");
+
+    const secondGeneration = chat.createGeneration({
+      text: "另一个对话",
+      idempotencyKey: "full-access-other-conversation-0001",
+    });
+    const secondProjection = repository.createProjection({
+      conversationId: secondGeneration.receipt.conversationId,
+      messageId: secondGeneration.receipt.assistantMessageId,
+      branchId: secondGeneration.receipt.branchId,
+      title: "另一个对话",
+      selectedModelRef: "platform/auto",
+      thinkingLevel: secondGeneration.thinkingLevel,
+      piPackageVersion: "0.84.3",
+      piHostContractVersion: 2,
+    });
+    const otherConversation = await broker.execute(
+      {
+        generationId: "00000000-0000-4000-8000-000000000012",
+        workItemId: secondProjection.workItem.id,
+        runId: secondProjection.run.id,
+        conversationId: secondGeneration.receipt.conversationId,
+        assistantMessageId: secondGeneration.receipt.assistantMessageId,
+        piToolCallId: "pi-call-full-access-other",
+        toolName: "openerx_desktop",
+      },
+      {
+        operation: "desktop",
+        action: "submit",
+        application: "Notes",
+        idempotencyKey: "full-access-other-submit-0001",
+      },
+    );
+    expect(otherConversation.status).toBe("permission_required");
+
+    expect(
+      repository.setPermissionMode({
+        conversationId: projection.conversationId,
+        mode: "ask",
+      }),
+    ).toEqual({
+      conversationId: projection.conversationId,
+      mode: "ask",
+      scopeId: null,
+    });
+    const afterRevoke = await broker.execute(projection, {
+      operation: "desktop",
+      action: "submit",
+      application: "Notes",
+      idempotencyKey: "full-access-after-revoke-0001",
+    });
+    expect(afterRevoke.status).toBe("permission_required");
+    chat.close();
+    repository.close();
+  });
+
   it("runs isolated Browser observation automatically but keeps submit per-call", async () => {
     const { chat, repository, projection } = fixture();
     const execute = vi.fn(async () => ({

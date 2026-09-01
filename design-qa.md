@@ -1,69 +1,125 @@
-# Codex 风格自动化页 Design QA
+# Design QA — File Preview Side Panel
 
-## Artifacts
+## Comparison target
 
-- source visual truth path: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-6216cbae-5fc3-4b50-9cfb-f5bce292bd9d.png`
-- implementation screenshot path: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-implementation-viewport.png`
-- detail screenshot path: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-detail-viewport.png`
-- editor screenshot path: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-editor-viewport.png`
-- full-view comparison evidence: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-comparison.png`
-- focused comparison evidence: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\automation-focus-comparison.png`
-- viewport: 2239 × 1339 CSS px, light theme
-- source pixels: 2239 × 1339
-- implementation pixels: 2239 × 1329
-- density normalization: browser capture was normalized to CSS-pixel width. The 10 px height difference is capture chrome, not page cropping. The focused comparison aligns the source and implementation main-content regions; the existing UWA sidebar is intentionally outside the implementation harness because it was not changed.
-- state: populated automation list with active and paused tasks; no panel open for the primary comparison
+- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-99a3daae-5450-4fda-98ae-98ec61462ea3.png`
+- Browser-rendered implementation: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\qa-side-preview-desktop.png`
+- Combined comparison evidence: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\qa-side-preview-comparison.png`
+- State: files library with `README.md` selected and Markdown preview open on the right.
+- Reference pixels: 1842 × 1222, including Windows/Electron chrome at approximately 1.5× device density. The app content corresponds to roughly 1228 CSS px wide.
+- Implementation pixels: 1226 × 758, normalized to the Electron content area's CSS size at 1× for comparison.
+- Desktop CSS viewport: 1226 × 758.
+- Narrow-window CSS viewport: 906 × 700.
 
-## Findings
+## QA inventory and interaction coverage
 
-- No actionable P0, P1, or P2 mismatch remains.
-- Fonts and typography: both screens use the existing system sans-serif stack with a restrained 34 px title, 16 px subtitle, 13–15 px controls and task labels, moderate optical weights, compact line heights, and single-line truncation for long summaries. The product-specific title “自动化” replaces the source phrase “已安排的任务” intentionally.
-- Spacing and layout rhythm: the implementation matches the reference’s centered narrow work area, generous top offset, pill search field, compact segmented filters, low-density task rows, quiet dividers, and large surrounding whitespace. Detail and editing content move into a 560 px right drawer so the primary list keeps the reference composition.
-- Colors and visual tokens: the surface stays neutral white in light mode with low-contrast borders and muted secondary copy. Black/white primary actions follow the reference. Green, amber, and outline states are limited to automation status semantics.
-- Image quality and asset fidelity: the source contains no product photography, illustration, logo, or decorative raster asset in the redesigned content region. Existing Phosphor icons provide the closest matching UI icon language; no emoji, placeholder art, handcrafted SVG, or fake raster asset is used.
-- Copy and content: source hierarchy and phrasing are adapted to real UWA capabilities. Each task shows name, state, schedule, next run, and prompt summary; background startup, retry, catch-up, model, heartbeat, run history, and safety copy remain available.
-- Accessibility and affordances: search, clear, filters, task rows, create/edit form, pause/resume, run-now, delete, background startup, and close actions are semantic and keyboard-addressable. Visible focus states and reduced-motion behavior are included.
+- Selecting a file opens a preview beside the library: passed with normal click input.
+- The preview is the library's right-hand sibling rather than a child below the list: passed by DOM structure and visible layout.
+- Library and preview have independent vertical scrolling: passed; the library pane had `scrollHeight 1115 / clientHeight 758`, while the preview body scrolled independently.
+- Selected file state is visible through `.library-card.is-selected` and `aria-pressed="true"`: passed.
+- Preview/source mode switch: passed in both directions.
+- Close restores the unsplit library width and removes the panel: passed.
+- Narrow window keeps the preview anchored to the right as an overlay, with no horizontal document overflow: passed at 906 × 700.
+- Console and renderer page errors: none observed after reload and the complete interaction flow.
 
 ## Full-view comparison evidence
 
-`automation-comparison.png` places the complete Codex reference and the browser-rendered UWA implementation in one comparison input. It shows the same white content canvas, centered reading column, title/search/filter sequence, lightweight task treatment, and dominant whitespace. The reference’s existing app sidebar and window chrome are not duplicated in the harness; the production UWA sidebar remains unchanged.
+The combined comparison shows the original files view on the left and the implementation after selection on the right. The established UWA sidebar, typography, color tokens, cards, spacing language, and content hierarchy remain consistent. The intentional change is that the library contracts into the left work area while a full-height preview panel occupies the right edge.
 
-## Focused region comparison evidence
+## Required fidelity surfaces
 
-`automation-focus-comparison.png` aligns the readable main-content regions in one input. It confirms the title hierarchy, search height and radius, selected-filter treatment, task-row typography, status-dot scale, muted schedule copy, divider weight, and vertical rhythm. The implementation intentionally carries more task metadata and realistic project data than the sparse reference.
+- Fonts and typography: existing UWA font stack, weights, sizes, line heights, wrapping, and hierarchy are preserved. Preview Markdown uses the existing application renderer and remains legible at both tested widths.
+- Spacing and layout rhythm: the full-height panel aligns to the content area's top and bottom; its left divider creates a clear split. The list and preview each fit the viewport without document-level scrolling.
+- Colors and visual tokens: existing workspace surface, border, accent, muted text, and active-state tokens are reused. No new off-system colors or gradients were introduced.
+- Image quality and asset fidelity: no new image assets were required. Existing Phosphor icons and rendered document surfaces are retained.
+- Copy and content: all existing library and preview labels are unchanged. The selected Markdown content renders through the existing preview path.
+
+## Focused-region evidence
+
+A separate crop was not needed: the original-resolution implementation screenshot keeps the entire right panel, header controls, Markdown typography, divider, and both scrollbars readable in one view. Numeric bounds additionally confirm the right-hand relationship: library pane `x 258 / width 561.45`, preview `x 819.45 / width 406.55`, with both at height 758.
 
 ## Comparison history
 
-- Initial capture issue: the preview harness placed the app content in the collapsed grid’s zero-width sidebar track, producing a blank screenshot.
-- Fix: added the preserved sidebar track to the harness and recaptured the same 2239 × 1339 viewport. This was a verification-harness correction; production code was unaffected.
-- Post-fix full-view evidence: `automation-implementation-viewport.png` shows the corrected centered content column and all primary controls.
-- Post-fix focused evidence: `automation-focus-comparison.png` shows no remaining actionable P0/P1/P2 drift on typography, spacing, tokens, icon quality, or copy hierarchy.
+### Iteration 1
 
-## Primary interactions tested
+- Earlier finding [P2]: at the split width, the two library add buttons were compressed and their Chinese labels wrapped vertically.
+- Fix: the library header switches to a stacked layout while the preview is open, and its action buttons use `white-space: nowrap`.
+- Post-fix evidence: `qa-side-preview-desktop.png` shows both buttons on one readable row with no clipping or vertical label wrapping.
 
-- Search narrows the list to the matching automation.
-- “已暂停” filtering returns only the paused task; “全部” restores the full list.
-- Selecting a task opens its detail drawer and loads run history.
-- “编辑” opens the populated editor and schedule preview.
-- “新建自动化” opens the creation editor; cancel closes it.
-- Background startup remains a functional checkbox/switch.
-- Browser console errors checked: none.
-- Automated renderer tests: 3 automation tests passed.
-- TypeScript check: passed.
-- Biome check for the changed TSX component: passed.
+## Findings
 
-## Implementation checklist
+No actionable P0, P1, or P2 differences remain. The narrower library column and stacked header controls are intentional consequences of the requested right-side preview.
 
-- [x] Replace the former card-heavy two-column page with the Codex-style reading flow.
-- [x] Add working search and status filters.
-- [x] Preserve task creation, editing, schedule preview, run-now, pause/resume, deletion, and history.
-- [x] Move secondary configuration and details into focused right drawers.
-- [x] Preserve background startup settings.
-- [x] Verify the populated list, filtering, detail, editor, and create states in the browser.
-- [x] Run targeted tests, typecheck, formatter/lint, and console checks.
+## Follow-up polish
 
-## Follow-up Polish
+No blocking polish items. A future optional enhancement could add a draggable divider if user-controlled preview width becomes desirable.
 
-- P3: a future pass could add an explicit confirmation dialog before deletion; the existing behavior remains unchanged in this redesign.
+## Final result
+
+final result: passed
+
+---
+
+# Design QA — Composer Model + Thinking Selector
+
+## Comparison target
+
+- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-ae28e30f-36f0-4c84-a052-12a6ee06d1ce.png`
+- Implementation screenshot path: live Windows capture `screenshot://screenshot-0` from the running UWA Electron window (ephemeral capture reference).
+- Viewport: UWA desktop window at 1229 × 815 logical pixels, density 1×.
+- Source pixels: 1904 × 1066, including Windows/Codex chrome.
+- Implementation pixels: 1229 × 815, including Windows/UWA chrome.
+- Density normalization: compared by desktop CSS size and the composer region rather than raw full-window pixel scale.
+- State: existing conversation, composer visible; closed combined trigger and open grouped-menu states both inspected.
+
+## Full-view comparison evidence
+
+The UWA composer now follows the Codex reference hierarchy: one compact model control sits in the bottom action row and displays both the active model and thinking strength. Permission remains a separate safety control, while Skill and context remain separate task controls. The rest of the UWA workspace and composer layout are unchanged.
+
+## Focused-region evidence
+
+The composer region was inspected at readable size in both states. The closed trigger reads `DeepSeek V4 Flash · 标准` with a lightning icon and caret. The open popup contains separate `模型` and `思考强度` groups, a divider between them, descriptions for model capability/context, and independent checkmarks for the selected model and selected thinking level.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing UWA font stack and text weights are preserved; the combined value remains on one line without truncating at the tested desktop width.
+- Spacing and layout rhythm: two adjacent controls became one 220–300 px control; the menu opens upward with consistent 9/12 px option spacing and does not collide with the window edge.
+- Colors and visual tokens: existing workspace surface, border, accent, muted text, and selected-state tokens are reused; no off-system palette or gradient was introduced.
+- Image quality and asset fidelity: no raster assets were required. The lightning, caret, and check icons use the existing Phosphor icon library.
+- Copy and content: the trigger combines the real model display name and localized thinking label; the popup retains model capabilities, context size, availability, and every supported thinking level.
+
+## Interaction coverage
+
+- One trigger exposes model and thinking choices: passed.
+- Existing conversations keep separate model/thinking persistence calls: passed.
+- New conversations can choose both values before sending: passed.
+- Native semantic selects remain available to existing automation/accessibility paths: passed.
+- Arrow-key navigation, Home/End, Escape, outside-click closing, selected, disabled, hover, and focus states remain supported by the shared menu component.
+- Targeted renderer tests: 3 passed.
+- Desktop TypeScript check: passed.
+
+## Comparison history
+
+### Iteration 1
+
+- Earlier finding [P2]: the combined label inherited the old 116 px label limit and visually truncated the model name before the thinking value.
+- Fix: increased the combined control to 220–300 px and its label allowance to 220 px.
+- Post-fix evidence: the running UWA window shows the full `DeepSeek V4 Flash · 标准` label and the action row remains on one line.
+
+### Iteration 2
+
+- Earlier finding [P3]: the footer still presented permission, model, Skill, and context as a row of bordered fields, making the action area visually heavier than the Codex reference.
+- Fix: converted those controls to quiet, borderless text actions; moved the combined model/thinking entry to the right; preserved an orange warning treatment for full-access mode; and removed the redundant keyboard hint from the conversation footer.
+- Post-fix evidence: the same menu, focus ring, hover surface, selected states, and permission warning remain available without permanent pill borders.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain for the requested model/thinking merge. The composer footer now follows the Codex reference's quieter hierarchy while retaining UWA's red accent inside the opened menu.
+
+## Follow-up polish
+
+P3: on very narrow windows, the combined label will ellipsize before wrapping so the send action remains reachable.
+
+## Final result
 
 final result: passed

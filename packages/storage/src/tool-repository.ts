@@ -23,6 +23,8 @@ import {
   type ToolCall,
   type ToolCapability,
   type ToolInput,
+  type ToolPermissionMode,
+  type ToolPermissionModeState,
   type ToolRisk,
   toolCallSchema,
   type UsageRecord,
@@ -715,6 +717,55 @@ export class ToolRepository {
           )
           .all(this.#ownerProfileId, now);
     return (rows as SqlRow[]).map((row) => this.#scope(row));
+  }
+
+  permissionMode(conversationId: string): ToolPermissionModeState {
+    const scope = this.activeScopes("full_access").find(
+      (candidate) => candidate.conversationId === conversationId,
+    );
+    return {
+      conversationId,
+      mode: scope ? "full_access" : "ask",
+      scopeId: scope?.id ?? null,
+    };
+  }
+
+  setPermissionMode(input: {
+    conversationId: string;
+    mode: ToolPermissionMode;
+  }): ToolPermissionModeState {
+    return this.#transaction(() => {
+      const active = this.activeScopes("full_access").filter(
+        (scope) => scope.conversationId === input.conversationId,
+      );
+      if (input.mode === "ask") {
+        for (const scope of active) this.revokeScope(scope.id);
+        return { conversationId: input.conversationId, mode: "ask", scopeId: null };
+      }
+      const existing = active[0];
+      if (existing) {
+        return {
+          conversationId: input.conversationId,
+          mode: "full_access",
+          scopeId: existing.id,
+        };
+      }
+      const scope = this.createScope({
+        capability: "full_access",
+        resourceType: "builtin",
+        resource: "conversation",
+        actions: ["high_impact"],
+        maxRisk: "L5",
+        conversationId: input.conversationId,
+        sessionOnly: false,
+        expiresAt: null,
+      });
+      return {
+        conversationId: input.conversationId,
+        mode: "full_access",
+        scopeId: scope.id,
+      };
+    });
   }
 
   revokeScope(scopeId: string): CapabilityScope {

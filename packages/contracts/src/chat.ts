@@ -98,6 +98,10 @@ import {
   runStepSchema,
   toolCallSchema,
   toolListInputSchema,
+  toolPermissionModeGetInputSchema,
+  toolPermissionModeSchema,
+  toolPermissionModeSetInputSchema,
+  toolPermissionModeStateSchema,
   toolRuntimeReadinessInputSchema,
   toolRuntimeReadinessSchema,
   toolScopeRevokeInputSchema,
@@ -234,6 +238,7 @@ export const chatSendInputSchema = z
     personalFileIds: z.array(entityIdSchema).max(100).optional(),
     skillInstallationId: entityIdSchema.optional(),
     thinkingLevel: thinkingLevelSchema.optional(),
+    permissionMode: toolPermissionModeSchema.optional(),
   })
   .strict();
 
@@ -426,6 +431,18 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
   z
     .object({ command: z.literal("tool.permission.resolve"), input: permissionResolveInputSchema })
     .strict(),
+  z
+    .object({
+      command: z.literal("tool.permissionMode.get"),
+      input: toolPermissionModeGetInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal("tool.permissionMode.set"),
+      input: toolPermissionModeSetInputSchema,
+    })
+    .strict(),
   z.object({ command: z.literal("tool.scopes.list"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("tool.scope.revoke"), input: toolScopeRevokeInputSchema }).strict(),
   z
@@ -612,6 +629,8 @@ export interface ChatCommandResultMap {
   "tool.workItem.get": z.infer<typeof workItemDetailSchema>;
   "tool.permissions.list": z.infer<typeof permissionRequestSchema>[];
   "tool.permission.resolve": z.infer<typeof permissionRequestSchema>;
+  "tool.permissionMode.get": z.infer<typeof toolPermissionModeStateSchema>;
+  "tool.permissionMode.set": z.infer<typeof toolPermissionModeStateSchema>;
   "tool.scopes.list": z.infer<typeof capabilityScopeSchema>[];
   "tool.scope.revoke": z.infer<typeof capabilityScopeSchema>;
   "workspace.grant": WorkspaceGrant;
@@ -755,6 +774,10 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "tool.permission.resolve":
       parsed = permissionRequestSchema.parse(value);
+      break;
+    case "tool.permissionMode.get":
+    case "tool.permissionMode.set":
+      parsed = toolPermissionModeStateSchema.parse(value);
       break;
     case "tool.scopes.list":
       parsed = z.array(capabilityScopeSchema).parse(value);

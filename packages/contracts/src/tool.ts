@@ -13,7 +13,9 @@ import { thinkingLevelSchema, usageRecordSchema } from "./model";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
 export const toolRiskSchema = z.enum(["L0", "L1", "L2", "L3", "L4", "L5"]);
+export const toolPermissionModeSchema = z.enum(["ask", "full_access"]);
 export const toolCapabilitySchema = z.enum([
+  "full_access",
   "builtin.compute",
   "builtin.structured_data",
   "file",
@@ -728,7 +730,7 @@ export const permissionRequestSchema = z
     requestedAt: timestampSchema,
     expiresAt: timestampSchema,
     resolvedAt: timestampSchema.nullable(),
-    resolution: z.enum(["once", "session", "persistent", "deny"]).nullable(),
+    resolution: z.enum(["once", "session", "persistent", "full_access", "deny"]).nullable(),
     scopeId: entityIdSchema.nullable(),
   })
   .strict();
@@ -956,6 +958,22 @@ export const permissionResolveInputSchema = z
     payloadDigest: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
+export const toolPermissionModeGetInputSchema = z
+  .object({ conversationId: entityIdSchema })
+  .strict();
+export const toolPermissionModeSetInputSchema = z
+  .object({
+    conversationId: entityIdSchema,
+    mode: toolPermissionModeSchema,
+  })
+  .strict();
+export const toolPermissionModeStateSchema = z
+  .object({
+    conversationId: entityIdSchema,
+    mode: toolPermissionModeSchema,
+    scopeId: entityIdSchema.nullable(),
+  })
+  .strict();
 export const mcpServerUpsertInputSchema = z.object({ config: mcpServerConfigSchema }).strict();
 export const mcpServerRemoveInputSchema = z.object({ serverId: entityIdSchema }).strict();
 export const mcpServerRemoveResultSchema = z
@@ -1007,6 +1025,8 @@ export const workItemDetailSchema = z
   .strict();
 
 export type ToolRisk = z.infer<typeof toolRiskSchema>;
+export type ToolPermissionMode = z.infer<typeof toolPermissionModeSchema>;
+export type ToolPermissionModeState = z.infer<typeof toolPermissionModeStateSchema>;
 export type ToolCapability = z.infer<typeof toolCapabilitySchema>;
 export type ToolRuntimeCapability = z.infer<typeof toolRuntimeCapabilitySchema>;
 export type ToolRuntimeStatus = z.infer<typeof toolRuntimeStatusSchema>;
@@ -1053,6 +1073,12 @@ export interface ToolBridge {
   resolvePermission(
     input: z.input<typeof permissionResolveInputSchema>,
   ): Promise<PermissionRequest>;
+  getToolPermissionMode(
+    input: z.input<typeof toolPermissionModeGetInputSchema>,
+  ): Promise<ToolPermissionModeState>;
+  setToolPermissionMode(
+    input: z.input<typeof toolPermissionModeSetInputSchema>,
+  ): Promise<ToolPermissionModeState>;
   listCapabilityScopes(): Promise<CapabilityScope[]>;
   revokeCapabilityScope(
     input: z.input<typeof toolScopeRevokeInputSchema>,

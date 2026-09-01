@@ -387,6 +387,18 @@ function createBridge(): DesktopBridge {
     getWorkItem: vi.fn(),
     listPermissionRequests: vi.fn().mockResolvedValue([]),
     resolvePermission: vi.fn(),
+    getToolPermissionMode: vi.fn().mockImplementation(async ({ conversationId: targetId }) => ({
+      conversationId: targetId,
+      mode: "ask",
+      scopeId: null,
+    })),
+    setToolPermissionMode: vi
+      .fn()
+      .mockImplementation(async ({ conversationId: targetId, mode }) => ({
+        conversationId: targetId,
+        mode,
+        scopeId: mode === "full_access" ? "88888888-8888-4888-8888-888888888888" : null,
+      })),
     listCapabilityScopes: vi.fn().mockResolvedValue([]),
     revokeCapabilityScope: vi.fn(),
     listMcpServers: vi.fn().mockResolvedValue([]),
@@ -624,12 +636,61 @@ describe("M1 chat renderer", () => {
 
     const conversationThinking = await screen.findByLabelText("后续消息思考强度");
     await waitFor(() => expect((conversationThinking as HTMLSelectElement).disabled).toBe(false));
-    await userEvent.setup().selectOptions(conversationThinking, "off");
+    const combinedTrigger = screen.getByRole("button", { name: "模型与思考菜单" });
+    await userEvent.setup().click(combinedTrigger);
+    const combinedMenu = screen.getByRole("listbox", { name: "模型与思考" });
+    expect(within(combinedMenu).getByText("模型")).toBeTruthy();
+    expect(within(combinedMenu).getByText("思考强度")).toBeTruthy();
+    await userEvent.setup().click(within(combinedMenu).getByRole("option", { name: "关闭" }));
     await waitFor(() =>
       expect(conversationBridge.selectConversationThinkingLevel).toHaveBeenCalledWith({
         conversationId,
         thinkingLevel: "off",
       }),
+    );
+  });
+
+  it("selects the tool permission mode in the composer for new and existing conversations", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listModels).mockResolvedValue([thinkingModel]);
+    renderApp(bridge);
+    const user = userEvent.setup();
+
+    await user.selectOptions(await screen.findByLabelText("权限模式"), "full_access");
+    await user.type(screen.getByLabelText("发送消息"), "直接执行");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "直接执行", permissionMode: "full_access" }),
+    );
+    cleanup();
+
+    const conversationBridge = createBridge();
+    vi.mocked(conversationBridge.getToolPermissionMode).mockResolvedValue({
+      conversationId,
+      mode: "full_access",
+      scopeId: "88888888-8888-4888-8888-888888888888",
+    });
+    vi.mocked(conversationBridge.setToolPermissionMode).mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    renderApp(conversationBridge, `/chat/${conversationId}`);
+
+    const permissionMode = await screen.findByLabelText("权限模式");
+    await waitFor(() => expect((permissionMode as HTMLSelectElement).disabled).toBe(false));
+    expect((permissionMode as HTMLSelectElement).value).toBe("full_access");
+    await userEvent.setup().selectOptions(permissionMode, "ask");
+    await waitFor(() =>
+      expect(conversationBridge.setToolPermissionMode).toHaveBeenCalledWith({
+        conversationId,
+        mode: "ask",
+      }),
+    );
+    expect((permissionMode as HTMLSelectElement).value).toBe("ask");
+    await userEvent.setup().type(screen.getByLabelText("发送消息"), "恢复逐次审批");
+    await userEvent.setup().click(screen.getByRole("button", { name: "发送" }));
+    expect(conversationBridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "恢复逐次审批", permissionMode: "ask" }),
     );
   });
 
@@ -1572,8 +1633,15 @@ describe("M1 chat renderer", () => {
     });
     renderApp(bridge, "/files");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: /preview\.html/ }));
+    const fileButton = await screen.findByRole("button", { name: /preview\.html/ });
+    await user.click(fileButton);
     const frame = await screen.findByTitle("HTML 隔离预览");
+    const libraryPage = frame.closest(".library-page");
+    const previewPanel = frame.closest(".content-preview");
+    expect(libraryPage?.classList.contains("preview-is-open")).toBe(true);
+    expect(previewPanel?.parentElement).toBe(libraryPage);
+    expect(libraryPage?.querySelector(":scope > .library-browser-pane")).toBeTruthy();
+    expect(fileButton.getAttribute("aria-pressed")).toBe("true");
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(frame.getAttribute("srcdoc")).toContain("window.openerx");

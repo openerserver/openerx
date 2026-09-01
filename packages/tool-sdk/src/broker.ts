@@ -144,7 +144,11 @@ export class CapabilityBroker {
       throw new ToolBrokerError("PERMISSION_DENIED");
     }
 
+    const hasFullAccess = this.#repository
+      .activeScopes("full_access")
+      .some((scope) => scope.conversationId === projection.conversationId);
     const requiresApproval =
+      !hasFullAccess &&
       requirement.approval !== "automatic" &&
       (requirement.approval === "per_call" ||
         !this.#repository

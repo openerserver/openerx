@@ -90,6 +90,8 @@ import {
   skillUninstallInputSchema,
   syncResolveConflictInputSchema,
   toolListInputSchema,
+  toolPermissionModeGetInputSchema,
+  toolPermissionModeSetInputSchema,
   toolScopeRevokeInputSchema,
   usageQueryInputSchema,
   usageRecordSchema,
@@ -902,6 +904,16 @@ function registerIpcHandlers(
     ipcChannels.toolPermissionResolve,
     "tool.permission.resolve",
     permissionResolveInputSchema,
+  );
+  registerChatHandler(
+    ipcChannels.toolPermissionModeGet,
+    "tool.permissionMode.get",
+    toolPermissionModeGetInputSchema,
+  );
+  registerChatHandler(
+    ipcChannels.toolPermissionModeSet,
+    "tool.permissionMode.set",
+    toolPermissionModeSetInputSchema,
   );
   registerChatHandler(ipcChannels.toolScopesList, "tool.scopes.list", emptyInputSchema);
   registerChatHandler(ipcChannels.toolScopeRevoke, "tool.scope.revoke", toolScopeRevokeInputSchema);

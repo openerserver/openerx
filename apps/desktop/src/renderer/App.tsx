@@ -27,6 +27,7 @@ import type {
   SyncConflict,
   ThinkingLevel,
   TokenAggregateField,
+  ToolPermissionMode,
   ToolRuntimeCapability,
   ToolRuntimeReadiness,
   UsageRecord,
@@ -43,6 +44,7 @@ import {
   Brain,
   CaretDown,
   ChatCircle,
+  Check,
   CheckCircle,
   Copy,
   Desktop,
@@ -53,6 +55,7 @@ import {
   GearSix,
   ImageSquare,
   Info,
+  Lightning,
   MagnifyingGlass,
   Moon,
   Paperclip,
@@ -61,6 +64,7 @@ import {
   Plus,
   QrCode,
   Receipt,
+  ShieldWarning,
   SidebarSimple,
   SlidersHorizontal,
   Sparkle,
@@ -73,7 +77,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Navigate,
@@ -88,7 +92,7 @@ import remarkGfm from "remark-gfm";
 import { AutomationsPage } from "./AutomationsPage";
 
 const suggestions = [
-  "搜索网络：先制定覆盖不同角度的检索计划，再调研最近一周 AI 行业的重要动态，核实信息并附上来源",
+  "复盘最近一周 A 股行情：哪些板块最受关注，背后的驱动因素是什么？",
   "检查我选择的文件或文件夹，找出问题并给出可验证的改进方案",
   "搜索最新资料，制作一份 AI 工具选型报告，同时生成对比表格、DOCX 和汇报 PPT",
   "计算一家月营收 100 万元、成本 65 万元公司的三种增长情景，并生成可下载的 Excel 分析表",
@@ -550,6 +554,227 @@ function trapFocus(event: React.KeyboardEvent<HTMLElement>): void {
   }
 }
 
+type ComposerSelectOption = {
+  value: string;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+};
+
+type ComposerSelectGroup = {
+  label: string;
+  options: readonly ComposerSelectOption[];
+};
+
+function ComposerSelect({
+  ariaLabel,
+  className = "",
+  disabled = false,
+  icon,
+  id,
+  label,
+  onChange,
+  options,
+  groups,
+  renderNativeSelect = true,
+  selectedValues,
+  title,
+  value,
+}: {
+  ariaLabel: string;
+  className?: string;
+  disabled?: boolean;
+  icon?: ReactNode;
+  id?: string;
+  label: string;
+  onChange: (value: string) => void;
+  options?: readonly ComposerSelectOption[];
+  groups?: readonly ComposerSelectGroup[];
+  renderNativeSelect?: boolean;
+  selectedValues?: readonly string[];
+  title?: string;
+  value: string;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const openingFocusRef = useRef<"selected" | "first" | "last">("selected");
+  const menuId = useId();
+  const normalizedGroups = useMemo(
+    () => groups ?? [{ label: "", options: options ?? [] }],
+    [groups, options],
+  );
+  const flattenedOptions = useMemo(
+    () => normalizedGroups.flatMap((group) => group.options),
+    [normalizedGroups],
+  );
+  const activeValues = useMemo(() => selectedValues ?? [value], [selectedValues, value]);
+  const enabledIndexes = useMemo(
+    () =>
+      flattenedOptions.flatMap((option, index) => (option.disabled ? [] : [index])),
+    [flattenedOptions],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const selectedIndex = flattenedOptions.findIndex(
+      (option) => activeValues.includes(option.value) && !option.disabled,
+    );
+    const targetIndex =
+      openingFocusRef.current === "first"
+        ? enabledIndexes[0]
+        : openingFocusRef.current === "last"
+          ? enabledIndexes.at(-1)
+          : selectedIndex >= 0
+            ? selectedIndex
+            : enabledIndexes[0];
+    window.requestAnimationFrame(() => {
+      if (targetIndex !== undefined) optionRefs.current[targetIndex]?.focus();
+    });
+  }, [activeValues, enabledIndexes, flattenedOptions, open]);
+
+  const openMenu = (focus: "selected" | "first" | "last" = "selected") => {
+    if (disabled || enabledIndexes.length === 0) return;
+    openingFocusRef.current = focus;
+    setOpen(true);
+  };
+
+  const closeMenu = (restoreFocus = false) => {
+    setOpen(false);
+    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  const moveOptionFocus = (currentIndex: number, direction: 1 | -1) => {
+    const position = enabledIndexes.indexOf(currentIndex);
+    const nextPosition = (position + direction + enabledIndexes.length) % enabledIndexes.length;
+    const nextIndex = enabledIndexes[nextPosition];
+    if (nextIndex !== undefined) optionRefs.current[nextIndex]?.focus();
+  };
+
+  return (
+    <div
+      ref={rootRef}
+      className={`composer-select ${open ? "is-open" : ""} ${className}`.trim()}
+      title={title}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="composer-select-trigger"
+        aria-label={`${ariaLabel}菜单`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={menuId}
+        disabled={disabled}
+        onClick={() => (open ? closeMenu() : openMenu())}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            openMenu(event.key === "ArrowDown" ? "first" : "last");
+          } else if (event.key === "Escape" && open) {
+            event.preventDefault();
+            closeMenu(true);
+          }
+        }}
+      >
+        {icon}
+        <span className="composer-select-label">{label}</span>
+        <CaretDown className="composer-select-caret" size={13} weight="bold" aria-hidden="true" />
+      </button>
+      {renderNativeSelect ? (
+        <select
+          id={id}
+          className="composer-native-select"
+          aria-label={ariaLabel}
+          tabIndex={-1}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          {flattenedOptions.map((option) => (
+            <option key={option.value} value={option.value} disabled={option.disabled}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      {open ? (
+        <div id={menuId} className="composer-select-menu" role="listbox" aria-label={ariaLabel}>
+          {normalizedGroups.map((group, groupIndex) => {
+            const offset = normalizedGroups
+              .slice(0, groupIndex)
+              .reduce((total, current) => total + current.options.length, 0);
+            return (
+              <div className="composer-select-group" key={group.label || "options"}>
+                {group.label ? (
+                  <span className="composer-select-group-label">{group.label}</span>
+                ) : null}
+                {group.options.map((option, optionIndex) => {
+                  const index = offset + optionIndex;
+                  const selected = activeValues.includes(option.value);
+                  return (
+                    <button
+                      key={option.value}
+                      ref={(element) => {
+                        optionRefs.current[index] = element;
+                      }}
+                      type="button"
+                      className={`composer-select-option ${selected ? "is-selected" : ""}`}
+                      role="option"
+                      aria-selected={selected}
+                      aria-disabled={option.disabled || undefined}
+                      disabled={option.disabled}
+                      onClick={() => {
+                        if (option.disabled) return;
+                        if (!selected) onChange(option.value);
+                        closeMenu(true);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                          event.preventDefault();
+                          moveOptionFocus(index, event.key === "ArrowDown" ? 1 : -1);
+                        } else if (event.key === "Home" || event.key === "End") {
+                          event.preventDefault();
+                          const target =
+                            event.key === "Home" ? enabledIndexes[0] : enabledIndexes.at(-1);
+                          if (target !== undefined) optionRefs.current[target]?.focus();
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          closeMenu(true);
+                        } else if (event.key === "Tab") {
+                          closeMenu();
+                        }
+                      }}
+                    >
+                      <span className="composer-select-option-copy">
+                        <strong>{option.label}</strong>
+                        {option.description ? <small>{option.description}</small> : null}
+                      </span>
+                      <span className="composer-select-check" aria-hidden="true">
+                        {selected ? <Check size={15} weight="bold" /> : null}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ConfirmDialog({
   title,
   description,
@@ -700,7 +925,10 @@ function Composer({
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const [skillInstallationId, setSkillInstallationId] = useState("");
+  const [newConversationModelRef, setNewConversationModelRef] = useState(defaultModelRef);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(defaultThinkingLevel);
+  const [newConversationPermissionMode, setNewConversationPermissionMode] =
+    useState<ToolPermissionMode>("ask");
   const [pendingFiles, setPendingFiles] = useState<PersonalFile[]>([]);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const previousConversationIdRef = useRef(conversationId);
@@ -712,6 +940,9 @@ function Composer({
     setPendingFiles([]);
     setAttachmentNotice(null);
   }, [conversationId]);
+  useEffect(() => {
+    if (!conversationId) setNewConversationModelRef(defaultModelRef);
+  }, [conversationId, defaultModelRef]);
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles({ conversationId: null }),
     onSuccess: async (selectedFiles) => {
@@ -739,6 +970,28 @@ function Composer({
     queryKey: ["models", "catalog"],
     queryFn: () => window.openerx.listModels(),
     retry: false,
+  });
+  const permissionMode = useQuery({
+    queryKey: ["tools", "permission-mode", conversationId],
+    queryFn: () => {
+      if (!conversationId) throw new Error("CONVERSATION_REQUIRED");
+      return window.openerx.getToolPermissionMode({ conversationId });
+    },
+    enabled: Boolean(conversationId),
+  });
+  const selectPermissionMode = useMutation({
+    mutationFn: async (mode: ToolPermissionMode) => {
+      if (!conversationId) {
+        setNewConversationPermissionMode(mode);
+        return null;
+      }
+      return await window.openerx.setToolPermissionMode({ conversationId, mode });
+    },
+    onSuccess: (state) => {
+      if (!state || !conversationId) return;
+      queryClient.setQueryData(["tools", "permission-mode", conversationId], state);
+      void queryClient.invalidateQueries({ queryKey: ["tools", "scopes"] });
+    },
   });
   const conversation = conversationSnapshot?.conversation;
   const compatibleConversationModels = conversation
@@ -797,13 +1050,18 @@ function Composer({
   });
   const newConversationModel =
     models.data?.find(
-      ({ modelRef, status }) => modelRef === defaultModelRef && status === "available",
+      ({ modelRef, status }) => modelRef === newConversationModelRef && status === "available",
     ) ??
     models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
     models.data?.find(({ status }) => status === "available") ??
     models.data?.[0];
   const newConversationModelRequiresConfiguration =
     !conversationId && newConversationModel?.status === "unavailable";
+  const selectedPermissionMode = conversationId
+    ? selectPermissionMode.isPending
+      ? selectPermissionMode.variables
+      : permissionMode.data?.mode
+    : newConversationPermissionMode;
   const newConversationThinkingLevels = useMemo(
     () =>
       newConversationModel ? modelThinkingLevels(newConversationModel) : [defaultThinkingLevel],
@@ -827,10 +1085,11 @@ function Composer({
           text,
           idempotencyKey: idempotencyKey("send"),
           ...(!conversationId
-            ? { thinkingLevel, modelRef: newConversationModel?.modelRef ?? defaultModelRef }
+            ? { thinkingLevel, modelRef: newConversationModel?.modelRef ?? newConversationModelRef }
             : {}),
           ...(pendingFiles.length > 0 ? { personalFileIds: pendingFiles.map(({ id }) => id) } : {}),
           ...(skillInstallationId ? { skillInstallationId } : {}),
+          ...(selectedPermissionMode ? { permissionMode: selectedPermissionMode } : {}),
         }),
         sendReceiptTimeoutMs,
       ),
@@ -901,15 +1160,99 @@ function Composer({
           >
             <Paperclip size={18} weight="regular" />
           </button>
+          <ComposerSelect
+            className={`composer-footer-control composer-permission-select ${
+              selectedPermissionMode === "full_access" ? "is-full-access" : ""
+            }`}
+            ariaLabel="权限模式"
+            icon={<ShieldWarning size={15} weight="regular" />}
+            label={selectedPermissionMode === "full_access" ? "完全访问" : "请求审批"}
+            value={selectedPermissionMode ?? "ask"}
+            disabled={
+              selectPermissionMode.isPending ||
+              (Boolean(conversationId) && permissionMode.isPending)
+            }
+            options={[
+              { value: "ask", label: "请求审批", description: "工具越出授权范围时先询问" },
+              {
+                value: "full_access",
+                label: "完全访问",
+                description: "当前对话中不再逐次询问",
+              },
+            ]}
+            title={
+              selectedPermissionMode === "full_access"
+                ? "当前对话中的工具无需逐次审批"
+                : "工具越出已授权范围时请求审批"
+            }
+            onChange={(nextValue) => selectPermissionMode.mutate(nextValue as ToolPermissionMode)}
+          />
           {!conversationId ? (
-            <div className="composer-select">
-              <SlidersHorizontal size={15} weight="regular" />
-              <span className="composer-select-label">
-                思考 · {thinkingLevelLabels[thinkingLevel]}
-              </span>
+            <>
+              <ComposerSelect
+                className="composer-footer-control composer-model-thinking-select"
+                ariaLabel="模型与思考"
+                icon={<Lightning size={15} weight="fill" />}
+                label={`${newConversationModel?.displayName ?? "选择模型"} · ${thinkingLevelLabels[thinkingLevel]}`}
+                value={`model:${newConversationModel?.modelRef ?? newConversationModelRef}`}
+                selectedValues={[
+                  `model:${newConversationModel?.modelRef ?? newConversationModelRef}`,
+                  `thinking:${thinkingLevel}`,
+                ]}
+                disabled={!newConversationModel}
+                renderNativeSelect={false}
+                groups={[
+                  {
+                    label: "模型",
+                    options: (models.data ?? []).map((model) => ({
+                      value: `model:${model.modelRef}`,
+                      label: model.displayName,
+                      description:
+                        model.status === "available"
+                          ? `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`
+                          : "当前不可用",
+                      disabled: model.status !== "available",
+                    })),
+                  },
+                  {
+                    label: "思考强度",
+                    options: newConversationThinkingLevels.map((level) => ({
+                      value: `thinking:${level}`,
+                      label: thinkingLevelLabels[level],
+                    })),
+                  },
+                ]}
+                onChange={(nextValue) => {
+                  if (nextValue.startsWith("model:")) {
+                    setNewConversationModelRef(nextValue.slice("model:".length));
+                  } else if (nextValue.startsWith("thinking:")) {
+                    setThinkingLevel(nextValue.slice("thinking:".length) as ThinkingLevel);
+                  }
+                }}
+              />
+              <select
+                className="composer-native-select"
+                aria-label="新任务模型"
+                tabIndex={-1}
+                value={newConversationModel?.modelRef ?? newConversationModelRef}
+                disabled={!newConversationModel}
+                onChange={(event) => setNewConversationModelRef(event.target.value)}
+              >
+                {(models.data ?? []).map((model) => (
+                  <option
+                    key={model.modelRef}
+                    value={model.modelRef}
+                    disabled={model.status !== "available"}
+                  >
+                    {model.displayName}
+                  </option>
+                ))}
+              </select>
               <select
                 id="thinking-level-new"
+                className="composer-native-select"
                 aria-label="新任务思考强度"
+                tabIndex={-1}
                 value={thinkingLevel}
                 disabled={!newConversationModel}
                 onChange={(event) => setThinkingLevel(event.target.value as ThinkingLevel)}
@@ -920,94 +1263,137 @@ function Composer({
                   </option>
                 ))}
               </select>
-              <CaretDown size={13} weight="bold" aria-hidden="true" />
-            </div>
+            </>
           ) : null}
           {conversation ? (
             <>
-              <div
-                className="composer-select composer-model-select"
+              <ComposerSelect
+                className="composer-footer-control composer-model-thinking-select"
+                ariaLabel="模型与思考"
+                icon={<Lightning size={15} weight="fill" />}
+                label={`${selectedConversationModel?.displayName ?? "后续消息模型"} · ${thinkingLevelLabels[conversation.thinkingLevel]}`}
+                value={`model:${conversation.selectedModelRef}`}
+                selectedValues={[
+                  `model:${conversation.selectedModelRef}`,
+                  `thinking:${conversation.thinkingLevel}`,
+                ]}
+                disabled={
+                  selectConversationModel.isPending ||
+                  selectConversationThinking.isPending ||
+                  !selectedConversationModel
+                }
+                renderNativeSelect={false}
+                groups={[
+                  {
+                    label: "模型",
+                    options: (compatibleConversationModels ?? []).map((model) => ({
+                      value: `model:${model.modelRef}`,
+                      label: model.displayName,
+                      description:
+                        model.status === "available"
+                          ? `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`
+                          : "当前不可用",
+                      disabled: model.status !== "available",
+                    })),
+                  },
+                  {
+                    label: "思考强度",
+                    options: [
+                      ...(!conversationThinkingLevels.includes(conversation.thinkingLevel)
+                        ? [
+                            {
+                              value: `thinking:${conversation.thinkingLevel}`,
+                              label: thinkingLevelLabels[conversation.thinkingLevel],
+                              disabled: true,
+                            },
+                          ]
+                        : []),
+                      ...conversationThinkingLevels.map((level) => ({
+                        value: `thinking:${level}`,
+                        label: thinkingLevelLabels[level],
+                      })),
+                    ],
+                  },
+                ]}
                 title={
                   selectedConversationModel
                     ? `${modelCapabilities(selectedConversationModel)} · 上下文 ${selectedConversationModel.contextWindow.toLocaleString()}`
                     : undefined
                 }
-              >
-                <span className="composer-select-label">
-                  {selectedConversationModel?.displayName ?? "后续消息模型"}
-                </span>
-                <select
-                  aria-label="后续消息模型"
-                  value={conversation.selectedModelRef}
-                  disabled={selectConversationModel.isPending}
-                  onChange={(event) => selectConversationModel.mutate(event.target.value)}
-                >
-                  {(compatibleConversationModels ?? []).map((model) => (
-                    <option
-                      key={model.modelRef}
-                      value={model.modelRef}
-                      disabled={model.status !== "available"}
-                    >
-                      {model.displayName}
-                    </option>
-                  ))}
-                </select>
-                <CaretDown size={13} weight="bold" aria-hidden="true" />
-              </div>
-              <div className="composer-select">
-                <SlidersHorizontal size={15} weight="regular" />
-                <span className="composer-select-label">
-                  思考 · {thinkingLevelLabels[conversation.thinkingLevel]}
-                </span>
-                <select
-                  aria-label="后续消息思考强度"
-                  value={conversation.thinkingLevel}
-                  disabled={selectConversationThinking.isPending || !selectedConversationModel}
-                  onChange={(event) =>
-                    selectConversationThinking.mutate(event.target.value as ThinkingLevel)
+                onChange={(nextValue) => {
+                  if (nextValue.startsWith("model:")) {
+                    selectConversationModel.mutate(nextValue.slice("model:".length));
+                  } else if (nextValue.startsWith("thinking:")) {
+                    selectConversationThinking.mutate(
+                      nextValue.slice("thinking:".length) as ThinkingLevel,
+                    );
                   }
-                >
-                  {!conversationThinkingLevels.includes(conversation.thinkingLevel) ? (
-                    <option value={conversation.thinkingLevel} disabled>
-                      {thinkingLevelLabels[conversation.thinkingLevel]}
-                    </option>
-                  ) : null}
-                  {conversationThinkingLevels.map((level) => (
-                    <option value={level} key={level}>
-                      {thinkingLevelLabels[level]}
-                    </option>
-                  ))}
-                </select>
-                <CaretDown size={13} weight="bold" aria-hidden="true" />
-              </div>
-            </>
-          ) : null}
-          <div className="composer-select">
-            <Sparkle size={15} weight="regular" />
-            <span className="composer-select-label">
-              {selectedSkill ? skillName(selectedSkill) : "自动 Skill"}
-            </span>
-            <select
-              id={`skill-${conversationId ?? "new"}`}
-              aria-label="选择 Skill"
-              value={skillInstallationId}
-              onChange={(event) => setSkillInstallationId(event.target.value)}
-            >
-              <option value="">自动 Skill</option>
-              {(skills.data ?? [])
-                .filter(({ enabled, packageState }) => enabled && packageState === "installed")
-                .map((skill) => (
-                  <option value={skill.id} key={skill.id}>
-                    {skillName(skill)}
+                }}
+              />
+              <select
+                className="composer-native-select"
+                aria-label="后续消息模型"
+                tabIndex={-1}
+                value={conversation.selectedModelRef}
+                disabled={selectConversationModel.isPending}
+                onChange={(event) => selectConversationModel.mutate(event.target.value)}
+              >
+                {(compatibleConversationModels ?? []).map((model) => (
+                  <option
+                    key={model.modelRef}
+                    value={model.modelRef}
+                    disabled={model.status !== "available"}
+                  >
+                    {model.displayName}
                   </option>
                 ))}
-            </select>
-            <CaretDown size={13} weight="bold" aria-hidden="true" />
-          </div>
+              </select>
+              <select
+                className="composer-native-select"
+                aria-label="后续消息思考强度"
+                tabIndex={-1}
+                value={conversation.thinkingLevel}
+                disabled={selectConversationThinking.isPending || !selectedConversationModel}
+                onChange={(event) =>
+                  selectConversationThinking.mutate(event.target.value as ThinkingLevel)
+                }
+              >
+                {!conversationThinkingLevels.includes(conversation.thinkingLevel) ? (
+                  <option value={conversation.thinkingLevel} disabled>
+                    {thinkingLevelLabels[conversation.thinkingLevel]}
+                  </option>
+                ) : null}
+                {conversationThinkingLevels.map((level) => (
+                  <option value={level} key={level}>
+                    {thinkingLevelLabels[level]}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
+          <ComposerSelect
+            className="composer-footer-control composer-skill-select"
+            id={`skill-${conversationId ?? "new"}`}
+            ariaLabel="选择 Skill"
+            icon={<Sparkle size={15} weight="regular" />}
+            label={selectedSkill ? skillName(selectedSkill) : "自动 Skill"}
+            value={skillInstallationId}
+            options={[
+              { value: "", label: "自动 Skill", description: "由 UWA 根据任务自动选择" },
+              ...(skills.data ?? [])
+                .filter(({ enabled, packageState }) => enabled && packageState === "installed")
+                .map((skill) => ({
+                  value: skill.id,
+                  label: skillName(skill),
+                  description: skill.description,
+                })),
+            ]}
+            onChange={setSkillInstallationId}
+          />
           {onOpenContext ? (
             <button
               type="button"
-              className={`composer-context ${contextOpen ? "is-active" : ""}`}
+              className={`composer-footer-control composer-context ${contextOpen ? "is-active" : ""}`}
               aria-label="切换上下文"
               onClick={onOpenContext}
             >
@@ -1035,6 +1421,14 @@ function Composer({
         {send.error ? (
           <p className="inline-error">
             {userFacingError(send.error, "消息暂时未能发送，请重试。")}
+          </p>
+        ) : null}
+        {permissionMode.error || selectPermissionMode.error ? (
+          <p className="inline-error">
+            {userFacingError(
+              permissionMode.error ?? selectPermissionMode.error,
+              "权限模式暂时无法更新，请重试。",
+            )}
           </p>
         ) : null}
         {newConversationModelRequiresConfiguration ? (
@@ -1763,7 +2157,8 @@ function FilesAndArtifacts(): React.JSX.Element {
     mutationFn: async (artifactId: string) => await window.openerx.saveArtifact({ artifactId }),
   });
   return (
-    <main className="library-page">
+    <main className={`library-page ${selected ? "preview-is-open" : ""}`}>
+      <div className="library-browser-pane">
       <header className="library-header">
         <div>
           <p className="eyebrow">本地优先 · 可同步对象</p>
@@ -1889,7 +2284,12 @@ function FilesAndArtifacts(): React.JSX.Element {
                   {groupFiles.map((file: PersonalFile) => (
                     <button
                       type="button"
-                      className="library-card"
+                      className={`library-card ${
+                        selected?.kind === "personal_file" && selected.id === file.id
+                          ? "is-selected"
+                          : ""
+                      }`}
+                      aria-pressed={selected?.kind === "personal_file" && selected.id === file.id}
                       key={`file-${file.id}`}
                       onClick={() => {
                         setSelected({ kind: "personal_file", id: file.id });
@@ -1911,7 +2311,12 @@ function FilesAndArtifacts(): React.JSX.Element {
                   {groupArtifacts.map((artifact) => (
                     <button
                       type="button"
-                      className="library-card"
+                      className={`library-card ${
+                        selected?.kind === "artifact" && selected.id === artifact.id
+                          ? "is-selected"
+                          : ""
+                      }`}
+                      aria-pressed={selected?.kind === "artifact" && selected.id === artifact.id}
                       key={`artifact-${artifact.id}`}
                       onClick={() => {
                         setSelected({ kind: "artifact", id: artifact.id });
@@ -1975,7 +2380,12 @@ function FilesAndArtifacts(): React.JSX.Element {
               {filteredUnlinkedFiles.map((file) => (
                 <button
                   type="button"
-                  className="library-card"
+                  className={`library-card ${
+                    selected?.kind === "personal_file" && selected.id === file.id
+                      ? "is-selected"
+                      : ""
+                  }`}
+                  aria-pressed={selected?.kind === "personal_file" && selected.id === file.id}
                   key={`unlinked-file-${file.id}`}
                   onClick={() => {
                     setSelected({ kind: "personal_file", id: file.id });
@@ -1997,7 +2407,12 @@ function FilesAndArtifacts(): React.JSX.Element {
               {filteredUnlinkedArtifacts.map((artifact) => (
                 <button
                   type="button"
-                  className="library-card"
+                  className={`library-card ${
+                    selected?.kind === "artifact" && selected.id === artifact.id
+                      ? "is-selected"
+                      : ""
+                  }`}
+                  aria-pressed={selected?.kind === "artifact" && selected.id === artifact.id}
                   key={`unlinked-artifact-${artifact.id}`}
                   onClick={() => {
                     setSelected({ kind: "artifact", id: artifact.id });
@@ -2042,6 +2457,7 @@ function FilesAndArtifacts(): React.JSX.Element {
           <NavLink to="/chat/new">开始一个新任务</NavLink>
         </div>
       ) : null}
+      </div>
       {selected ? (
         <section className="content-preview" aria-labelledby="content-preview-title">
           <header>
@@ -2088,15 +2504,17 @@ function FilesAndArtifacts(): React.JSX.Element {
           {saveArtifact.data ? (
             <p className="inline-success">已保存 {saveArtifact.data.fileName}</p>
           ) : null}
-          {preview.data ? (
-            <ContentPreviewRenderer
-              preview={preview.data}
-              previewMode={previewMode}
-              ariaLabel="成果视觉预览"
-            />
-          ) : (
-            <p className="muted-copy">正在准备预览…</p>
-          )}
+          <div className="content-preview-body">
+            {preview.data ? (
+              <ContentPreviewRenderer
+                preview={preview.data}
+                previewMode={previewMode}
+                ariaLabel="成果视觉预览"
+              />
+            ) : (
+              <p className="muted-copy">正在准备预览…</p>
+            )}
+          </div>
           {preview.data?.citations.length ? (
             <footer>{preview.data.citations.length} 个稳定引用位置</footer>
           ) : null}

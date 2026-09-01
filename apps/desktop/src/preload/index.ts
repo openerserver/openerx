@@ -116,6 +116,8 @@ import {
   skillUninstallResultSchema,
   syncResolveConflictInputSchema,
   toolListInputSchema,
+  toolPermissionModeGetInputSchema,
+  toolPermissionModeSetInputSchema,
   toolScopeRevokeInputSchema,
   usageAggregateSchema,
   usageQueryInputSchema,
@@ -653,6 +655,18 @@ const bridge: DesktopBridge = {
       ipcChannels.toolPermissionResolve,
       "tool.permission.resolve",
       permissionResolveInputSchema.parse(input),
+    ),
+  getToolPermissionMode: async (input) =>
+    invokeChat(
+      ipcChannels.toolPermissionModeGet,
+      "tool.permissionMode.get",
+      toolPermissionModeGetInputSchema.parse(input),
+    ),
+  setToolPermissionMode: async (input) =>
+    invokeChat(
+      ipcChannels.toolPermissionModeSet,
+      "tool.permissionMode.set",
+      toolPermissionModeSetInputSchema.parse(input),
     ),
   listCapabilityScopes: async () => invokeChat(ipcChannels.toolScopesList, "tool.scopes.list", {}),
   revokeCapabilityScope: async (input) =>

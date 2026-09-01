@@ -111,6 +111,8 @@ export const ipcChannels = Object.freeze({
   toolWorkItemGet: "tool:work-item:get",
   toolPermissionsList: "tool:permissions:list",
   toolPermissionResolve: "tool:permission:resolve",
+  toolPermissionModeGet: "tool:permission-mode:get",
+  toolPermissionModeSet: "tool:permission-mode:set",
   toolScopesList: "tool:scopes:list",
   toolScopeRevoke: "tool:scope:revoke",
   toolRuntimeReadiness: "tool:runtime:readiness",

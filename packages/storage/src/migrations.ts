@@ -1333,6 +1333,67 @@ const migrations: readonly Migration[] = [
         AND min_rate_limit_remaining_percent = 20;
     `,
   },
+  {
+    version: 29,
+    checksum: "conversation-full-access-scope-v29-20260901",
+    sql: `
+      ALTER TABLE permission_requests RENAME TO permission_requests_v28;
+      ALTER TABLE capability_scopes RENAME TO capability_scopes_v28;
+
+      CREATE TABLE capability_scopes (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        capability TEXT NOT NULL CHECK (capability IN (
+          'full_access', 'builtin.compute', 'builtin.structured_data', 'file', 'workspace',
+          'web.search', 'image.generate', 'browser', 'shell', 'desktop', 'mcp', 'skill'
+        )),
+        resource_type TEXT NOT NULL CHECK (resource_type IN (
+          'builtin', 'workspace', 'path', 'domain', 'application', 'server', 'skill'
+        )),
+        resource TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        max_risk TEXT NOT NULL CHECK (max_risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        session_only INTEGER NOT NULL CHECK (session_only IN (0, 1)),
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL,
+        conversation_id TEXT
+      ) STRICT;
+      CREATE TABLE permission_requests (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        tool_call_id TEXT NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
+        capability TEXT NOT NULL,
+        risk TEXT NOT NULL CHECK (risk IN ('L0', 'L1', 'L2', 'L3', 'L4', 'L5')),
+        resource_type TEXT NOT NULL,
+        resource TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        payload_digest TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired', 'cancelled')),
+        requested_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolution TEXT CHECK (resolution IN ('once', 'session', 'persistent', 'full_access', 'deny')),
+        scope_id TEXT REFERENCES capability_scopes(id),
+        UNIQUE(tool_call_id, payload_digest)
+      ) STRICT;
+
+      INSERT INTO capability_scopes SELECT * FROM capability_scopes_v28;
+      INSERT INTO permission_requests SELECT * FROM permission_requests_v28;
+      DROP TABLE permission_requests_v28;
+      DROP TABLE capability_scopes_v28;
+
+      CREATE INDEX capability_scopes_match_idx
+        ON capability_scopes(owner_profile_id, capability, resource_type, resource, revoked_at);
+      CREATE INDEX capability_scopes_conversation_idx
+        ON capability_scopes(owner_profile_id, conversation_id, capability, revoked_at);
+      CREATE INDEX permission_requests_pending_idx
+        ON permission_requests(owner_profile_id, status, requested_at);
+    `,
+  },
 ];
 
 export function migrateDatabase(
