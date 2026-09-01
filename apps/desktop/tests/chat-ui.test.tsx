@@ -1360,10 +1360,9 @@ describe("M1 chat renderer", () => {
     expect(skillCards).toHaveLength(2);
     await userEvent.setup().click(within(skillCards[0] as HTMLElement).getByText("权限与详情"));
     expect((skillCards[0]?.querySelector("details") as HTMLDetailsElement).open).toBe(true);
-    const activity = screen.getByRole("group", { name: "Skill 调用记录" });
-    expect(skillGrid.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
+    expect(screen.queryByRole("group", { name: "Skill 调用记录" })).toBeNull();
+    expect(screen.queryByText("最近调用")).toBeNull();
+    expect(managementBridge.listSkillInvocations).not.toHaveBeenCalled();
   });
 
   it("groups personal files and deliverables by conversation in the library", async () => {

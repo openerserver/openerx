@@ -3976,7 +3976,7 @@ h1 {
   border-radius: 14px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .settings-account-page .settings-workbench {
     grid-template-columns: 220px minmax(0, 1fr);
   }
@@ -5885,9 +5885,7 @@ h1 {
 .skill-center-header > div:first-child > p:last-child,
 .skill-card header p,
 .skill-dependencies p,
-.skill-dependencies span,
-.skill-activity span,
-.skill-activity p {
+.skill-dependencies span {
   color: var(--workspace-muted);
 }
 
@@ -6058,28 +6056,6 @@ h1 {
 .skill-card-actions button:hover {
   color: var(--workspace-text);
   border-color: var(--workspace-border-strong);
-}
-
-.skill-activity {
-  display: grid;
-  gap: 8px;
-  margin-top: 28px;
-}
-
-.skill-activity h2 {
-  margin-bottom: 2px;
-  font-size: 14px;
-}
-
-.skill-activity > div {
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 10px 12px;
-  background: var(--workspace-surface-raised);
-  border: 1px solid var(--workspace-border);
-  border-radius: 8px;
-  font-size: 10px;
 }
 
 @media (max-width: 1100px) {
@@ -7920,8 +7896,9 @@ summary:focus-visible {
   display: flex;
   flex-direction: column;
   width: min(100%, 760px);
-  height: auto;
+  height: max-content;
   min-height: 0;
+  align-self: start;
   padding: 0;
   gap: 14px;
   overflow: visible;
@@ -8173,58 +8150,6 @@ summary:focus-visible {
   border-color: var(--workspace-border-strong);
 }
 
-.settings-account-page .skill-activity {
-  margin: 0;
-  overflow: hidden;
-  background: var(--workspace-surface);
-  border: 1px solid var(--workspace-border);
-  border-radius: 10px;
-}
-
-.settings-account-page .skill-activity > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  color: var(--workspace-muted-strong);
-  cursor: pointer;
-  font-size: 11px;
-}
-
-.settings-account-page .skill-activity > summary small {
-  color: var(--workspace-muted);
-  font-size: 10px;
-}
-
-.skill-activity-list {
-  display: grid;
-  gap: 0;
-  border-top: 1px solid var(--workspace-border);
-}
-
-.skill-activity-list > div {
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 10px 14px;
-  font-size: 10px;
-}
-
-.skill-activity-list > div + div {
-  border-top: 1px solid var(--workspace-border);
-}
-
-.skill-activity-list span,
-.skill-activity-list p {
-  color: var(--workspace-muted);
-}
-
-.skill-activity-list p {
-  margin: 0;
-  padding: 12px 14px;
-  font-size: 11px;
-}
-
 @media (max-width: 860px) {
   .app-shell,
   .app-shell.context-is-open {
@@ -8320,5 +8245,231 @@ summary:focus-visible {
 
   .settings-account-page .skill-card-actions {
     padding-left: 18px;
+  }
+}
+
+/* Shared visual system for every settings subsection. */
+.settings-account-page .settings-section-content {
+  gap: 16px;
+  scrollbar-gutter: stable;
+}
+
+.settings-account-page .settings-section-content > * {
+  width: min(100%, 980px);
+  min-width: 0;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.settings-account-page .settings-section-panel,
+.settings-account-page .settings-section-content > .settings-card,
+.settings-account-page .settings-tool-center,
+.settings-account-page .skill-center-page {
+  width: min(100%, 980px);
+}
+
+.settings-account-page .settings-section-content .settings-card {
+  gap: 18px;
+  padding: 24px;
+  border-radius: 12px;
+}
+
+.settings-account-page .settings-section-content .settings-card + .settings-card {
+  margin-top: 0;
+}
+
+.settings-account-page .settings-section-content :is(.settings-heading, .skill-center-header, .tool-library-header) {
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.settings-account-page .settings-section-content :is(.settings-heading h2, .skill-center-header h2, .tool-library-header h2) {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+
+.settings-account-page .settings-section-content :is(.settings-heading p, .skill-center-header p, .tool-library-header p) {
+  margin: 4px 0 0;
+  color: var(--workspace-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-account-page .settings-section-content :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  min-height: 40px;
+  padding: 8px 11px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+  outline: 0;
+}
+
+.settings-account-page .settings-section-content :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea):focus {
+  border-color: var(--workspace-border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--workspace-accent) 8%, transparent);
+}
+
+.settings-account-page .settings-section-content .tool-search-field input:not([type="checkbox"]):not([type="radio"]),
+.settings-account-page .settings-section-content .skill-filter input:not([type="checkbox"]):not([type="radio"]),
+.settings-account-page .settings-section-content .memory-filters > div input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.settings-account-page .settings-section-content :is(.settings-actions, .toolbar-actions) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.settings-account-page .settings-section-content :is(.settings-actions, .toolbar-actions) button:not(.primary-action):not(.danger-action) {
+  min-height: 36px;
+  padding: 7px 11px;
+  color: var(--workspace-muted-strong);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+}
+
+.settings-account-page .settings-section-content :is(.settings-actions, .toolbar-actions) button:not(.primary-action):not(.danger-action):hover {
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border-color: var(--workspace-border-strong);
+}
+
+.settings-account-page .settings-section-content .toolbar-actions .primary-action {
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
+  border-color: var(--workspace-accent);
+}
+
+.settings-account-page .settings-section-content .toolbar-actions .primary-action:hover {
+  background: var(--workspace-accent-hover);
+  border-color: var(--workspace-accent-hover);
+}
+
+.settings-account-page .skill-center-page,
+.settings-account-page .settings-tool-center {
+  padding: 24px;
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 12px;
+}
+
+.settings-account-page .skill-center-page {
+  gap: 16px;
+}
+
+.settings-account-page .settings-tool-center .tool-library-toolbar {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 18px;
+  margin: 18px 0 14px;
+}
+
+.settings-account-page .settings-tool-center .tool-category-tabs {
+  flex-wrap: wrap;
+  gap: 16px;
+  overflow: visible;
+}
+
+.settings-account-page .settings-tool-center .tool-search-field {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.settings-account-page .settings-tool-center .tool-library-header h2 {
+  font-size: 18px;
+}
+
+.settings-account-page .settings-tool-center .tool-add-button,
+.settings-account-page .skill-install-button {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.settings-account-page #model-section .settings-card {
+  grid-template-columns: minmax(130px, 0.24fr) minmax(0, 1fr);
+  gap: 12px 20px;
+  align-items: center;
+}
+
+.settings-account-page #model-section .settings-card > :is(.settings-heading, .settings-actions, .inline-success, .inline-error) {
+  grid-column: 1 / -1;
+}
+
+.settings-account-page #model-section .settings-card > .toolbar-actions {
+  grid-column: 2;
+}
+
+.settings-account-page #model-section .settings-card > label[for] {
+  color: var(--workspace-muted-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-account-page #model-section .settings-card > label:not([for]) {
+  display: flex;
+  grid-column: 2;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  color: var(--workspace-muted-strong);
+  font-size: 12px;
+}
+
+.settings-account-page #model-section .settings-card > button {
+  grid-column: 2;
+  justify-self: start;
+}
+
+@media (max-width: 760px) {
+  .settings-account-page .settings-section-content > *,
+  .settings-account-page .settings-section-panel,
+  .settings-account-page .settings-section-content > .settings-card,
+  .settings-account-page .settings-tool-center,
+  .settings-account-page .skill-center-page {
+    width: 100%;
+  }
+
+  .settings-account-page .settings-section-content .settings-card,
+  .settings-account-page .skill-center-page,
+  .settings-account-page .settings-tool-center {
+    padding: 18px;
+  }
+
+  .settings-account-page #model-section .settings-card {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-account-page #model-section .settings-card > *,
+  .settings-account-page #model-section .settings-card > label:not([for]),
+  .settings-account-page #model-section .settings-card > button {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 1100px) {
+  .settings-account-page .settings-tool-center .tool-library-row {
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    gap: 10px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .settings-account-page .settings-tool-center :is(.tool-library-columns, .tool-library-row > p, .tool-library-row > .tool-library-source) {
+    display: none;
   }
 }

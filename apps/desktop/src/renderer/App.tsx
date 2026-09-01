@@ -3646,18 +3646,6 @@ function skillReasonLabel(reason: string): string {
   return reason;
 }
 
-function skillInvocationLabel(value: string): string {
-  const labels: Record<string, string> = {
-    manual: "手动触发",
-    auto: "自动触发",
-    completed: "已完成",
-    failed: "失败",
-    running: "运行中",
-    blocked: "等待授权",
-  };
-  return labels[value] ?? value.replaceAll("_", " ");
-}
-
 function SkillCenter(): React.JSX.Element {
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<"personal" | "workspace">("personal");
@@ -3667,10 +3655,6 @@ function SkillCenter(): React.JSX.Element {
   const skills = useQuery({
     queryKey: ["skills"],
     queryFn: () => window.openerx.listSkills(),
-  });
-  const invocations = useQuery({
-    queryKey: ["skills", "invocations"],
-    queryFn: () => window.openerx.listSkillInvocations({ limit: 20 }),
   });
   const refresh = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey: ["skills"] });
@@ -3995,27 +3979,6 @@ function SkillCenter(): React.JSX.Element {
         />
       ) : null}
 
-      <details className="skill-activity" aria-label="Skill 调用记录">
-        <summary>
-          <span>最近调用</span>
-          <small>{invocations.data?.length ?? 0} 条记录</small>
-        </summary>
-        <div className="skill-activity-list">
-          {(invocations.data ?? []).map((invocation) => (
-            <div key={invocation.id}>
-              <strong>
-                {(skills.data ?? []).find(({ id }) => id === invocation.installationId)
-                  ?.displayName ?? invocation.installationId.slice(0, 8)}
-              </strong>
-              <span>
-                {skillInvocationLabel(invocation.trigger)} ·{" "}
-                {skillInvocationLabel(invocation.status)} · {skillReasonLabel(invocation.reason)}
-              </span>
-            </div>
-          ))}
-          {invocations.data?.length === 0 ? <p>还没有 Skill 调用。</p> : null}
-        </div>
-      </details>
     </section>
   );
 }
@@ -5505,7 +5468,7 @@ function AccountSettings({
             </div>
           ) : null}
           {activeSection === "assistants" ? <SkillCenter /> : null}
-          {activeSection === "tools" ? <ToolCenter showTitle={false} /> : null}
+          {activeSection === "tools" ? <ToolCenter /> : null}
           {activeSection === "memory" ? (
             <div className="settings-section-panel" id="memory-section" tabIndex={-1}>
               <MemorySettingsPanel />
