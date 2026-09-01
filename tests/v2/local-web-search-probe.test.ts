@@ -54,7 +54,7 @@ function reportForDate(
       nodeVersion: "v24.2.0",
       openerxVersion: "2.0.0-alpha.0",
     },
-    userAgent: "OpenerX-LWS-Test/2.0",
+    userAgent: "UWA-LWS-Test/2.0",
     runs,
   });
 }

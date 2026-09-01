@@ -12,11 +12,11 @@ Use this skill when the user asks for a structured decision report.
 
 1. Read \`references/template.md\` for the required section order.
 2. Use \`openerx_skill_script\` with \`scripts/render.mjs\` only when a deterministic heading outline is useful.
-3. Use normal OpenerX file and artifact tools for user data and final deliverables.
+3. Use normal UWA file and artifact tools for user data and final deliverables.
 `,
     "agents/openai.yaml": `version: 1.0.0
 display_name: Structured report
-publisher: OpenerX
+publisher: UWA
 tools:
   - openerx_structured_data
   - openerx_skill_script
@@ -45,7 +45,7 @@ process.stdout.write(JSON.stringify({ title, sections: ["Executive summary", "Fi
 function officeManifest(displayName: string): string {
   return `version: 1.0.0
 display_name: ${displayName}
-publisher: OpenerX
+publisher: UWA
 tools:
   - openerx_office_artifact
 permissions: []

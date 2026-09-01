@@ -1,4 +1,4 @@
-# OpenerX Codex 式自动化执行方案
+# UWA Codex 式自动化执行方案
 
 > 状态：`IMPLEMENTING / LOCAL_ALPHA_LOGIN_STARTUP`
 >
@@ -19,7 +19,7 @@
 编辑或删除自动化。
 
 本方案参考 Codex/ChatGPT 当前公开呈现的自动化方向：重复工作流、持续目标、后台执行和可审阅产物；
-具体产品命名、协议和实现均使用 OpenerX 自有设计。公开依据见
+具体产品命名、协议和实现均使用 UWA 自有设计。公开依据见
 [OpenAI 官方用例文档](https://learn.chatgpt.com/use-cases?category=data&category=engineering&category=front-end&category=integrations&category=ios&category=macos&search=Automation&task_type=analysis&task_type=code&task_type=testing&team=engineering&team=operations&team=sales)。
 
 ### 1.0 实施进度（2026-08-29）
@@ -49,12 +49,12 @@
 
 ### 1.2 首版明确不做
 
-- 不在 OpenerX 云端运行 Agent，不把 Relay、手机或同步服务变成执行主机。
+- 不在 UWA 云端运行 Agent，不把 Relay、手机或同步服务变成执行主机。
 - 不远程唤醒已关机、休眠或未登录的桌面设备。
 - 不新建 Agent Loop、SessionManager 或工具生命周期；全部执行仍由 Pi Host 负责。
 - 不允许自动化绕过登录、验证码、支付、发送、发布、删除等逐次确认动作。
 - 不允许使用失效 Workspace Grant、撤销的 MCP/Skill 授权或跨设备继承的本地绝对路径。
-- 不承诺 OpenerX 进程被明确退出或终止期间准点执行；Windows 关闭主窗口后由系统托盘保持进程，
+- 不承诺 UWA 进程被明确退出或终止期间准点执行；Windows 关闭主窗口后由系统托盘保持进程，
   用户可选择注册登录启动项，但该能力不能远程唤醒设备或跨越关机、休眠与注销状态。
 
 ## 2. 产品语义

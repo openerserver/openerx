@@ -657,7 +657,7 @@ export class BillingLedgerService {
       ),
     ];
     const pdf = minimalPdf([
-      "OpenerX Billing Statement",
+      "UWA Billing Statement",
       `Month: ${month}`,
       `Account: ${accountId}`,
       `Opening CNY minor: ${openingMinor}`,

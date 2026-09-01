@@ -1,4 +1,4 @@
-# OpenerX 2.0 V1 整体架构
+# UWA 2.0 V1 整体架构
 
 > 状态：`M9_LOCAL_RELEASE_FOUNDATION_COMPLETE / EXTERNAL_RELEASE_GATES_PENDING`
 >
@@ -64,7 +64,7 @@ flowchart LR
     CAPABILITIES["受控能力实现<br/>File · Web · Browser · Shell · Desktop · MCP · Skill"]
   end
 
-  subgraph CLOUD["OpenerX 云平台 · services/"]
+  subgraph CLOUD["UWA 云平台 · services/"]
     direction TB
     IDENTITY["Identity API<br/>账户 / 设备会话 / 撤销"]
     SYNC_API["Account Sync API<br/>Revision / Cursor / Conflict"]

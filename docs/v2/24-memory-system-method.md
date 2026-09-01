@@ -1,24 +1,24 @@
-# OpenerX 长期记忆方法
+# UWA 长期记忆方法
 
 > 状态：`IMPLEMENTED / REAL-MODEL GOLDEN + HOLDOUT VERIFIED`
 >
 > 日期：2026-08-30（Asia/Shanghai）
 >
-> 适用范围：OpenerX V2 当前账户级、跨对话长期记忆实现。本文件描述系统现在如何运行；历史决策和
+> 适用范围：UWA V2 当前账户级、跨对话长期记忆实现。本文件描述系统现在如何运行；历史决策和
 > 分阶段建设过程见 [Codex 风格记忆方案](23-codex-style-memory-plan.md)。
 
 ## 1. 方法概览
 
-OpenerX 采用“Pi 会话能力 + OpenerX 产品记忆层”的组合方法：
+UWA 采用“Pi 会话能力 + UWA 产品记忆层”的组合方法：
 
 - Pi 负责当前分支的 agent loop、Session、上下文压缩、恢复、重试和工具生命周期；
-- OpenerX 负责账户级长期记忆的保存、召回、同步、合并、来源、删除和用户控制；
+- UWA 负责账户级长期记忆的保存、召回、同步、合并、来源、删除和用户控制；
 - 长期记忆始终是可能出错的用户回忆，不是系统指令，也不授予任何工具权限；
 - 当前用户消息、System Prompt、Skill 和工作区指令始终优先于记忆；
 - 显式保存优先，自动学习必须经过受限模型任务、确定性校验和可撤销产品界面。
 
 Pi 的 JSONL Session 和 compaction summary 只解决“同一对话继续”和“上下文窗口压缩”。它们不是
-账户级产品数据，不能代替可管理、可同步、可删除的长期记忆库。OpenerX 也不读取 Codex 的本地记忆
+账户级产品数据，不能代替可管理、可同步、可删除的长期记忆库。UWA 也不读取 Codex 的本地记忆
 目录；采用的是相似的产品机制，而不是依赖另一个宿主的私有格式。
 
 ## 2. 核心原则
@@ -39,7 +39,7 @@ Pi 的 JSONL Session 和 compaction summary 只解决“同一对话继续”和
 | --- | --- | --- | --- |
 | L0 当前 Turn | 当前输入、工具结果 | 当前执行 | Pi AgentSession |
 | L1 当前对话 | 分支消息、Session、压缩摘要 | Conversation/Branch | 产品消息 + Pi SessionManager |
-| L2 长期记忆 | 偏好、稳定事实、工作方式、持续主题 | 账户级、跨对话 | OpenerX Memory Repository |
+| L2 长期记忆 | 偏好、稳定事实、工作方式、持续主题 | 账户级、跨对话 | UWA Memory Repository |
 | L3 强制规则 | 安全、产品行为、Skill、项目指令 | 版本化配置/文档 | System Prompt、Skill、工作区指令 |
 
 L2 只能帮助模型回忆，不能承担 L3 的强制语义。需要始终执行的规则必须写入受控指令层。

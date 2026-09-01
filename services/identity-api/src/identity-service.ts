@@ -146,7 +146,7 @@ export class IdentityService {
       let account = this.#accountByEmail(email);
       if (!account) {
         const accountId = this.#idFactory();
-        const displayName = email.split("@")[0] || "OpenerX User";
+        const displayName = email.split("@")[0] || "UWA User";
         this.#database
           .prepare(
             `INSERT INTO accounts(account_id, email, display_name, created_at)

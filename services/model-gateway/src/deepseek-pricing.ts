@@ -8,7 +8,7 @@ import {
 } from "./deepseek-model-executor";
 
 export const deepSeekBillingTermsSummary =
-  "DeepSeek API 费用由 OpenerX 服务端依据供应商返回的实际 Token 用量和当前人民币价格快照计算；单笔结算以分为最小单位并向上取整。";
+  "DeepSeek API 费用由 UWA 服务端依据供应商返回的实际 Token 用量和当前人民币价格快照计算；单笔结算以分为最小单位并向上取整。";
 
 export const deepSeekBillingTerms: BillingTerms = {
   version: "terms-deepseek-cn-2026-08-v1",

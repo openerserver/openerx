@@ -8,13 +8,13 @@
 
 ## 1. 产品结论
 
-`已确定`：OpenerX V1 提供与 Codex Remote 同类的手机远程控制能力。
+`已确定`：UWA V1 提供与 Codex Remote 同类的手机远程控制能力。
 
 - Windows/macOS 桌面客户端是唯一执行主机，提供本地项目、文件 Scope、凭证、工具、浏览器、Shell、桌面能力和 Pi harness。
 - iOS/Android Remote Companion 是控制面，用于发起、查看、引导、排队、停止、审批和审阅任务。
 - 手机端不是独立 AI 运行时、远程桌面、SSH/终端模拟器，也不加载 Pi。
 - Remote Relay 只连接手机与用户已配对的桌面主机；它不实现 Agent Loop、Session、队列、重试、工具生命周期或权限决策。
-- 桌面主机必须开机、联网且 OpenerX Remote 已启用。V1 不承诺远程唤醒、无人值守登录或主机离线执行。
+- 桌面主机必须开机、联网且 UWA Remote 已启用。V1 不承诺远程唤醒、无人值守登录或主机离线执行。
 
 产品心智固定为：
 
@@ -54,7 +54,7 @@ V2 = 产品状态、传输、权限与安全边界
 flowchart LR
   PHONE["iOS / Android Remote Companion<br/>React Native + Expo"]
 
-  subgraph CLOUD["OpenerX 云平台"]
+  subgraph CLOUD["UWA 云平台"]
     ID["Identity API<br/>账户 / 设备 / 配对 / 撤销"]
     RELAY["Remote Control Gateway<br/>Presence / Command / Event Cursor"]
     PUSH["Notification Service<br/>APNs / FCM"]
@@ -176,7 +176,7 @@ Diff、测试、终端和截图以短期加密资源引用传递；推送只携�
 ## 6. 配对、身份与密钥
 
 1. 用户在桌面端开启 Remote 并显示短时有效的一次性二维码。
-2. 已登录同一 OpenerX 账户的手机扫描二维码；账户不一致立即拒绝。
+2. 已登录同一 UWA 账户的手机扫描二维码；账户不一致立即拒绝。
 3. 手机和主机各自生成设备密钥对，私钥进入 iOS Keychain/Secure Enclave 或 Android Keystore，以及桌面系统凭证库。
 4. Gateway 校验一次性 nonce、账户、设备状态和按账户要求启用的 MFA/Passkey 后建立配对。
 5. 桌面显示已配对手机、最后活动和撤销入口；手机显示已配对主机和 Remote 开关状态。
@@ -280,4 +280,4 @@ Remote Alpha 退出标准：所有上述硬门禁通过；目标用户可以仅�
 - [Remote connections](https://learn.chatgpt.com/docs/remote-connections)
 - [Mastering remote engineering work from your phone](https://developers.openai.com/blog/mastering-codex-remote-for-engineering)
 
-官方资料确认的核心心智是手机作为控制面、桌面继续提供本地环境与执行能力；主机需要在线，并通过安全 Relay 连接而不是公开暴露主机。本合同在此基础上采用 OpenerX 产品命令、Pi 原生 API 和 V2 安全边界。
+官方资料确认的核心心智是手机作为控制面、桌面继续提供本地环境与执行能力；主机需要在线，并通过安全 Relay 连接而不是公开暴露主机。本合同在此基础上采用 UWA 产品命令、Pi 原生 API 和 V2 安全边界。

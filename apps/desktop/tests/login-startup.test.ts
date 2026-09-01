@@ -25,8 +25,8 @@ function fakeApp(isPackaged = true): LoginStartupApp & { registered: boolean } {
 
 describe("Windows login startup", () => {
   it("builds packaged and development background launch targets", () => {
-    expect(loginStartupTarget("win32", true, "C:\\OpenerX\\OpenerX.exe", "C:\\workspace")).toEqual({
-      path: "C:\\OpenerX\\OpenerX.exe",
+    expect(loginStartupTarget("win32", true, "C:\\UWA\\UWA.exe", "C:\\workspace")).toEqual({
+      path: "C:\\UWA\\UWA.exe",
       args: [backgroundLaunchArgument],
     });
     expect(
@@ -35,12 +35,12 @@ describe("Windows login startup", () => {
       path: "C:\\Electron\\electron.exe",
       args: ["C:\\workspace", backgroundLaunchArgument],
     });
-    expect(loginStartupTarget("darwin", true, "/Applications/OpenerX", "/workspace")).toBeNull();
+    expect(loginStartupTarget("darwin", true, "/Applications/UWA", "/workspace")).toBeNull();
   });
 
   it("enables and disables the matching Windows login item", () => {
     const app = fakeApp();
-    const service = new DesktopLoginStartupService(app, "win32", "C:\\OpenerX\\OpenerX.exe");
+    const service = new DesktopLoginStartupService(app, "win32", "C:\\UWA\\UWA.exe");
 
     expect(service.state()).toEqual({
       supported: true,
@@ -49,18 +49,18 @@ describe("Windows login startup", () => {
     });
     expect(service.update({ openAtLogin: true }).openAtLogin).toBe(true);
     expect(app.setLoginItemSettings).toHaveBeenLastCalledWith({
-      path: "C:\\OpenerX\\OpenerX.exe",
+      path: "C:\\UWA\\UWA.exe",
       args: [backgroundLaunchArgument],
       openAtLogin: true,
       enabled: true,
-      name: "OpenerX",
+      name: "UWA",
     });
     expect(service.update({ openAtLogin: false }).openAtLogin).toBe(false);
   });
 
   it("reports unsupported platforms without changing system settings", () => {
     const app = fakeApp();
-    const service = new DesktopLoginStartupService(app, "darwin", "/Applications/OpenerX");
+    const service = new DesktopLoginStartupService(app, "darwin", "/Applications/UWA");
 
     expect(service.state()).toEqual({
       supported: false,
@@ -74,8 +74,8 @@ describe("Windows login startup", () => {
   });
 
   it("only treats the background flag as login startup on Windows", () => {
-    expect(isBackgroundLoginStartup("win32", ["OpenerX.exe", backgroundLaunchArgument])).toBe(true);
-    expect(isBackgroundLoginStartup("darwin", ["OpenerX", backgroundLaunchArgument])).toBe(false);
-    expect(isBackgroundLoginStartup("win32", ["OpenerX.exe"])).toBe(false);
+    expect(isBackgroundLoginStartup("win32", ["UWA.exe", backgroundLaunchArgument])).toBe(true);
+    expect(isBackgroundLoginStartup("darwin", ["UWA", backgroundLaunchArgument])).toBe(false);
+    expect(isBackgroundLoginStartup("win32", ["UWA.exe"])).toBe(false);
   });
 });

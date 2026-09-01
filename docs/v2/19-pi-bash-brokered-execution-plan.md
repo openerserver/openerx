@@ -1,4 +1,4 @@
-# OpenerX Pi Bash Broker 化执行方案
+# UWA Pi Bash Broker 化执行方案
 
 - 状态：`ARCHITECTURE ACCEPTED / PBASH-001..PBASH-007 LOCAL COMPLETE / PBASH-008 LOCAL FAIL-CLOSED COMPLETE / EXTERNAL RELEASE BLOCKED`
 - 日期：2026-08-28（Asia/Shanghai）
@@ -21,7 +21,7 @@
 
 ```text
 Pi AgentSession
-  -> OpenerX-owned raw-shell `bash` ToolDefinition
+  -> UWA-owned raw-shell `bash` ToolDefinition
   -> private pi.tool.request / progress / response
   -> App Service Capability Broker
   -> Brokered Shell Runner
@@ -34,7 +34,7 @@ Pi AgentSession
 
 必须同时保持以下决定：
 
-1. Pi 继续是唯一 Agent Loop；OpenerX 不实现第二套规划、重试或上下文压缩。
+1. Pi 继续是唯一 Agent Loop；UWA 不实现第二套规划、重试或上下文压缩。
 2. `noTools: "builtin"` 继续生效，不恢复 Pi 原始 `read/bash/edit/write` 本地执行路径。
 3. Pi Host 注册一个产品自有、名称为 `bash` 的 ToolDefinition，使模型仍按 Pi Bash 方式调用。
 4. ToolDefinition 必须保留 `piToolCallId`，把命令转为版本化 `shell_command_execute` 操作后交给 Broker。
@@ -51,7 +51,7 @@ Pi AgentSession
 11. 基础 `workspace_write` 可以直接写授权工作区并生成变更证据；CoW/worktree 是高隔离 profile，外部
     无人值守远程写入必须使用，但不再是所有本地 Beta 的统一硬门槛。
 
-这不是“开放默认 Bash”，而是“复用 Pi Bash 合同，由 OpenerX 接管执行权”。
+这不是“开放默认 Bash”，而是“复用 Pi Bash 合同，由 UWA 接管执行权”。
 
 ## 2. 当前基线与关键差距
 
@@ -78,9 +78,9 @@ Pi 0.84.3 的默认 Bash：
 - 允许通过 `BashOperations` 替换执行后端。
 
 `BashOperations.exec()` 证明 Pi 支持委托执行，但其 0.84.3 签名只有
-`command/cwd/onData/signal/timeout/env`，没有 `piToolCallId`。直接使用该接口会丢失 OpenerX 当前
+`command/cwd/onData/signal/timeout/env`，没有 `piToolCallId`。直接使用该接口会丢失 UWA 当前
 基于 `generationId + piToolCallId + toolName` 的精确幂等键和 Run 投影。因此首版不得只把
-`BashOperations` 接到一个匿名远程执行器；应由 OpenerX 自己定义兼容的 `bash` ToolDefinition，
+`BashOperations` 接到一个匿名远程执行器；应由 UWA 自己定义兼容的 `bash` ToolDefinition，
 在 `execute(toolCallId, ...)` 层进入现有私有工具协议。
 
 ### 2.3 当前与目标的差异
@@ -99,22 +99,22 @@ Pi 0.84.3 的默认 Bash：
 | 文件写入     | 工作区直接写         | 宿主任意写           | 基础直接写 + 变更证据；高隔离 CoW/worktree 可选/按场景强制    |
 | 跨平台       | 当前仅 macOS 可用    | 依赖本机 Shell       | PlatformSandboxEngine 后端显式声明能力，不可静默降级          |
 
-### 2.4 Codex 设计参照与 OpenerX 适配
+### 2.4 Codex 设计参照与 UWA 适配
 
 本方案采用 Codex 已验证的基本模式，但不复制其产品默认值：
 
 - [OpenAI 官方 Sandboxing 文档](https://developers.openai.com/codex/sandboxing)明确把 sandbox 和
   approval 作为两个协作但独立的控制，并说明边界作用于 `git`、包管理器、测试运行器等所有派生
-  命令。OpenerX 因此允许完整 Shell 语义，把强制边界放到 Runner 外层。
-- Codex 使用平台原生隔离，并在权限边界内减少逐命令审批；OpenerX 对应采用
+  命令。UWA 因此允许完整 Shell 语义，把强制边界放到 Runner 外层。
+- Codex 使用平台原生隔离，并在权限边界内减少逐命令审批；UWA 对应采用
   `PlatformSandboxEngine`，各操作系统提供自己的后端，而不是强制所有平台使用同一容器或 VM。
 - [OpenAI 官方 Agent approvals & security 文档](https://developers.openai.com/codex/agent-approvals-security)
-  将文件、网络与审批边界分开。OpenerX 同样分离执行 profile、网络 policy 和审批，但网络默认 deny，
+  将文件、网络与审批边界分开。UWA 同样分离执行 profile、网络 policy 和审批，但网络默认 deny，
   环境变量与宿主数据读取比通用本地 Coding Agent 更严格。
-- OpenerX 额外保留 WorkspaceGrant、持久 ToolCall、精确 payload digest、`outcome_unknown` 和 Remote
+- UWA 额外保留 WorkspaceGrant、持久 ToolCall、精确 payload digest、`outcome_unknown` 和 Remote
   至少一次投递对账。这些属于本产品的远程副作用合同，不能用本地沙盒代替。
 
-这里的“参考 Codex”是架构模式和安全原则，不是声称 OpenerX 与 Codex 内部实现、默认权限或发布
+这里的“参考 Codex”是架构模式和安全原则，不是声称 UWA 与 Codex 内部实现、默认权限或发布
 保证完全相同。
 
 ## 3. 目标与非目标
@@ -309,10 +309,10 @@ Pi 的 `BashOperations` 仍可用于未来适配，但 0.84.3 的接口不能单
 - 取得原始 `piToolCallId`；
 - 表达 Permission Required 等产品状态；
 - 使用现有 `pi.tool.request` 精确投影；
-- 返回 OpenerX Artifact ID 而不是 Pi Host 临时文件路径；
+- 返回 UWA Artifact ID 而不是 Pi Host 临时文件路径；
 - 将活动 WorkspaceGrant 绑定到操作。
 
-因此首版采用 OpenerX-owned `bash` ToolDefinition。增加一项 Pi 升级兼容测试：每次升级 Pi 时比较
+因此首版采用 UWA-owned `bash` ToolDefinition。增加一项 Pi 升级兼容测试：每次升级 Pi 时比较
 其 Bash 工具名称、输入 schema、默认提示贡献、输出截断和取消语义；发生漂移必须显式评审，不能
 静默假装兼容。
 
@@ -474,7 +474,7 @@ interface PiToolProgressFrame {
 - 序号必须单调；结束、取消或失败后忽略迟到帧。
 - 进度与最终结果都经过 ANSI/控制字符处理和凭证脱敏。
 - 上下文返回沿用 Pi 基线：最多 2,000 行或 50 KiB；完整日志最多 2 MiB，超出后截断。
-- 完整日志进入 OpenerX Artifact/受控文件存储并返回 ID，不返回 Pi Host 或 Runner 临时绝对路径。
+- 完整日志进入 UWA Artifact/受控文件存储并返回 ID，不返回 Pi Host 或 Runner 临时绝对路径。
 - 无换行单行超过 64 KiB 时整行替换为固定脱敏标记；这是防凭证跨边界泄露的 fail-closed 行为。
 
 ## 10. 平台隔离策略

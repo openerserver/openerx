@@ -1,9 +1,9 @@
 {
   "name": "@openerx/desktop",
-  "productName": "OpenerX",
+  "productName": "UWA",
   "version": "2.0.0-alpha.0",
   "private": true,
-  "description": "OpenerX Electron desktop client",
+  "description": "UWA (Unicom Work Assistant) Electron desktop client",
   "main": ".vite/build/main.js",
   "scripts": {
     "start": "node scripts/build-macos-browser-helper.mjs && electron-forge start",

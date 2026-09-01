@@ -3,7 +3,7 @@
 ## 结论
 
 显式长期记忆 Phase A 的合同、存储、App Service 与 Pi Host 基础已完成本地实现与专项回归。Pi 继续负责
-单对话 Session、compaction 和 agent loop；跨对话记忆由 OpenerX 产品层持久化、召回、同步和删除。
+单对话 Session、compaction 和 agent loop；跨对话记忆由 UWA 产品层持久化、召回、同步和删除。
 
 本检查点不声明自动学习、Embedding 检索、性能门禁或跨设备真实 Beta 已完成。
 

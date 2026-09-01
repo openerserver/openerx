@@ -90,10 +90,10 @@ try {
   const completedBeforeDesktop = await page
     .locator(".message-assistant[data-message-status='completed']")
     .count();
-  await page.getByLabel("发送消息").fill("捕获当前 OpenerX 窗口 [PI_TEST_DESKTOP]");
+  await page.getByLabel("发送消息").fill("捕获当前 UWA 窗口 [PI_TEST_DESKTOP]");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await page
-    .getByText("控制桌面应用 OpenerX：screenshot", { exact: true })
+    .getByText("控制桌面应用 UWA：screenshot", { exact: true })
     .locator("..")
     .getByRole("button", { name: "仅本次允许" })
     .click();

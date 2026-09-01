@@ -32,11 +32,11 @@ const skillInstallation: SkillInstallation = {
   displayName: "结构化报告",
   description: "把输入整理为结构化报告。",
   version: "1.0.0",
-  publisher: "OpenerX",
+  publisher: "UWA",
   scope: "builtin",
   workspaceId: null,
   sourceKind: "built_in",
-  sourceLabel: "OpenerX bundled skills",
+  sourceLabel: "UWA bundled skills",
   checksumSha256: "a".repeat(64),
   trust: "bundled",
   enabled: true,
@@ -1302,7 +1302,7 @@ describe("M1 chat renderer", () => {
       "page",
     );
     expect(await screen.findByText("结构化报告")).toBeTruthy();
-    expect(screen.getByText(/OpenerX 内置 Skill/)).toBeTruthy();
+    expect(screen.getByText(/UWA 内置 Skill/)).toBeTruthy();
     expect(screen.getByText(/工具：Skill 脚本执行器/)).toBeTruthy();
   });
 
@@ -2084,6 +2084,7 @@ describe("M1 chat renderer", () => {
     vi.mocked(bridge.listWorkItems).mockResolvedValue([workItem]);
     renderApp(bridge, `/chat/${conversationId}`);
 
+    expect(await screen.findByText("Unicom Work Assistant")).toBeTruthy();
     const workspace = await screen.findByRole("region", { name: "对话工作区" });
     const rail = await screen.findByRole("complementary", { name: "成果与来源" });
     const activity = workspace.querySelector(".tool-activity");

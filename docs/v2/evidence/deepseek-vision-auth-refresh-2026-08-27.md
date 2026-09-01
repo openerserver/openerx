@@ -62,7 +62,7 @@ Results:
 - Provider-reported aggregate usage shown by the desktop: input `8600`, cached input `0`, output
   `994`, reasoning `455`, total `9594`
 
-The response correctly identified the attached screenshot as the OpenerX macOS AI conversation UI and
+The response correctly identified the attached screenshot as the UWA macOS AI conversation UI and
 read the visible failed-generation message. This proves the desktop attachment-to-vision-model path,
 not only a direct provider smoke request.
 

@@ -1,10 +1,10 @@
-# OpenerX Codex 风格记忆方案
+# UWA Codex 风格记忆方案
 
 > 状态：`PHASE B MODEL GOLDEN + HOLDOUT PASSED`
 >
 > 日期：2026-08-30（Asia/Shanghai）
 >
-> 目标：在不复制 Pi agent loop、不把 Pi Session 当产品数据真值的前提下，为 OpenerX
+> 目标：在不复制 Pi agent loop、不把 Pi Session 当产品数据真值的前提下，为 UWA
 > 增加用户可控、可解释、可同步、可删除的跨对话长期记忆。
 
 > 2026-08-30 实施检查点：Phase A 显式记忆闭环已完成；Phase B 的持久化空闲任务、运行时调度、
@@ -21,13 +21,13 @@
 
 ## 1. 结论
 
-采用“Pi 会话能力 + OpenerX 产品记忆层”的组合方案，机制上对齐 Codex Memories，
+采用“Pi 会话能力 + UWA 产品记忆层”的组合方案，机制上对齐 Codex Memories，
 但不复制 Codex 的私有文件格式或直接依赖 `~/.codex/memories/`。
 
 - Pi 继续唯一负责 agent loop、同一分支的 Session、长上下文压缩、恢复、重试和工具生命周期。
-- OpenerX 新增产品级 Memory Repository，负责跨对话记忆的保存、检索、同步、管理和删除。
+- UWA 新增产品级 Memory Repository，负责跨对话记忆的保存、检索、同步、管理和删除。
 - App Service 在每次 `PiPromptFrame` 发出前选择少量相关记忆，以明确的“不可信回忆”数据块注入。
-- Pi 通过 OpenerX 原生 Memory Tool 完成“记住、查看、修改、忘记”，不直接读写 SQLite 或记忆文件。
+- Pi 通过 UWA 原生 Memory Tool 完成“记住、查看、修改、忘记”，不直接读写 SQLite 或记忆文件。
 - 第一阶段只开放用户明确要求保存的记忆；自动学习在第二阶段通过后台抽取和可撤销通知开启。
 
 不建议把 Pi 的 JSONL Session 直接扩展成跨对话记忆库。Session 是分支执行状态，适合恢复和
@@ -41,7 +41,7 @@
 - Pi JSONL Session 保存完整分支历史；
 - Pi 自动/手动 compaction 将旧上下文总结后继续执行；
 - Session registry 损坏时可从 Pi Session header 恢复；
-- OpenerX Conversation/Message 始终是独立产品真值。
+- UWA Conversation/Message 始终是独立产品真值。
 
 这些能力解决的是“同一对话继续聊”和“上下文窗口不够时压缩”，不是以下需求：
 
@@ -50,7 +50,7 @@
 - 让用户查看、编辑、停用、删除或跨设备同步记忆；
 - 自动从已经结束的对话中抽取并合并长期记忆。
 
-因此，Pi 有会话记忆和压缩能力，但没有 OpenerX 所需的账户级跨对话产品记忆。
+因此，Pi 有会话记忆和压缩能力，但没有 UWA 所需的账户级跨对话产品记忆。
 
 ## 3. 四层上下文边界
 
@@ -58,7 +58,7 @@
 | --- | --- | --- | --- |
 | L0 当前 Turn | 当前用户输入、工具结果 | 当前执行结束后不单独保留 | Pi AgentSession |
 | L1 对话记忆 | 当前分支消息、压缩摘要、恢复状态 | 随 Conversation/Branch 存续 | Pi SessionManager + 产品消息 |
-| L2 长期记忆 | 用户偏好、稳定事实、工作习惯、持续上下文 | 账户级，跨对话，可管理和同步 | 新增 OpenerX Memory Repository |
+| L2 长期记忆 | 用户偏好、稳定事实、工作习惯、持续上下文 | 账户级，跨对话，可管理和同步 | 新增 UWA Memory Repository |
 | L3 强制规则 | 安全规则、团队约束、产品行为、Skill 说明 | 版本化配置或受审文档 | System Prompt、Skill、工作区指令 |
 
 L2 只能作为“可能有用的回忆”，不能替代 L3。任何必须始终执行的规则不得只存在记忆里。
@@ -384,7 +384,7 @@ Compaction 是有损的分支上下文摘要，目标是释放 context window；
 
 ### 直接读取 Codex 本地记忆目录
 
-Codex 记忆是另一个宿主的生成状态，账户、版本、格式和控制面都不属于 OpenerX。复用机制可以，
+Codex 记忆是另一个宿主的生成状态，账户、版本、格式和控制面都不属于 UWA。复用机制可以，
 耦合其本地文件不可接受。
 
 ### 一开始上向量数据库和全自动学习
@@ -398,7 +398,7 @@ Phase A 已完成，Phase B 已开放自动抽取、通知、本地多来源追�
 无模型参与的定期 consolidation，并已完成跨设备槽位的确定性收敛、模糊聚类人工确认、全目录
 分片轮转和 Golden/holdout 真实评测；记忆控制误报已修复且两套门禁转绿。下一步应完成跨设备完整
 来源同步和 1,000 条延迟基准，并扩大独立语料与重复运行来覆盖模型漂移，再决定是否进入 Phase C。
-整体仍保持 OpenerX 已批准的 Pi 边界：Pi 继续是唯一 agent harness，产品数据继续独立于 Pi Session。
+整体仍保持 UWA 已批准的 Pi 边界：Pi 继续是唯一 agent harness，产品数据继续独立于 Pi Session。
 
 参考：
 

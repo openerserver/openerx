@@ -112,7 +112,7 @@ export function createProductSkillTools(input: {
       name: "openerx_skill_script",
       label: "Run Skill script",
       description:
-        "Execute a script declared by an enabled Skill through the OpenerX Capability Broker.",
+        "Execute a script declared by an enabled Skill through the UWA Capability Broker.",
       parameters: Type.Object(
         {
           skill: Type.String({ minLength: 1, maxLength: 64 }),

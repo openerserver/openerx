@@ -11,7 +11,7 @@
 - `@earendil-works/pi-coding-agent@0.84.3` is the sole production agent harness.
 - `packages/pi-host` composes Pi `AgentSession`, `SessionManager`, `DefaultResourceLoader` and `ModelRuntime` directly.
 - Pi owns the agent loop, model turns, context, compaction, internal retry and tool-call lifecycle.
-- OpenerX owns the isolated Pi Host process, product history, event projection and capability/permission boundary.
+- UWA owns the isolated Pi Host process, product history, event projection and capability/permission boundary.
 - The generic Runtime SDK, `RuntimeAdapter`, Runtime Host and production fake harness were removed.
 - Deterministic answers use Pi's faux Model Provider only in test files and the development-only E2E host.
 - Production has no local credential or canned-model fallback. Until M2 supplies the Platform Model Gateway Provider, a prompt terminates with `PI_MODEL_NOT_CONFIGURED`.
@@ -39,7 +39,7 @@ Run from the repository root:
 npm run check:v2
 npm run test:e2e:v2
 npm run audit:prod:v2
-node_modules/.bin/asar list apps/desktop/out/OpenerX-darwin-arm64/OpenerX.app/Contents/Resources/app.asar | rg 'pi-host|runtime-host|runtime-sdk|faux'
+node_modules/.bin/asar list apps/desktop/out/UWA-darwin-arm64/UWA.app/Contents/Resources/app.asar | rg 'pi-host|runtime-host|runtime-sdk|faux'
 git diff --check
 ```
 

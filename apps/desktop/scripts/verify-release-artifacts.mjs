@@ -21,7 +21,7 @@ function find(directory, name) {
 
 const target = process.env.OPENERX_RELEASE_TARGET ?? `${process.platform}-${process.arch}`;
 const packages = find(outRoot, "app.asar").filter((archive) =>
-  archive.includes(`${path.sep}OpenerX-${target}${path.sep}`),
+  archive.includes(`${path.sep}UWA-${target}${path.sep}`),
 );
 if (packages.length === 0) throw new Error("RELEASE_ASAR_NOT_FOUND");
 

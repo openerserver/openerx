@@ -20,8 +20,8 @@ const desktopDirectory = path.resolve(import.meta.dirname, "..");
 const sourceApp = path.join(
   desktopDirectory,
   "out",
-  `OpenerX-darwin-${process.arch}`,
-  "OpenerX.app",
+  `UWA-darwin-${process.arch}`,
+  "UWA.app",
 );
 const platformEntry = path.join(desktopDirectory, ".vite", "build", "platform-alpha-test.mjs");
 const identity = process.env.OPENERX_MAC_SIGN_IDENTITY?.trim();
@@ -30,9 +30,9 @@ if (!existsSync(sourceApp)) throw new Error("D3_SIGNED_APP_NOT_FOUND");
 if (!existsSync(platformEntry)) throw new Error("D3_PLATFORM_FIXTURE_NOT_BUILT");
 
 const root = mkdtempSync(path.join(tmpdir(), "openerx-cx110-d3-"));
-const keychainApplicationName = `OpenerX CX110 D3 ${path.basename(root).split("-").at(-1)}`;
+const keychainApplicationName = `UWA CX110 D3 ${path.basename(root).split("-").at(-1)}`;
 const candidates = path.join(root, "candidates");
-const installedApp = path.join(root, "Applications", "OpenerX.app");
+const installedApp = path.join(root, "Applications", "UWA.app");
 const profileDirectory = path.join(root, "profile");
 const entitlements = path.join(desktopDirectory, "resources", "entitlements.mac.plist");
 const textEditToken = `cx110d3${path.basename(root).split("-").at(-1)?.toLowerCase()}`;
@@ -78,11 +78,11 @@ function candidate(label, version) {
   run("/usr/libexec/PlistBuddy", ["-c", `Set :CFBundleVersion ${version}`, plist]);
   const marker = spawnSync(
     "/usr/libexec/PlistBuddy",
-    ["-c", `Add :OpenerXLifecycleMarker string ${label}`, plist],
+    ["-c", `Add :UWALifecycleMarker string ${label}`, plist],
     { encoding: "utf8" },
   );
   if (marker.status !== 0) {
-    run("/usr/libexec/PlistBuddy", ["-c", `Set :OpenerXLifecycleMarker ${label}`, plist]);
+    run("/usr/libexec/PlistBuddy", ["-c", `Set :UWALifecycleMarker ${label}`, plist]);
   }
   run("/usr/bin/codesign", [
     "--force",
@@ -100,8 +100,8 @@ function candidate(label, version) {
 }
 
 function install(appPath) {
-  const stage = path.join(root, "Applications", ".OpenerX.next.app");
-  const previous = path.join(root, "Applications", ".OpenerX.previous.app");
+  const stage = path.join(root, "Applications", ".UWA.next.app");
+  const previous = path.join(root, "Applications", ".UWA.previous.app");
   rmSync(stage, { recursive: true, force: true });
   rmSync(previous, { recursive: true, force: true });
   ditto(appPath, stage);
@@ -221,7 +221,7 @@ async function launch() {
   const devToolsActivePort = path.join(profileDirectory, "DevToolsActivePort");
   rmSync(devToolsActivePort, { force: true });
   const child = spawn(
-    path.join(installedApp, "Contents", "MacOS", "OpenerX"),
+    path.join(installedApp, "Contents", "MacOS", "UWA"),
     ["--remote-debugging-port=0"],
     {
       cwd: path.dirname(installedApp),

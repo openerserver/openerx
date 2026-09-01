@@ -16,7 +16,7 @@ The driver and `windows-browser-accessibility.ps1` provide:
 
 - default HTTP(S) browser discovery for Edge and Chrome, including Windows 11 `UserChoiceLatest` with a validated
   fallback to legacy `UserChoice` and fail-closed HTTP/HTTPS parity;
-- an OpenerX-created visible top-level window selected as the unique new HWND;
+- an UWA-created visible top-level window selected as the unique new HWND;
 - exact executable path, PID, HWND and bounds correlation on every observation/action;
 - Windows UI Automation `Document` observation with filtered visible interactive elements and opaque short-lived
   element references;
@@ -26,7 +26,7 @@ The driver and `windows-browser-accessibility.ps1` provide:
   pre-output sensitive rectangle pixel masking;
 - low-level keyboard/mouse takeover monitoring that ignores injected events and reports only real events targeting
   the bound root HWND;
-- exact `WM_CLOSE` only for the OpenerX-created window.
+- exact `WM_CLOSE` only for the UWA-created window.
 
 The implementation does not expose DOM, selector, JavaScript, CDP, Cookie, password-store or browser history access.
 

@@ -159,26 +159,26 @@ import {
 
 const e2eApplicationName =
   process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_APPLICATION_NAME?.trim() : undefined;
-if (e2eApplicationName && !/^OpenerX CX110 D3 [A-Za-z0-9_-]{1,64}$/u.test(e2eApplicationName)) {
+if (e2eApplicationName && !/^UWA CX110 D3 [A-Za-z0-9_-]{1,64}$/u.test(e2eApplicationName)) {
   throw new Error("OPENERX_E2E_APPLICATION_NAME_INVALID");
 }
-app.name = e2eApplicationName || "OpenerX";
+app.name = e2eApplicationName || "UWA";
 
 function configureApplicationMenu(): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
-        label: "OpenerX",
+        label: "UWA",
         submenu: [
-          { role: "about", label: "关于 OpenerX" },
+          { role: "about", label: "关于 UWA" },
           { type: "separator" },
           { role: "services", label: "服务" },
           { type: "separator" },
-          { role: "hide", label: "隐藏 OpenerX" },
+          { role: "hide", label: "隐藏 UWA" },
           { role: "hideOthers", label: "隐藏其他" },
           { role: "unhide", label: "全部显示" },
           { type: "separator" },
-          { role: "quit", label: "退出 OpenerX" },
+          { role: "quit", label: "退出 UWA" },
         ],
       },
       { role: "fileMenu", label: "文件" },
@@ -212,7 +212,12 @@ if (!primaryInstance) app.quit();
 
 const e2eProfileDirectory =
   process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_PROFILE_DIR : undefined;
-if (e2eProfileDirectory) app.setPath("userData", path.resolve(e2eProfileDirectory));
+if (e2eProfileDirectory) {
+  app.setPath("userData", path.resolve(e2eProfileDirectory));
+} else {
+  // Keep existing installations on their original profile directory after the product rename.
+  app.setPath("userData", path.join(app.getPath("appData"), "OpenerX"));
+}
 
 function registerIpcHandlers(
   supervisor: AppServiceSupervisor,
@@ -343,7 +348,7 @@ function registerIpcHandlers(
       : await dialog.showSaveDialog({
           title: "导出脱敏诊断包",
           defaultPath: path.join(app.getPath("documents"), "openerx-diagnostics.json"),
-          filters: [{ name: "OpenerX 诊断包", extensions: ["json"] }],
+          filters: [{ name: "UWA 诊断包", extensions: ["json"] }],
         });
     if (selection.canceled || !selection.filePath) return null;
     diagnostics.record({ source: "desktop", level: "info", code: "diagnostics.exported" });
@@ -374,7 +379,7 @@ function registerIpcHandlers(
       : await dialog.showSaveDialog({
           title: "导出个人数据",
           defaultPath: path.join(app.getPath("documents"), "openerx-personal-data.zip"),
-          filters: [{ name: "OpenerX 个人数据", extensions: ["zip"] }],
+          filters: [{ name: "UWA 个人数据", extensions: ["zip"] }],
         });
     if (selection.canceled || !selection.filePath) return null;
     diagnostics.record({ source: "desktop", level: "info", code: "personal_data.exported" });
@@ -851,7 +856,7 @@ function registerIpcHandlers(
     const selection = await dialog.showOpenDialog({
       title: "授权项目工作区",
       properties: ["openDirectory"],
-      message: "OpenerX 只能在你明确授权的目录内读取或修改文件",
+      message: "UWA 只能在你明确授权的目录内读取或修改文件",
     });
     if (selection.canceled || !selection.filePaths[0]) return null;
     return await supervisor.request(
@@ -1184,14 +1189,14 @@ async function createBackgroundTray(diagnostics: DiagnosticsService): Promise<vo
   }
   if (icon.isEmpty()) icon = await app.getFileIcon(process.execPath, { size: "small" });
   backgroundTray = new Tray(icon.resize({ width: 16, height: 16 }));
-  backgroundTray.setToolTip("OpenerX · 自动化后台运行中");
+  backgroundTray.setToolTip("UWA · 自动化后台运行中");
   backgroundTray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "自动化在后台运行", enabled: false },
       { type: "separator" },
-      { label: "打开 OpenerX", click: () => showMainWindow(diagnostics) },
+      { label: "打开 UWA", click: () => showMainWindow(diagnostics) },
       {
-        label: "退出 OpenerX（停止自动化）",
+        label: "退出 UWA（停止自动化）",
         click: () => {
           quitRequested = true;
           app.quit();

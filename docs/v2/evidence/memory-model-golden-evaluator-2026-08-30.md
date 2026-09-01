@@ -6,7 +6,7 @@ Date: 2026-08-30 (Asia/Shanghai)
 
 Status: `REAL-MODEL FIX VERIFIED / GOLDEN AND HOLDOUT PASSED`
 
-OpenerX now has a reproducible real-model Golden evaluator for the two model-dependent memory paths:
+UWA now has a reproducible real-model Golden evaluator for the two model-dependent memory paths:
 
 - automatic durable-memory extraction;
 - historical duplicate/conflict semantic clustering.

@@ -50,7 +50,7 @@ async function fixtureServer(): Promise<{ server: Server; url: string }> {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenerX takeover fixture</title>
+  <title>UWA takeover fixture</title>
   <style>
     body { margin: 0; padding: 48px; color: #172033; font: 20px system-ui, sans-serif; }
     main { min-height: 520px; border: 3px solid #2563eb; border-radius: 20px; padding: 40px; }

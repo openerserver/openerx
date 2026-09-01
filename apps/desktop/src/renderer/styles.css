@@ -1350,6 +1350,26 @@ body,
   letter-spacing: -0.02em;
 }
 
+.brand-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  line-height: 1;
+}
+
+.brand-copy strong {
+  font-size: 17px;
+  font-weight: 740;
+}
+
+.brand-copy small {
+  color: var(--workspace-muted);
+  font-size: 9px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 .brand-mark {
   display: block;
   flex: 0 0 30px;

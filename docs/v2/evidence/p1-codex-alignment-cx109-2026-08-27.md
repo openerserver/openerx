@@ -10,7 +10,7 @@
 
 ## 1. 结论
 
-CX-109 已在当前工作树形成可运行的本地实现检查点。OpenerX 现在以持久化 `run_items` 作为每个 ExecutionRun 的可回放时间线，覆盖 Model、ReasoningSummary、Plan、Tool、Command、Source、Diff、Approval、Compaction 和 Retry。ToolCall 同时保存经过合同验证的完整类型化输入与有类型的结果 Content Part；Office/附件专用 File 通道也进入同一 ToolCall/Run Item 投影，不再成为审计盲区。
+CX-109 已在当前工作树形成可运行的本地实现检查点。UWA 现在以持久化 `run_items` 作为每个 ExecutionRun 的可回放时间线，覆盖 Model、ReasoningSummary、Plan、Tool、Command、Source、Diff、Approval、Compaction 和 Retry。ToolCall 同时保存经过合同验证的完整类型化输入与有类型的结果 Content Part；Office/附件专用 File 通道也进入同一 ToolCall/Run Item 投影，不再成为审计盲区。
 
 桌面端按 Run 读取和排序 Item，可切换同一 WorkItem 的历史 Run；工具输入、命令输出和退出码、来源、文件差异、审批终态、计划进度、压缩 Token 前后值及重试状态均可回放。进程中断会把未完成 Item 恢复为明确失败，既有 v12 数据会由 v13 migration 回填为 Tool、Model、Compaction、Retry 和 Approval Item。
 

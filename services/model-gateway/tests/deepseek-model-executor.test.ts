@@ -19,7 +19,7 @@ function request(values: Partial<ModelGatewayRequestDto> = {}): ModelGatewayRequ
     requestDedupeKey: `deepseek-${randomUUID()}`,
     requirements: {},
     context: {
-      systemPrompt: "You are OpenerX.",
+      systemPrompt: "You are UWA.",
       messages: [{ role: "user", content: "只回答：连接成功", timestamp: Date.now() }],
     },
     ...values,
@@ -302,7 +302,7 @@ describe("DeepSeekModelExecutor", () => {
       request({
         requirements: { functionCalling: true },
         context: {
-          systemPrompt: "You are OpenerX.",
+          systemPrompt: "You are UWA.",
           messages: [{ role: "user", content: "检查项目", timestamp: Date.now() }],
           tools: [
             {
@@ -459,7 +459,7 @@ describe("DeepSeekModelExecutor", () => {
     expect(JSON.parse(String(init?.body))).toMatchObject({
       model: "deepseek-v4-flash",
       messages: [
-        { role: "system", content: "You are OpenerX." },
+        { role: "system", content: "You are UWA." },
         { role: "user", content: "只回答：连接成功" },
       ],
       thinking: { type: "disabled" },

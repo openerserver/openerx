@@ -56,8 +56,8 @@ def create_pdf() -> None:
         leftMargin=22 * mm,
         topMargin=22 * mm,
         bottomMargin=22 * mm,
-        title="OpenerX M4 cited PDF fixture",
-        author="OpenerX M4 tests",
+        title="UWA M4 cited PDF fixture",
+        author="UWA M4 tests",
     )
     story = [
         Paragraph("M4 File Grounding Brief", styles["FixtureTitle"]),
@@ -85,7 +85,7 @@ def create_pdf() -> None:
         ),
         Spacer(1, 10 * mm),
         Paragraph(
-            "The source remains the original PDF while OpenerX works from a controlled copy.",
+            "The source remains the original PDF while UWA works from a controlled copy.",
             styles["FixtureBody"],
         ),
     ]
@@ -157,11 +157,11 @@ def create_docx() -> None:
 
     footer = section.footer
     footer_table = footer.add_table(rows=1, cols=2, width=Inches(6.8))
-    footer_table.rows[0].cells[0].text = "OpenerX M4"
+    footer_table.rows[0].cells[0].text = "UWA M4"
     footer_table.rows[0].cells[1].text = "Controlled fixture"
     footer_table.rows[0].cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    document.core_properties.title = "OpenerX M4 Approval Memo"
-    document.core_properties.author = "OpenerX M4 tests"
+    document.core_properties.title = "UWA M4 Approval Memo"
+    document.core_properties.author = "UWA M4 tests"
     document.save(output)
 
 

@@ -1,4 +1,4 @@
-# OpenerX 2.0 产品合同包
+# UWA 2.0 产品合同包
 
 > 状态：`PRODUCT_CONTRACT_APPROVED / IMPLEMENTATION_IN_PROGRESS`
 >
@@ -10,7 +10,7 @@
 
 ## 1. 当前已经确定的方向
 
-1. `已确定`：对当前 OpenerX 进行完全重构。
+1. `已确定`：对当前 UWA 进行完全重构。
 2. `已确定`：主要用户仍是企业普通用户。
 3. `已确定`：首个实现版本聚焦单个用户直接使用的个人客户端，体验形态参考 ChatGPT、WorkBuddy。
 4. `已确定`：产品/团队负责人视角、组织协作和企业管理能力不进入首版，只保留为未来可能方向。
@@ -19,7 +19,7 @@
 7. `已确定`：桌面壳采用 Electron，Web UI 由 Vite 构建后打包进客户端。
 8. `已确定`：V1 的执行主机只支持 Windows 和 macOS；同时发布 iOS/Android Remote Companion 作为手机控制面，不在移动端运行 Pi 或本地工具。
 9. `已确定`：V1 支持个人账户云同步和跨设备历史恢复。
-10. `已确定`：V1 使用 OpenerX 平台统一提供的模型，不要求用户配置 API Key；用户可以明确选择平台模型。
+10. `已确定`：V1 使用 UWA 平台统一提供的模型，不要求用户配置 API Key；用户可以明确选择平台模型。
 11. `已确定`：V1 在 Token 使用记录基础上提供个人额度、费用、积分、充值、支付和账单完整闭环。
 12. `已确定`：文件、工具和 Skill 按 Codex 桌面能力基线建设和验收。
 13. `已确定`：Windows 支持 Windows 10 以上；“较新的 macOS”当前具体化为 macOS 14 及以上。
@@ -30,7 +30,7 @@
 
 ## 2. 版本术语
 
-- `OpenerX 2.0`：本次完全重构计划的总称。
+- `UWA 2.0`：本次完全重构计划的总称。
 - `V1`：2.0 的首个可用版本，即个人 AI 客户端。
 - `Future Enterprise`：未来可能增加的产品/团队负责人、组织、团队知识、管理员治理和企业级部署能力。
 
@@ -88,8 +88,8 @@
 37. [evidence/pbash-007-model-ab-2026-08-28.md](evidence/pbash-007-model-ab-2026-08-28.md)：PBASH-007 固定 DeepSeek 模型、9 类任务、3 次配对的真实 Golden A/B 证据。
 38. [21-local-web-search-plan.md](21-local-web-search-plan.md)：默认启用的百度 JSON/Bing HTML 进程内轻量本地 Web Search、可信设置、退避和连续探测方案；可通过 `OPENERX_LOCAL_WEB_SEARCH_V2=0` 显式回退托管搜索。
 39. [evidence/lws-006-2026-08-29.md](evidence/lws-006-2026-08-29.md)：Stop 资源回收、Parser 性能、每日 6 次真实探测与 7 日/平台发布矩阵证据。
-40. [22-standalone-byok-deployment.md](22-standalone-byok-deployment.md)：Windows 单安装包默认 BYOK、首次 API 配置、无 OpenerX 服务端依赖与可选托管模式合同。
-41. [23-codex-style-memory-plan.md](23-codex-style-memory-plan.md)：Pi 会话能力与 OpenerX 账户级长期记忆的边界、对话级控制、显式记忆 Phase A 和后续自动学习门禁。
+40. [22-standalone-byok-deployment.md](22-standalone-byok-deployment.md)：Windows 单安装包默认 BYOK、首次 API 配置、无 UWA 服务端依赖与可选托管模式合同。
+41. [23-codex-style-memory-plan.md](23-codex-style-memory-plan.md)：Pi 会话能力与 UWA 账户级长期记忆的边界、对话级控制、显式记忆 Phase A 和后续自动学习门禁。
 42. [evidence/memory-phase-a-mvp-2026-08-30.md](evidence/memory-phase-a-mvp-2026-08-30.md)：Memory Phase A 的管理/来源删除/同步实现、类型检查、专项测试与剩余 Beta 门禁证据。
 43. [evidence/memory-phase-b-extraction-foundation-2026-08-30.md](evidence/memory-phase-b-extraction-foundation-2026-08-30.md)：Memory Phase B 的持久化空闲任务、Pi 无工具结构化抽取、外部上下文门禁与服务端权威 usage/请求去重证据。
 44. [24-memory-system-method.md](24-memory-system-method.md)：当前长期记忆的完整运行方法，包括显式/自动写入、召回注入、冲突合并、安全、同步、计费、评测和剩余门禁。

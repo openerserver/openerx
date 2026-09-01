@@ -90,7 +90,7 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
       optionsForFile: (filePath: string) => ({
         hardenedRuntime: true,
         entitlements:
-          path.basename(filePath) === "OpenerX.app" ? macEntitlements : macChildEntitlements,
+          path.basename(filePath) === "UWA.app" ? macEntitlements : macChildEntitlements,
       }),
     };
     if (!releaseMode) return { osxSign };
@@ -109,7 +109,7 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
       windowsSign: {
         certificateFile: requiredEnvironment("WINDOWS_CERTIFICATE_FILE"),
         certificatePassword: requiredEnvironment("WINDOWS_CERTIFICATE_PASSWORD"),
-        description: "OpenerX personal AI desktop client",
+        description: "UWA personal AI desktop client",
         website: "https://openerx.example",
       },
     };
@@ -124,13 +124,13 @@ const config: ForgeConfig = {
     },
     appBundleId: "com.openerx.desktop",
     appCategoryType: "public.app-category-type.productivity",
-    appCopyright: "Copyright © 2026 OpenerX",
-    executableName: "OpenerX",
+    appCopyright: "Copyright © 2026 UWA",
+    executableName: "UWA",
     extendInfo: {
       NSAppleEventsUsageDescription:
-        "OpenerX 仅在您逐次批准桌面操作后，使用系统自动化控制您指定的应用。",
+        "UWA 仅在您逐次批准桌面操作后，使用系统自动化控制您指定的应用。",
     },
-    name: "OpenerX",
+    name: "UWA",
     ...signingConfiguration(),
   },
   hooks: {
@@ -172,8 +172,8 @@ const config: ForgeConfig = {
       );
       const appBasePath = path.resolve(buildPath, "../..");
       const executablePath = ["darwin", "mas"].includes(platform)
-        ? path.join(appBasePath, "MacOS", "OpenerX")
-        : path.join(appBasePath, platform === "win32" ? "electron.exe" : "OpenerX");
+        ? path.join(appBasePath, "MacOS", "UWA")
+        : path.join(appBasePath, platform === "win32" ? "electron.exe" : "UWA");
       const hasMacSigning = Boolean(forgeConfig.packagerConfig.osxSign);
 
       await flipFuses(executablePath, {
@@ -196,11 +196,11 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({
-      name: "OpenerX",
-      exe: "OpenerX.exe",
-      setupExe: "OpenerXSetup.exe",
-      title: "OpenerX",
-      authors: "OpenerX",
+      name: "UWA",
+      exe: "UWA.exe",
+      setupExe: "UWASetup.exe",
+      title: "UWA",
+      authors: "UWA",
     }),
     new MakerZIP({}, ["darwin"]),
     new MakerDMG({}),

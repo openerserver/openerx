@@ -14,7 +14,7 @@ an open directory package with progressive disclosure, visible provenance and a 
 
 Pi remains the only Skill discovery and invocation engine. App Service supplies the enabled, resolved
 package mounts for one generation. Pi's native resource loader parses name and description, exposes only
-auto-invocable metadata to the model and expands an explicitly selected `/skill:name` command. OpenerX
+auto-invocable metadata to the model and expands an explicitly selected `/skill:name` command. UWA
 does not add a second keyword matcher.
 
 Packages contain `SKILL.md`, optional `scripts/`, `references/`, `assets/` and optional

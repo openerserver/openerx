@@ -2,7 +2,7 @@
   "name": "openerx-v2",
   "version": "2.0.0-alpha.0",
   "private": true,
-  "description": "OpenerX 2.0 personal AI desktop client",
+  "description": "UWA (Unicom Work Assistant) personal AI desktop client",
   "packageManager": "npm@11.3.0",
   "engines": {
     "node": ">=24.3.0",

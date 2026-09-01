@@ -240,7 +240,7 @@ describe("McpToolAdapter Streamable HTTP", () => {
     const provider: InteractiveMcpOAuthProvider = {
       redirectUrl: undefined,
       clientMetadata: {
-        client_name: "OpenerX test",
+        client_name: "UWA test",
         redirect_uris: [],
         grant_types: ["client_credentials"],
       },

@@ -1,4 +1,4 @@
-# OpenerX Browser Computer-Use 重构方案
+# UWA Browser Computer-Use 重构方案
 
 - 状态：`ACCEPTED / BCU-003 MACOS AX + WINDOWS EDGE/CHROME UIA LIVE PASS / BRIDGE SIGNED TRANSPORT PENDING`
 - 日期：2026-08-27；live gate 更新于 2026-08-29（Asia/Shanghai）
@@ -21,8 +21,8 @@
    进度、截图缩略图、授权卡、后端标识和接管入口，不承载远程网页。
 2. 默认后端为 `system_default`：打开机器当前的默认浏览器；有用户连接的可信 Browser Bridge 时绑定
    精确标签页，否则绑定一个供本次任务使用的专用窗口。该后端复用浏览器已有的 Cookie、密码管理器、
-   扩展和登录态，但 OpenerX 不导入、复制、枚举或导出这些数据。
-3. 安全增强后端为 `managed_chromium`：使用 Electron 随应用交付的 Chromium 和 OpenerX 管理的
+   扩展和登录态，但 UWA 不导入、复制、枚举或导出这些数据。
+3. 安全增强后端为 `managed_chromium`：使用 Electron 随应用交付的 Chromium 和 UWA 管理的
    独立 Profile，不继承用户日常 Chrome、Edge、Safari 或 Firefox 的 Cookie、扩展、密码和登录态。
 4. Pi 优先通过过滤后的浏览器语义快照/可访问性树和窗口元数据观察页面，并用短期 element reference
    执行 `focus`、`setValue`、`invoke`、`select`、滚动和按键；截图用于基线、异常判断、坐标 fallback
@@ -130,8 +130,8 @@ Electron 官方 [`shell.openExternal()`](https://www.electronjs.org/docs/latest/
 - 有独立 Session ID、后端类型、control path、应用身份、surface kind/ID、窗口所有权和能力清单。
 - 系统浏览器在可信 Bridge 下可绑定用户明确授权的精确标签页；无 Bridge 时使用专用窗口。两种路径都
   共享该浏览器原有 Profile，且不得操作未授权标签页或其他窗口。
-- 托管 Chromium 模式使用 OpenerX 独立 BrowserWindow、renderer/process 和 Profile。
-- 用户始终可以通过主窗口状态卡或附着在目标窗口边缘的控制条看到“由 OpenerX 操作”，并可暂停、
+- 托管 Chromium 模式使用 UWA 独立 BrowserWindow、renderer/process 和 Profile。
+- 用户始终可以通过主窗口状态卡或附着在目标窗口边缘的控制条看到“由 UWA 操作”，并可暂停、
   接管、恢复和停止。
 - 用户直接点击或输入后，自动化立即暂停，当前 observation 失效；Pi 必须重新观察后才能继续。
 - Run 停止、App Service/Main 断开或 Session 超时后，两个后端都停止输入并使 observation 失效。
@@ -139,7 +139,7 @@ Electron 官方 [`shell.openExternal()`](https://www.electronjs.org/docs/latest/
 生命周期必须区分窗口所有权：
 
 - `system_default` 停止时默认只解除绑定，不清理用户浏览器 Cookie/Profile，也不关闭任务开始前已
-  存在的标签页或窗口。只有 OpenerX 确认创建并独占的标签页/窗口，才可在用户明确选择关闭后关闭。
+  存在的标签页或窗口。只有 UWA 确认创建并独占的标签页/窗口，才可在用户明确选择关闭后关闭。
 - `managed_chromium` 停止时关闭受管窗口；临时 Profile 显式清理，持久 Profile 按用户设置保留。
 - 任一后端无法确认目标标签页/窗口身份时立即 fail-closed，不对整屏或当前前台窗口继续操作。
 
@@ -184,7 +184,7 @@ Electron 官方 [`shell.openExternal()`](https://www.electronjs.org/docs/latest/
   typed `image/png`。稳定的低风险语义动作可只返回语义 diff 和 screenshot digest，不必传整张截图。
 - 语义文本和图像都设数量/长度/区域上限；密码框、Token、Cookie 和隐藏元素不进入模型上下文。
 - 用户接管期间不向 Pi 发送截图、可访问性快照或按键内容。
-- 页面内容、第三方扩展和浏览器通知一律视为不可信输入。只有签名并由用户连接的 OpenerX Browser
+- 页面内容、第三方扩展和浏览器通知一律视为不可信输入。只有签名并由用户连接的 UWA Browser
   Bridge 代码属于可信控制面；它返回的网页内容仍是不可信数据，不能扩大 Scope。
 
 ### 3.3 建议合同
@@ -313,7 +313,7 @@ interface BrowserObservation extends BrowserSessionDescriptor {
 ```
 
 V2 模型合同不再包含 `selector`、原始 DOM/HTML、本机 `path` 或任意 JavaScript。不要依赖 Codex
-私有的 `@oai/sky` 包；项目只借鉴其交互语义，在 OpenerX 合同和 Host 内实现可维护的等价接口。
+私有的 `@oai/sky` 包；项目只借鉴其交互语义，在 UWA 合同和 Host 内实现可维护的等价接口。
 
 可信 Adapter 内部允许与禁止的边界：
 
@@ -330,7 +330,7 @@ V2 模型合同不再包含 `selector`、原始 DOM/HTML、本机 `path` 或任�
 | 行为 | 默认风险 | 要求 |
 | --- | --- | --- |
 | 首次启用系统默认浏览器模式 | L3 | 明示会使用现有登录态、扩展和浏览器数据；用户确认后写入本地设置 |
-| 连接 OpenerX Browser Bridge | L3 | 用户显式安装/连接；按标签页授权；显示可访问域名和撤销入口 |
+| 连接 UWA Browser Bridge | L3 | 用户显式安装/连接；按标签页授权；显示可访问域名和撤销入口 |
 | 系统浏览器打开/观察 | L2/L3 | 校验 HTTP(S) URL，绑定精确标签页或专用窗口并显示 control path；跨域重新判断 |
 | 托管 Chromium 打开/观察 | L2 | 使用独立 Profile；首次按域名/会话授权 |
 | 普通语义动作、点击、滚动、前进/后退 | L2 | 绑定当前 Session、后端、surface、control path 和新鲜 Observation |
@@ -348,7 +348,7 @@ V2 模型合同不再包含 `selector`、原始 DOM/HTML、本机 `path` 或任�
 设置界面提供：
 
 - 默认模式：`系统默认浏览器（兼容优先）`，复用已有账号状态。
-- 可选模式：`OpenerX 安全浏览器（Electron Chromium）`，使用隔离 Profile。
+- 可选模式：`UWA 安全浏览器（Electron Chromium）`，使用隔离 Profile。
 - 系统浏览器显示 `已连接标签页 / 系统辅助功能 / 视觉兜底`；Browser Bridge 必须有连接、按标签页授权
   和撤销入口，且不会把标签页清单或网页秘密暴露给 Pi。
 - 每次任务可从可信 UI 临时提高到安全浏览器；从安全浏览器降级到系统浏览器必须再次确认。
@@ -359,17 +359,17 @@ V2 模型合同不再包含 `selector`、原始 DOM/HTML、本机 `path` 或任�
 
 ### 5.1 系统默认浏览器
 
-- 账号、密码、Passkey、Cookie、扩展和登录状态由用户现有浏览器拥有；OpenerX 只通过按标签页授权的
+- 账号、密码、Passkey、Cookie、扩展和登录状态由用户现有浏览器拥有；UWA 只通过按标签页授权的
   Browser Bridge，或可见 UI/OS Accessibility 操作已绑定 surface，不读取 Cookie 数据库、密码库或
   第三方扩展存储。
 - Browser Bridge 只能向 Host 返回当前授权标签页的过滤语义、可见状态和动作结果；标签页列表只在
   可信 UI 中供用户选择，不能进入 Pi 上下文。断开连接或切换标签页后旧 observation 立即失效。
 - 用户没有登录时，由用户接管窗口完成登录。接管期间不截图、不记录按键、不把秘密返回 Pi。
-- 登录状态是否持续、何时过期、如何退出和清除，遵循用户浏览器本身的设置；OpenerX 停止任务不会
+- 登录状态是否持续、何时过期、如何退出和清除，遵循用户浏览器本身的设置；UWA 停止任务不会
   自动清除，也不能承诺替用户彻底退出账号。
 - 首版上传、下载、站点权限、密码管理器弹窗和系统认证提示都由用户接管。未取得受控文件 ID 前，
-  OpenerX 不得把浏览器提示“下载完成”当作文件成果。
-- OpenerX 不导入或复制整个用户浏览器 Profile，不向 Pi 枚举其他标签页，不修改默认浏览器、主页、
+  UWA 不得把浏览器提示“下载完成”当作文件成果。
+- UWA 不导入或复制整个用户浏览器 Profile，不向 Pi 枚举其他标签页，不修改默认浏览器、主页、
   第三方扩展或同步设置。
 
 ### 5.2 托管 Chromium
@@ -449,7 +449,7 @@ HTML fixture 全程走语义 elementRef，Canvas fixture 才允许受约束坐�
 实现状态（2026-08-28）：`LOCAL AX LIVE GATES PASS + BRIDGE SECURITY FOUNDATION IMPLEMENTED / SIGNED TRANSPORT PENDING`。
 当前默认启用
 `browser_computer_use_v2`，可用 `OPENERX_BROWSER_COMPUTER_USE_V2=0|false` 回滚到冻结的
-`legacy_dom_v1`。macOS 已实现默认浏览器发现、OpenerX 专用顶层窗口、PID + `CGWindowID` + bounds
+`legacy_dom_v1`。macOS 已实现默认浏览器发现、UWA 专用顶层窗口、PID + `CGWindowID` + bounds
 精确绑定、原生 AX 语义观察/动作、精确窗口截图和敏感区域像素遮罩；Main Host 与 Pi 投影已经接通，
 真实默认 Chrome 已通过“百度搜索 phonescloud”语义烟测，以及 `Backspace`、滚动、前进/后退和刷新
 原生动作矩阵，并只关闭专用窗口。日期化命令、结果、截图摘要与本地包证据见
@@ -467,7 +467,7 @@ HTML fixture 全程走语义 elementRef，Canvas fixture 才允许受约束坐�
 - 无 Bridge 时通过 `shell.openExternal()`/OS URL handler 打开 URL，创建或确认专用顶层窗口，并绑定
   应用、PID、原生窗口和当前页面；无法绑定时请求用户处理或停止。
 - 实现 open/observe/focus/setValue/invoke/select/click/type/key/scroll/back/forward/reload/detach，以及
-  仅对 OpenerX 独占 surface 允许的 close。
+  仅对 UWA 独占 surface 允许的 close。
 - 首版上传、下载、登录、系统认证和浏览器权限提示进入用户接管。
 
 退出条件：不向模型暴露 selector/DOM/脚本，使用机器实际默认浏览器完成本地搜索夹具和“百度搜索
@@ -488,7 +488,7 @@ fixture 可受约束 fallback；临时 Profile 隔离、清理和双后端语义
 
 ### BCU-005：Broker、模式 UI、授权卡和文件传输
 
-- 设置默认选择 `系统默认浏览器（兼容优先）`，并提供 `OpenerX 安全浏览器`；首次启用系统模式
+- 设置默认选择 `系统默认浏览器（兼容优先）`，并提供 `UWA 安全浏览器`；首次启用系统模式
   显示现有账号/扩展风险说明。
 - 接入后端/control path 安全下限、Browser Bridge 按标签页授权、域名 Scope、敏感输入、高影响动作
   和用户接管政策。
@@ -511,7 +511,7 @@ CAPTCHA 和安全警告只能用户接管。
   浏览器、OS/DPI/多屏和签名包矩阵通过前继续按 readiness fail-closed，不外推发布支持。
 
 退出条件：完整 `check:v2` 通过，签名 macOS 安装态通过，回滚演练可在不迁移/损坏用户浏览器或
-OpenerX 数据的情况下恢复旧版本。
+UWA 数据的情况下恢复旧版本。
 
 ### BCU-007：受管持久 Chromium Profile（后续）
 
@@ -589,14 +589,14 @@ OpenerX 数据的情况下恢复旧版本。
 
 ## 10. 非目标
 
-- 不把 OpenerX 主界面改成浏览器壳。
+- 不把 UWA 主界面改成浏览器壳。
 - 不导入、复制、枚举或导出用户日常浏览器的 Profile、Cookie、密码、扩展数据或全局历史。
 - 不自动接管任意标签页；已有标签页只能通过用户连接的签名 Browser Bridge 按 tab 授权，无 Bridge
   时必须使用可验证绑定的专用窗口。
 - 不向 Pi 暴露通用浏览器扩展 API、远程调试端口、完整 DOM/HTML、CSS/XPath selector、任意
   JavaScript 或 DevTools 命令。
 - 不把 Browser Bridge 作为读取 Cookie、密码、历史、未授权标签页或绕过 Broker 的通道。
-- 不承诺 OpenerX 能替用户清除系统浏览器账号状态；只管理托管 Chromium 自己的数据。
+- 不承诺 UWA 能替用户清除系统浏览器账号状态；只管理托管 Chromium 自己的数据。
 - 不实现云端浏览器或移动端本地 Browser 执行；Remote 仍把命令送到在线桌面主机。
 - 不建设纯截图/纯坐标引擎；视觉是验证与 fallback，不是唯一观察和控制方式。
 - 不把任意 DOM 注入作为“语义或视觉操作失败时的隐藏 fallback”。

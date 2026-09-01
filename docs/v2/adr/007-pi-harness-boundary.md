@@ -31,7 +31,7 @@ multi-harness API would duplicate those semantics and create two sources of trut
 9. Deterministic tests use Pi's native `faux` model Provider from test files only. Production source
    and release artifacts contain no fake harness or canned model path.
 10. A Pi upgrade requires event, session, stop, retry, compaction, tool, packaging and recovery
-    regression evidence. OpenerX does not expose an alternate harness extension point.
+    regression evidence. UWA does not expose an alternate harness extension point.
 
 ## Consequences
 

@@ -15,7 +15,7 @@ function fixture(): {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const payload: ReleaseManifest = {
     schemaVersion: 1,
-    product: "OpenerX",
+    product: "UWA",
     keyId: "desktop-release-key",
     version: "2.0.0",
     channel: "stable",
@@ -28,7 +28,7 @@ function fixture(): {
         platform: "darwin",
         arch: "arm64",
         kind: "zip",
-        downloadUrl: "https://releases.openerx.example/2.0.0/OpenerX-arm64.zip",
+        downloadUrl: "https://releases.openerx.example/2.0.0/UWA-arm64.zip",
         feedUrl: "https://releases.openerx.example/stable/darwin/arm64",
         sha256: "a".repeat(64),
         sizeBytes: 1024,

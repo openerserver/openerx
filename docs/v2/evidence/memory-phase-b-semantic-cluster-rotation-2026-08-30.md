@@ -6,7 +6,7 @@ Date: 2026-08-30 (Asia/Shanghai)
 
 Profiles with more than 40 eligible active memories now receive eventual full same-kind block-pair coverage without increasing a single model request beyond 40 memories.
 
-The catalog is grouped by memory kind, ordered stably, and divided into blocks of 20. OpenerX enumerates every within-block and cross-block combination for each kind. A persisted v27 cursor identifies the next combination. A stable catalog therefore eventually places every pair of same-kind memories in one bounded `pi.memory.cluster` request.
+The catalog is grouped by memory kind, ordered stably, and divided into blocks of 20. UWA enumerates every within-block and cross-block combination for each kind. A persisted v27 cursor identifies the next combination. A stable catalog therefore eventually places every pair of same-kind memories in one bounded `pi.memory.cluster` request.
 
 ## Scheduling semantics
 

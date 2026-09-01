@@ -14,7 +14,7 @@ CX-110-D2 已关闭“静态目录把尚不可执行的工具宣称为可用”�
 
 桌面工具中心现在区分 `available`、`degraded`、`authorization_required` 和 `unavailable`，显示中文可操作原因，并提供显式刷新。Renderer 不自行推断操作系统能力；它只显示 Main/App Service 返回的 strict contract。
 
-本轮在当前 macOS arm64 开发机真实启动 Electron：隔离 Browser 完成打开、输入、截图、上传、下载和关闭；Desktop Main 真实探测为可用，并按窗口源捕获了 OpenerX 目标窗口；Shell 在未授予可写工作区时显示“需要设置”。这证明当前开发机和当前 unsigned Electron 运行环境，不证明签名应用 TCC 身份、其他 Mac 或 Windows。
+本轮在当前 macOS arm64 开发机真实启动 Electron：隔离 Browser 完成打开、输入、截图、上传、下载和关闭；Desktop Main 真实探测为可用，并按窗口源捕获了 UWA 目标窗口；Shell 在未授予可写工作区时显示“需要设置”。这证明当前开发机和当前 unsigned Electron 运行环境，不证明签名应用 TCC 身份、其他 Mac 或 Windows。
 
 ## 2. 运行时边界
 
@@ -58,7 +58,7 @@ UI 只显示映射后的中文原因；未知内部错误不会原样泄漏给�
 | --- | --- | --- | --- | --- |
 | Browser | 真实 Electron E2E 完成独立 partition 的 open/type/screenshot/upload/download/close，并验证只剩主窗口。 | Broker 显式 deny 后 Host adapter 调用次数为 0；高影响 submit 仍逐次审批。 | 撤销持久 capture Scope 后，同资源下一次调用重新进入 `permission_required`。 | Main Host 不可用时从 Turn 工具集移除；纯探测矩阵覆盖 `BROWSER_HOST_UNAVAILABLE`。 |
 | Shell | 当前 Mac 在 OS sandbox 内真实执行 argv、返回输出/退出码，并可启动、观察、停止长进程。 | Node/Python 在网络允许和禁止两种状态下读取工作区外文件都由 OS 拒绝；未授权网络被拒绝，授权回环网络成功。 | 撤销 Workspace Grant 同时撤销 Shell Scope；readiness 变为“需要可写工作区”，下一 Turn 不再含 Shell。 | macOS 缺少 `sandbox-exec`、Windows 或其他平台均返回 `SHELL_OS_SANDBOX_UNAVAILABLE`，不降级执行。 |
-| Desktop | 当前 Mac 的 Screen Recording、Accessibility 和 automation 探测通过；真实 Electron E2E 只捕获名为 OpenerX 的目标窗口。 | Broker 显式 deny 后不触达 Host；窗口选择只请求 `window` source，目标不存在不回退到整屏。 | 撤销持久 capture Scope 后下一次截图重新请求授权。 | 无 Screen Recording 时完全不暴露；只有截图权限时标为 degraded；无 Accessibility 或 `osascript` 显示独立原因。 |
+| Desktop | 当前 Mac 的 Screen Recording、Accessibility 和 automation 探测通过；真实 Electron E2E 只捕获名为 UWA 的目标窗口。 | Broker 显式 deny 后不触达 Host；窗口选择只请求 `window` source，目标不存在不回退到整屏。 | 撤销持久 capture Scope 后下一次截图重新请求授权。 | 无 Screen Recording 时完全不暴露；只有截图权限时标为 degraded；无 Accessibility 或 `osascript` 显示独立原因。 |
 
 当前真实 E2E 输出：
 
@@ -88,7 +88,7 @@ E2E_DESKTOP_READINESS_OK browser=运行时可用 shell=需要设置 desktop=运�
 - App Service：20 个测试。
 - Desktop：54 个测试。
 - 上述四组共 127 个测试，且四个 workspace TypeScript 检查通过。
-- 真实 Electron E2E：Browser 完整链路、运行时状态 UI 和 Desktop OpenerX 目标窗口捕获通过。
+- 真实 Electron E2E：Browser 完整链路、运行时状态 UI 和 Desktop UWA 目标窗口捕获通过。
 
 2026-08-27 14:51（Asia/Shanghai）执行完整 `npm run check:v2`，结果 `exit 0`：
 
@@ -104,7 +104,7 @@ E2E_DESKTOP_READINESS_OK browser=运行时可用 shell=需要设置 desktop=运�
 
 ## 7. 明确限制与下一任务
 
-- 当前 macOS 证据来自开发机和 unsigned Electron；TCC 权限可能绑定当前 Electron 身份，不能外推到签名、公证后的 OpenerX.app。
+- 当前 macOS 证据来自开发机和 unsigned Electron；TCC 权限可能绑定当前 Electron 身份，不能外推到签名、公证后的 UWA.app。
 - Desktop 实机正向证据覆盖目标窗口捕获；Accessibility 交互、高影响 submit/send/delete/purchase 仍只有 Broker/Host 自动化边界，未对用户真实应用执行副作用。
 - Shell 当前安全实现依赖 macOS `sandbox-exec`；Windows 原生 AppContainer/受限 Token 沙箱尚未实现，因此 Windows 明确 unavailable。
 - Browser 使用本机 HTTP 夹具，未证明任意第三方站点、登录、验证码或下载策略兼容性。

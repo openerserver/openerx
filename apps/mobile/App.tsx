@@ -102,7 +102,7 @@ function Login({
       <View style={styles.loginMark}>
         <Text style={styles.loginMarkText}>O</Text>
       </View>
-      <Text style={styles.eyebrow}>OPENERX REMOTE</Text>
+      <Text style={styles.eyebrow}>UWA REMOTE</Text>
       <Text style={styles.loginTitle}>掌控任务，不接管电脑。</Text>
       <Text style={styles.loginCopy}>
         手机只发送加密产品命令。Pi、文件和工具仍在已配对桌面执行。
@@ -729,8 +729,8 @@ function RemoteApp({
       <StatusBar style="light" />
       <View style={styles.appHeader}>
         <View>
-          <Text style={styles.brand}>OpenerX</Text>
-          <Text style={styles.brandSub}>Remote Companion</Text>
+          <Text style={styles.brand}>UWA</Text>
+          <Text style={styles.brandSub}>Unicom Work Assistant</Text>
         </View>
         <Text style={styles.encryptedBadge}>◈ E2EE</Text>
       </View>

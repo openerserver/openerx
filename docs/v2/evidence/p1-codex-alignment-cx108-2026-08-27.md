@@ -99,7 +99,7 @@ pdftoppm -png <rendered.pdf> page
 ## 7. 明确限制与下一任务
 
 - 当前生产工具是有界、类型化的报告/表格/演示/PDF 规格，不是 Word、Excel、PowerPoint 任意对象模型，也不支持宏、外部模板或任意 OOXML 注入。
-- 客户端对 OpenerX 生成成果展示由同一规范生成的确定性 SVG；二进制编译器与预览的一致性已用本机原生打开抽查。任意第三方 Office 文件仍可能只有解析文本，不据此宣称 FILE-05 发布级全覆盖。
+- 客户端对 UWA 生成成果展示由同一规范生成的确定性 SVG；二进制编译器与预览的一致性已用本机原生打开抽查。任意第三方 Office 文件仍可能只有解析文本，不据此宣称 FILE-05 发布级全覆盖。
 - 自然语言创建/修改测试使用确定性的 Pi Host 替身，证明产品 Turn、Skill、工具、Artifact 和预览链路，但不证明 live 模型一定选择正确工具；live Provider 属于 CX-110。
 - macOS LibreOfficeDev/Poppler 的本机结果不代替 Windows Microsoft Office、签名/公证包和真实双平台 UI 矩阵；这些仍属于 CX-110。
 - 下一任务是 CX-109：持久化 Plan、Reasoning、Command、Diff、Approval、Compaction 等丰富 Item，并按 Run 在 UI 回放。

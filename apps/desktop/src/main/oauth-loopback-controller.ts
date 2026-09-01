@@ -30,8 +30,8 @@ function trustedAuthorizationUrl(value: string): URL {
 }
 
 function completionPage(success: boolean): string {
-  const heading = success ? "授权已返回 OpenerX" : "授权回调无效";
-  const detail = success ? "现在可以关闭此页面并返回桌面应用。" : "请返回 OpenerX 重新授权。";
+  const heading = success ? "授权已返回 UWA" : "授权回调无效";
+  const detail = success ? "现在可以关闭此页面并返回桌面应用。" : "请返回 UWA 重新授权。";
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>${heading}</title><style>body{font:16px system-ui;margin:48px;color:#20241f}main{max-width:560px;margin:auto}h1{font-size:24px}</style></head><body><main><h1>${heading}</h1><p>${detail}</p></main></body></html>`;
 }
 

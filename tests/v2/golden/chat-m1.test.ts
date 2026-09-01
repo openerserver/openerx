@@ -71,8 +71,8 @@ function responseFor(context: Context): AssistantMessage {
   if (latestUser.includes("中英双向翻译") || latestUser.includes("保留 API")) {
     return fauxAssistantMessage(
       [
-        "English: OpenerX API version 2.0 supports 24 requests.",
-        "中文：OpenerX API 版本 2.0 支持 24 个请求。",
+        "English: UWA API version 2.0 supports 24 requests.",
+        "中文：UWA API 版本 2.0 支持 24 个请求。",
       ].join("\n"),
     );
   }
@@ -80,7 +80,7 @@ function responseFor(context: Context): AssistantMessage {
     return fauxAssistantMessage(
       [
         "```ts",
-        'const client = "OpenerX";',
+        'const client = "UWA";',
         "```",
         "",
         "| 项目 | 状态 | 版本 |",
@@ -178,9 +178,9 @@ describe("M1 Pi AgentSession golden chat gates", () => {
     expect(email.text).toContain("不补充未提供的信息");
 
     const translation = await runPrompt([
-      { role: "user", text: "中英双向翻译，保留 API、OpenerX、2.0 和 24" },
+      { role: "user", text: "中英双向翻译，保留 API、UWA、2.0 和 24" },
     ]);
-    for (const term of ["API", "OpenerX", "2.0", "24"]) expect(translation.text).toContain(term);
+    for (const term of ["API", "UWA", "2.0", "24"]) expect(translation.text).toContain(term);
     expect(translation.text).toContain("English:");
     expect(translation.text).toContain("中文：");
 

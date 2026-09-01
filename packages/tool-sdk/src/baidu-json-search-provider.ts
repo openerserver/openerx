@@ -40,9 +40,9 @@ export function localWebSearchProductUserAgent(appVersion = DEFAULT_APP_VERSION)
   const electronVersion = process.versions.electron;
   const chromeVersion = process.versions.chrome;
   if (electronVersion && chromeVersion) {
-    return `Mozilla/5.0 (${platformUserAgentToken()}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Electron/${electronVersion} OpenerX/${appVersion}`;
+    return `Mozilla/5.0 (${platformUserAgentToken()}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Electron/${electronVersion} UWA/${appVersion}`;
   }
-  return `OpenerX/${appVersion} (${process.platform}; Node/${process.versions.node})`;
+  return `UWA/${appVersion} (${process.platform}; Node/${process.versions.node})`;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {

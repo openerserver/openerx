@@ -235,7 +235,7 @@ describe("BCU-001 browser computer-use V2 contract", () => {
         backend: "managed_chromium",
         controlPath: "managed_chromium_semantic",
       }),
-    ).toThrowError(/isolated|OpenerX-owned/u);
+    ).toThrowError(/isolated|UWA-owned/u);
   });
 
   it("enforces short-lived observations, paired visual evidence and redacted secrets", () => {

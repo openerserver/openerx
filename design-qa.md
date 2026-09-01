@@ -11,7 +11,7 @@
 - viewport: 2239 × 1339 CSS px, light theme
 - source pixels: 2239 × 1339
 - implementation pixels: 2239 × 1329
-- density normalization: browser capture was normalized to CSS-pixel width. The 10 px height difference is capture chrome, not page cropping. The focused comparison aligns the source and implementation main-content regions; the existing OpenerX sidebar is intentionally outside the implementation harness because it was not changed.
+- density normalization: browser capture was normalized to CSS-pixel width. The 10 px height difference is capture chrome, not page cropping. The focused comparison aligns the source and implementation main-content regions; the existing UWA sidebar is intentionally outside the implementation harness because it was not changed.
 - state: populated automation list with active and paused tasks; no panel open for the primary comparison
 
 ## Findings
@@ -21,12 +21,12 @@
 - Spacing and layout rhythm: the implementation matches the reference’s centered narrow work area, generous top offset, pill search field, compact segmented filters, low-density task rows, quiet dividers, and large surrounding whitespace. Detail and editing content move into a 560 px right drawer so the primary list keeps the reference composition.
 - Colors and visual tokens: the surface stays neutral white in light mode with low-contrast borders and muted secondary copy. Black/white primary actions follow the reference. Green, amber, and outline states are limited to automation status semantics.
 - Image quality and asset fidelity: the source contains no product photography, illustration, logo, or decorative raster asset in the redesigned content region. Existing Phosphor icons provide the closest matching UI icon language; no emoji, placeholder art, handcrafted SVG, or fake raster asset is used.
-- Copy and content: source hierarchy and phrasing are adapted to real OpenerX capabilities. Each task shows name, state, schedule, next run, and prompt summary; background startup, retry, catch-up, model, heartbeat, run history, and safety copy remain available.
+- Copy and content: source hierarchy and phrasing are adapted to real UWA capabilities. Each task shows name, state, schedule, next run, and prompt summary; background startup, retry, catch-up, model, heartbeat, run history, and safety copy remain available.
 - Accessibility and affordances: search, clear, filters, task rows, create/edit form, pause/resume, run-now, delete, background startup, and close actions are semantic and keyboard-addressable. Visible focus states and reduced-motion behavior are included.
 
 ## Full-view comparison evidence
 
-`automation-comparison.png` places the complete Codex reference and the browser-rendered OpenerX implementation in one comparison input. It shows the same white content canvas, centered reading column, title/search/filter sequence, lightweight task treatment, and dominant whitespace. The reference’s existing app sidebar and window chrome are not duplicated in the harness; the production OpenerX sidebar remains unchanged.
+`automation-comparison.png` places the complete Codex reference and the browser-rendered UWA implementation in one comparison input. It shows the same white content canvas, centered reading column, title/search/filter sequence, lightweight task treatment, and dominant whitespace. The reference’s existing app sidebar and window chrome are not duplicated in the harness; the production UWA sidebar remains unchanged.
 
 ## Focused region comparison evidence
 

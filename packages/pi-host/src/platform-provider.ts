@@ -450,10 +450,10 @@ export function createPlatformModelProvider(
   if (!selected) throw new Error(`PLATFORM_MODEL_NOT_FOUND:${selectedEntry.modelRef}`);
   const provider = createProvider<string>({
     id: "openerx-platform",
-    name: "OpenerX Platform",
+    name: "UWA Platform",
     auth: {
       apiKey: {
-        name: "OpenerX device session",
+        name: "UWA device session",
         resolve: async () => ({ auth: {}, source: "brokered device session" }),
       },
     },

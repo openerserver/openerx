@@ -10,7 +10,7 @@
 
 ## 1. 结论
 
-OpenerX 应把 Pi 从“随整个桌面应用一起更新的源码依赖”演进成“应用内置兜底 Runtime +
+UWA 应把 Pi 从“随整个桌面应用一起更新的源码依赖”演进成“应用内置兜底 Runtime +
 设备级版本化 Runtime Bundle”。更新控制器继续由 Electron Main 持有，使用单独的 HTTPS +
 Ed25519 信任根下载精确构建产物；候选包在非活动目录完成验签、哈希、兼容性和进程预检后，
 只在没有活动 Run 时于下一次 Pi Host 启动原子切换。启动、握手或确定性运行时健康检查失败时，
@@ -19,7 +19,7 @@ Ed25519 信任根下载精确构建产物；候选包在非活动目录完成验
 升级前的应用版本不能立即通过远程文件把 Pi `0.84.3` 替换为 `0.84.4`：
 
 - `packages/pi-host`、根 `package.json` 和 Desktop 开发依赖当时都锁定 `0.84.3`；
-- Vite 把 Pi 与 OpenerX Host 适配代码一起构建成 `.vite/build/pi-host.js`；
+- Vite 把 Pi 与 UWA Host 适配代码一起构建成 `.vite/build/pi-host.js`；
 - `AppServiceSupervisor` 从应用包内部用 `utilityProcess.fork()` 启动该入口；
 - Electron 已启用 `OnlyLoadAppFromAsar` 和 ASAR 完整性 Fuse。
 
@@ -42,7 +42,7 @@ Codex Changelog 也按精确 CLI 版本发布可重复的安装命令。
   OpenAI Authenticode 签名，进程从该精确目录启动；
 - 其他本地 Runtime 也使用 `<runtime>/<content-id>/.../manifest.json` 的版本化目录布局。
 
-OpenerX 采用其中的稳定原则：应用壳与高频 Runtime 解耦、目录不可变、精确版本启动、先验证后
+UWA 采用其中的稳定原则：应用壳与高频 Runtime 解耦、目录不可变、精确版本启动、先验证后
 激活、保留旧版本。不会依赖 Codex 的私有 URL、目录名、协议或服务端实现。
 
 ### 2.2 Pi 社区自身的托管升级机制
@@ -52,12 +52,12 @@ Pi `0.84.3` 已加入实验性的 managed install 更新：获取精确版本的
 `releases/<version>`，最后以 rename 原子替换 `current-version`；失败时不改动当前版本，并用锁阻止
 并发更新。
 
-OpenerX 复用它的状态机思想，但不在用户机器执行 npm：
+UWA 复用它的状态机思想，但不在用户机器执行 npm：
 
-- 客户端只下载 CI 已构建、已锁依赖、已测试和已签名的 OpenerX Pi Runtime Bundle；
-- Bundle 包含 Pi 和匹配的 OpenerX 适配层，不把上游 `pi` CLI 当作产品 Agent Host；
+- 客户端只下载 CI 已构建、已锁依赖、已测试和已签名的 UWA Pi Runtime Bundle；
+- Bundle 包含 Pi 和匹配的 UWA 适配层，不把上游 `pi` CLI 当作产品 Agent Host；
 - 客户端不运行 install script，不解析任意 npm/git 依赖，不接收用户提供的更新 URL；
-- 激活验证不仅检查版本，还检查 OpenerX Host 合同、运行环境和启动握手。
+- 激活验证不仅检查版本，还检查 UWA Host 合同、运行环境和启动握手。
 
 ### 2.3 明确不采用
 
@@ -68,7 +68,7 @@ OpenerX 复用它的状态机思想，但不在用户机器执行 npm：
 3. **不直接运行上游 CLI/RPC。** 这会绕开现有 Pi Host 的事件投影、平台 Model Provider、文件、
    Memory、Capability Broker、权限、Usage 和 Remote 映射。
 4. **不远程替换 `@openerx/contracts` 或 Main Supervisor。** IPC 合同演进仍通过桌面应用升级。
-5. **不把一次 npm 发布自动视为可发布 Runtime。** Pi API 兼容性必须先通过 OpenerX 回归和审批。
+5. **不把一次 npm 发布自动视为可发布 Runtime。** Pi API 兼容性必须先通过 UWA 回归和审批。
 6. **不支持未签名降级。** 回滚只切换到本机已经验签的 LKG/内置版本，或发布更高的修复版本。
 
 ## 3. 目标与非目标
@@ -87,7 +87,7 @@ OpenerX 复用它的状态机思想，但不在用户机器执行 npm：
 - 不支持任意 Pi 版本或用户自带 Pi 构建；
 - 不在 V1 引入多 harness 抽象；Pi 仍是唯一生产 Agent Harness；
 - 不允许 Runtime Bundle 增加新的 OS 权限、Main 能力或 IPC 消息；
-- 不在一次远程 Runtime 更新中迁移 OpenerX SQLite Schema；
+- 不在一次远程 Runtime 更新中迁移 UWA SQLite Schema；
 - 不替代桌面应用自身的 Squirrel/ZIP/DMG 签名更新；
 - 首版不做运行中 Session 的无感迁移。
 
@@ -101,7 +101,7 @@ flowchart TD
   STAGE --> PREFLIGHT[isolated Pi Host preflight\nno user profile / no model call]
   PREFLIGHT --> POINTER[atomic pending/active pointer]
 
-  APP[Signed OpenerX app] --> LOADER[ASAR-owned stable Pi Runtime Loader]
+  APP[Signed UWA app] --> LOADER[ASAR-owned stable Pi Runtime Loader]
   APP --> EMBEDDED[embedded fallback Runtime]
   POINTER --> LOADER
   LOADER --> EXTERNAL[versioned external Runtime Bundle]
@@ -120,7 +120,7 @@ flowchart TD
 | Main `PiRuntimeUpdateService` | 是 | 否 | 检查、下载、验签、预检、激活、回滚、审计 |
 | ASAR Runtime Loader | 是 | 否 | 读取已验证指针、再次校验兼容性、加载精确入口 |
 | `@openerx/contracts` | 是 | 否 | App Service ↔ Pi Host 严格协议 |
-| OpenerX Pi Adapter | 内置一份 | 是 | 把特定 Pi API 映射到稳定 Loader/Host 合同 |
+| UWA Pi Adapter | 内置一份 | 是 | 把特定 Pi API 映射到稳定 Loader/Host 合同 |
 | `@earendil-works/pi-*` | 内置一份 | 是 | AgentSession、Loop、压缩、重试和工具生命周期 |
 | Conversation/Message/SQLite | 否 | 否 | 产品真值，不由 Runtime 包拥有或迁移 |
 
@@ -146,7 +146,7 @@ THIRD_PARTY_NOTICES.txt
 ```
 
 `pi-runtime.mjs` 是 CI 从精确 lockfile 构建的单入口 Bundle，包含指定 Pi 版本和版本匹配的
-OpenerX Pi Adapter。生产客户端不安装 node_modules。若未来确实需要原生 addon，必须作为 manifest
+UWA Pi Adapter。生产客户端不安装 node_modules。若未来确实需要原生 addon，必须作为 manifest
 inventory 中的平台文件单独签名/哈希，并增加 Electron/Node Module ABI 精确门禁；首版优先保持纯
 JS Bundle。
 
@@ -158,7 +158,7 @@ JS Bundle。
 ```json
 {
   "schemaVersion": 1,
-  "product": "OpenerXPiRuntime",
+  "product": "UWAPiRuntime",
   "keyId": "openerx-pi-runtime-2026-01",
   "runtimeReleaseId": "piru-20260830-0001",
   "runtimeReleaseVersion": "1.0.0",
@@ -192,7 +192,7 @@ JS Bundle。
 
 规则：
 
-- `runtimeReleaseId` 是不可复用的发布身份；`runtimeReleaseVersion` 是 OpenerX Bundle 版本，不能只用
+- `runtimeReleaseId` 是不可复用的发布身份；`runtimeReleaseVersion` 是 UWA Bundle 版本，不能只用
   上游 `piVersion`；同一个 Pi 版本可能因
   Adapter、构建或安全修复需要重新发布；
 - 客户端必须同时检查 App 范围、Host Contract、Loader API、平台、架构、Node/Electron 运行环境；
@@ -275,7 +275,7 @@ stateDiagram-v2
 
 - Bundle 可导入且只导出规定的 Loader API；
 - 报告值与 manifest 中的 `piVersion`、`adapterVersion`、Host Contract 和 entry digest 一致；
-- Pi 关键构造器和 OpenerX ToolDefinition 可加载；
+- Pi 关键构造器和 UWA ToolDefinition 可加载；
 - `pi-host.ready` 在 10 秒内完成，退出和端口关闭能回收资源；
 - 不使用 faux Provider 发起模型调用；行为级测试在 CI/发布门禁完成，生产包继续排除假 Provider。
 
@@ -350,7 +350,7 @@ Runtime Release ID。任何错配都在读取用户数据或接受 Prompt 前退
 ## 9. `0.84.4` 专项兼容性门禁
 
 从 Pi `v0.84.3` 到 `v0.84.4` 的上游差异为 112 个文件，包含 2,786 行新增和 378 行删除。与
-OpenerX 直接相关的变化至少有：
+UWA 直接相关的变化至少有：
 
 - 大 Tool Result 可在 Tool 执行后、下一次 Assistant Response 前触发自动压缩；
 - Session JSONL 缺少尾换行时会自动修复；
@@ -389,7 +389,7 @@ OpenerX 直接相关的变化至少有：
 - `stable`：只接收已完成所有 Gate 和批准的 Runtime。
 
 通道只能由签名应用配置或受管理策略收窄；普通用户不能把 stable 客户端指向任意 URL。管理员可
-关闭 Runtime 自动更新并通过设备管理分发批准的 Runtime，但仍必须使用 OpenerX 签名 Bundle。
+关闭 Runtime 自动更新并通过设备管理分发批准的 Runtime，但仍必须使用 UWA 签名 Bundle。
 
 ### 10.2 推广顺序
 

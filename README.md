@@ -1,6 +1,6 @@
-# OpenerX 2.0
+# UWA — Unicom Work Assistant
 
-OpenerX 2.0 是面向普通用户的个人 AI 工作客户端。V1 使用 Electron + React + TypeScript 构建 Windows/macOS 执行主机，并提供 iOS/Android Remote Companion；对话、文件、工具、Skill、账户同步、平台模型和个人计费统一由桌面执行面与手机控制面呈现。
+UWA（Unicom Work Assistant）是面向普通用户的个人 AI 工作客户端。V1 使用 Electron + React + TypeScript 构建 Windows/macOS 执行主机，并提供 iOS/Android Remote Companion；对话、文件、工具、Skill、账户同步、平台模型和个人计费统一由桌面执行面与手机控制面呈现。
 
 ## 当前状态
 

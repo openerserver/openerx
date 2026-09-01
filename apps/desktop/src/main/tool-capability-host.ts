@@ -231,7 +231,7 @@ export class ElectronToolCapabilityHost {
         width: 1_280,
         height: 820,
         show: process.env.OPENERX_E2E !== "1",
-        title: "OpenerX 隔离浏览器",
+        title: "UWA 隔离浏览器",
         webPreferences: {
           partition: `openerx-isolated-browser-${id}`,
           sandbox: true,

@@ -4,7 +4,7 @@ Date: 2026-08-30 (Asia/Shanghai)
 
 ## Outcome
 
-OpenerX now routes fuzzy relationships found while extracting new memories through an explicit user-review boundary. The restricted Pi memory task receives at most 50 existing memories, may label a new candidate as `none`, `duplicate`, or `conflict`, and may only reference an existing memory ID supplied in the same request and of the same kind.
+UWA now routes fuzzy relationships found while extracting new memories through an explicit user-review boundary. The restricted Pi memory task receives at most 50 existing memories, may label a new candidate as `none`, `duplicate`, or `conflict`, and may only reference an existing memory ID supplied in the same request and of the same kind.
 
 `duplicate` and `conflict` suggestions do not become active memories. They are persisted in the local v25 `memory_merge_reviews` table and surfaced in Memory Settings. The user can:
 

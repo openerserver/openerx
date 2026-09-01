@@ -277,15 +277,15 @@ export class AppServiceSupervisor {
     const utilityStdio = process.env.OPENERX_E2E === "1" ? "pipe" : "inherit";
     this.#mainPort = mainChannel.port1;
     this.#piHostProcess = utilityProcess.fork(path.join(__dirname, this.#piHostEntry), [], {
-      serviceName: "OpenerX Pi Host",
+      serviceName: "UWA Pi Host",
       stdio: utilityStdio,
     });
     this.#appProcess = utilityProcess.fork(path.join(__dirname, "app-service.js"), [], {
-      serviceName: "OpenerX App Service",
+      serviceName: "UWA App Service",
       stdio: utilityStdio,
     });
     this.#remoteHostProcess = utilityProcess.fork(path.join(__dirname, "remote-host.js"), [], {
-      serviceName: "OpenerX Remote Connector",
+      serviceName: "UWA Remote Connector",
       stdio: utilityStdio,
     });
     if (process.env.OPENERX_E2E === "1") {

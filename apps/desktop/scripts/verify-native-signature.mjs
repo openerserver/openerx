@@ -17,12 +17,12 @@ function find(directory) {
     const absolute = path.join(directory, entry.name);
     if (entry.isDirectory() && entry.name.endsWith(".app")) return [absolute];
     if (entry.isDirectory()) return find(absolute);
-    return entry.isFile() && entry.name.toLowerCase() === "openerx.exe" ? [absolute] : [];
+    return entry.isFile() && entry.name.toLowerCase() === "uwa.exe" ? [absolute] : [];
   });
 }
 
 const targets = find(outRoot).filter(
-  (target) => !selectedTarget || target.includes(`${path.sep}OpenerX-${selectedTarget}${path.sep}`),
+  (target) => !selectedTarget || target.includes(`${path.sep}UWA-${selectedTarget}${path.sep}`),
 );
 if (targets.length === 0) throw new Error("RELEASE_NATIVE_TARGET_NOT_FOUND");
 

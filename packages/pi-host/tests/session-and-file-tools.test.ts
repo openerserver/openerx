@@ -199,7 +199,7 @@ describe("Pi native Broker tools", () => {
     session.dispose();
   });
 
-  it("registers only OpenerX file tools and forwards operations without raw paths", async () => {
+  it("registers only UWA file tools and forwards operations without raw paths", async () => {
     const { cwd, agentDir } = directories();
     const request = vi.fn(async () => [{ id: randomUUID(), displayName: "brief.pdf" }]);
     const generationId = randomUUID();

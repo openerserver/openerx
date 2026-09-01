@@ -1,4 +1,4 @@
-# OpenerX V2 轻量本地 Web Search 实施方案
+# UWA V2 轻量本地 Web Search 实施方案
 
 - 状态：`LWS-001..004 IMPLEMENTED / LWS-006 PROBE+GATE IMPLEMENTED / HISTORY 1 OF 7 / NOT RELEASE READY`
 - 修订日期：2026-08-29（Asia/Shanghai）
@@ -24,7 +24,7 @@ V2 应实现一个很小的本机 `LocalWebSearchGateway`：
 3. Provider Adapter 解析百度 JSON 或 Bing 服务端 HTML；
 4. 结果在本机规范化、过滤、去重为 `Source[]`，交回同一个 Pi Agent Loop；
 5. 搜索阶段不打开浏览器、不执行 JavaScript、不启动额外进程，也不打开结果网页；
-6. 默认运行链不再调用 OpenerX 云端 `/v1/tools/web-search`。
+6. 默认运行链不再调用 UWA 云端 `/v1/tools/web-search`。
 
 这仍然不是离线搜索，也不是在本机建设爬虫或搜索索引。查询会从用户设备直接发给百度、Bing 或
 用户配置的其他 Provider；“本地”指搜索工具的策略、请求、解析、缓存和审计都在本机完成。
@@ -48,14 +48,14 @@ V2 应实现一个很小的本机 `LocalWebSearchGateway`：
 
 | Provider 路径 | 状态 | 下载体积 | 总耗时 | 结构化结果 |
 | --- | ---: | ---: | ---: | ---: |
-| 百度 `/s?...&tn=json`，稳定 Electron/OpenerX 产品 UA | 200 JSON | 4,191 B | 0.415 s | 11 entries，10 条标题/摘要完整 |
+| 百度 `/s?...&tn=json`，稳定 Electron/UWA 产品 UA | 200 JSON | 4,191 B | 0.415 s | 11 entries，10 条标题/摘要完整 |
 | Bing `/search?...&format=rss` 首次 | 200 XML | 5,709 B | 0.666 s | 10 items |
 | Bing 服务端 HTML | 200 HTML | 43,437 B | 1.186 s | 10 个 `b_algo` 结果块 |
 
 重要限制：
 
 - 百度 JSON 入口没有公开正式 API 合同；只带简化 Probe 标识的 UA 得到过 302，包含实际
-  Electron/Chromium 与 OpenerX 版本的稳定产品 UA 得到 200，说明 UA 合同、反自动化和接口漂移都
+  Electron/Chromium 与 UWA 版本的稳定产品 UA 得到 200，说明 UA 合同、反自动化和接口漂移都
   必须纳入 readiness，不能靠轮换或伪造 UA 处理。
 - Bing RSS 首次返回 XML，后续探测曾返回 221 B HTML 页面，不能作为唯一生产入口。
 - Bing 的旧 Web Search APIs 已于 2025-08-11 退役；当前不存在可直接替换的普通 Bing Search
@@ -122,7 +122,7 @@ User prompt
 - 仅允许 `https://www.baidu.com:443`、`https://www.bing.com:443` 及用户显式配置的 Provider；
 - 搜索请求默认 `redirect: "manual"`，SERP 入口重定向到验证码/登录页时直接返回稳定错误；
 - 不发送浏览器 Cookie、账号、Referer、工作区信息、模型凭证或系统代理中的秘密；
-- 使用由实际打包 Electron/Chromium 和 OpenerX 版本生成的稳定产品 User-Agent；不伪造不存在的
+- 使用由实际打包 Electron/Chromium 和 UWA 版本生成的稳定产品 User-Agent；不伪造不存在的
   浏览器版本、不轮换 UA/代理、不伪装登录用户、不绕过 CAPTCHA；
 - DNS/IP/代理规则复用 PBASH `controlled_egress` 已有的私网、metadata、DNS rebinding 和
   redirect 越界约束；

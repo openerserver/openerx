@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "OpenerX Remote",
+    "name": "UWA Remote",
     "slug": "openerx-remote",
     "version": "2.0.0-alpha.0",
     "runtimeVersion": {
@@ -14,7 +14,7 @@
       "bundleIdentifier": "com.openerx.remote",
       "buildNumber": "1",
       "infoPlist": {
-        "NSCameraUsageDescription": "扫描桌面显示的一次性 OpenerX Remote 配对码。",
+        "NSCameraUsageDescription": "扫描桌面显示的一次性 UWA Remote 配对码。",
         "NSFaceIDUsageDescription": "确认高风险远程审批由当前设备用户作出。"
       },
       "privacyManifests": {

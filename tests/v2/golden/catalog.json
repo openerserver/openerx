@@ -36,7 +36,7 @@
       "gate": "hard",
       "input": {
         "fixture": "chat.bilingual-terms.v1",
-        "prompt": "中英双向翻译夹具内容，保留 API、OpenerX 和全部数字。"
+        "prompt": "中英双向翻译夹具内容，保留 API、UWA 和全部数字。"
       },
       "expected": ["both directions are present", "terms and numbers are unchanged"]
     },
@@ -210,7 +210,7 @@
       },
       "expected": [
         "source and preview modes work",
-        "preview exposes neither Node nor OpenerX bridge"
+        "preview exposes neither Node nor UWA bridge"
       ]
     },
     {

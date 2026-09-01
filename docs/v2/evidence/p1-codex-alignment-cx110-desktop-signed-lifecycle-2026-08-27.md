@@ -10,7 +10,7 @@
 
 ## 1. 结论
 
-CX-110-D3 已完成当前 Mac 的签名桌面本地检查点。`OpenerX.app` 使用 Developer ID Application
+CX-110-D3 已完成当前 Mac 的签名桌面本地检查点。`UWA.app` 使用 Developer ID Application
 签名，固定 bundle ID `com.openerx.desktop`，启用 hardened runtime，并携带 Apple Events 用途说明及
 自动化 entitlement。签名校验、指定需求、Screen Recording、Accessibility、真实 System Events
 调用和同身份版本切换均已通过。
@@ -23,7 +23,7 @@ PID、CGWindow ID、窗口标题、截图尺寸和 60 秒有效期约束。受�
 安装生命周期在隔离的临时 Applications 根中完成 `2.0.0-alpha.0 → 2.0.0-alpha.1 →
 2.0.0-alpha.0` 真回滚。三次均启动签名应用并复用同一用户 Profile；账户 ID、Conversation、SQLite、
 设备身份、系统 Keychain-backed 加密凭据均保持。测试只删除其唯一测试 Keychain 项和临时目录，不触碰
-用户现有 OpenerX Profile。
+用户现有 UWA Profile。
 
 这仍不是发布完成：当前包没有 Apple 公证票据，没有验证 DMG/Finder 到 `/Applications` 的 Gatekeeper
 安装，也没有 Windows 原生实现或签名矩阵。

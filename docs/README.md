@@ -1,4 +1,4 @@
-# OpenerX 2.0 文档
+# UWA 2.0 文档
 
 当前活跃文档只维护在 [`v2/`](v2/README.md)。旧控制平面文档已完整移动到 [`../v1-backup/docs/`](../v1-backup/docs/README.md)。
 

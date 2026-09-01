@@ -361,7 +361,7 @@ function accountStatusLabel(status: string | undefined): string {
 function accountReason(reason: string | null | undefined): string | null {
   if (!reason) return null;
   if (reason === "DEVICE_SESSION_REVOKED") return "此设备的登录已失效，请重新验证邮箱。";
-  if (reason === "AUTHENTICATION_REQUIRED") return "请先登录 OpenerX。";
+  if (reason === "AUTHENTICATION_REQUIRED") return "请先登录 UWA。";
   return "账户状态发生变化，请重新登录后再试。";
 }
 
@@ -427,7 +427,7 @@ function userFacingError(error: unknown, fallback: string): string {
     return "远程 BYOK 地址必须使用 HTTPS；本机 localhost 可使用 HTTP。";
   }
   if (message.includes("PI_MODEL_NOT_CONFIGURED")) {
-    return "默认模型暂时未就绪，OpenerX 正在自动恢复；请稍后重试。";
+    return "默认模型暂时未就绪，UWA 正在自动恢复；请稍后重试。";
   }
   if (message.includes("PI_PROVIDER_FAILURE") || message.includes("MODEL_PROVIDER")) {
     return "模型服务暂时没有响应，请检查网络后重试。";
@@ -1092,7 +1092,7 @@ function NewChat({ defaultModelRef }: { defaultModelRef: string }): React.JSX.El
       {modelRequiresConfiguration ? (
         <section className="settings-card" aria-label="配置模型 API">
           <h2>先配置模型 API</h2>
-          <p>此安装包默认使用 BYOK，不依赖 OpenerX 服务器。配置 API Key 后即可开始任务。</p>
+          <p>此安装包默认使用 BYOK，不依赖 UWA 服务器。配置 API Key 后即可开始任务。</p>
           <NavLink className="primary-link" to="/settings/account">
             前往设置 → 模型
           </NavLink>
@@ -2182,7 +2182,7 @@ function MessageCard({
       <div className="message-content">
         {showMessageStatus ? (
           <header className="message-state-header">
-            <strong>{message.role === "user" ? "你" : "OpenerX"}</strong>
+            <strong>{message.role === "user" ? "你" : "UWA"}</strong>
             <span className={`message-status status-${message.status}`}>
               {messageStatusLabel[message.status]}
             </span>
@@ -3591,7 +3591,7 @@ function skillSourceKindLabel(sourceKind: string): string {
 }
 
 function skillSourceLabel(skill: SkillInstallation): string {
-  return skill.sourceKind === "built_in" ? "OpenerX 内置 Skill" : skill.sourceLabel;
+  return skill.sourceKind === "built_in" ? "UWA 内置 Skill" : skill.sourceLabel;
 }
 
 function skillPlatformLabel(platform: string): string {
@@ -4169,7 +4169,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
         <div>
           <h2>模型服务</h2>
           <p>
-            默认使用 BYOK；请求从本机直接发送到你的 OpenAI-compatible API，无需 OpenerX 服务端。
+            默认使用 BYOK；请求从本机直接发送到你的 OpenAI-compatible API，无需 UWA 服务端。
           </p>
         </div>
       </div>
@@ -4601,7 +4601,7 @@ function RemoteSettings(): React.JSX.Element {
       ) : null}
       {challenge.data && qrDataUrl ? (
         <div className="remote-pairing-panel">
-          <img src={qrDataUrl} alt="OpenerX Remote 一次性配对二维码" />
+          <img src={qrDataUrl} alt="UWA Remote 一次性配对二维码" />
           <div>
             <strong>用已登录同一账户的手机扫描</strong>
             <p>二维码不含访问令牌，只含一次性挑战、公钥和到期时间。</p>
@@ -5423,7 +5423,7 @@ function AccountSettings({
                 <span className={`account-status account-${state?.status ?? "unavailable"}`}>
                   {accountStatusLabel(state?.status)}
                 </span>
-                <h2>{state?.account?.displayName ?? "登录 OpenerX"}</h2>
+                <h2>{state?.account?.displayName ?? "登录 UWA"}</h2>
                 <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
               </div>
               {state?.status !== "signed_in" || !state.session ? (
@@ -6362,7 +6362,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       <header className="tool-library-header">
         <div>
           {showTitle ? <h2>工具</h2> : null}
-          <p>添加、设置并管理 OpenerX 可以使用的工具</p>
+          <p>添加、设置并管理 UWA 可以使用的工具</p>
         </div>
         <button type="button" className="tool-add-button" onClick={() => setAddDialogOpen(true)}>
           <Plus size={18} weight="bold" />
@@ -6666,7 +6666,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 <h3>工具信息</h3>
                 <p>
                   {toolRuntimeReason(selectedReadiness?.reason ?? null) ??
-                    "此工具由 OpenerX 提供，当前不需要额外设置。"}
+                    "此工具由 UWA 提供，当前不需要额外设置。"}
                 </p>
                 {selectedReadiness?.details?.length ? (
                   <ul>
@@ -6918,7 +6918,10 @@ function Sidebar({
             <span className="brand-mark">
               <img src="/assets/china-unicom-logo.png" alt="中国联通官方标志" />
             </span>
-            <span>OpenerX</span>
+            <span className="brand-copy">
+              <strong>UWA</strong>
+              <small>Unicom Work Assistant</small>
+            </span>
           </div>
           <button
             type="button"

@@ -1,4 +1,4 @@
-# OpenerX V1 release and rollback runbook
+# UWA V1 release and rollback runbook
 
 > Local automation status: `READY`
 >

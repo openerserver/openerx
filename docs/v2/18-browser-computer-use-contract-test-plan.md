@@ -69,7 +69,7 @@ The system-browser suite has two explicit modes:
 
 - Deterministic Browser Bridge security fixture: implemented for one-time exact-tab grant and bounded
   request/response behavior; signed installed transport remains pending.
-- OS Accessibility fixture: OpenerX-created or confirmed dedicated top-level window.
+- OS Accessibility fixture: UWA-created or confirmed dedicated top-level window.
 
 A randomized standard HTML fixture changes DOM IDs/classes on every run. Search, form input, selection and
 navigation must complete with semantic `elementRef` actions and no coordinates. A separate Canvas fixture

@@ -29,9 +29,9 @@ content is never embedded in the chat Renderer.
 
 - `system_default` is the default backend. A signed, user-connected Browser Bridge may bind one expressly
   authorized tab. Without the Bridge, the Host must open or confirm a dedicated top-level browser window
-  and bind it through OS Accessibility. OpenerX reuses ambient login state but does not enumerate, copy,
+  and bind it through OS Accessibility. UWA reuses ambient login state but does not enumerate, copy,
   import or export the browser profile, Cookie store, password store, extensions or global history.
-- `managed_chromium` uses Electron's Chromium with an OpenerX-owned isolated profile. The initial backend
+- `managed_chromium` uses Electron's Chromium with an UWA-owned isolated profile. The initial backend
   uses an ephemeral profile; a persistent managed profile is a later, separately reviewed feature.
 - A trusted user setting defines the security minimum. A request may upgrade from `system_default` to
   `managed_chromium`; neither Pi nor page content may downgrade a managed minimum.
@@ -44,7 +44,7 @@ fails closed; the Host never falls back to the current foreground browser or the
 
 The first Bridge transport targets Chromium Manifest V3. The extension requests only `activeTab`,
 `scripting` and `nativeMessaging`; it does not request `<all_urls>`, `cookies`, `history`, `debugger` or a
-global tab-enumeration capability. The user must click the OpenerX extension action in the exact target tab.
+global tab-enumeration capability. The user must click the UWA extension action in the exact target tab.
 Chrome documents `activeTab` as a temporary grant created by a user gesture and revoked on cross-origin
 navigation or tab close ([activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab)).
 
@@ -130,7 +130,7 @@ checks domain Scope, evaluates risk, owns approvals and idempotency, and dispatc
 Host observes and executes; it cannot plan, approve itself or silently change backend/control path.
 
 `detach` stops control without closing a user-owned browser surface. `close` requires current Observation
-state and is valid only for a surface OpenerX can prove it created and owns. System-browser file upload and
+state and is valid only for a surface UWA can prove it created and owns. System-browser file upload and
 download initially require user takeover. Managed Chromium later reuses controlled PersonalFile IDs and
 never returns a private filesystem path to Pi.
 

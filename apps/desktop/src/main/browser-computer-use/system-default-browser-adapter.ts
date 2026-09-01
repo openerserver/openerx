@@ -490,7 +490,7 @@ export class SystemDefaultBrowserAdapter {
     session.monitor?.close();
     const descriptor = this.#observations.endSession(operation.sessionId, "closed");
     this.#sessions.delete(operation.sessionId);
-    return lifecycleResult("已关闭 OpenerX 创建的系统浏览器专用窗口", descriptor, true);
+    return lifecycleResult("已关闭 UWA 创建的系统浏览器专用窗口", descriptor, true);
   }
 
   async #recordObservation(

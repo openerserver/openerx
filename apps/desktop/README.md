@@ -1,4 +1,4 @@
-# OpenerX Desktop
+# UWA Desktop — Unicom Work Assistant
 
 V2 的 Electron + React + TypeScript 桌面客户端。
 

@@ -18,7 +18,7 @@ parsing or a working-directory string as a security boundary.
 ## Decision
 
 Pi remains the only Agent Loop, while App Service remains the only authority boundary. Pi builtin tools
-stay disabled with `noTools: "builtin"`. Pi Host may register an OpenerX-owned tool named `bash`, whose
+stay disabled with `noTools: "builtin"`. Pi Host may register an UWA-owned tool named `bash`, whose
 model-visible input is limited to `command` and `timeout`. It preserves Pi's tool-call identity and sends a
 strict, versioned `shell_command_execute` operation to the Capability Broker.
 

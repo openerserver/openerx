@@ -1,4 +1,4 @@
-# OpenerX V2 按 Codex 实现方式的能力评估
+# UWA V2 按 Codex 实现方式的能力评估
 
 > 状态：`P0 + CX-101–CX-109 + CX-110-D1/D2/D3 + CX-111 IMPLEMENTED / LOCAL VERIFIED`；完整 CX-110/P2 仍未完成
 >
@@ -12,9 +12,9 @@
 
 ## 1. 结论
 
-当前答案不是“Pi 中的各种处理能力，OpenerX 都已经支持”。
+当前答案不是“Pi 中的各种处理能力，UWA 都已经支持”。
 
-OpenerX 已经具备一套方向正确的骨架：Pi 是唯一 Agent Harness，Renderer 权限收窄，模型调用、计费和 Usage 由服务端控制，工具统一经过 Capability Broker，文件采用受控副本和稳定引用，Skill 与 MCP 也已有安装、传输和审计基础。
+UWA 已经具备一套方向正确的骨架：Pi 是唯一 Agent Harness，Renderer 权限收窄，模型调用、计费和 Usage 由服务端控制，工具统一经过 Capability Broker，文件采用受控副本和稳定引用，Skill 与 MCP 也已有安装、传输和审计基础。
 
 评估时若按 Codex 的实现方式衡量，存在两类关键缺口：
 
@@ -57,7 +57,7 @@ OpenerX 已经具备一套方向正确的骨架：Pi 是唯一 Agent Harness，R
 | 文件进入受控内容库，原路径不进入模型 | 保留 | File Service 的受控副本、哈希、稳定引用和不可变 ArtifactVersion 是正确边界。 |
 | Skill 包复制、校验、挂载并由 Pi Resource Loader 加载 | 保留 | 已符合渐进加载方向；后续补项目级指令和更细的能力声明即可。 |
 | MCP 使用官方 SDK 的 STDIO/Streamable HTTP 传输 | 保留底层传输 | 传输层方向正确；模型侧的“一个巨型 MCP 工具”需要改为独立工具注册。 |
-| 禁用任意 Pi Extension、Theme、Prompt Template 和原始内置工具 | 当前保留 | 在 OpenerX 自己的信任、工作区和工具合同完善前，`noExtensions`、`noContextFiles`、`noTools: "builtin"` 是安全选择。 |
+| 禁用任意 Pi Extension、Theme、Prompt Template 和原始内置工具 | 当前保留 | 在 UWA 自己的信任、工作区和工具合同完善前，`noExtensions`、`noContextFiles`、`noTools: "builtin"` 是安全选择。 |
 | Remote 复用同一个 App Service/Broker | 保留 | Remote 不应另造权限或执行内核，当前复用方向正确。 |
 
 ## 4. 评估时已确认的错误：P0
@@ -115,13 +115,13 @@ flowchart TD
 
 ## 5. 应实现的能力：P1
 
-这些能力不是当前代码必然错误，但若 OpenerX 继续保留 `docs/v2/10-codex-capability-baseline.md` 中的 Codex 能力声明，就必须真实实现并取得端到端证据。
+这些能力不是当前代码必然错误，但若 UWA 继续保留 `docs/v2/10-codex-capability-baseline.md` 中的 Codex 能力声明，就必须真实实现并取得端到端证据。
 
 | ID | 应实现能力 | 当前状态 | Codex 对齐后的完成定义 |
 | --- | --- | --- | --- |
 | CX-101 | 用户授权的工作区 | PASS（本地）——可信 Desktop Main 选择目录；授权的读写、网络、有效期和撤销状态可见。模型只获得 grant ID/相对路径；失效根隔离，Shell 仍由 OS 沙箱约束。 | 用户显式授予一个或多个根目录；读写、网络和有效期可见；路径、符号链接和子进程均不能逃逸。 |
 | CX-102 | 代码读取、搜索、补丁和差异 | PASS（本地）——受 Scope 的 list/search/read、SHA-256 Patch、typed diff、变更找回和 hash-guarded undo 已接入 Pi/Broker/存储/UI；中断写入可恢复。 | 提供受 Scope 限制的 list/search/read、`apply_patch`、diff、撤销和审阅；修改前后目标清楚，可恢复，不静默覆盖。 |
-| CX-103 | 项目指令发现 | PASS（本地）——保持 `noContextFiles: true`，由 OpenerX 在授权根内加载全局→项目→嵌套 `AGENTS.md`，记录 digest/作用域/Run 来源，并在 Patch 前强制确认。 | 仅在已授权工作区内加载全局→项目→嵌套目录指令，记录来源与作用域；不直接开启 Pi 的任意上下文文件扫描。 |
+| CX-103 | 项目指令发现 | PASS（本地）——保持 `noContextFiles: true`，由 UWA 在授权根内加载全局→项目→嵌套 `AGENTS.md`，记录 digest/作用域/Run 来源，并在 Patch 前强制确认。 | 仅在已授权工作区内加载全局→项目→嵌套目录指令，记录来源与作用域；不直接开启 Pi 的任意上下文文件扫描。 |
 | CX-104 | 独立、类型化的 MCP 工具 | PASS（本地 fixture）——每个启用工具按 namespace/Schema/annotations 独立注册；调用前重新验证描述符；只读直通、写入逐次审批，禁用后下一 Turn 消失。 | 连接后把每个允许的 MCP tool 注册为带命名空间、JSON Schema、只读/写入注解和单独审批策略的工具；支持 allow/deny 与禁用，不让模型手写 JSON 字符串。 |
 | CX-105 | 工具按需发现和延迟加载 | PASS（本地）——Run 固化 available/initial 两套工具表；Pi 初始只激活任务相关 Schema 与 `openerx_tool_search`，命中后在同一 Turn 动态激活；Skill 资源继续按需读取。 | 初始只暴露当前任务相关工具或一个受控 tool-search 机制；已选 Skill 才加载其详细资源；减少上下文成本和误调用面。 |
 | CX-106 | 模型能力与宿主工具能力分离 | PASS——Model Catalog 只声明模型输入/函数/结构化能力；Host Tool Availability 由本 Turn 工具集表达；推理级别不再强制包含 `off`。 | 模型只声明输入模态、函数调用、结构化输出、上下文和真实推理级别；Web、Shell、MCP、Browser、图片生成属于 Host Tool Availability；允许不支持关闭推理的模型。 |
@@ -140,8 +140,8 @@ flowchart TD
 | 云端 Agent 执行 | 延后 | 当前产品边界是桌面唯一执行端；云执行会改变数据、权限、计费和恢复模型。 |
 | Voice、GitHub PR Review、企业管理 | 不纳入当前 V2 | 它们是独立产品面，不是 Pi Harness 正确性的前置条件。 |
 | BYOK、本地模型、任意 Provider 插件 | 延后 | 先稳定服务端目录、Usage、回退和计费语义；再决定是否扩展信任边界。 |
-| 任意 Pi Extension、Theme、Prompt Template | 继续禁用 | 不是 OpenerX 核心能力，并会绕开已定义的安装、权限和审计体系。 |
-| 原始 Pi 文件系统/Shell 内置工具 | 继续禁用 | 应由 OpenerX 的工作区 Scope、Patch 工具和 Capability Broker 替代。 |
+| 任意 Pi Extension、Theme、Prompt Template | 继续禁用 | 不是 UWA 核心能力，并会绕开已定义的安装、权限和审计体系。 |
+| 原始 Pi 文件系统/Shell 内置工具 | 继续禁用 | 应由 UWA 的工作区 Scope、Patch 工具和 Capability Broker 替代。 |
 | 自动连接任意 MCP 并默认信任全部工具 | 禁止 | MCP Server 与每个工具都需要显式来源、启用状态、权限注解和审批策略。 |
 
 ## 7. 对现有“已完成”文档的修正意见

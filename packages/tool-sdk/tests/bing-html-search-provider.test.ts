@@ -97,7 +97,7 @@ describe("Bing HTML local Web Search Provider", () => {
     }));
     const provider = new BingHtmlSearchProvider({
       client: { get },
-      userAgent: "OpenerX-Test/2.0",
+      userAgent: "UWA-Test/2.0",
     });
     const result = await provider.search(
       { query: "OpenERX & local", recencyDays: 7, domains: [] },

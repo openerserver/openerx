@@ -96,7 +96,7 @@ export class DesktopLoginStartupService {
       ...target,
       openAtLogin: input.openAtLogin,
       enabled: input.openAtLogin,
-      name: "OpenerX",
+      name: "UWA",
     });
     return this.state();
   }

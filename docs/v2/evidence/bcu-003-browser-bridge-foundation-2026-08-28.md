@@ -96,7 +96,7 @@ validation. These constraints follow Chrome's official documentation:
 ## Evidence boundary and next gate
 
 This checkpoint proves the local state machine and Adapter behavior only. It does not prove that Chrome can
-currently connect to OpenerX. BCU-003 remains partial until a minimally privileged MV3 extension and
+currently connect to UWA. BCU-003 remains partial until a minimally privileged MV3 extension and
 packaged native host use an owner-only Main transport, trusted UI performs connect/revoke, Main correlates
 the exact native Chrome window, a real tab completes the dated search smoke test, and a signed installed
 candidate retains the required permissions across restart/upgrade/rollback.

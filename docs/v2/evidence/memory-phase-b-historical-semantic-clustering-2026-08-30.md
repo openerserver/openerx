@@ -4,7 +4,7 @@ Date: 2026-08-30 (Asia/Shanghai)
 
 ## Outcome
 
-OpenerX now performs a bounded semantic review pass over existing active memories after a deterministic consolidation run completes. The App Service sends at most 40 memories to the restricted `pi.memory.cluster` task. Pi Host runs an in-memory, no-tool session and may return at most 20 high-confidence `duplicate` or `conflict` pairs.
+UWA now performs a bounded semantic review pass over existing active memories after a deterministic consolidation run completes. The App Service sends at most 40 memories to the restricted `pi.memory.cluster` task. Pi Host runs an in-memory, no-tool session and may return at most 20 high-confidence `duplicate` or `conflict` pairs.
 
 The model output never mutates active memory directly. Valid pairs are staged in the existing Memory Settings review queue. A semantic-model failure is best effort: expiration cleanup, supersede-link repair, and the persisted deterministic consolidation run remain completed.
 

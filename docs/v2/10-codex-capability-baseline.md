@@ -10,14 +10,14 @@
 
 ## 1. 合同解释
 
-`已确定`：OpenerX V1 的文件、工具和 Skill 能力按照 Codex 桌面产品在基线日期公开提供的能力设计和验收。
+`已确定`：UWA V1 的文件、工具和 Skill 能力按照 Codex 桌面产品在基线日期公开提供的能力设计和验收。
 
 “按照 Codex 能力支持”在本合同中表示：
 
-- 用户能够在 OpenerX 中完成同类文件、浏览、搜索、命令执行、MCP 和 Skill 工作。
+- 用户能够在 UWA 中完成同类文件、浏览、搜索、命令执行、MCP 和 Skill 工作。
 - 每项能力在 Windows 和 macOS 都有正式实现、权限边界、错误恢复和端到端测试。
 - 能力不能只存在于内部 API、实验开关、演示脚本或某一个开发者环境中。
-- OpenerX 使用自己的产品语言、领域模型和安全实现，不复制 Codex 私有协议、界面或品牌。
+- UWA 使用自己的产品语言、领域模型和安全实现，不复制 Codex 私有协议、界面或品牌。
 - 本基线冻结 V1 范围；Codex 在 2026-08-25 之后新增的能力不会自动进入 V1。
 
 本合同不把 Codex 的代码审查、Git 工作流、团队管理、语音或定时任务自动纳入 V1；这些不属于本轮明确锁定的“文件、工具和 Skill”范围。远程移动端控制已经由最新产品决定单独纳入 V1，范围和门禁以 [15-remote-control-contract.md](15-remote-control-contract.md) 为准。
@@ -39,7 +39,7 @@
 
 首批解析与成果格式至少包括：PDF、DOCX、XLSX、CSV、PPTX、TXT、Markdown、常见代码/JSON/YAML、PNG、JPEG、WebP 和 HTML。加密、损坏、超大或不支持的文件必须给出可操作错误。
 
-2026-08-27 的 CX-108 本地检查点已覆盖 OpenerX 有界 Office Skill 生成/修改成果的 FILE-04、FILE-05 和 FILE-07 切片；任意第三方 Office 文件的忠实预览及 Windows/macOS 发布级矩阵仍属于未完成范围。
+2026-08-27 的 CX-108 本地检查点已覆盖 UWA 有界 Office Skill 生成/修改成果的 FILE-04、FILE-05 和 FILE-07 切片；任意第三方 Office 文件的忠实预览及 Windows/macOS 发布级矩阵仍属于未完成范围。
 
 ## 3. 工具能力基线
 
@@ -145,4 +145,4 @@ Web、Shell、Browser、Desktop、MCP、图片生成、工作区和 Skill 属于
 - [Build skills](https://learn.chatgpt.com/docs/build-skills)
 - [Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)
 
-这些链接用于定义 V1 的公开能力参照，不表示 OpenerX 依赖 OpenAI 私有客户端实现。
+这些链接用于定义 V1 的公开能力参照，不表示 UWA 依赖 OpenAI 私有客户端实现。

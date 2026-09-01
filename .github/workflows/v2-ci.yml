@@ -70,7 +70,7 @@ jobs:
       - run: npm run verify:native-signature --workspace @openerx/desktop
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenerX-${{ matrix.target }}-unsigned
+          name: UWA-${{ matrix.target }}-unsigned
           path: apps/desktop/out/
           if-no-files-found: error
           retention-days: 7
