@@ -60,6 +60,7 @@ import {
   Moon,
   Paperclip,
   PaperPlaneTilt,
+  PawPrint,
   PencilSimple,
   Plus,
   QrCode,
@@ -89,6 +90,7 @@ import {
   useParams,
 } from "react-router-dom";
 import remarkGfm from "remark-gfm";
+import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
 
 const suggestions = [
@@ -107,6 +109,7 @@ const accountKey = ["account", "state"] as const;
 const billingKey = ["billing"] as const;
 const themeStorageKey = "openerx.theme";
 const defaultModelStorageKey = "openerx.defaultModelRef";
+const assistantCompanionStorageKey = "openerx.assistant.companionEnabled";
 
 type ThemePreference = "system" | "dark" | "light";
 type WorkspaceAccessChoice = "read_only" | "read_write";
@@ -151,6 +154,14 @@ function initialDefaultModelRef(): string {
     return window.localStorage.getItem(defaultModelStorageKey) || "platform/byok";
   } catch {
     return "platform/byok";
+  }
+}
+
+function initialAssistantCompanionEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(assistantCompanionStorageKey) === "true";
+  } catch {
+    return false;
   }
 }
 
@@ -285,6 +296,7 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   BROWSER_HOST_UNAVAILABLE: "隔离浏览器 Host 未就绪",
   MAIN_CAPABILITY_UNAVAILABLE: "桌面 Host 未就绪",
   SHELL_OS_SANDBOX_UNAVAILABLE: "当前系统缺少安全 Shell 沙箱",
+  SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE: "Codex Windows 安全沙箱尚未就绪",
   WORKSPACE_WRITE_GRANT_REQUIRED: "需先授权一个可写工作区",
   DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED: "需在系统设置中允许屏幕录制",
   DESKTOP_SCREEN_CAPTURE_STATUS_UNKNOWN: "无法确认屏幕录制权限",
@@ -7337,6 +7349,10 @@ function Sidebar({
             <ArrowClockwise size={17} />
             <span>自动化</span>
           </NavLink>
+          <NavLink to="/assistant">
+            <PawPrint size={17} />
+            <span>助手</span>
+          </NavLink>
           <NavLink to="/settings">
             <GearSix size={17} />
             <span>设置</span>
@@ -7398,6 +7414,9 @@ export function App(): React.JSX.Element {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
   const [defaultModelRef, setDefaultModelRef] = useState(initialDefaultModelRef);
+  const [assistantCompanionEnabled, setAssistantCompanionEnabled] = useState(
+    initialAssistantCompanionEnabled,
+  );
   const [automaticMemoryNotice, setAutomaticMemoryNotice] =
     useState<AutomaticMemoryCreatedEvent | null>(null);
   const [memoryUndoPending, setMemoryUndoPending] = useState(false);
@@ -7465,6 +7484,17 @@ export function App(): React.JSX.Element {
       // The current session still uses the selected model when storage is unavailable.
     }
   }, [defaultModelRef]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        assistantCompanionStorageKey,
+        String(assistantCompanionEnabled),
+      );
+    } catch {
+      // The current session still keeps the companion preference.
+    }
+  }, [assistantCompanionEnabled]);
 
   const sequenceByConversation = useRef(new Map<string, number>());
   const queryClient = useQueryClient();
@@ -7540,6 +7570,8 @@ export function App(): React.JSX.Element {
         event.type.startsWith("permission.")
       ) {
         void queryClient.invalidateQueries({ queryKey: ["tools"] });
+        void queryClient.invalidateQueries({ queryKey: ["work-items"] });
+        void queryClient.invalidateQueries({ queryKey: ["permissions"] });
       }
       if (!event.conversationId) return;
       const conversationId = event.conversationId;
@@ -7629,6 +7661,15 @@ export function App(): React.JSX.Element {
             element={<AutomationsPage defaultModelRef={defaultModelRef} />}
           />
           <Route
+            path="/assistant"
+            element={
+              <AssistantPage
+                companionEnabled={assistantCompanionEnabled}
+                onCompanionEnabledChange={setAssistantCompanionEnabled}
+              />
+            }
+          />
+          <Route
             path="/assistants"
             element={<Navigate to="/settings/account?section=assistants" replace />}
           />
@@ -7650,6 +7691,12 @@ export function App(): React.JSX.Element {
           <Route path="*" element={<Navigate to="/chat/new" replace />} />
         </Routes>
       </div>
+      {assistantCompanionEnabled &&
+      !settingsOpen &&
+      !contextOpen &&
+      !location.pathname.startsWith("/assistant") ? (
+        <AssistantCompanion onOpen={() => navigate("/assistant")} />
+      ) : null}
       {automaticMemoryNotice ? (
         <aside className="memory-created-notice" role="status" aria-live="polite">
           <Brain size={21} aria-hidden="true" />

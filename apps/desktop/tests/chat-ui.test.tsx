@@ -9,6 +9,7 @@ import type {
   LocalWebSearchSettingsState,
   ModelCatalogEntry,
   PersonalFile,
+  PermissionRequest,
   SkillInstallation,
   WorkItem,
   WorkItemDetail,
@@ -697,20 +698,14 @@ describe("M1 chat renderer", () => {
   it("opens the model settings section from the model configuration prompt", async () => {
     cleanup();
     const bridge = createBridge();
-    vi.mocked(bridge.listModels).mockResolvedValue([
-      { ...thinkingModel, status: "unavailable" },
-    ]);
+    vi.mocked(bridge.listModels).mockResolvedValue([{ ...thinkingModel, status: "unavailable" }]);
     renderApp(bridge, "/chat/new");
 
-    await userEvent.setup().click(
-      await screen.findByRole("link", { name: "前往设置 → 模型" }),
-    );
+    await userEvent.setup().click(await screen.findByRole("link", { name: "前往设置 → 模型" }));
 
     expect(await screen.findByLabelText("模型设置")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "模型", level: 1 })).toBeNull();
-    expect(screen.getByRole("button", { name: "模型" }).getAttribute("aria-current")).toBe(
-      "page",
-    );
+    expect(screen.getByRole("button", { name: "模型" }).getAttribute("aria-current")).toBe("page");
     expect(await screen.findByLabelText("运行模式")).toBeTruthy();
   });
 
@@ -1409,9 +1404,7 @@ describe("M1 chat renderer", () => {
     expect(await screen.findByRole("heading", { name: "Skill" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "skill", level: 1 })).toBeNull();
     expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
-    expect(screen.getByRole("button", { name: "skill" }).getAttribute("aria-current")).toBe(
-      "page",
-    );
+    expect(screen.getByRole("button", { name: "skill" }).getAttribute("aria-current")).toBe("page");
     expect(await screen.findByText("结构化报告")).toBeTruthy();
     expect(screen.getByText("图像工作流")).toBeTruthy();
     expect(screen.getAllByText(/UWA 内置 Skill/)).toHaveLength(2);
@@ -2895,6 +2888,136 @@ describe("M1 chat renderer", () => {
       execution: { modelRef: "platform/byok", catchUpPolicy: "latest_once" },
       schedule: { mode: "rrule", expression: "FREQ=DAILY" },
     });
+  });
+
+  it("places the companion assistant below automations and opens its workspace mode", async () => {
+    cleanup();
+    window.localStorage.removeItem("openerx.assistant.companionEnabled");
+    window.localStorage.removeItem("openerx.assistant.importantOnly");
+    window.localStorage.removeItem("openerx.assistant.lastSeenAt");
+    const bridge = createBridge();
+    renderApp(bridge, "/assistant");
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("heading", { name: "你好，我是小联" })).toBeTruthy();
+    const navigation = screen.getByRole("navigation", { name: "主导航" });
+    const navigationLabels = within(navigation)
+      .getAllByRole("link")
+      .map((link) => link.textContent?.trim());
+    expect(navigationLabels.slice(-3)).toEqual(["自动化", "助手", "设置"]);
+    expect(
+      within(navigation).getByRole("link", { name: "助手" }).getAttribute("aria-current"),
+    ).toBe("page");
+    expect(screen.getByRole("region", { name: "助手状态说明" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "开启伴随模式" }));
+    await user.click(screen.getByRole("button", { name: /开始对话/ }));
+    expect(await screen.findByRole("button", { name: "打开助手" })).toBeTruthy();
+    expect(window.localStorage.getItem("openerx.assistant.companionEnabled")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "打开助手" }));
+    await user.click(screen.getByRole("button", { name: "收起伴随模式" }));
+    expect(screen.queryByRole("button", { name: "打开助手" })).toBeNull();
+
+    window.localStorage.removeItem("openerx.assistant.companionEnabled");
+    window.localStorage.removeItem("openerx.assistant.importantOnly");
+    window.localStorage.removeItem("openerx.assistant.lastSeenAt");
+  });
+
+  it("prioritizes current work over terminal results already seen", async () => {
+    cleanup();
+    window.localStorage.setItem("openerx.assistant.lastSeenAt", new Date().toISOString());
+    const bridge = createBridge();
+    const runningWorkItem: WorkItem = {
+      id: "77777777-7777-4777-8777-777777777777",
+      ownerProfileId: "local-default",
+      conversationId,
+      messageId: assistantMessageId,
+      title: "正在整理报告",
+      status: "running",
+      activeRunId: "88888888-8888-4888-8888-888888888888",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      completedAt: null,
+      revision: 1,
+    };
+    const oldFailedWorkItem: WorkItem = {
+      ...runningWorkItem,
+      id: "99999999-9999-4999-8999-999999999999",
+      title: "很久以前失败的任务",
+      status: "failed",
+      activeRunId: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+    };
+    vi.mocked(bridge.listWorkItems).mockResolvedValue([oldFailedWorkItem, runningWorkItem]);
+    renderApp(bridge, "/assistant");
+
+    expect(await screen.findByText("有 1 个任务正在进行，我会继续替你盯住。")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "小联状态" })).getByText("处理中"),
+    ).toBeTruthy();
+
+    window.localStorage.removeItem("openerx.assistant.lastSeenAt");
+  });
+
+  it("counts a waiting work item and its permissions as one attention item", async () => {
+    cleanup();
+    window.localStorage.setItem("openerx.assistant.lastSeenAt", new Date().toISOString());
+    const bridge = createBridge();
+    const waitingWorkItem: WorkItem = {
+      id: "77777777-7777-4777-8777-777777777777",
+      ownerProfileId: "local-default",
+      conversationId,
+      messageId: assistantMessageId,
+      title: "等待确认权限",
+      status: "waiting_for_permission",
+      activeRunId: "88888888-8888-4888-8888-888888888888",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      completedAt: null,
+      revision: 1,
+    };
+    const permissionBase: PermissionRequest = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      ownerProfileId: "local-default",
+      workItemId: waitingWorkItem.id,
+      runId: "88888888-8888-4888-8888-888888888888",
+      toolCallId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      capability: "file",
+      risk: "L1",
+      resourceType: "path",
+      resource: "C:/workspace/report.md",
+      actions: ["read"],
+      reason: "读取工作区报告",
+      payloadDigest: "a".repeat(64),
+      status: "pending",
+      requestedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      resolvedAt: null,
+      resolution: null,
+      scopeId: null,
+    };
+    vi.mocked(bridge.listWorkItems).mockResolvedValue([waitingWorkItem]);
+    vi.mocked(bridge.listAutomations).mockRejectedValue(new Error("automation service offline"));
+    vi.mocked(bridge.listPermissionRequests).mockResolvedValue([
+      permissionBase,
+      {
+        ...permissionBase,
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        toolCallId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      },
+    ]);
+    renderApp(bridge, "/assistant");
+
+    expect(await screen.findByText("有 1 项工作正等你确认。")).toBeTruthy();
+    expect(screen.getByText("有些动态暂时无法读取。")).toBeTruthy();
+    const attentionMetric = within(screen.getByRole("region", { name: "今日工作脉搏" }))
+      .getByText("待你确认")
+      .closest("article");
+    expect(attentionMetric?.querySelector("strong")?.textContent).toBe("1");
+
+    window.localStorage.removeItem("openerx.assistant.lastSeenAt");
   });
 
   it("enables background startup from the automation page", async () => {
