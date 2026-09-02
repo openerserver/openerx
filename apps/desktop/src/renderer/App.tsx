@@ -2605,7 +2605,8 @@ function MessageCard({
       await queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
     },
   });
-  const text = message.parts.map((part) => part.text).join("");
+  const text = message.parts.map((part) => part.text).join("\n\n");
+  const assistantTextParts = message.parts.filter((part) => part.text.length > 0);
   const running = message.role === "assistant" && ["pending", "streaming"].includes(message.status);
   const usage = useQuery({
     queryKey: ["usage", "message", message.id],
@@ -2689,38 +2690,60 @@ function MessageCard({
           </form>
         ) : message.role === "assistant" ? (
           <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
-            <div className="markdown-body">
-              {text ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    a: ({ href, children }) => (
-                      <a href={href} target="_blank" rel="noreferrer">
-                        {children}
-                      </a>
-                    ),
-                    pre: ({ children }) => (
-                      <div className="code-block">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            const code = event.currentTarget.nextElementSibling?.textContent ?? "";
-                            void copyText(code, "代码已复制到剪贴板。");
-                          }}
-                        >
-                          {actionNotice === "代码已复制到剪贴板。" ? "已复制" : "复制代码"}
-                        </button>
-                        <pre>{children}</pre>
-                      </div>
-                    ),
-                  }}
-                >
-                  {text}
-                </ReactMarkdown>
-              ) : (
+            {assistantTextParts.length > 0 ? (
+              <div
+                className="assistant-response-parts"
+                data-response-part-count={assistantTextParts.length}
+              >
+                {assistantTextParts.map((part, index) => (
+                  <section
+                    key={part.id}
+                    className="assistant-response-part"
+                    aria-label={
+                      assistantTextParts.length > 1
+                        ? `UWA 进度更新 ${index + 1}`
+                        : undefined
+                    }
+                  >
+                    <div className="markdown-body">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          a: ({ href, children }) => (
+                            <a href={href} target="_blank" rel="noreferrer">
+                              {children}
+                            </a>
+                          ),
+                          pre: ({ children }) => (
+                            <div className="code-block">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  const code =
+                                    event.currentTarget.nextElementSibling?.textContent ?? "";
+                                  void copyText(code, "代码已复制到剪贴板。");
+                                }}
+                              >
+                                {actionNotice === "代码已复制到剪贴板。"
+                                  ? "已复制"
+                                  : "复制代码"}
+                              </button>
+                              <pre>{children}</pre>
+                            </div>
+                          ),
+                        }}
+                      >
+                        {part.text}
+                      </ReactMarkdown>
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <div className="markdown-body">
                 <p className="thinking">正在思考…</p>
-              )}
-            </div>
+              </div>
+            )}
             {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
           </div>
         ) : (

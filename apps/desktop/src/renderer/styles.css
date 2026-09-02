@@ -1918,6 +1918,51 @@ h1 {
   min-width: 0;
 }
 
+.assistant-response-parts {
+  display: grid;
+  gap: 16px;
+}
+
+.assistant-response-part {
+  position: relative;
+  min-width: 0;
+}
+
+.assistant-response-parts[data-response-part-count]:not([data-response-part-count="1"])
+  .assistant-response-part {
+  padding-left: 17px;
+}
+
+.assistant-response-parts[data-response-part-count]:not([data-response-part-count="1"])
+  .assistant-response-part::before {
+  position: absolute;
+  top: 0.72em;
+  left: 1px;
+  width: 5px;
+  height: 5px;
+  background: var(--workspace-muted);
+  border-radius: 50%;
+  content: "";
+}
+
+.assistant-response-parts[data-response-part-count]:not([data-response-part-count="1"])
+  .assistant-response-part:not(:last-child)::after {
+  position: absolute;
+  top: calc(0.72em + 7px);
+  bottom: -13px;
+  left: 3px;
+  width: 1px;
+  background: color-mix(in srgb, var(--workspace-border-strong) 68%, transparent);
+  content: "";
+}
+
+.message-is-streaming
+  .assistant-response-parts[data-response-part-count]:not([data-response-part-count="1"])
+  .assistant-response-part:last-child::before {
+  background: var(--workspace-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--workspace-accent) 12%, transparent);
+}
+
 .response-waterfall {
   overflow-anchor: auto;
 }

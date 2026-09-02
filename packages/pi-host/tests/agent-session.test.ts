@@ -472,13 +472,16 @@ describe("Pi AgentSession composition", () => {
     modelRuntime.registerNativeProvider(faux.provider);
     faux.setResponses([
       fauxAssistantMessage(
-        fauxToolCall("openerx_update_plan", {
-          explanation: "Implement then verify",
-          items: [
-            { text: "Implement", status: "in_progress" },
-            { text: "Verify", status: "pending" },
-          ],
-        }),
+        [
+          fauxText("开始执行。"),
+          fauxToolCall("openerx_update_plan", {
+            explanation: "Implement then verify",
+            items: [
+              { text: "Implement", status: "in_progress" },
+              { text: "Verify", status: "pending" },
+            ],
+          }),
+        ],
         { stopReason: "toolUse" },
       ),
       fauxAssistantMessage("Plan accepted."),
@@ -510,6 +513,33 @@ describe("Pi AgentSession composition", () => {
       },
     });
     await terminal;
+
+    const deltaEvents = piPort.sent.filter(
+      (frame): frame is { delta: string; startsNewPart?: boolean } =>
+        typeof frame === "object" &&
+        frame !== null &&
+        "kind" in frame &&
+        frame.kind === "pi.product-event" &&
+        "type" in frame &&
+        frame.type === "delta" &&
+        "delta" in frame &&
+        typeof frame.delta === "string",
+    );
+    const boundaryIndex = deltaEvents.findIndex((event) => event.startsNewPart === true);
+    expect(boundaryIndex).toBeGreaterThan(0);
+    expect(
+      deltaEvents
+        .slice(0, boundaryIndex)
+        .map(({ delta }) => delta)
+        .join(""),
+    ).toBe("开始执行。");
+    expect(
+      deltaEvents
+        .slice(boundaryIndex)
+        .map(({ delta }) => delta)
+        .join(""),
+    ).toBe("Plan accepted.");
+    expect(deltaEvents.filter((event) => event.startsNewPart)).toHaveLength(1);
 
     expect(piPort.sent).toEqual(
       expect.arrayContaining([

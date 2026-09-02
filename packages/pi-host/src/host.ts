@@ -55,6 +55,7 @@ interface ActiveGeneration {
   conversationId: string;
   branchId: string;
   modelRound: number;
+  lastTextModelRound: number | null;
   reasoningRound: number;
   compactionRound: number;
 }
@@ -223,7 +224,7 @@ export function startPiHostProcess(
       generationId: string,
       state: ActiveGeneration,
       event: Pick<PiHostEventFrame, "type"> &
-        Partial<Pick<PiHostEventFrame, "delta" | "errorCode" | "usageRecords">>,
+        Partial<Pick<PiHostEventFrame, "delta" | "startsNewPart" | "errorCode" | "usageRecords">>,
     ): void => {
       if (state.terminal) return;
       state.sequence += 1;
@@ -235,6 +236,7 @@ export function startPiHostProcess(
         occurredAt: new Date().toISOString(),
         type: event.type,
         ...(event.delta === undefined ? {} : { delta: event.delta }),
+        ...(event.startsNewPart === undefined ? {} : { startsNewPart: event.startsNewPart }),
         ...(event.errorCode === undefined ? {} : { errorCode: event.errorCode }),
         ...(event.usageRecords === undefined ? {} : { usageRecords: event.usageRecords }),
       };
@@ -558,6 +560,7 @@ export function startPiHostProcess(
         conversationId: frame.conversationId,
         branchId: frame.branchId,
         modelRound: 0,
+        lastTextModelRound: null,
         reasoningRound: 0,
         compactionRound: 0,
       };
@@ -791,9 +794,13 @@ export function startPiHostProcess(
             event.assistantMessageEvent.type === "text_delta" &&
             event.assistantMessageEvent.delta.length > 0
           ) {
+            const startsNewPart =
+              state.lastTextModelRound !== null && state.lastTextModelRound !== state.modelRound;
+            state.lastTextModelRound = state.modelRound;
             emit(frame.generationId, state, {
               type: "delta",
               delta: event.assistantMessageEvent.delta,
+              ...(startsNewPart ? { startsNewPart: true } : {}),
             });
             return;
           }

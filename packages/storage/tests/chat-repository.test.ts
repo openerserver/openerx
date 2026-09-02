@@ -96,6 +96,39 @@ describe("ChatRepository", () => {
     repository.close();
   });
 
+  it("stores text from separate model rounds as separate response parts", () => {
+    const repository = new ChatRepository(databasePath());
+    const draft = repository.createGeneration({
+      text: "分阶段完成任务",
+      idempotencyKey: "multi-round-send-0001",
+    });
+    repository.appendPiEvent(draft.receipt.assistantMessageId, {
+      eventId: crypto.randomUUID(),
+      sequence: 1,
+      occurredAt: new Date().toISOString(),
+      type: "delta",
+      delta: "先收集资料。",
+    });
+    repository.appendPiEvent(draft.receipt.assistantMessageId, {
+      eventId: crypto.randomUUID(),
+      sequence: 2,
+      occurredAt: new Date().toISOString(),
+      type: "delta",
+      delta: "再生成报告。",
+      startsNewPart: true,
+    });
+    repository.appendPiEvent(draft.receipt.assistantMessageId, {
+      eventId: crypto.randomUUID(),
+      sequence: 3,
+      occurredAt: new Date().toISOString(),
+      type: "completed",
+    });
+
+    const assistant = repository.getConversation(draft.receipt.conversationId).messages.at(-1);
+    expect(assistant?.parts.map((part) => part.text)).toEqual(["先收集资料。", "再生成报告。"]);
+    repository.close();
+  });
+
   it("deduplicates commands and preserves older branches on edit and regeneration", () => {
     const repository = new ChatRepository(databasePath());
     const first = repository.createGeneration({

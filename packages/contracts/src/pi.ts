@@ -421,6 +421,7 @@ export const piHostEventFrameSchema = z
     occurredAt: timestampSchema,
     type: z.enum(["delta", "completed", "stopped", "failed"]),
     delta: z.string().optional(),
+    startsNewPart: z.boolean().optional(),
     errorCode: z.string().min(1).optional(),
     usageRecords: z.array(usageRecordSchema).max(128).optional(),
   })

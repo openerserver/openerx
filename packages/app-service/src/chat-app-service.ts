@@ -908,6 +908,7 @@ export class ChatAppService {
       occurredAt: frame.occurredAt,
       type: frame.type,
       ...(frame.delta === undefined ? {} : { delta: frame.delta }),
+      ...(frame.startsNewPart === undefined ? {} : { startsNewPart: frame.startsNewPart }),
       ...(frame.errorCode === undefined ? {} : { errorCode: frame.errorCode }),
     });
     const authorization = this.#authorizationByGeneration.get(frame.generationId);

@@ -63,6 +63,7 @@ export interface PiProductEvent {
   occurredAt: string;
   type: "delta" | "completed" | "stopped" | "failed";
   delta?: string;
+  startsNewPart?: boolean;
   errorCode?: string;
 }
 
@@ -358,11 +359,29 @@ export class ChatRepository {
       }
       assertMessageTransition(currentStatus, nextStatus);
       if (event.delta) {
-        this.#database
+        const latestPart = this.#database
           .prepare(
-            "UPDATE message_parts SET text = text || ? WHERE message_id = ? AND position = 1",
+            `SELECT id, position, text FROM message_parts
+             WHERE message_id = ? ORDER BY position DESC LIMIT 1`,
           )
-          .run(event.delta, assistantMessageId);
+          .get(assistantMessageId) as { id: string; position: number; text: string } | undefined;
+        if (event.startsNewPart && latestPart?.text) {
+          this.#database
+            .prepare(
+              `INSERT INTO message_parts(id, message_id, position, type, text)
+               VALUES (?, ?, ?, 'text', ?)`,
+            )
+            .run(
+              this.#idFactory(),
+              assistantMessageId,
+              Number(latestPart.position) + 1,
+              event.delta,
+            );
+        } else if (latestPart) {
+          this.#database
+            .prepare("UPDATE message_parts SET text = text || ? WHERE id = ?")
+            .run(event.delta, latestPart.id);
+        }
       }
       this.#database
         .prepare(
@@ -815,7 +834,7 @@ export class ChatRepository {
       .map((message) => ({
         messageId: message.id,
         role: message.role,
-        text: message.parts[0]?.text ?? "",
+        text: message.parts.map((part) => part.text).join("\n\n"),
       }));
   }
 

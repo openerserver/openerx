@@ -539,6 +539,37 @@ describe("M1 chat renderer", () => {
     vi.unstubAllGlobals();
   });
 
+  it("renders separate model rounds as clearly divided progress updates", async () => {
+    const bridge = createBridge();
+    const userMessage = snapshot.messages[0];
+    const assistant = snapshot.messages[1];
+    if (!userMessage || !assistant) throw new Error("CHAT_MULTI_PART_FIXTURE_INVALID");
+    vi.mocked(bridge.getConversation).mockResolvedValue({
+      ...snapshot,
+      messages: [
+        userMessage,
+        {
+          ...assistant,
+          status: "streaming",
+          parts: [
+            { id: crypto.randomUUID(), type: "text", text: "先搜索并整理资料。" },
+            { id: crypto.randomUUID(), type: "text", text: "再生成三份交付物。" },
+          ],
+        },
+      ],
+    });
+
+    renderApp(bridge, `/chat/${conversationId}`);
+
+    expect(await screen.findByText("先搜索并整理资料。")).toBeTruthy();
+    expect(screen.getByText("再生成三份交付物。")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "UWA 进度更新 1" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "UWA 进度更新 2" })).toBeTruthy();
+    expect(document.querySelectorAll(".assistant-response-part")).toHaveLength(2);
+    expect(screen.queryByText("先搜索并整理资料。再生成三份交付物。")).toBeNull();
+    cleanup();
+  });
+
   it("sends through the narrow bridge and renders GFM code and tables", async () => {
     const bridge = createBridge();
     renderApp(bridge);
