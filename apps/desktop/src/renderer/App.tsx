@@ -430,6 +430,24 @@ function skillDescription(skill: SkillInstallation): string {
 
 function userFacingError(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message.includes("SKILL_TOO_MANY_FILES")) {
+    return "Skill 包含的文件过多（最多 20,000 个），请精简包内资源后重试。";
+  }
+  if (message.includes("SKILL_ARCHIVE_TOO_LARGE")) {
+    return "Skill ZIP 超过 20 MB，请压缩或精简资源后重试。";
+  }
+  if (message.includes("SKILL_PACKAGE_TOO_LARGE")) {
+    return "Skill 解压后的内容超过 20 MB，请精简资源后重试。";
+  }
+  if (message.includes("SKILL_ROOT_AMBIGUOUS")) {
+    return "ZIP 根目录或其唯一的一级子目录中必须包含 SKILL.md。";
+  }
+  if (message.includes("SKILL_FRONTMATTER_REQUIRED")) {
+    return "SKILL.md 缺少有效的 YAML frontmatter。";
+  }
+  if (message.includes("SKILL_MANIFEST_INVALID")) {
+    return "agents/openai.yaml 包含无法识别或无效的字段，请检查 Skill 元数据。";
+  }
   if (message.includes("BYOK_API_KEY_REQUIRED") || message.includes("BYOK_NOT_CONFIGURED")) {
     return "请先在“设置 → 模型”中配置并保存 OpenAI-compatible API。";
   }

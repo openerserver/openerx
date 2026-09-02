@@ -238,6 +238,51 @@ describe("SkillPackageService", () => {
     repository.close();
   });
 
+  it("supports a wrapped, asset-heavy ZIP with more than 500 files", () => {
+    const { root, repository, service } = profile();
+    const source = writeSkill(root, {
+      name: "asset-heavy-skill",
+      permissions: "[]",
+      scripts: "[]",
+    });
+    const archive = path.join(root, "asset-heavy.zip");
+    const files: Record<string, Uint8Array> = Object.fromEntries(
+      ["SKILL.md", "agents/openai.yaml", "references/template.md", "scripts/run.mjs"].map(
+        (relativePath) => [
+          `asset-heavy-skill/${relativePath}`,
+          new Uint8Array(readFileSync(path.join(source, relativePath))),
+        ],
+      ),
+    );
+    for (let index = 0; index < 668; index += 1) {
+      files[`asset-heavy-skill/assets/item-${index}.txt`] = new TextEncoder().encode(
+        `asset ${index}`,
+      );
+    }
+    files["asset-heavy-skill/agents/openai.yaml"] = new TextEncoder().encode(
+      "interface:\n  display_name: Asset Heavy Skill\n  short_description: Fixture metadata\n" +
+        "policy:\n  products: [chatgpt, codex, api]\n  allow_implicit_invocation: true\n",
+    );
+    writeFileSync(archive, zipSync(files));
+
+    const skill = service.install({
+      sourcePath: archive,
+      sourceKind: "archive",
+      scope: "personal",
+      workspaceId: null,
+    });
+
+    expect(skill).toMatchObject({
+      name: "asset-heavy-skill",
+      displayName: "Asset Heavy Skill",
+      version: "0.0.0",
+      publisher: "Unknown publisher",
+      sourceKind: "archive",
+      packageState: "installed",
+    });
+    repository.close();
+  });
+
   it("applies workspace over personal over builtin priority and isolates package corruption", () => {
     const { root, repository, service } = profile();
     service.seedBuiltIns();

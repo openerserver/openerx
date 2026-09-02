@@ -18,7 +18,10 @@ import { unzipSync } from "fflate";
 import { parse as parseYaml } from "yaml";
 import { builtInSkills } from "./builtins";
 
-const maxFiles = 500;
+// Codex does not impose a per-package file cap when installing a Skill, and its
+// discovery walk allows 20,000 entries per Skills root. Match that compatibility
+// scale while retaining a finite archive-entry guard against pathological ZIPs.
+const maxFiles = 20_000;
 const maxPackageBytes = 20 * 1024 * 1024;
 const maxResourceBytes = 2 * 1024 * 1024;
 
@@ -67,6 +70,33 @@ function parseSkillFrontmatter(content: string): { name: string; description: st
     typeof frontmatter.description === "string" ? frontmatter.description.trim() : "";
   if (!description || description.length > 1_024) throw new Error("SKILL_DESCRIPTION_INVALID");
   return { name, description };
+}
+
+function parseSkillPackageManifest(content: string | null): SkillPackageManifest {
+  try {
+    const parsed = content ? parseYaml(content) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("SKILL_MANIFEST_INVALID");
+    }
+    const record = parsed as Record<string, unknown>;
+    const codexInterface =
+      record.interface && typeof record.interface === "object" && !Array.isArray(record.interface)
+        ? (record.interface as Record<string, unknown>)
+        : {};
+    return skillPackageManifestSchema.parse({
+      version: record.version ?? "0.0.0",
+      display_name: record.display_name ?? codexInterface.display_name,
+      publisher: record.publisher ?? "Unknown publisher",
+      tools: record.tools,
+      mcp_servers: record.mcp_servers,
+      permissions: record.permissions,
+      platforms: record.platforms,
+      scripts: record.scripts,
+      signature: record.signature,
+    });
+  } catch {
+    throw new Error("SKILL_MANIFEST_INVALID");
+  }
 }
 
 function collectFiles(
@@ -459,10 +489,8 @@ export class SkillPackageService {
     if (!existsSync(skillFile)) throw new Error("SKILL_MD_REQUIRED");
     const frontmatter = parseSkillFrontmatter(readFileSync(skillFile, "utf8"));
     const manifestPath = path.join(root, "agents", "openai.yaml");
-    const manifest = skillPackageManifestSchema.parse(
-      existsSync(manifestPath)
-        ? parseYaml(readFileSync(manifestPath, "utf8"))
-        : { version: "0.0.0", publisher: "Unknown publisher" },
+    const manifest = parseSkillPackageManifest(
+      existsSync(manifestPath) ? readFileSync(manifestPath, "utf8") : null,
     );
     for (const script of manifest.scripts) {
       const normalized = normalizeRelative(script);
