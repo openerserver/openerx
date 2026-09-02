@@ -49,6 +49,7 @@ function fixture(
   const tools = new ToolRepository(databasePath, {
     ownerProfileId: "profile-a",
   });
+  const defaultWorkspaceDirectory = path.join(directory, "UWA Workspace");
   const generation = chat.createGeneration({
     text: "打开网页",
     idempotencyKey: "chat-tool-service-0001",
@@ -74,6 +75,7 @@ function fixture(
   const service = new ToolAppService({
     repository: tools,
     workspaceDirectory: directory,
+    defaultWorkspaceDirectory,
     host,
     resolveUploadPath: (fileId) => path.join(directory, "content", fileId),
     ingestDownload: async (downloadPath) => ({
@@ -109,7 +111,16 @@ function fixture(
     piToolCallId: "pi-browser-call",
     toolName: "openerx_browser",
   };
-  return { chat, tools, service, host, events, base, directory };
+  return {
+    chat,
+    tools,
+    service,
+    host,
+    events,
+    base,
+    directory,
+    defaultWorkspaceDirectory,
+  };
 }
 
 function platformEngine(available = true) {
@@ -196,6 +207,74 @@ afterEach(() => {
 });
 
 describe("ToolAppService", () => {
+  it("creates an isolated default writable workspace for every projectless conversation", async () => {
+    const { chat, tools, service, base, defaultWorkspaceDirectory } = fixture();
+    const second = chat.createGeneration({
+      text: "第二个无项目对话",
+      idempotencyKey: "chat-default-workspace-0002",
+    });
+
+    const firstWorkspace = service.ensureConversationWorkspace(base.conversationId);
+    const secondWorkspace = service.ensureConversationWorkspace(second.receipt.conversationId);
+
+    expect(firstWorkspace).toMatchObject({
+      conversationId: base.conversationId,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+      bindingRole: "primary",
+      bindingSource: "default",
+    });
+    expect(secondWorkspace.conversationId).toBe(second.receipt.conversationId);
+    expect(firstWorkspace.rootPath).not.toBe(secondWorkspace.rootPath);
+    expect(firstWorkspace.rootPath).toBe(
+      path.join(defaultWorkspaceDirectory, "conversations", base.conversationId),
+    );
+    expect(secondWorkspace.rootPath).toBe(
+      path.join(defaultWorkspaceDirectory, "conversations", second.receipt.conversationId),
+    );
+    expect(existsSync(firstWorkspace.rootPath)).toBe(true);
+    expect(existsSync(secondWorkspace.rootPath)).toBe(true);
+    expect(tools.listWorkspaceBindings(base.conversationId)).toEqual([
+      expect.objectContaining({
+        workspaceGrantId: firstWorkspace.id,
+        role: "primary",
+        source: "default",
+      }),
+    ]);
+    chat.close();
+    await service.close();
+  });
+
+  it("replaces the default primary workspace when the conversation selects a project", async () => {
+    const { chat, tools, service, base } = fixture();
+    const project = mkdtempSync(path.join(tmpdir(), "openerx-project-workspace-"));
+    directories.push(project);
+    const defaultWorkspace = service.ensureConversationWorkspace(base.conversationId);
+
+    const selected = service.grantWorkspace({
+      rootPath: project,
+      conversationId: base.conversationId,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+
+    expect(tools.workspaceGrant(defaultWorkspace.id).revokedAt).not.toBeNull();
+    expect(tools.primaryWorkspaceGrant(base.conversationId)?.id).toBe(selected.id);
+    expect(selected).toMatchObject({ bindingRole: "primary", bindingSource: "project" });
+    expect(tools.listWorkspaceBindings(base.conversationId)).toEqual([
+      expect.objectContaining({
+        workspaceGrantId: selected.id,
+        role: "primary",
+        source: "project",
+      }),
+    ]);
+    expect(service.listWorkspaces(base.conversationId).map(({ id }) => id)).toEqual([selected.id]);
+    chat.close();
+    await service.close();
+  });
+
   it("projects a permission wait, resumes the same Pi call, and completes the run", async () => {
     const { chat, tools, service, host, events, base } = fixture();
     service.initialize();
@@ -480,15 +559,9 @@ describe("ToolAppService", () => {
       );
       expect(research.initialToolNames).toContain("openerx_web_search");
 
-      const fileReview = await prepare(
-        "检查我选择的文件或文件夹，找出问题并给出可验证的改进方案",
-      );
+      const fileReview = await prepare("检查我选择的文件或文件夹，找出问题并给出可验证的改进方案");
       expect(fileReview.initialToolNames).toEqual(
-        expect.arrayContaining([
-          "openerx_file_list",
-          "openerx_file_search",
-          "openerx_file_read",
-        ]),
+        expect.arrayContaining(["openerx_file_list", "openerx_file_search", "openerx_file_read"]),
       );
 
       const deliverables = await prepare(
@@ -848,7 +921,7 @@ describe("ToolAppService", () => {
     await service.close();
   });
 
-  it("removes Shell from runtime readiness and generation tools after workspace revocation", async () => {
+  it("restores Shell through the default workspace after a project workspace is revoked", async () => {
     const { chat, service, base, directory } = fixture({
       shellAvailability: () => ({
         availableToolNames: ["openerx_shell", "openerx_shell_process"],
@@ -875,11 +948,12 @@ describe("ToolAppService", () => {
       availableToolNames: ["openerx_shell", "openerx_shell_process"],
       details:
         process.platform === "win32"
-          ? [
+          ? expect.arrayContaining([
               "Backend：Codex Windows restricted token",
               "隔离：受限账户 / ACL / Job Object / WFP",
               "命令：argv 直传；网络默认拒绝",
-            ]
+              expect.stringContaining("默认工作区："),
+            ])
           : ["回滚路径：openerx_shell", "同一会话不会同时暴露 brokered bash"],
     });
 
@@ -892,8 +966,8 @@ describe("ToolAppService", () => {
         })
       ).find(({ capability }) => capability === "shell"),
     ).toMatchObject({
-      status: "authorization_required",
-      reason: "WORKSPACE_WRITE_GRANT_REQUIRED",
+      status: "available",
+      reason: null,
     });
     const prepared = await service.prepareGeneration({
       conversationId: base.conversationId,
@@ -902,8 +976,8 @@ describe("ToolAppService", () => {
       skillInstallationIds: [],
       authenticated: false,
     });
-    expect(prepared.availableToolNames).not.toContain("openerx_shell");
-    expect(prepared.initialToolNames).not.toContain("openerx_shell");
+    expect(prepared.availableToolNames).toContain("openerx_shell");
+    expect(prepared.initialToolNames).toContain("openerx_shell");
     chat.close();
     await service.close();
   });

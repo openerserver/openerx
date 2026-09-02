@@ -459,6 +459,7 @@ describe("M1 process and chat contracts", () => {
         nonce,
         piHostNonce: nonce,
         profileDirectory: "/profile",
+        defaultWorkspaceDirectory: "/documents/UWA Workspace",
         ownerProfileId: "local-default",
         deviceId: "00000000-0000-4000-8000-000000000000",
       }),

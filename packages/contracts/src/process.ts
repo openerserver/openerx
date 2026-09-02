@@ -22,6 +22,7 @@ export const appServiceBootstrapSchema = z
     nonce: processNonceSchema,
     piHostNonce: processNonceSchema,
     profileDirectory: z.string().min(1),
+    defaultWorkspaceDirectory: z.string().min(1),
     ownerProfileId: z.string().min(1),
     deviceId: entityIdSchema,
   })

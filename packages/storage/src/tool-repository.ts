@@ -94,6 +94,19 @@ export interface WorkspaceChangeRecord extends WorkspaceChange {
   afterText: string;
 }
 
+export type WorkspaceBindingRole = "primary" | "additional";
+export type WorkspaceBindingSource = "default" | "project" | "user_added";
+
+export interface WorkspaceBinding {
+  workspaceGrantId: string;
+  ownerProfileId: string;
+  conversationId: string;
+  role: WorkspaceBindingRole;
+  source: WorkspaceBindingSource;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type WorkspaceChangeSetRecord = WorkspaceChangeSet;
 
 export type StoredLocalWebSearchSettings = LocalWebSearchSettingsSelection & {
@@ -785,6 +798,10 @@ export class ToolRepository {
     access: WorkspaceGrant["access"];
     allowNetwork: boolean;
     expiresAt: string | null;
+    binding?: {
+      role: WorkspaceBindingRole;
+      source: WorkspaceBindingSource;
+    };
   }): WorkspaceGrant {
     return this.#transaction(() => {
       const id = this.#idFactory();
@@ -829,7 +846,89 @@ export class ToolRepository {
           expiresAt: input.expiresAt,
         });
       }
+      if (input.conversationId && input.binding) {
+        this.#bindWorkspace({
+          workspaceGrantId: id,
+          conversationId: input.conversationId,
+          ...input.binding,
+          createdAt,
+        });
+      }
       return this.workspaceGrant(id);
+    });
+  }
+
+  listWorkspaceBindings(conversationId: string): WorkspaceBinding[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT binding.*
+         FROM workspace_bindings AS binding
+         JOIN workspace_grants AS grant ON grant.id = binding.workspace_grant_id
+         WHERE binding.owner_profile_id = ? AND binding.conversation_id = ?
+           AND grant.revoked_at IS NULL
+           AND (grant.expires_at IS NULL OR grant.expires_at > ?)
+         ORDER BY CASE binding.role WHEN 'primary' THEN 0 ELSE 1 END,
+                  binding.updated_at DESC, binding.workspace_grant_id`,
+      )
+      .all(this.#ownerProfileId, conversationId, this.#now()) as SqlRow[];
+    return rows.map((row) => this.#workspaceBinding(row));
+  }
+
+  primaryWorkspaceGrant(conversationId: string): WorkspaceGrant | null {
+    const binding = this.listWorkspaceBindings(conversationId).find(
+      ({ role }) => role === "primary",
+    );
+    return binding ? this.activeWorkspaceGrant(binding.workspaceGrantId, conversationId) : null;
+  }
+
+  bindWorkspace(input: {
+    workspaceGrantId: string;
+    conversationId: string;
+    role: WorkspaceBindingRole;
+    source: WorkspaceBindingSource;
+  }): WorkspaceBinding {
+    return this.#transaction(() => {
+      const grant = this.activeWorkspaceGrant(input.workspaceGrantId, input.conversationId);
+      if (grant.conversationId !== input.conversationId) {
+        throw new Error("WORKSPACE_BINDING_CONVERSATION_REQUIRED");
+      }
+      const now = this.#now();
+      this.#bindWorkspace({ ...input, createdAt: now });
+      const binding = this.#database
+        .prepare("SELECT * FROM workspace_bindings WHERE workspace_grant_id = ?")
+        .get(input.workspaceGrantId) as SqlRow | undefined;
+      if (!binding) throw new Error("WORKSPACE_BINDING_NOT_FOUND");
+      return this.#workspaceBinding(binding);
+    });
+  }
+
+  revokeDefaultWorkspaceGrants(conversationId: string): WorkspaceGrant[] {
+    return this.#transaction(() => {
+      const now = this.#now();
+      const rows = this.#database
+        .prepare(
+          `SELECT grant.id
+           FROM workspace_grants AS grant
+           JOIN workspace_bindings AS binding ON binding.workspace_grant_id = grant.id
+           WHERE grant.owner_profile_id = ? AND binding.conversation_id = ?
+             AND binding.source = 'default' AND grant.revoked_at IS NULL`,
+        )
+        .all(this.#ownerProfileId, conversationId) as Array<{ id: string }>;
+      for (const { id } of rows) {
+        this.#database
+          .prepare("UPDATE workspace_grants SET revoked_at = ? WHERE id = ?")
+          .run(now, id);
+        this.#database
+          .prepare(
+            `UPDATE capability_scopes SET revoked_at = COALESCE(revoked_at, ?)
+             WHERE owner_profile_id = ? AND resource_type = 'workspace' AND resource = ?`,
+          )
+          .run(now, this.#ownerProfileId, id);
+        this.#database
+          .prepare("DELETE FROM workspace_bindings WHERE workspace_grant_id = ?")
+          .run(id);
+      }
+      return rows.map(({ id }) => this.workspaceGrant(id));
     });
   }
 
@@ -838,19 +937,23 @@ export class ToolRepository {
     const rows = conversationId
       ? this.#database
           .prepare(
-            `SELECT * FROM workspace_grants
-             WHERE owner_profile_id = ? AND revoked_at IS NULL
-               AND (expires_at IS NULL OR expires_at > ?)
-               AND (conversation_id IS NULL OR conversation_id = ?)
-             ORDER BY created_at`,
+            `SELECT grant.*, binding.role AS binding_role, binding.source AS binding_source
+             FROM workspace_grants AS grant
+             LEFT JOIN workspace_bindings AS binding ON binding.workspace_grant_id = grant.id
+             WHERE grant.owner_profile_id = ? AND grant.revoked_at IS NULL
+               AND (grant.expires_at IS NULL OR grant.expires_at > ?)
+               AND (grant.conversation_id IS NULL OR grant.conversation_id = ?)
+             ORDER BY grant.created_at`,
           )
           .all(this.#ownerProfileId, now, conversationId)
       : this.#database
           .prepare(
-            `SELECT * FROM workspace_grants
-             WHERE owner_profile_id = ? AND revoked_at IS NULL
-               AND (expires_at IS NULL OR expires_at > ?)
-             ORDER BY created_at`,
+            `SELECT grant.*, binding.role AS binding_role, binding.source AS binding_source
+             FROM workspace_grants AS grant
+             LEFT JOIN workspace_bindings AS binding ON binding.workspace_grant_id = grant.id
+             WHERE grant.owner_profile_id = ? AND grant.revoked_at IS NULL
+               AND (grant.expires_at IS NULL OR grant.expires_at > ?)
+             ORDER BY grant.created_at`,
           )
           .all(this.#ownerProfileId, now);
     return (rows as SqlRow[]).map((row) => this.#workspaceGrant(row));
@@ -858,7 +961,12 @@ export class ToolRepository {
 
   workspaceGrant(id: string): WorkspaceGrant {
     const row = this.#database
-      .prepare("SELECT * FROM workspace_grants WHERE id = ? AND owner_profile_id = ?")
+      .prepare(
+        `SELECT grant.*, binding.role AS binding_role, binding.source AS binding_source
+         FROM workspace_grants AS grant
+         LEFT JOIN workspace_bindings AS binding ON binding.workspace_grant_id = grant.id
+         WHERE grant.id = ? AND grant.owner_profile_id = ?`,
+      )
       .get(id, this.#ownerProfileId) as SqlRow | undefined;
     if (!row) throw new Error("WORKSPACE_GRANT_NOT_FOUND");
     return this.#workspaceGrant(row);
@@ -894,6 +1002,7 @@ export class ToolRepository {
            WHERE owner_profile_id = ? AND resource_type = 'workspace' AND resource = ?`,
         )
         .run(now, this.#ownerProfileId, id);
+      this.#database.prepare("DELETE FROM workspace_bindings WHERE workspace_grant_id = ?").run(id);
       return this.workspaceGrant(id);
     });
   }
@@ -1905,7 +2014,58 @@ export class ToolRepository {
       expiresAt: row.expires_at,
       revokedAt: row.revoked_at,
       createdAt: row.created_at,
+      ...(row.binding_role ? { bindingRole: row.binding_role } : {}),
+      ...(row.binding_source ? { bindingSource: row.binding_source } : {}),
     });
+  }
+
+  #workspaceBinding(row: SqlRow): WorkspaceBinding {
+    return {
+      workspaceGrantId: String(row.workspace_grant_id),
+      ownerProfileId: String(row.owner_profile_id),
+      conversationId: String(row.conversation_id),
+      role: row.role as WorkspaceBindingRole,
+      source: row.source as WorkspaceBindingSource,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  #bindWorkspace(input: {
+    workspaceGrantId: string;
+    conversationId: string;
+    role: WorkspaceBindingRole;
+    source: WorkspaceBindingSource;
+    createdAt: string;
+  }): void {
+    if (input.role === "primary") {
+      this.#database
+        .prepare(
+          `UPDATE workspace_bindings SET role = 'additional', updated_at = ?
+           WHERE owner_profile_id = ? AND conversation_id = ? AND role = 'primary'
+             AND workspace_grant_id <> ?`,
+        )
+        .run(input.createdAt, this.#ownerProfileId, input.conversationId, input.workspaceGrantId);
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO workspace_bindings
+         (workspace_grant_id, owner_profile_id, conversation_id, role, source, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(workspace_grant_id) DO UPDATE SET
+           role = excluded.role,
+           source = excluded.source,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        input.workspaceGrantId,
+        this.#ownerProfileId,
+        input.conversationId,
+        input.role,
+        input.source,
+        input.createdAt,
+        input.createdAt,
+      );
   }
 
   #transaction<T>(operation: () => T): T {

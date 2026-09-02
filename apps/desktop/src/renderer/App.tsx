@@ -1874,19 +1874,30 @@ function ContextDock({
               <div className="context-file-copy">
                 <strong title={workspace.rootPath}>{workspace.displayName}</strong>
                 <span>
-                  {workspace.access === "read_write" ? "读写" : "只读"} · 网络
+                  {workspace.bindingSource === "default"
+                    ? "默认工作区"
+                    : workspace.bindingRole === "primary"
+                      ? "主工作区"
+                      : workspace.bindingRole === "additional"
+                        ? "附加工作区"
+                        : "工作区"}{" "}
+                  · {workspace.access === "read_write" ? "读写" : "只读"} · 网络
                   {workspace.allowNetwork ? "允许" : "禁止"} ·{" "}
                   {workspaceExpiryLabel(workspace.expiresAt)} · {workspace.rootPath}
                 </span>
               </div>
-              <button
-                type="button"
-                className="icon-button context-file-menu"
-                aria-label={`撤销 ${workspace.displayName} 工作区`}
-                onClick={() => revokeWorkspace.mutate(workspace.id)}
-              >
-                <X size={16} weight="bold" />
-              </button>
+              {workspace.bindingSource === "default" ? (
+                <span className="context-file-cloud-copy">自动管理</span>
+              ) : (
+                <button
+                  type="button"
+                  className="icon-button context-file-menu"
+                  aria-label={`撤销 ${workspace.displayName} 工作区`}
+                  onClick={() => revokeWorkspace.mutate(workspace.id)}
+                >
+                  <X size={16} weight="bold" />
+                </button>
+              )}
             </article>
           ))}
           {workspaces.isPending ? <p className="muted-copy">正在读取工作区…</p> : null}

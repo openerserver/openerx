@@ -1295,6 +1295,7 @@ app.whenReady().then(async () => {
         directory,
         new ToolCredentialVault(path.join(directory, "credentials", "tool-credentials.bin")),
       ),
+    path.join(app.getPath("documents"), "UWA Workspace"),
   );
   const remote = new RemoteDesktopController(
     supervisor,

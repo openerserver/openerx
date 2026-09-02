@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type {
   AppServiceAuthorization,
@@ -255,6 +255,7 @@ function fileToolResult(
 export interface ToolAppServiceOptions {
   repository: ToolRepository;
   workspaceDirectory: string;
+  defaultWorkspaceDirectory?: string;
   host: CapabilityHost & CapabilityAvailabilityHost & CredentialResolver;
   oauth?: CredentialStore & OAuthInteractionHost;
   resolveUploadPath(fileId: string): string;
@@ -348,6 +349,8 @@ export interface PreparedGenerationTools {
 
 export class ToolAppService {
   readonly #repository: ToolRepository;
+  readonly #defaultWorkspaceDirectory: string;
+  readonly #defaultWorkspaceFallback: boolean;
   readonly #broker: CapabilityBroker;
   readonly #emitEvent: (event: ChatEvent) => void;
   readonly #selectedModelRef: (assistantMessageId: string) => string;
@@ -379,6 +382,20 @@ export class ToolAppService {
 
   constructor(options: ToolAppServiceOptions) {
     this.#repository = options.repository;
+    const preferredDefaultWorkspace =
+      options.defaultWorkspaceDirectory ??
+      path.join(path.dirname(options.workspaceDirectory), "UWA Workspace");
+    let defaultWorkspaceFallback = false;
+    try {
+      mkdirSync(path.join(preferredDefaultWorkspace, "conversations"), { recursive: true });
+      this.#defaultWorkspaceDirectory = realpathSync(preferredDefaultWorkspace);
+    } catch {
+      const fallback = path.join(path.dirname(options.workspaceDirectory), "default-workspace");
+      mkdirSync(path.join(fallback, "conversations"), { recursive: true });
+      this.#defaultWorkspaceDirectory = realpathSync(fallback);
+      defaultWorkspaceFallback = true;
+    }
+    this.#defaultWorkspaceFallback = defaultWorkspaceFallback;
     this.#emitEvent = options.emit;
     this.#selectedModelRef = options.selectedModelRef;
     this.#host = options.host;
@@ -602,6 +619,9 @@ export class ToolAppService {
     }
     const canonicalRoot = realpathSync(input.rootPath);
     if (!lstatSync(canonicalRoot).isDirectory()) throw new Error("WORKSPACE_DIRECTORY_REQUIRED");
+    if (input.conversationId) {
+      this.#repository.revokeDefaultWorkspaceGrants(input.conversationId);
+    }
     return this.#repository.grantWorkspace({
       conversationId: input.conversationId,
       displayName: path.basename(canonicalRoot),
@@ -609,11 +629,58 @@ export class ToolAppService {
       access: input.access,
       allowNetwork: input.allowNetwork,
       expiresAt: input.expiresAt,
+      ...(input.conversationId
+        ? { binding: { role: "primary" as const, source: "project" as const } }
+        : {}),
     });
   }
 
   listWorkspaces(conversationId?: string): WorkspaceGrant[] {
+    if (conversationId) this.ensureConversationWorkspace(conversationId);
     return this.#repository.listWorkspaceGrants(conversationId);
+  }
+
+  ensureConversationWorkspace(conversationId: string): WorkspaceGrant {
+    const primary = this.#repository.primaryWorkspaceGrant(conversationId);
+    if (primary) {
+      try {
+        if (lstatSync(realpathSync(primary.rootPath)).isDirectory()) return primary;
+      } catch {
+        this.#repository.revokeWorkspaceGrant(primary.id);
+      }
+    }
+
+    const existing = this.#repository.listWorkspaceGrants(conversationId).find((grant) => {
+      try {
+        return lstatSync(realpathSync(grant.rootPath)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    if (existing) {
+      if (existing.conversationId === conversationId) {
+        this.#repository.bindWorkspace({
+          workspaceGrantId: existing.id,
+          conversationId,
+          role: "primary",
+          source: "user_added",
+        });
+      }
+      return existing;
+    }
+
+    const rootPath = path.join(this.#defaultWorkspaceDirectory, "conversations", conversationId);
+    mkdirSync(rootPath, { recursive: true });
+    const canonicalRoot = realpathSync(rootPath);
+    return this.#repository.grantWorkspace({
+      conversationId,
+      displayName: `默认工作区 · ${conversationId.slice(0, 8)}`,
+      rootPath: canonicalRoot,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+      binding: { role: "primary", source: "default" },
+    });
   }
 
   revokeWorkspace(workspaceGrantId: string): WorkspaceGrant {
@@ -633,15 +700,22 @@ export class ToolAppService {
     environmentPolicy?: BrokeredBashEnvironmentPolicy;
     networkPolicy?: BrokeredBashNetworkPolicy;
   }): Promise<PreparedGenerationTools> {
-    const workspaceGrants = this.#repository
-      .listWorkspaceGrants(input.conversationId)
-      .filter((grant) => {
-        try {
-          return lstatSync(realpathSync(grant.rootPath)).isDirectory();
-        } catch {
-          return false;
-        }
-      });
+    this.ensureConversationWorkspace(input.conversationId);
+    const listedWorkspaceGrants = this.#repository.listWorkspaceGrants(input.conversationId);
+    const conversationWorkspaceGrants = listedWorkspaceGrants.filter(
+      (grant) => grant.conversationId === input.conversationId,
+    );
+    const workspaceGrants = (
+      conversationWorkspaceGrants.length > 0
+        ? conversationWorkspaceGrants
+        : listedWorkspaceGrants.filter((grant) => grant.conversationId === null)
+    ).filter((grant) => {
+      try {
+        return lstatSync(realpathSync(grant.rootPath)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
     const instructionSources = workspaceGrants.flatMap((grant) => {
       try {
         return this.#workspace.instructionSources(grant);
@@ -652,9 +726,13 @@ export class ToolAppService {
     const hostAvailability = await this.#safeHostAvailability();
     const shellAvailability = this.#shellAvailability();
     const brokeredBashRuntime = await this.#brokeredBashRuntimeAvailability();
+    const primaryWorkspaceGrant = this.#repository.primaryWorkspaceGrant(input.conversationId);
     const brokeredBashExecution = this.#prepareBrokeredBashExecution(
       workspaceGrants,
-      input,
+      {
+        ...input,
+        activeExecutionGrantId: input.activeExecutionGrantId ?? primaryWorkspaceGrant?.id,
+      },
       brokeredBashRuntime,
     );
     const localWebSearchReadiness = this.#localWebSearchV2
@@ -850,9 +928,9 @@ export class ToolAppService {
       }
     });
     const shellHostAvailable = shellAvailability.availableToolNames.includes("openerx_shell");
-    const writableWorkspaceAvailable = executionWorkspaceGrants.some(
-      ({ access }) => access === "read_write",
-    );
+    const writableWorkspaceAvailable =
+      executionWorkspaceGrants.some(({ access }) => access === "read_write") ||
+      this.#defaultWorkspaceAvailable();
     const mcp = await this.#mcpRuntimeReadiness(checkedAt);
 
     return [
@@ -946,6 +1024,10 @@ export class ToolAppService {
                 `Backend：Codex Windows restricted token${shellHostAvailable ? "" : "（未就绪）"}`,
                 "隔离：受限账户 / ACL / Job Object / WFP",
                 "命令：argv 直传；网络默认拒绝",
+                `默认工作区：${this.#defaultWorkspaceDirectory}`,
+                ...(this.#defaultWorkspaceFallback
+                  ? ["位置：系统文档目录不可写，已使用应用数据目录"]
+                  : []),
               ]
             : ["回滚路径：openerx_shell", "同一会话不会同时暴露 brokered bash"],
       ),
@@ -965,6 +1047,15 @@ export class ToolAppService {
       ),
       mcp,
     ];
+  }
+
+  #defaultWorkspaceAvailable(): boolean {
+    try {
+      mkdirSync(path.join(this.#defaultWorkspaceDirectory, "conversations"), { recursive: true });
+      return lstatSync(realpathSync(this.#defaultWorkspaceDirectory)).isDirectory();
+    } catch {
+      return false;
+    }
   }
 
   async #safeHostAvailability(): Promise<HostToolAvailability> {

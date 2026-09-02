@@ -1394,6 +1394,42 @@ const migrations: readonly Migration[] = [
         ON permission_requests(owner_profile_id, status, requested_at);
     `,
   },
+  {
+    version: 30,
+    checksum: "conversation-workspace-bindings-v30-20260902",
+    sql: `
+      CREATE TABLE workspace_bindings (
+        workspace_grant_id TEXT PRIMARY KEY REFERENCES workspace_grants(id),
+        owner_profile_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('primary', 'additional')),
+        source TEXT NOT NULL CHECK (source IN ('default', 'project', 'user_added')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX workspace_bindings_conversation_idx
+        ON workspace_bindings(owner_profile_id, conversation_id, role, updated_at DESC);
+
+      INSERT INTO workspace_bindings
+        (workspace_grant_id, owner_profile_id, conversation_id, role, source, created_at, updated_at)
+      SELECT id, owner_profile_id, conversation_id, 'additional', 'user_added', created_at, created_at
+      FROM workspace_grants
+      WHERE conversation_id IS NOT NULL;
+
+      UPDATE workspace_bindings AS binding
+      SET role = 'primary'
+      WHERE workspace_grant_id = (
+        SELECT candidate.workspace_grant_id
+        FROM workspace_bindings AS candidate
+        JOIN workspace_grants AS grant ON grant.id = candidate.workspace_grant_id
+        WHERE candidate.owner_profile_id = binding.owner_profile_id
+          AND candidate.conversation_id = binding.conversation_id
+          AND grant.revoked_at IS NULL
+        ORDER BY candidate.created_at, candidate.workspace_grant_id
+        LIMIT 1
+      );
+    `,
+  },
 ];
 
 export function migrateDatabase(

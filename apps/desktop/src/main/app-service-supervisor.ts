@@ -65,6 +65,7 @@ export interface MainCapabilityHost {
 
 export class AppServiceSupervisor {
   #profileDirectory: string;
+  readonly #defaultWorkspaceDirectory: string;
   #ownerProfileId: string;
   readonly #deviceId: string;
   readonly #piHostEntry: string;
@@ -95,12 +96,14 @@ export class AppServiceSupervisor {
     ownerProfileId = "local-default",
     deviceId = "00000000-0000-4000-8000-000000000000",
     capabilityHostFactory: ((profileDirectory: string) => MainCapabilityHost) | null = null,
+    defaultWorkspaceDirectory = path.join(profileDirectory, "UWA Workspace"),
   ) {
     this.#profileDirectory = profileDirectory;
     this.#piHostEntry = piHostEntry;
     this.#ownerProfileId = ownerProfileId;
     this.#deviceId = deviceId;
     this.#capabilityHostFactory = capabilityHostFactory;
+    this.#defaultWorkspaceDirectory = defaultWorkspaceDirectory;
   }
 
   async start(): Promise<void> {
@@ -336,6 +339,7 @@ export class AppServiceSupervisor {
         nonce: appNonce,
         piHostNonce,
         profileDirectory: this.#profileDirectory,
+        defaultWorkspaceDirectory: this.#defaultWorkspaceDirectory,
         ownerProfileId: this.#ownerProfileId,
         deviceId: this.#deviceId,
       },

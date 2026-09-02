@@ -2,6 +2,8 @@ import { z } from "zod";
 import { entityIdSchema, timestampSchema } from "./common";
 
 export const workspaceAccessSchema = z.enum(["read_only", "read_write"]);
+export const workspaceBindingRoleSchema = z.enum(["primary", "additional"]);
+export const workspaceBindingSourceSchema = z.enum(["default", "project", "user_added"]);
 
 export const workspaceGrantSchema = z
   .object({
@@ -15,6 +17,8 @@ export const workspaceGrantSchema = z
     expiresAt: timestampSchema.nullable(),
     revokedAt: timestampSchema.nullable(),
     createdAt: timestampSchema,
+    bindingRole: workspaceBindingRoleSchema.optional(),
+    bindingSource: workspaceBindingSourceSchema.optional(),
   })
   .strict();
 
@@ -119,6 +123,8 @@ export const workspaceChangeSetSchema = z
   .strict();
 
 export type WorkspaceAccess = z.infer<typeof workspaceAccessSchema>;
+export type WorkspaceBindingRole = z.infer<typeof workspaceBindingRoleSchema>;
+export type WorkspaceBindingSource = z.infer<typeof workspaceBindingSourceSchema>;
 export type WorkspaceGrant = z.infer<typeof workspaceGrantSchema>;
 export type WorkspaceInstructionSource = z.infer<typeof workspaceInstructionSourceSchema>;
 export type WorkspaceChange = z.infer<typeof workspaceChangeSchema>;

@@ -88,6 +88,7 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
   const toolService = new ToolAppService({
     repository: toolRepository,
     workspaceDirectory,
+    defaultWorkspaceDirectory: bootstrap.defaultWorkspaceDirectory,
     host: mainCapabilities,
     oauth: mainCapabilities,
     resolveUploadPath: (fileId) => files.resolvePersonalFilePath(fileId),
