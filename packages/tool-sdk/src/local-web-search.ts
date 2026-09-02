@@ -281,11 +281,14 @@ function fallbackAllowed(error: LocalWebSearchError): boolean {
     "LOCAL_SEARCH_PROVIDER_NOT_CONFIGURED",
     "LOCAL_SEARCH_PROVIDER_UNAVAILABLE",
     "LOCAL_SEARCH_PROVIDER_CHALLENGE",
+    "LOCAL_SEARCH_TIMEOUT",
     "LOCAL_SEARCH_RATE_LIMITED",
+    "LOCAL_SEARCH_RESPONSE_TOO_LARGE",
     "LOCAL_SEARCH_CONTENT_TYPE_INVALID",
     "LOCAL_SEARCH_RESULT_PARSE_FAILED",
     "LOCAL_SEARCH_RESULT_SURFACE_UNRECOGNIZED",
     "LOCAL_SEARCH_NO_RESULTS",
+    "LOCAL_SEARCH_SOURCE_URL_INVALID",
   ].includes(error.code);
 }
 
@@ -407,7 +410,7 @@ export class LocalWebSearchCoordinator {
           : null;
       return {
         descriptor: provider.descriptor,
-        selected: configuration.policy.providerOrder.includes(providerId),
+        selected: configuration.policy.providerOrder[0] === providerId,
         status: this.#providerStatus(providerId),
         consecutiveThrottleFailures: health.consecutiveThrottleFailures,
         backedOffUntil,

@@ -670,6 +670,7 @@ export function startPiHostProcess(
           ...(frame.workspace?.execution
             ? { brokeredBashExecution: frame.workspace.execution }
             : {}),
+          browserSearchFallback: frame.availableToolNames?.includes("openerx_browser") ?? true,
           transport: capabilityToolTransport,
         });
         const workspaceTools = createProductWorkspaceTools({

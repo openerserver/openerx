@@ -47,6 +47,7 @@ import {
   localWebSearchSettingsSelectionSchema,
   localWebSearchSettingsStateSchema,
   localWebSearchV2Enabled,
+  orderedLocalWebSearchProviders,
   piHostContractVersion,
 } from "@openerx/contracts";
 import type { ToolRepository } from "@openerx/storage";
@@ -413,7 +414,10 @@ export class ToolAppService {
         ...defaultLocalWebSearchPolicy(),
         ...(persistedLocalWebSearchSettings
           ? {
-              providerOrder: [persistedLocalWebSearchSettings.providerId],
+              providerOrder: orderedLocalWebSearchProviders(
+                persistedLocalWebSearchSettings.providerId,
+              ),
+              allowProviderFallback: true,
               locale: persistedLocalWebSearchSettings.locale,
               safeSearch: persistedLocalWebSearchSettings.safeSearch,
             }
@@ -576,7 +580,7 @@ export class ToolAppService {
       locale: policy.locale,
       safeSearch: policy.safeSearch,
       featureEnabled: this.#localWebSearchV2,
-      allowProviderFallback: false,
+      allowProviderFallback: policy.allowProviderFallback,
       cacheMode: "turn",
       updatedAt: this.#localWebSearchSettingsUpdatedAt,
       providers: this.#localWebSearchCoordinator.providerStates(this.#localWebSearchConfiguration),
@@ -590,8 +594,8 @@ export class ToolAppService {
     const persisted = this.#repository.saveLocalWebSearchSettings(selection);
     this.#localWebSearchConfiguration = freezeLocalWebSearchPolicy({
       ...this.#localWebSearchConfiguration.policy,
-      providerOrder: [selection.providerId],
-      allowProviderFallback: false,
+      providerOrder: orderedLocalWebSearchProviders(selection.providerId),
+      allowProviderFallback: true,
       locale: selection.locale,
       safeSearch: selection.safeSearch,
       cacheMode: "turn",
@@ -829,7 +833,7 @@ export class ToolAppService {
       add("openerx_calculate", "openerx_structured_data");
     }
     if (/最新|新闻|搜索网络|查网页|web|search online|current/u.test(prompt))
-      add("openerx_web_search");
+      add("openerx_web_search", "openerx_browser");
     if (/生成图片|画图|image|illustration|render/u.test(prompt)) add("openerx_image_generate");
     if (/浏览器|网页操作|browser|website/u.test(prompt)) add("openerx_browser");
     if (/桌面|应用窗口|desktop|screenshot/u.test(prompt)) add("openerx_desktop");
@@ -952,8 +956,9 @@ export class ToolAppService {
           ? [
               "阶段：Desktop Local Alpha",
               "执行：本机 App Service",
-              `Provider：${localSearch.providerIds.join(", ") || "unavailable"}`,
-              "浏览器：不使用",
+              `Provider 顺序：${this.#localWebSearchConfiguration.policy.providerOrder.join(" → ")}`,
+              `Provider 自动降级：${this.#localWebSearchConfiguration.policy.allowProviderFallback ? "开启" : "关闭"}`,
+              browserAvailable ? "浏览器兜底：可用" : "浏览器兜底：不可用",
             ]
           : [],
       ),

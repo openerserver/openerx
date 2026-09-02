@@ -142,7 +142,7 @@ export const localWebSearchProviderRuntimeStateSchema = z
 export const localWebSearchSettingsStateSchema = localWebSearchSettingsSelectionSchema
   .extend({
     featureEnabled: z.boolean(),
-    allowProviderFallback: z.literal(false),
+    allowProviderFallback: z.boolean(),
     cacheMode: z.literal("turn"),
     updatedAt: timestampSchema.nullable(),
     providers: z.array(localWebSearchProviderRuntimeStateSchema).max(8),
@@ -167,18 +167,26 @@ export type LocalWebSearchProviderRuntimeState = z.infer<
 >;
 export type LocalWebSearchSettingsState = z.infer<typeof localWebSearchSettingsStateSchema>;
 
+export function orderedLocalWebSearchProviders(
+  primary: SelectableLocalWebSearchProviderId,
+): SelectableLocalWebSearchProviderId[] {
+  return primary === "direct:baidu-json"
+    ? ["direct:baidu-json", "direct:bing-html"]
+    : ["direct:bing-html", "direct:baidu-json"];
+}
+
 export function defaultLocalWebSearchPolicy(): LocalWebSearchPolicy {
   return {
     contractVersion: LOCAL_WEB_SEARCH_CONTRACT_VERSION,
     policyVersion: LOCAL_WEB_SEARCH_POLICY_VERSION,
     enabled: true,
-    providerOrder: ["direct:baidu-json"],
-    allowProviderFallback: false,
+    providerOrder: orderedLocalWebSearchProviders("direct:baidu-json"),
+    allowProviderFallback: true,
     locale: "zh-CN",
     safeSearch: "moderate",
     maxResultsPerCall: 8,
     requestTimeoutMs: 4_000,
-    toolTimeoutMs: 5_000,
+    toolTimeoutMs: 9_000,
     maxResponseBytes: 524_288,
     queryMaxBytes: 4_096,
     cacheMode: "turn",

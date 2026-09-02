@@ -30,6 +30,50 @@ function idempotencyKey(generationId: string, toolCallId: string, toolName: stri
   return `tool:${generationId}:${toolCallId}:${toolName}`;
 }
 
+const browserSearchFallbackErrorCodes = new Set([
+  "LOCAL_SEARCH_PROVIDER_NOT_CONFIGURED",
+  "LOCAL_SEARCH_PROVIDER_UNAVAILABLE",
+  "LOCAL_SEARCH_PROVIDER_CHALLENGE",
+  "LOCAL_SEARCH_TIMEOUT",
+  "LOCAL_SEARCH_RATE_LIMITED",
+  "LOCAL_SEARCH_RESPONSE_TOO_LARGE",
+  "LOCAL_SEARCH_CONTENT_TYPE_INVALID",
+  "LOCAL_SEARCH_RESULT_PARSE_FAILED",
+  "LOCAL_SEARCH_RESULT_SURFACE_UNRECOGNIZED",
+  "LOCAL_SEARCH_NO_RESULTS",
+  "LOCAL_SEARCH_SOURCE_URL_INVALID",
+]);
+
+function errorCode(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  return error.message.split(":", 1)[0] ?? null;
+}
+
+function browserSearchUrl(query: string, domains: readonly string[] | undefined): string {
+  const base = "https://www.bing.com/search";
+  const queryParts = [...query];
+  const domainFilter = (domains ?? []).map((domain) => `site:${domain}`).join(" OR ");
+  const build = (value: string) => {
+    const url = new URL(base);
+    url.searchParams.set("q", domainFilter ? `${value} (${domainFilter})` : value);
+    return url.href;
+  };
+  let url = build(queryParts.join(""));
+  if (url.length <= 4_096) return url;
+
+  const withoutDomains = (value: string) => {
+    const candidate = new URL(base);
+    candidate.searchParams.set("q", value);
+    return candidate.href;
+  };
+  url = withoutDomains(queryParts.join(""));
+  while (url.length > 4_096 && queryParts.length > 1) {
+    queryParts.length = Math.max(1, Math.floor(queryParts.length * 0.8));
+    url = withoutDomains(queryParts.join(""));
+  }
+  return url;
+}
+
 export function createProductCapabilityTools(input: {
   generationId: string;
   conversationId: string;
@@ -37,6 +81,7 @@ export function createProductCapabilityTools(input: {
   assistantMessageId: string;
   transport: PiCapabilityToolTransport;
   browserComputerUseV2?: boolean;
+  browserSearchFallback?: boolean;
   brokeredBashExecution?: BrokeredBashExecutionContext;
 }): ToolDefinition[] {
   const invoke = async (
@@ -256,6 +301,53 @@ export function createProductCapabilityTools(input: {
           await invoke(toolCallId, "openerx_browser", { operation: "browser", ...params }),
       });
 
+  const openBrowserSearchFallback = async (
+    toolCallId: string,
+    query: string,
+    domains: readonly string[] | undefined,
+    localSearchErrorCode: string,
+  ) => {
+    const url = browserSearchUrl(query, domains);
+    const fallbackToolCallId = `${toolCallId}:browser-fallback`;
+    const browserMode = useBrowserComputerUseV2 ? "system_browser" : "isolated_browser";
+    const browserLabel = useBrowserComputerUseV2 ? "system browser" : "isolated browser";
+    const browserResult = useBrowserComputerUseV2
+      ? await invoke(fallbackToolCallId, "openerx_browser", {
+          operation: "browser_computer_use",
+          request: {
+            contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+            action: "open",
+            url,
+          },
+        })
+      : await invoke(fallbackToolCallId, "openerx_browser", {
+          operation: "browser",
+          action: "open",
+          url,
+        });
+    const details =
+      browserResult.details && typeof browserResult.details === "object"
+        ? (browserResult.details as Record<string, unknown>)
+        : { browserResult: browserResult.details };
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Local search providers failed (${localSearchErrorCode}); opened the query in the ${browserLabel} as the final fallback. Use the returned observation to read visible results.`,
+        },
+        ...browserResult.content,
+      ],
+      details: {
+        ...details,
+        webSearchFallback: {
+          mode: browserMode,
+          localSearchErrorCode,
+          searchUrl: url,
+        },
+      },
+    };
+  };
+
   return [
     ...(input.brokeredBashExecution
       ? [
@@ -314,7 +406,7 @@ export function createProductCapabilityTools(input: {
       name: "openerx_web_search",
       label: "Search the Web",
       description:
-        "Search current Web information through the configured local UWA search provider with sources. For multi-query research, follow a plan of distinct evidence angles, avoid duplicate queries, and stop when the collected sources adequately support the answer.",
+        "Search current Web information through UWA's ordered local providers (preferred engine, then alternate) with sources. If both providers fail and browser fallback is available, the tool opens the query in the system browser. For multi-query research, follow a plan of distinct evidence angles, avoid duplicate queries, and stop when the collected sources adequately support the answer.",
       parameters: Type.Object(
         {
           query: Type.String({ minLength: 1, maxLength: 1_000 }),
@@ -325,13 +417,22 @@ export function createProductCapabilityTools(input: {
         },
         { additionalProperties: false },
       ),
-      execute: async (toolCallId, params) =>
-        await invoke(toolCallId, "openerx_web_search", {
-          operation: "web_search",
-          query: params.query,
-          ...(params.recencyDays === undefined ? {} : { recencyDays: params.recencyDays }),
-          ...(params.domains === undefined ? {} : { domains: params.domains }),
-        }),
+      execute: async (toolCallId, params) => {
+        try {
+          return await invoke(toolCallId, "openerx_web_search", {
+            operation: "web_search",
+            query: params.query,
+            ...(params.recencyDays === undefined ? {} : { recencyDays: params.recencyDays }),
+            ...(params.domains === undefined ? {} : { domains: params.domains }),
+          });
+        } catch (error) {
+          const code = errorCode(error);
+          if (!input.browserSearchFallback || !code || !browserSearchFallbackErrorCodes.has(code)) {
+            throw error;
+          }
+          return await openBrowserSearchFallback(toolCallId, params.query, params.domains, code);
+        }
+      },
     }),
     defineTool({
       name: "openerx_image_generate",

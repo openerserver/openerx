@@ -342,7 +342,7 @@ function createBridge(): DesktopBridge {
       locale: "zh-CN",
       safeSearch: "moderate",
       featureEnabled: true,
-      allowProviderFallback: false,
+      allowProviderFallback: true,
       cacheMode: "turn",
       updatedAt: null,
       providers: [

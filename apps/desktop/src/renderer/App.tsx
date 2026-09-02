@@ -6908,7 +6908,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 <div className="tool-settings-heading">
                   <div>
                     <h3>设置</h3>
-                    <p>选择本地搜索使用的引擎、结果语言和安全级别。</p>
+                    <p>选择首选搜索引擎、结果语言和安全级别；失败时自动切换备用引擎。</p>
                   </div>
                   <button
                     type="button"
@@ -6926,7 +6926,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                   }}
                 >
                   <label>
-                    <span>搜索引擎</span>
+                    <span>首选搜索引擎</span>
                     <select
                       aria-label="Web Search Provider"
                       value={localWebSearchDraft.providerId}
@@ -6989,7 +6989,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                     <div key={provider.descriptor.providerId}>
                       <span>
                         <strong>{provider.descriptor.displayName}</strong>
-                        {provider.selected ? <small>当前选择</small> : null}
+                        {provider.selected ? <small>首选</small> : null}
                       </span>
                       <span className={`is-${provider.status}`}>
                         {localWebSearchProviderStatusLabels[provider.status]}

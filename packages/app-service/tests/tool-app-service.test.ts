@@ -698,8 +698,12 @@ describe("ToolAppService", () => {
     });
     expect(prepared.availableToolNames).toContain("openerx_web_search");
     expect(prepared.initialToolNames).toContain("openerx_web_search");
+    expect(prepared.initialToolNames).toContain("openerx_browser");
     expect(prepared.localWebSearchConfiguration).toMatchObject({
-      policy: { providerOrder: ["direct:baidu-json"] },
+      policy: {
+        providerOrder: ["direct:baidu-json", "direct:bing-html"],
+        allowProviderFallback: true,
+      },
       policyDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
     });
     expect(
@@ -716,8 +720,9 @@ describe("ToolAppService", () => {
       details: expect.arrayContaining([
         "阶段：Desktop Local Alpha",
         "执行：本机 App Service",
-        "Provider：direct:baidu-json",
-        "浏览器：不使用",
+        "Provider 顺序：direct:baidu-json → direct:bing-html",
+        "Provider 自动降级：开启",
+        "浏览器兜底：可用",
       ]),
     });
 
@@ -804,7 +809,11 @@ describe("ToolAppService", () => {
     ).toMatchObject({
       status: "available",
       reason: null,
-      details: expect.arrayContaining(["Provider：direct:bing-html", "浏览器：不使用"]),
+      details: expect.arrayContaining([
+        "Provider 顺序：direct:bing-html",
+        "Provider 自动降级：关闭",
+        "浏览器兜底：可用",
+      ]),
     });
     chat.close();
     await service.close();
@@ -824,7 +833,7 @@ describe("ToolAppService", () => {
       locale: "zh-CN",
       safeSearch: "moderate",
       featureEnabled: true,
-      allowProviderFallback: false,
+      allowProviderFallback: true,
       cacheMode: "turn",
     });
 
@@ -845,7 +854,8 @@ describe("ToolAppService", () => {
       safeSearch: "strict",
     });
     expect(before.localWebSearchConfiguration?.policy).toMatchObject({
-      providerOrder: ["direct:baidu-json"],
+      providerOrder: ["direct:baidu-json", "direct:bing-html"],
+      allowProviderFallback: true,
       locale: "zh-CN",
       safeSearch: "moderate",
     });
@@ -858,8 +868,8 @@ describe("ToolAppService", () => {
       authenticated: false,
     });
     expect(after.localWebSearchConfiguration?.policy).toMatchObject({
-      providerOrder: ["direct:bing-html"],
-      allowProviderFallback: false,
+      providerOrder: ["direct:bing-html", "direct:baidu-json"],
+      allowProviderFallback: true,
       locale: "en-US",
       safeSearch: "strict",
       cacheMode: "turn",

@@ -426,9 +426,13 @@ describe("lightweight local Web Search", () => {
     expect(search).toHaveBeenCalledTimes(2);
   });
 
-  it("marks an explicitly allowed fallback result as partial", async () => {
+  it.each([
+    "LOCAL_SEARCH_PROVIDER_CHALLENGE",
+    "LOCAL_SEARCH_TIMEOUT",
+    "LOCAL_SEARCH_RATE_LIMITED",
+  ] as const)("falls back after %s and marks the result as partial", async (errorCode) => {
     const baiduSearch = vi.fn<LocalSearchProvider["search"]>(async () => {
-      throw new LocalWebSearchError("LOCAL_SEARCH_PROVIDER_CHALLENGE");
+      throw new LocalWebSearchError(errorCode);
     });
     const bingSearch = vi.fn<LocalSearchProvider["search"]>(async () => ({
       providerId: "direct:bing-html",
@@ -532,7 +536,9 @@ describe("lightweight local Web Search", () => {
       now: () => now,
       backoffMs: 30 * 60 * 1_000,
     });
-    const configuration = freezeLocalWebSearchPolicy(policy());
+    const configuration = freezeLocalWebSearchPolicy(
+      policy({ providerOrder: ["direct:baidu-json"], allowProviderFallback: false }),
+    );
     const execute = (generationId: string) =>
       coordinator.search({
         generationId,
@@ -609,7 +615,9 @@ describe("lightweight local Web Search", () => {
       search,
     };
     const coordinator = new LocalWebSearchCoordinator([provider]);
-    const configuration = freezeLocalWebSearchPolicy(policy());
+    const configuration = freezeLocalWebSearchPolicy(
+      policy({ providerOrder: ["direct:baidu-json"], allowProviderFallback: false }),
+    );
     const execute = (generationId: string) =>
       coordinator.search({
         generationId,
@@ -639,7 +647,9 @@ describe("lightweight local Web Search", () => {
 
   it("fails closed on fake execution, challenge payloads, and schema drift", async () => {
     const fakeCoordinator = new LocalWebSearchCoordinator([new FakeLocalWebSearchProvider()]);
-    const configuration = freezeLocalWebSearchPolicy(policy());
+    const configuration = freezeLocalWebSearchPolicy(
+      policy({ providerOrder: ["direct:baidu-json"], allowProviderFallback: false }),
+    );
     expect(fakeCoordinator.readiness(configuration)).toMatchObject({
       available: false,
       reason: "LOCAL_SEARCH_FAKE_PROVIDER_ONLY",
