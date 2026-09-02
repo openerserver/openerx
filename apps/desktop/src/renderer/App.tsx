@@ -110,6 +110,7 @@ const billingKey = ["billing"] as const;
 const themeStorageKey = "openerx.theme";
 const defaultModelStorageKey = "openerx.defaultModelRef";
 const assistantCompanionStorageKey = "openerx.assistant.companionEnabled";
+const assistantFeatureStorageKey = "openerx.features.assistantEnabled";
 
 type ThemePreference = "system" | "dark" | "light";
 type WorkspaceAccessChoice = "read_only" | "read_write";
@@ -160,6 +161,14 @@ function initialDefaultModelRef(): string {
 function initialAssistantCompanionEnabled(): boolean {
   try {
     return window.localStorage.getItem(assistantCompanionStorageKey) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function initialAssistantFeatureEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(assistantFeatureStorageKey) === "true";
   } catch {
     return false;
   }
@@ -7321,9 +7330,11 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
 function Sidebar({
   onCollapse,
   backgroundInert = false,
+  assistantFeatureEnabled = false,
 }: {
   onCollapse: () => void;
   backgroundInert?: boolean;
+  assistantFeatureEnabled?: boolean;
 }): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
   const history = useQuery({
@@ -7383,10 +7394,12 @@ function Sidebar({
             <ArrowClockwise size={17} />
             <span>自动化</span>
           </NavLink>
-          <NavLink to="/assistant">
-            <PawPrint size={17} />
-            <span>助手</span>
-          </NavLink>
+          {assistantFeatureEnabled ? (
+            <NavLink to="/assistant">
+              <PawPrint size={17} />
+              <span>助手</span>
+            </NavLink>
+          ) : null}
           <NavLink to="/settings">
             <GearSix size={17} />
             <span>设置</span>
@@ -7451,6 +7464,7 @@ export function App(): React.JSX.Element {
   const [assistantCompanionEnabled, setAssistantCompanionEnabled] = useState(
     initialAssistantCompanionEnabled,
   );
+  const [assistantFeatureEnabled] = useState(initialAssistantFeatureEnabled);
   const [automaticMemoryNotice, setAutomaticMemoryNotice] =
     useState<AutomaticMemoryCreatedEvent | null>(null);
   const [memoryUndoPending, setMemoryUndoPending] = useState(false);
@@ -7659,7 +7673,11 @@ export function App(): React.JSX.Element {
         跳到主要内容
       </button>
       {!settingsOpen ? (
-        <Sidebar onCollapse={() => setSidebarOpen(false)} backgroundInert={contextOpen} />
+        <Sidebar
+          onCollapse={() => setSidebarOpen(false)}
+          backgroundInert={contextOpen}
+          assistantFeatureEnabled={assistantFeatureEnabled}
+        />
       ) : null}
       {!settingsOpen && !sidebarOpen ? (
         <button
@@ -7697,10 +7715,14 @@ export function App(): React.JSX.Element {
           <Route
             path="/assistant"
             element={
-              <AssistantPage
-                companionEnabled={assistantCompanionEnabled}
-                onCompanionEnabledChange={setAssistantCompanionEnabled}
-              />
+              assistantFeatureEnabled ? (
+                <AssistantPage
+                  companionEnabled={assistantCompanionEnabled}
+                  onCompanionEnabledChange={setAssistantCompanionEnabled}
+                />
+              ) : (
+                <Navigate to="/chat/new" replace />
+              )
             }
           />
           <Route
@@ -7725,7 +7747,8 @@ export function App(): React.JSX.Element {
           <Route path="*" element={<Navigate to="/chat/new" replace />} />
         </Routes>
       </div>
-      {assistantCompanionEnabled &&
+      {assistantFeatureEnabled &&
+      assistantCompanionEnabled &&
       !settingsOpen &&
       !contextOpen &&
       !location.pathname.startsWith("/assistant") ? (

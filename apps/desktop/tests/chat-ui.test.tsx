@@ -2921,8 +2921,25 @@ describe("M1 chat renderer", () => {
     });
   });
 
+  it("hides the assistant by default and redirects its direct route", async () => {
+    cleanup();
+    window.localStorage.removeItem("openerx.features.assistantEnabled");
+    const bridge = createBridge();
+    renderApp(bridge, "/assistant");
+
+    const navigation = await screen.findByRole("navigation", { name: "主导航" });
+    expect(within(navigation).queryByRole("link", { name: "助手" })).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "新对话" }).getAttribute("aria-current")).toBe(
+        "page",
+      ),
+    );
+    expect(screen.queryByRole("heading", { name: "你好，我是小联" })).toBeNull();
+  });
+
   it("places the companion assistant below automations and opens its workspace mode", async () => {
     cleanup();
+    window.localStorage.setItem("openerx.features.assistantEnabled", "true");
     window.localStorage.removeItem("openerx.assistant.companionEnabled");
     window.localStorage.removeItem("openerx.assistant.importantOnly");
     window.localStorage.removeItem("openerx.assistant.lastSeenAt");
@@ -2952,10 +2969,12 @@ describe("M1 chat renderer", () => {
     window.localStorage.removeItem("openerx.assistant.companionEnabled");
     window.localStorage.removeItem("openerx.assistant.importantOnly");
     window.localStorage.removeItem("openerx.assistant.lastSeenAt");
+    window.localStorage.removeItem("openerx.features.assistantEnabled");
   });
 
   it("prioritizes current work over terminal results already seen", async () => {
     cleanup();
+    window.localStorage.setItem("openerx.features.assistantEnabled", "true");
     window.localStorage.setItem("openerx.assistant.lastSeenAt", new Date().toISOString());
     const bridge = createBridge();
     const runningWorkItem: WorkItem = {
@@ -2990,10 +3009,12 @@ describe("M1 chat renderer", () => {
     ).toBeTruthy();
 
     window.localStorage.removeItem("openerx.assistant.lastSeenAt");
+    window.localStorage.removeItem("openerx.features.assistantEnabled");
   });
 
   it("counts a waiting work item and its permissions as one attention item", async () => {
     cleanup();
+    window.localStorage.setItem("openerx.features.assistantEnabled", "true");
     window.localStorage.setItem("openerx.assistant.lastSeenAt", new Date().toISOString());
     const bridge = createBridge();
     const waitingWorkItem: WorkItem = {
@@ -3049,6 +3070,7 @@ describe("M1 chat renderer", () => {
     expect(attentionMetric?.querySelector("strong")?.textContent).toBe("1");
 
     window.localStorage.removeItem("openerx.assistant.lastSeenAt");
+    window.localStorage.removeItem("openerx.features.assistantEnabled");
   });
 
   it("enables background startup from the automation page", async () => {
