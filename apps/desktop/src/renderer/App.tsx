@@ -99,6 +99,13 @@ import {
 import remarkGfm from "remark-gfm";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
+import {
+  ConversationProjectBadge,
+  ConversationProjectMoveDialog,
+  ProjectHome,
+  ProjectSidebar,
+  useProject,
+} from "./projects";
 
 const suggestions = [
   "复盘最近一周 A 股行情：哪些板块最受关注，背后的驱动因素是什么？",
@@ -962,12 +969,14 @@ function Composer({
   onOpenContext,
   contextOpen = false,
   defaultModelRef = automaticModelRef,
+  projectId,
 }: {
   conversationId?: string;
   conversationSnapshot?: ConversationSnapshot;
   onOpenContext?: () => void;
   contextOpen?: boolean;
   defaultModelRef?: string;
+  projectId?: string;
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const [skillInstallationId, setSkillInstallationId] = useState("");
@@ -1128,6 +1137,7 @@ function Composer({
       withUiTimeout(
         window.openerx.sendMessage({
           conversationId: conversationId ?? null,
+          ...(!conversationId && projectId ? { projectId } : {}),
           text,
           idempotencyKey: idempotencyKey("send"),
           ...(!conversationId
@@ -1501,7 +1511,15 @@ function Composer({
   );
 }
 
-function NewChat({ defaultModelRef }: { defaultModelRef: string }): React.JSX.Element {
+function NewChat({
+  defaultModelRef,
+  projectId,
+  projectName,
+}: {
+  defaultModelRef: string;
+  projectId?: string;
+  projectName?: string;
+}): React.JSX.Element {
   const models = useQuery({
     queryKey: ["models", "catalog"],
     queryFn: () => window.openerx.listModels(),
@@ -1521,7 +1539,7 @@ function NewChat({ defaultModelRef }: { defaultModelRef: string }): React.JSX.El
   return (
     <main className="new-chat-page">
       <header className="new-chat-topbar">
-        <span className="topbar-product">新任务</span>
+        <span className="topbar-product">{projectName ? `${projectName} · 新任务` : "新任务"}</span>
         <span className="topbar-state">
           {defaultModel?.status === "unavailable"
             ? "需要配置 API"
@@ -1530,9 +1548,13 @@ function NewChat({ defaultModelRef }: { defaultModelRef: string }): React.JSX.El
         </span>
       </header>
       <section className="welcome" aria-labelledby="welcome-title">
-        <p className="eyebrow">个人 AI 工作区</p>
-        <h1 id="welcome-title">今天想完成什么？</h1>
-        <p>描述目标，或附上文件；已授权范围内自动执行，越出范围或产生高影响副作用时再确认。</p>
+        <p className="eyebrow">{projectName ? `项目 · ${projectName}` : "个人 AI 工作区"}</p>
+        <h1 id="welcome-title">{projectName ? "在这个项目中做什么？" : "今天想完成什么？"}</h1>
+        <p>
+          {projectName
+            ? "新对话会继承项目说明和当前设备已连接的目录；权限扩大或高影响操作仍需确认。"
+            : "描述目标，或附上文件；已授权范围内自动执行，越出范围或产生高影响副作用时再确认。"}
+        </p>
       </section>
       {modelRequiresConfiguration ? (
         <section className="settings-card" aria-label="配置模型 API">
@@ -1550,11 +1572,12 @@ function NewChat({ defaultModelRef }: { defaultModelRef: string }): React.JSX.El
               text={suggestion}
               thinkingLevel={suggestionThinkingLevel}
               modelRef={defaultModel?.modelRef ?? defaultModelRef}
+              projectId={projectId}
             />
           ))}
         </section>
       )}
-      <Composer defaultModelRef={defaultModelRef} />
+      <Composer defaultModelRef={defaultModelRef} projectId={projectId} />
     </main>
   );
 }
@@ -1563,10 +1586,12 @@ function Suggestion({
   text,
   thinkingLevel,
   modelRef,
+  projectId,
 }: {
   text: string;
   thinkingLevel: ThinkingLevel;
   modelRef: string;
+  projectId?: string;
 }): React.JSX.Element {
   const navigate = useNavigate();
   const send = useMutation({
@@ -1574,6 +1599,7 @@ function Suggestion({
       withUiTimeout(
         window.openerx.sendMessage({
           conversationId: null,
+          ...(projectId ? { projectId } : {}),
           text,
           modelRef,
           thinkingLevel,
@@ -1604,6 +1630,22 @@ function Suggestion({
   );
 }
 
+function ProjectNewChat({ defaultModelRef }: { defaultModelRef: string }): React.JSX.Element {
+  const projectId = useParams<{ projectId: string }>().projectId ?? "";
+  const project = useProject(projectId);
+  if (project.isPending) return <Placeholder title="正在打开项目…" />;
+  if (!project.data || project.data.project.archivedAt) {
+    return <Navigate to={projectId ? `/projects/${projectId}` : "/chat/new"} replace />;
+  }
+  return (
+    <NewChat
+      defaultModelRef={defaultModelRef}
+      projectId={projectId}
+      projectName={project.data.project.name}
+    />
+  );
+}
+
 function ContextDock({
   conversationId,
   onClose,
@@ -1622,6 +1664,12 @@ function ContextDock({
   const chooseFilesButtonRef = useRef<HTMLButtonElement>(null);
   const chooseDirectoryButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => closeButtonRef.current?.focus(), []);
+  const conversation = useQuery({
+    queryKey: chatKeys.conversation(conversationId),
+    queryFn: () => window.openerx.getConversation({ conversationId }),
+    enabled: Boolean(conversationId),
+  });
+  const contextProject = useProject(conversation.data?.conversation.projectId ?? "");
   const files = useQuery({
     queryKey: ["files", conversationId],
     queryFn: () => withUiTimeout(window.openerx.listFiles({ conversationId })),
@@ -1712,7 +1760,11 @@ function ContextDock({
             <h2>当前上下文</h2>
             <Info size={15} weight="regular" />
           </div>
-          <p>仅用于当前对话</p>
+          <p>
+            {conversation.data?.conversation.projectId
+              ? "包含项目继承与仅此对话内容"
+              : "仅用于当前对话"}
+          </p>
         </div>
         <button
           ref={closeButtonRef}
@@ -1724,6 +1776,19 @@ function ContextDock({
           <X size={19} weight="regular" />
         </button>
       </header>
+
+      {conversation.data?.conversation.projectId ? (
+        <section className="context-project-source" aria-label="项目上下文来源">
+          <span className="context-project-source-label">来自项目</span>
+          <NavLink to={`/projects/${conversation.data.conversation.projectId}`}>
+            {contextProject.data?.project.name ?? "正在读取项目…"}
+          </NavLink>
+          <p className="context-project-source-instructions">
+            {contextProject.data?.project.instructions ||
+              "此项目没有说明；已连接目录仍会在下一轮自动继承。"}
+          </p>
+        </section>
+      ) : null}
 
       <section className="context-files" aria-labelledby="context-files-title">
         <div className="context-section-heading">
@@ -1841,14 +1906,14 @@ function ContextDock({
 
       <section className="context-files" aria-labelledby="context-workspaces-title">
         <div className="context-section-heading">
-          <h3 id="context-workspaces-title">项目工作区</h3>
+          <h3 id="context-workspaces-title">工作区目录</h3>
           <span>{workspaces.data?.length ?? 0}</span>
         </div>
         <div className="context-dropzone">
           <FolderSimple size={26} weight="regular" />
-          <strong>授权可审阅、可撤销的项目目录</strong>
+          <strong>添加仅用于当前对话的目录</strong>
           <span>
-            授权后，范围内读写和沙箱 Shell 自动执行；网络权限单独授予，外部高影响动作仍逐次确认。
+            项目目录在上方标记为“来自项目”；这里新增的授权不会反向修改项目配置。
           </span>
           <div className="workspace-grant-controls">
             <label>
@@ -1900,40 +1965,50 @@ function ContextDock({
           </div>
         </div>
         <div className="context-file-list">
-          {workspaces.data?.map((workspace) => (
-            <article className="context-file" key={workspace.id}>
-              <div className="context-file-icon">
-                <FolderSimple size={19} weight="regular" />
-              </div>
-              <div className="context-file-copy">
-                <strong title={workspace.rootPath}>{workspace.displayName}</strong>
-                <span>
-                  {workspace.bindingSource === "default"
-                    ? "默认工作区"
-                    : workspace.bindingRole === "primary"
-                      ? "主工作区"
-                      : workspace.bindingRole === "additional"
-                        ? "附加工作区"
-                        : "工作区"}{" "}
-                  · {workspace.access === "read_write" ? "读写" : "只读"} · 网络
-                  {workspace.allowNetwork ? "允许" : "禁止"} ·{" "}
-                  {workspaceExpiryLabel(workspace.expiresAt)} · {workspace.rootPath}
-                </span>
-              </div>
-              {workspace.bindingSource === "default" ? (
-                <span className="context-file-cloud-copy">自动管理</span>
-              ) : (
-                <button
-                  type="button"
-                  className="icon-button context-file-menu"
-                  aria-label={`撤销 ${workspace.displayName} 工作区`}
-                  onClick={() => revokeWorkspace.mutate(workspace.id)}
-                >
-                  <X size={16} weight="bold" />
-                </button>
-              )}
-            </article>
-          ))}
+          {workspaces.data?.map((workspace) => {
+            const sourceLabel =
+              workspace.bindingSource === "project"
+                ? "来自项目"
+                : workspace.bindingSource === "default"
+                  ? "默认工作区"
+                  : "仅此对话";
+            const roleLabel =
+              workspace.bindingRole === "primary"
+                ? "主目录"
+                : workspace.bindingRole === "additional"
+                  ? "附加目录"
+                  : "目录";
+            return (
+              <article className="context-file" key={workspace.id}>
+                <div className="context-file-icon">
+                  <FolderSimple size={19} weight="regular" />
+                </div>
+                <div className="context-file-copy">
+                  <strong title={workspace.rootPath}>{workspace.displayName}</strong>
+                  <span>
+                    {sourceLabel} · {roleLabel} ·{" "}
+                    {workspace.access === "read_write" ? "读写" : "只读"} · 网络
+                    {workspace.allowNetwork ? "允许" : "禁止"} ·{" "}
+                    {workspaceExpiryLabel(workspace.expiresAt)} · {workspace.rootPath}
+                  </span>
+                </div>
+                {workspace.bindingSource === "default" ? (
+                  <span className="context-file-cloud-copy">自动管理</span>
+                ) : workspace.bindingSource === "project" ? (
+                  <span className="context-file-cloud-copy">来自项目</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="icon-button context-file-menu"
+                    aria-label={`撤销 ${workspace.displayName} 工作区`}
+                    onClick={() => revokeWorkspace.mutate(workspace.id)}
+                  >
+                    <X size={16} weight="bold" />
+                  </button>
+                )}
+              </article>
+            );
+          })}
           {workspaces.isPending ? <p className="muted-copy">正在读取工作区…</p> : null}
           {!workspaces.isPending && (workspaces.data?.length ?? 0) === 0 ? (
             <p className="muted-copy">尚未授权项目目录。</p>
@@ -3818,6 +3893,7 @@ function ConversationToolbar({
   const conversation = snapshot.conversation;
   const [renaming, setRenaming] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [projectMoveOpen, setProjectMoveOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [forgetSourceMemories, setForgetSourceMemories] = useState(false);
   const [nextTitle, setNextTitle] = useState(conversation.title);
@@ -3893,6 +3969,7 @@ function ConversationToolbar({
     <header className="conversation-toolbar">
       <div className="conversation-heading">
         <h1>{conversation.title}</h1>
+        <ConversationProjectBadge projectId={conversation.projectId} />
       </div>
       <div className="toolbar-actions">
         <button
@@ -3957,6 +4034,16 @@ function ConversationToolbar({
               }}
             >
               重命名
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMoreOpen(false);
+                setProjectMoveOpen(true);
+              }}
+            >
+              {conversation.projectId ? "更改或移出项目…" : "移动到项目…"}
             </button>
             <button
               type="button"
@@ -4033,6 +4120,22 @@ function ConversationToolbar({
             </span>
           </label>
         </ConfirmDialog>
+      ) : null}
+      {projectMoveOpen ? (
+        <ConversationProjectMoveDialog
+          conversation={conversation}
+          onClose={() => {
+            setProjectMoveOpen(false);
+            window.setTimeout(() => moreButtonRef.current?.focus(), 0);
+          }}
+          onMoved={(projectName) =>
+            setToolbarNotice(
+              projectName
+                ? `对话已移入“${projectName}”；项目上下文从下一轮开始生效。`
+                : "对话已移出项目；项目上下文从下一轮起移除。",
+            )
+          }
+        />
       ) : null}
       <div className="toolbar-feedback" aria-live="polite">
         {toolbarNotice ? <p>{toolbarNotice}</p> : null}
@@ -6530,6 +6633,14 @@ function AccountSettings({
     enabled: signedIn,
     retry: false,
   });
+  useEffect(() => {
+    if (!sync.data) return;
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["chat"] }),
+      queryClient.invalidateQueries({ queryKey: ["projects"] }),
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
+    ]);
+  }, [queryClient, sync.data]);
   const accountUsage = useQuery({
     queryKey: ["usage", "account"],
     queryFn: () => window.openerx.getUsage(),
@@ -6591,8 +6702,12 @@ function AccountSettings({
       window.openerx.resolveSyncConflict(input),
     onSuccess: async (status) => {
       queryClient.setQueryData(["sync", "status"], status);
-      await queryClient.invalidateQueries({ queryKey: ["sync", "conflicts"] });
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sync", "conflicts"] }),
+        queryClient.invalidateQueries({ queryKey: ["chat"] }),
+        queryClient.invalidateQueries({ queryKey: ["projects"] }),
+        queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
+      ]);
     },
   });
   const clearLocalCache = useMutation({
@@ -6602,8 +6717,12 @@ function AccountSettings({
     },
     onSuccess: async (result) => {
       if (!result) return;
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
-      await queryClient.invalidateQueries({ queryKey: ["sync", "conflicts"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["chat"] }),
+        queryClient.invalidateQueries({ queryKey: ["projects"] }),
+        queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
+        queryClient.invalidateQueries({ queryKey: ["sync", "conflicts"] }),
+      ]);
     },
   });
   const deleteCloudData = useMutation({
@@ -6619,8 +6738,12 @@ function AccountSettings({
     },
     onSuccess: async (result) => {
       if (!result) return;
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
-      await queryClient.invalidateQueries({ queryKey: ["sync"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["chat"] }),
+        queryClient.invalidateQueries({ queryKey: ["projects"] }),
+        queryClient.invalidateQueries({ queryKey: ["workspaces"] }),
+        queryClient.invalidateQueries({ queryKey: ["sync"] }),
+      ]);
     },
   });
 
@@ -8238,6 +8361,7 @@ function Sidebar({
             <span>设置</span>
           </NavLink>
         </nav>
+        <ProjectSidebar />
         <section className="history-list" aria-label="对话历史">
           <div className="history-heading">
             <span>{showArchived ? "历史 · 含归档" : "历史 · 活动"}</span>
@@ -8531,6 +8655,11 @@ export function App(): React.JSX.Element {
       >
         <Routes>
           <Route path="/chat/new" element={<NewChat defaultModelRef={defaultModelRef} />} />
+          <Route
+            path="/projects/:projectId/new"
+            element={<ProjectNewChat defaultModelRef={defaultModelRef} />}
+          />
+          <Route path="/projects/:projectId" element={<ProjectHome />} />
           <Route
             path="/chat/:conversationId"
             element={<ChatPage contextOpen={contextOpen} onToggleContext={toggleContext} />}

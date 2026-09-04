@@ -43,6 +43,7 @@ import {
   chatStopInputSchema,
   conversationMemorySettingsGetInputSchema,
   conversationMemorySettingsUpdateInputSchema,
+  conversationMoveToProjectInputSchema,
   conversationSnapshotSchema,
   createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
@@ -78,6 +79,17 @@ import {
   permissionListInputSchema,
   permissionResolveInputSchema,
   personalDataSummarySchema,
+  projectArchiveCommandInputSchema,
+  projectCommandEnvelopeSchema,
+  projectCreateInputSchema,
+  projectDirectoryChooseInputSchema,
+  projectDirectoryChoosePrivilegedInputSchema,
+  projectDirectoryDisconnectInputSchema,
+  projectDirectoryRemoveInputSchema,
+  projectDirectorySetPrimaryInputSchema,
+  projectGetInputSchema,
+  projectListInputSchema,
+  projectUpdateInputSchema,
   releaseUpdateStateSchema,
   remoteDesktopEnableInputSchema,
   remoteDesktopRevokeInputSchema,
@@ -689,6 +701,25 @@ function registerIpcHandlers(
     });
   };
 
+  const registerProjectHandler = <T>(
+    channel: string,
+    command: z.input<typeof projectCommandEnvelopeSchema>["command"],
+    inputSchema: { parse: (value: unknown) => T },
+  ): void => {
+    ipcMain.handle(channel, async (event, input: unknown) => {
+      assertTrustedIpcSender(event);
+      const request = projectCommandEnvelopeSchema.parse({
+        command,
+        input: inputSchema.parse(input),
+      });
+      const authorization =
+        platformUrl && accounts.state().status === "signed_in"
+          ? await accounts.authorization(platformUrl)
+          : undefined;
+      return await supervisor.request(request, authorization);
+    });
+  };
+
   ipcMain.handle(ipcChannels.toolRuntimeReadiness, async (event) => {
     assertTrustedIpcSender(event);
     const modelService = await modelSettings.state();
@@ -847,6 +878,20 @@ function registerIpcHandlers(
     "automation.schedule.preview",
     automationSchedulePreviewInputSchema,
   );
+  registerProjectHandler(ipcChannels.projectList, "project.list", projectListInputSchema);
+  registerProjectHandler(ipcChannels.projectGet, "project.get", projectGetInputSchema);
+  registerProjectHandler(ipcChannels.projectCreate, "project.create", projectCreateInputSchema);
+  registerProjectHandler(ipcChannels.projectUpdate, "project.update", projectUpdateInputSchema);
+  registerProjectHandler(
+    ipcChannels.projectArchive,
+    "project.archive",
+    projectArchiveCommandInputSchema,
+  );
+  registerProjectHandler(
+    ipcChannels.projectRestore,
+    "project.restore",
+    projectArchiveCommandInputSchema,
+  );
   ipcMain.handle(ipcChannels.fileChoose, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const parsed = fileChooseInputSchema.parse(input ?? {});
@@ -924,6 +969,45 @@ function registerIpcHandlers(
       }),
     );
   });
+  ipcMain.handle(ipcChannels.projectDirectoryChoose, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    const parsed = projectDirectoryChooseInputSchema.parse(input ?? {});
+    const selection = await dialog.showOpenDialog({
+      title: parsed.projectDirectoryId ? "重新连接项目目录" : "添加项目目录",
+      properties: ["openDirectory"],
+      message: "UWA 只能在你明确授权的项目目录内读取或修改文件",
+    });
+    if (selection.canceled || !selection.filePaths[0]) return null;
+    return await supervisor.request(
+      projectCommandEnvelopeSchema.parse({
+        command: "project.directory.choose",
+        input: projectDirectoryChoosePrivilegedInputSchema.parse({
+          ...parsed,
+          rootPath: selection.filePaths[0],
+        }),
+      }),
+    );
+  });
+  registerProjectHandler(
+    ipcChannels.projectDirectorySetPrimary,
+    "project.directory.setPrimary",
+    projectDirectorySetPrimaryInputSchema,
+  );
+  registerProjectHandler(
+    ipcChannels.projectDirectoryDisconnect,
+    "project.directory.disconnect",
+    projectDirectoryDisconnectInputSchema,
+  );
+  registerProjectHandler(
+    ipcChannels.projectDirectoryRemove,
+    "project.directory.remove",
+    projectDirectoryRemoveInputSchema,
+  );
+  registerProjectHandler(
+    ipcChannels.conversationMoveToProject,
+    "conversation.moveToProject",
+    conversationMoveToProjectInputSchema,
+  );
   registerChatHandler(ipcChannels.workspaceList, "workspace.list", workspaceListInputSchema);
   registerChatHandler(ipcChannels.workspaceRevoke, "workspace.revoke", workspaceRevokeInputSchema);
   registerChatHandler(ipcChannels.fileList, "file.list", fileListInputSchema);

@@ -1,4 +1,10 @@
-import type { RemoteCommandPayload, RemoteDevicePairing, RemoteHost } from "@openerx/contracts";
+import {
+  type RemoteCommandPayload,
+  type RemoteDevicePairing,
+  type RemoteHost,
+  type RemoteProjectSummary,
+  remoteProjectSnapshotPayloadSchema,
+} from "@openerx/contracts";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Crypto from "expo-crypto";
 import * as DocumentPicker from "expo-document-picker";
@@ -291,19 +297,27 @@ function HostsScreen({
 function TasksScreen({
   host,
   pairing,
+  projects,
+  selectedProjectId,
   conversationId,
   activeMessageId,
   events,
   onCommand,
   onNewTask,
+  onRefreshProjects,
+  onSelectProject,
 }: {
   host: RemoteHost | null;
   pairing: RemoteDevicePairing | null;
+  projects: RemoteProjectSummary[];
+  selectedProjectId: string | null;
   conversationId: string | null;
   activeMessageId: string | null;
   events: DecryptedRemoteEvent[];
   onCommand: (payload: RemoteCommandPayload) => Promise<void>;
   onNewTask: () => void;
+  onRefreshProjects: () => Promise<void>;
+  onSelectProject: (projectId: string | null) => void;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [attachment, setAttachment] = useState<string | null>(null);
@@ -317,7 +331,12 @@ function TasksScreen({
       setBusy(false);
     }
   };
-  const messageEvents = events.filter((event) => event.envelope.conversationId === conversationId);
+  const messageEvents = conversationId
+    ? events.filter((event) => event.envelope.conversationId === conversationId)
+    : [];
+  const selectedProject =
+    projects.find((project) => project.projectId === selectedProjectId) ?? null;
+  const canControl = Boolean(host && host.presence === "online" && pairing);
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -338,6 +357,88 @@ function TasksScreen({
           <Text style={styles.cardTitle}>{host?.displayName ?? "未选择主机"}</Text>
           <Text style={styles.cardMeta}>{pairing ? "端到端加密" : "未配对"}</Text>
         </View>
+        <View style={styles.sectionHeader}>
+          <View>
+            <Text style={styles.sectionTitle}>项目上下文</Text>
+            <Text style={styles.sectionHint}>
+              {conversationId ? "本任务已锁定；下个新任务可重新选择" : "目录权限只能在桌面管理"}
+            </Text>
+          </View>
+          <PrimaryButton
+            disabled={!canControl}
+            label="刷新项目"
+            onPress={() => void onRefreshProjects()}
+            tone="neutral"
+          />
+        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={styles.projectChoiceRow}>
+            <Pressable
+              disabled={Boolean(conversationId)}
+              onPress={() => onSelectProject(null)}
+              style={[
+                styles.projectChoice,
+                selectedProjectId === null ? styles.projectChoiceSelected : null,
+                conversationId ? styles.projectChoiceDisabled : null,
+              ]}
+            >
+              <Text style={styles.cardTitle}>无项目</Text>
+              <Text style={styles.cardMeta}>仅此任务</Text>
+            </Pressable>
+            {projects.map((project) => (
+              <Pressable
+                disabled={Boolean(conversationId)}
+                key={project.projectId}
+                onPress={() => onSelectProject(project.projectId)}
+                style={[
+                  styles.projectChoice,
+                  project.projectId === selectedProjectId ? styles.projectChoiceSelected : null,
+                  conversationId ? styles.projectChoiceDisabled : null,
+                ]}
+              >
+                <Text numberOfLines={1} style={styles.cardTitle}>
+                  {project.name}
+                </Text>
+                <Text style={styles.cardMeta}>
+                  {project.directories.length} 个目录 · {project.conversationCount} 个任务
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </ScrollView>
+        {selectedProject ? (
+          <View style={styles.projectDetail}>
+            <Text style={styles.cardTitle}>{selectedProject.name}</Text>
+            <Text style={styles.cardMeta}>{selectedProject.instructions || "未设置项目说明"}</Text>
+            <View style={styles.projectDirectoryList}>
+              {selectedProject.directories.map((directory) => (
+                <View key={directory.projectDirectoryId} style={styles.projectDirectoryRow}>
+                  <View style={styles.flex}>
+                    <Text numberOfLines={1} style={styles.eventText}>
+                      {directory.displayName}
+                    </Text>
+                    <Text style={styles.cardMeta}>
+                      {directory.role === "primary" ? "主目录" : "附加目录"} ·
+                      {directory.desiredAccess === "read_write" ? " 可读写" : " 只读"}
+                    </Text>
+                  </View>
+                  <Text
+                    style={
+                      directory.connectionState === "connected"
+                        ? styles.connectionConnected
+                        : styles.connectionRequired
+                    }
+                  >
+                    {directory.connectionState === "connected" ? "已连接" : "需在桌面重连"}
+                  </Text>
+                </View>
+              ))}
+              {selectedProject.directories.length === 0 ? (
+                <Text style={styles.sectionHint}>该项目尚未绑定目录</Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
         <View style={styles.transcript}>
           {messageEvents.map((event) => (
             <View key={event.envelope.eventId} style={styles.eventRow}>
@@ -369,15 +470,25 @@ function TasksScreen({
         />
         <View style={styles.actionGrid}>
           <PrimaryButton
-            disabled={busy || !text.trim() || !host || !pairing}
+            disabled={busy || !text.trim() || !canControl}
             label={conversationId ? "发送" : "Start"}
             onPress={() =>
-              void invoke({
-                kind: conversationId ? "session.prompt" : "task.start",
-                text: text.trim(),
-                clientOperationId: `mobile:${Date.now()}`,
-                executionMode: conversationId ? "attended" : "unattended",
-              })
+              void invoke(
+                conversationId
+                  ? {
+                      kind: "session.prompt",
+                      text: text.trim(),
+                      clientOperationId: `mobile:${Date.now()}`,
+                      executionMode: "attended",
+                    }
+                  : {
+                      kind: "task.start",
+                      text: text.trim(),
+                      clientOperationId: `mobile:${Date.now()}`,
+                      executionMode: "unattended",
+                      projectId: selectedProjectId,
+                    },
+              )
             }
           />
           <PrimaryButton
@@ -600,6 +711,8 @@ function RemoteApp({
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [revisionByConversation, setRevisionByConversation] = useState<Record<string, number>>({});
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
+  const [projectsByHost, setProjectsByHost] = useState<Record<string, RemoteProjectSummary[]>>({});
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [controller, setController] = useState<RemoteController | null>(null);
 
@@ -648,6 +761,15 @@ function RemoteApp({
         const latestCursor = next.at(-1)?.envelope.cursor ?? null;
         setCursor(latestCursor);
         for (const event of next) {
+          if (event.envelope.kind === "project.snapshot") {
+            const snapshot = remoteProjectSnapshotPayloadSchema.safeParse(event.payload);
+            if (snapshot.success) {
+              setProjectsByHost((current) => ({
+                ...current,
+                [event.envelope.hostDeviceId]: snapshot.data.projects,
+              }));
+            }
+          }
           const id = event.envelope.conversationId;
           if (id) {
             setConversationId((current) => current ?? id);
@@ -676,9 +798,12 @@ function RemoteApp({
     if (!controller || !selectedHost || !selectedPairing)
       throw new Error("REMOTE_HOST_NOT_SELECTED");
     try {
+      const targetConversationId = payload.kind === "project.list" ? null : conversationId;
       await controller.send(selectedHost, selectedPairing, payload, {
-        conversationId,
-        baseRevision: conversationId ? (revisionByConversation[conversationId] ?? 0) : 0,
+        conversationId: targetConversationId,
+        baseRevision: targetConversationId
+          ? (revisionByConversation[targetConversationId] ?? 0)
+          : 0,
       });
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "REMOTE_COMMAND_FAILED";
@@ -686,6 +811,32 @@ function RemoteApp({
       throw caught;
     }
   };
+
+  const refreshProjects = async (): Promise<void> => {
+    await command({ kind: "project.list", includeArchived: false });
+  };
+
+  useEffect(() => {
+    if (!controller || !selectedHost || selectedHost.presence !== "online" || !selectedPairing)
+      return;
+    void controller
+      .send(
+        selectedHost,
+        selectedPairing,
+        { kind: "project.list", includeArchived: false },
+        { conversationId: null, baseRevision: 0 },
+      )
+      .catch((caught) =>
+        setError(caught instanceof Error ? caught.message : "REMOTE_PROJECT_LIST_FAILED"),
+      );
+  }, [controller, selectedHost, selectedPairing]);
+
+  const projects = selectedHostId ? (projectsByHost[selectedHostId] ?? []) : [];
+  useEffect(() => {
+    if (selectedProjectId && !projects.some(({ projectId }) => projectId === selectedProjectId)) {
+      setSelectedProjectId(null);
+    }
+  }, [projects, selectedProjectId]);
 
   const decide = async (
     event: DecryptedRemoteEvent,
@@ -753,10 +904,14 @@ function RemoteApp({
           <TasksScreen
             host={selectedHost}
             pairing={selectedPairing}
+            projects={projects}
+            selectedProjectId={selectedProjectId}
             conversationId={conversationId}
             activeMessageId={activeMessageId}
             events={events}
             onCommand={command}
+            onRefreshProjects={refreshProjects}
+            onSelectProject={setSelectedProjectId}
             onNewTask={() => {
               setConversationId(null);
               setActiveMessageId(null);
@@ -962,6 +1117,39 @@ const styles = StyleSheet.create({
     backgroundColor: "#181c18",
     borderRadius: 12,
   },
+  projectChoiceRow: { flexDirection: "row", gap: 8, paddingVertical: 2 },
+  projectChoice: {
+    width: 154,
+    minHeight: 68,
+    justifyContent: "center",
+    gap: 5,
+    padding: 12,
+    backgroundColor: "#1b1f1b",
+    borderWidth: 1,
+    borderColor: "#2d332d",
+    borderRadius: 13,
+  },
+  projectChoiceSelected: { borderColor: "#7ea869", backgroundColor: "#20271e" },
+  projectChoiceDisabled: { opacity: 0.72 },
+  projectDetail: {
+    gap: 8,
+    padding: 13,
+    borderRadius: 13,
+    backgroundColor: "#181c18",
+    borderWidth: 1,
+    borderColor: "#2d332d",
+  },
+  projectDirectoryList: { gap: 7 },
+  projectDirectoryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingTop: 7,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#303630",
+  },
+  connectionConnected: { color: "#9ac884", fontSize: 10, fontWeight: "700" },
+  connectionRequired: { color: "#e5ae75", fontSize: 10, fontWeight: "700" },
   transcript: { minHeight: 180, gap: 9, backgroundColor: "#151815", borderRadius: 14, padding: 13 },
   eventRow: { borderLeftWidth: 2, borderLeftColor: "#668654", paddingLeft: 10, gap: 3 },
   eventKind: {

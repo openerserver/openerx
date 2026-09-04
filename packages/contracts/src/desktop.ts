@@ -11,6 +11,7 @@ import type { DiagnosticsBridge } from "./diagnostics";
 import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
 import type { ModelServiceBridge } from "./model-service";
+import type { ProjectBridge } from "./project";
 import type { ReleaseUpdateBridge } from "./release";
 import type { SkillBridge } from "./skill";
 import type { SyncBridge } from "./sync";
@@ -98,6 +99,17 @@ export const ipcChannels = Object.freeze({
   workspaceChoose: "workspace:choose",
   workspaceList: "workspace:list",
   workspaceRevoke: "workspace:revoke",
+  projectList: "project:list",
+  projectGet: "project:get",
+  projectCreate: "project:create",
+  projectUpdate: "project:update",
+  projectArchive: "project:archive",
+  projectRestore: "project:restore",
+  projectDirectoryChoose: "project:directory:choose",
+  projectDirectorySetPrimary: "project:directory:set-primary",
+  projectDirectoryDisconnect: "project:directory:disconnect",
+  projectDirectoryRemove: "project:directory:remove",
+  conversationMoveToProject: "conversation:project:move",
   fileList: "file:list",
   fileSearch: "file:search",
   filePreview: "file:preview",
@@ -207,6 +219,7 @@ export interface DesktopBridge
     FileBridge,
     ToolBridge,
     WorkspaceBridge,
+    ProjectBridge,
     SkillBridge,
     RemoteDesktopBridge,
     ReleaseUpdateBridge {

@@ -161,6 +161,7 @@ export const conversationSchema = z
   .object({
     id: entityIdSchema,
     ownerProfileId: z.string().min(1),
+    projectId: entityIdSchema.nullable().default(null),
     title: z.string().min(1).max(120),
     activeBranchId: entityIdSchema,
     selectedModelRef: z.string().min(1),
@@ -229,6 +230,7 @@ export const chatGetInputSchema = z.object({ conversationId: entityIdSchema }).s
 export const chatSendInputSchema = z
   .object({
     conversationId: entityIdSchema.nullable().optional(),
+    projectId: entityIdSchema.nullable().optional(),
     text: z.string().trim().min(1).max(100_000),
     idempotencyKey: z.string().min(8).max(200),
     modelRef: z

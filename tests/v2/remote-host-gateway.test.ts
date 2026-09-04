@@ -299,6 +299,71 @@ describe("RemoteHostConnector", () => {
     state.gateway.close();
   });
 
+  it("returns project listings as an encrypted, path-free controller snapshot", async () => {
+    const state = setup();
+    const remoteCommand = state.makeCommand({ kind: "project.list", includeArchived: false });
+    state.gateway.submitCommand(state.controllerPrincipal, remoteCommand);
+    const snapshot = {
+      kind: "project.snapshot" as const,
+      generatedAt: state.nowRef.value.toISOString(),
+      projects: [
+        {
+          projectId: randomUUID(),
+          name: "手机项目",
+          instructions: "先运行测试。",
+          pinnedRank: null,
+          archivedAt: null,
+          revision: 1,
+          conversationCount: 0,
+          directories: [
+            {
+              projectDirectoryId: randomUUID(),
+              displayName: "主目录",
+              role: "primary" as const,
+              desiredAccess: "read_write" as const,
+              connectionState: "connected" as const,
+            },
+          ],
+        },
+      ],
+    };
+    const connector = new RemoteHostConnector({
+      databasePath: path.join(state.directory, "connector.sqlite"),
+      host: state.host,
+      hostPrivateKey: state.hostKeys.privateKey,
+      transport: state.transport,
+      now: () => state.nowRef.value,
+      applier: {
+        currentRevision: async () => 4,
+        apply: async () => ({
+          kind: "remote.command.result",
+          requestId: remoteCommand.commandId,
+          ok: true,
+          appliedRevision: 4,
+          result: snapshot,
+        }),
+      },
+    });
+    await connector.start();
+    await connector.tick();
+    const [event] = state.gateway.listEvents(state.controllerPrincipal, {
+      hostDeviceId: state.host.hostDeviceId,
+      afterCursor: null,
+    });
+    expect(event).toMatchObject({ kind: "project.snapshot", conversationId: null });
+    if (!event) throw new Error("project snapshot missing");
+    const decrypted = decryptRemoteObject(
+      event.encryptedPayload,
+      state.controllerKeys.privateKey,
+      state.hostKeys.publicKey,
+      `event:${event.eventId}:${state.pairing.pairingId}`,
+    );
+    expect(decrypted).toEqual(snapshot);
+    expect(JSON.stringify(decrypted)).not.toContain("rootPath");
+    connector.close();
+    state.gateway.close();
+  });
+
   it("rejects stale base revisions before invoking App Service", async () => {
     const state = setup();
     const remoteCommand = state.makeCommand({

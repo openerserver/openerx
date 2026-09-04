@@ -1,8 +1,8 @@
 # UWA 2.0 V1 整体架构
 
-> 状态：`M9_LOCAL_RELEASE_FOUNDATION_COMPLETE / EXTERNAL_RELEASE_GATES_PENDING`
+> 状态：`M9_LOCAL_RELEASE_FOUNDATION_COMPLETE / PERSONAL_PROJECTS_PLANNED / EXTERNAL_RELEASE_GATES_PENDING`
 >
-> 更新日期：2026-08-27（Asia/Shanghai）
+> 更新日期：2026-09-04（Asia/Shanghai）
 >
 > 适用范围：Windows 10 22H2+/Windows 11 x64、macOS 14+ arm64/x64 桌面执行主机与 iOS 17+/Android 11+ Remote Companion
 
@@ -13,7 +13,7 @@
 | 维度 | 旧架构 | V2 架构 |
 | --- | --- | --- |
 | 用户入口 | 浏览器 Web UI | Electron + React 桌面执行主机；React Native iOS/Android Remote Companion |
-| 用户心智 | Project、Task、Workflow、Agent 控制 | Conversation、Message、File、Artifact |
+| 用户心智 | 企业 Project、Task、Workflow、Agent 控制 | Conversation 为主；可选 Personal Project 组织 Message、File、Artifact 与本机目录 |
 | 前端边界 | Web UI 通过 BFF 访问 Control Plane | Renderer 通过类型化 Preload Bridge 访问本地 App Service |
 | 本地权限 | 浏览器、BFF 和旧执行模块分散处理 | Electron Main 与 V2 Broker 管理权限；Pi Host 独立隔离 |
 | 执行边界 | BFF 托管旧执行引擎并聚合任务事件 | Isolated Pi Host；Pi 完整拥有 agent harness |
@@ -22,7 +22,7 @@
 | 商业系统 | 成本/预算治理视图 | 报价、预留、额度、积分、充值余额、复式账本、支付和账单 |
 | 工具能力 | 旧执行引擎和插件各自配置 | Pi 管理工具调用生命周期；V2 Capability Broker 统一 Web、Browser、Shell、Desktop、MCP、Skill 权限与副作用 |
 | Remote | 无稳定个人远程控制边界 | 手机发送产品命令；桌面 App Service 直接映射 Pi 原生 API；出站加密 Relay 不拥有 harness |
-| 企业能力 | Organization、Project、审批、治理是主线 | 移出 V1，旧系统保留为 Legacy |
+| 企业能力 | Organization、企业 Project、审批、治理是主线 | 移出 V1，旧系统保留为 Legacy；个人项目不复用企业控制平面 |
 
 ## 2. V2 总体逻辑架构图
 
@@ -487,7 +487,7 @@ sequenceDiagram
   end
 ```
 
-同步只负责账户内容。设备权限、绝对路径、Cookie、Shell 历史、平台密钥、商业余额和账本均不进入普通离线同步队列。
+同步只负责账户内容，包括 Project 元数据、目录逻辑占位和 Conversation 归属。项目目录和其他设备权限、绝对路径、Cookie、Shell 历史、平台密钥、商业余额和账本均不进入普通离线同步队列。
 
 ### 3.3 手机 Remote 控制
 
@@ -531,7 +531,7 @@ Relay 的投递重放只解决网络至少一次语义，不是 Agent 队列。P
 | React Renderer | 不可信 Web 环境 | 展示、输入、调用窄 Bridge | Node、文件系统、进程、密钥、账本写入 |
 | Preload Bridge | 最小桥接层 | 版本化 DTO、参数校验、业务动作 | 暴露原始 `ipcRenderer` 或通用执行接口 |
 | Electron Main | 桌面权限 Broker | 窗口、系统对话框、Keychain、进程监督 | AI 长任务、文档解析、支付事实判定 |
-| App Service | 本地业务协调 | 本地缓存、对话、同步队列、模型/账单 API | 修改服务端余额、保存 Provider 密钥 |
+| App Service | 本地业务协调 | 本地缓存、项目/对话、同步队列、模型/账单 API | 修改服务端余额、保存 Provider 密钥 |
 | Mobile Companion | 不可信远程控制端 | 展示账户内容、发送签名产品命令、作出受限用户决定 | 直接访问 Pi/桌面、扩大 Scope、保存主机凭证 |
 | Remote Host Connector | 网络隔离边界 | 出站连接、设备挑战、验签/解密/去重、加密产品事件 | 公开监听、直接调用 Pi、替 Broker 批准 |
 | Pi Host | 不可信执行区 | 在授权工作目录运行 Pi `AgentSession` | 扫描 Home、读取全局凭证、任意网络 |
@@ -543,8 +543,8 @@ Relay 的投递重放只解决网络至少一次语义，不是 Agent 队列。P
 
 | 数据 | 唯一真值 | 本地状态 |
 | --- | --- | --- |
-| Conversation、Message、可同步设置 | 账户云数据 | 缓存、离线队列、搜索投影 |
-| 本地文件权限和绝对路径 | 当前设备 | 不同步 |
+| Project、Conversation 归属、Message、可同步设置 | 账户云数据 | 缓存、离线队列、搜索投影 |
+| 项目目录和其他本地文件权限/绝对路径 | 当前设备 | 不同步；新设备显示重连占位 |
 | Attachment、Artifact 内容 | 云对象存储 + 受控本地副本 | 可重建缓存或设备副本 |
 | Pi Session/AgentSession | Pi Host 内部引用 | 不是用户历史真值 |
 | 模型 Token | UsageRecord | 只读展示缓存 |
@@ -593,7 +593,7 @@ App Service 进程组就绪/重启只产生白名单生命周期信号，Main �
 
 ## 7. Legacy 边界
 
-旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、Project、Task、Workflow 或审批模型。
+旧系统已整理到 `v1-backup/`，不出现在 V2 主调用链，仅作为可恢复归档和行为参考。V2 新代码不得直接依赖旧 Control Plane 的 Organization、企业 Project、Task、Workflow 或审批模型。个人项目按 [26-personal-projects-plan.md](26-personal-projects-plan.md) 使用独立的轻量领域模型。
 
 ## 8. M1 至 M9 本地已实现映射
 

@@ -43,3 +43,7 @@ npm run check:v2
 ```
 
 `check:v2` 会依次执行依赖边界、lint、类型检查、单元/夹具测试和 Electron 生产打包。M0 的决策记录位于 [`docs/v2/adr/`](docs/v2/adr/README.md)。
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE) 许可证。

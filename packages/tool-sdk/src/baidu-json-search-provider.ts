@@ -14,7 +14,7 @@ import { NodeControlledSearchHttpClient } from "./local-web-search-http";
 
 const BAIDU_ORIGIN = "https://www.baidu.com";
 const BAIDU_SEARCH_PATH = "/s";
-const DEFAULT_APP_VERSION = "2.0.0-alpha.0";
+const DEFAULT_APP_VERSION = "2.0.1";
 
 export const BAIDU_JSON_SEARCH_PROVIDER_DESCRIPTOR: LocalWebSearchProviderDescriptor = {
   providerId: "direct:baidu-json",

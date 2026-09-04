@@ -1430,6 +1430,94 @@ const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 31,
+    checksum: "personal-projects-v31-20260904",
+    sql: `
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
+        instructions TEXT NOT NULL DEFAULT '' CHECK (length(instructions) <= 20000),
+        pinned_rank INTEGER CHECK (pinned_rank IS NULL OR pinned_rank >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT,
+        revision INTEGER NOT NULL CHECK (revision > 0)
+      ) STRICT;
+      CREATE INDEX projects_owner_updated_idx
+        ON projects(owner_profile_id, archived_at, updated_at DESC);
+      CREATE INDEX projects_owner_pinned_idx
+        ON projects(owner_profile_id, pinned_rank, updated_at DESC)
+        WHERE archived_at IS NULL AND pinned_rank IS NOT NULL;
+
+      CREATE TABLE project_directories (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 240),
+        role TEXT NOT NULL CHECK (role IN ('primary', 'additional')),
+        desired_access TEXT NOT NULL CHECK (desired_access IN ('read_only', 'read_write')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        revision INTEGER NOT NULL CHECK (revision > 0)
+      ) STRICT;
+      CREATE INDEX project_directories_project_idx
+        ON project_directories(owner_profile_id, project_id, deleted_at, role, created_at);
+      CREATE UNIQUE INDEX project_directories_primary_idx
+        ON project_directories(project_id)
+        WHERE role = 'primary' AND deleted_at IS NULL;
+
+      CREATE TABLE project_directory_bindings (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        project_directory_id TEXT NOT NULL REFERENCES project_directories(id) ON DELETE CASCADE,
+        device_id TEXT NOT NULL,
+        workspace_grant_id TEXT NOT NULL REFERENCES workspace_grants(id),
+        last_validated_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        revoked_at TEXT,
+        revision INTEGER NOT NULL CHECK (revision > 0)
+      ) STRICT;
+      CREATE INDEX project_directory_bindings_device_idx
+        ON project_directory_bindings(owner_profile_id, device_id, revoked_at, updated_at DESC);
+      CREATE UNIQUE INDEX project_directory_bindings_active_directory_device_idx
+        ON project_directory_bindings(project_directory_id, device_id)
+        WHERE revoked_at IS NULL;
+      CREATE UNIQUE INDEX project_directory_bindings_active_grant_idx
+        ON project_directory_bindings(workspace_grant_id)
+        WHERE revoked_at IS NULL;
+
+      ALTER TABLE conversations
+        ADD COLUMN project_id TEXT REFERENCES projects(id);
+      CREATE INDEX conversations_project_idx
+        ON conversations(owner_profile_id, project_id, deleted_at, updated_at DESC);
+
+      ALTER TABLE workspace_bindings
+        ADD COLUMN project_directory_binding_id TEXT REFERENCES project_directory_bindings(id);
+      ALTER TABLE workspace_bindings
+        ADD COLUMN source_revision INTEGER CHECK (source_revision IS NULL OR source_revision > 0);
+      CREATE INDEX workspace_bindings_project_directory_idx
+        ON workspace_bindings(project_directory_binding_id, conversation_id)
+        WHERE project_directory_binding_id IS NOT NULL;
+
+      UPDATE workspace_bindings
+      SET source = 'user_added'
+      WHERE source = 'project' AND project_directory_binding_id IS NULL;
+    `,
+  },
+  {
+    version: 32,
+    checksum: "project-directory-authorization-replay-v32-20260904",
+    sql: `
+      ALTER TABLE workspace_grants ADD COLUMN project_operation_id TEXT;
+      CREATE UNIQUE INDEX workspace_grants_project_operation_idx
+        ON workspace_grants(owner_profile_id, project_operation_id)
+        WHERE project_operation_id IS NOT NULL;
+    `,
+  },
 ];
 
 export function migrateDatabase(

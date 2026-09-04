@@ -8,8 +8,10 @@ import type {
   DesktopBridge,
   LocalWebSearchSettingsState,
   ModelCatalogEntry,
-  PersonalFile,
   PermissionRequest,
+  PersonalFile,
+  ProjectDetail,
+  ProjectSummary,
   SkillInstallation,
   WorkItem,
   WorkItemDetail,
@@ -76,10 +78,65 @@ const thinkingModel: ModelCatalogEntry = {
   thinkingLevels: ["off", "medium"],
 };
 
+const personalProjectId = "66666666-6666-4666-8666-666666666666";
+const projectDirectoryId = "77777777-7777-4777-8777-777777777777";
+const projectDirectoryBindingId = "88888888-8888-4888-8888-888888888888";
+const projectWorkspaceGrantId = "99999999-9999-4999-8999-999999999999";
+const projectDetail: ProjectDetail = {
+  project: {
+    id: personalProjectId,
+    ownerProfileId: "local-default",
+    name: "客户交付",
+    instructions: "优先使用中文，并在提交前运行测试。",
+    pinnedRank: 0,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    archivedAt: null,
+    revision: 2,
+  },
+  directories: [
+    {
+      directory: {
+        id: projectDirectoryId,
+        ownerProfileId: "local-default",
+        projectId: personalProjectId,
+        displayName: "delivery-workspace",
+        role: "primary",
+        desiredAccess: "read_write",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        deletedAt: null,
+        revision: 1,
+      },
+      binding: {
+        id: projectDirectoryBindingId,
+        ownerProfileId: "local-default",
+        projectDirectoryId,
+        deviceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        workspaceGrantId: projectWorkspaceGrantId,
+        lastValidatedAt: timestamp,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        revokedAt: null,
+        revision: 1,
+      },
+      connectionState: "connected",
+    },
+  ],
+};
+const projectSummary: ProjectSummary = {
+  ...projectDetail.project,
+  conversationCount: 1,
+  directoryCount: 1,
+  connectedDirectoryCount: 1,
+  reconnectRequiredCount: 0,
+};
+
 const snapshot: ConversationSnapshot = {
   conversation: {
     id: conversationId,
     ownerProfileId: "local-default",
+    projectId: null,
     title: "Markdown 验收",
     activeBranchId: branchId,
     selectedModelRef: "pi/default",
@@ -328,6 +385,17 @@ function createBridge(): DesktopBridge {
     chooseWorkspace: vi.fn().mockResolvedValue(null),
     listWorkspaces: vi.fn().mockResolvedValue([]),
     revokeWorkspace: vi.fn(),
+    listProjects: vi.fn().mockResolvedValue([]),
+    getProject: vi.fn(),
+    createProject: vi.fn(),
+    updateProject: vi.fn(),
+    archiveProject: vi.fn(),
+    restoreProject: vi.fn(),
+    chooseProjectDirectory: vi.fn().mockResolvedValue(null),
+    setPrimaryProjectDirectory: vi.fn(),
+    disconnectProjectDirectory: vi.fn(),
+    removeProjectDirectory: vi.fn(),
+    moveConversationToProject: vi.fn(),
     listFiles: vi.fn().mockResolvedValue([]),
     searchFiles: vi.fn().mockResolvedValue([]),
     previewFile: vi.fn(),
@@ -614,7 +682,7 @@ describe("M1 chat renderer", () => {
 
   it("starts every homepage capability showcase with the exact supported prompt", async () => {
     const prompts = [
-      "搜索网络：先制定覆盖不同角度的检索计划，再调研最近一周 AI 行业的重要动态，核实信息并附上来源",
+      "复盘最近一周 A 股行情：哪些板块最受关注，背后的驱动因素是什么？",
       "检查我选择的文件或文件夹，找出问题并给出可验证的改进方案",
       "搜索最新资料，制作一份 AI 工具选型报告，同时生成对比表格、DOCX 和汇报 PPT",
       "计算一家月营收 100 万元、成本 65 万元公司的三种增长情景，并生成可下载的 Excel 分析表",
@@ -3426,5 +3494,234 @@ describe("M1 chat renderer", () => {
         }),
       ),
     );
+  });
+
+  it("creates a personal project from the sidebar without requiring a directory", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const createdProject = { ...projectDetail.project, name: "季度规划", instructions: "" };
+    vi.mocked(bridge.createProject).mockResolvedValue(createdProject);
+    vi.mocked(bridge.getProject).mockResolvedValue({
+      project: createdProject,
+      directories: [],
+    });
+    renderApp(bridge);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "新建项目" }));
+    await user.type(screen.getByLabelText("项目名称"), "季度规划");
+    await user.click(screen.getByRole("button", { name: "创建项目" }));
+
+    await waitFor(() =>
+      expect(bridge.createProject).toHaveBeenCalledWith({
+        operationId: expect.any(String),
+        name: "季度规划",
+        instructions: "",
+      }),
+    );
+    expect(await screen.findByRole("heading", { name: "季度规划" })).toBeTruthy();
+  });
+
+  it("opens a project from the sidebar and starts a project-scoped conversation", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listProjects).mockResolvedValue([projectSummary]);
+    vi.mocked(bridge.getProject).mockResolvedValue(projectDetail);
+    vi.mocked(bridge.listModels).mockResolvedValue([thinkingModel]);
+    vi.mocked(bridge.listConversations).mockResolvedValue([
+      {
+        ...snapshot.conversation,
+        projectId: personalProjectId,
+        lastMessagePreview: "已完成第一版",
+        messageCount: 2,
+      },
+    ]);
+    renderApp(bridge);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("link", { name: /客户交付/ }));
+    expect(await screen.findByRole("heading", { name: "客户交付" })).toBeTruthy();
+    expect(screen.getByText("delivery-workspace")).toBeTruthy();
+    await user.click(screen.getByRole("link", { name: "在此项目中开始对话" }));
+    expect(await screen.findByRole("heading", { name: "在这个项目中做什么？" })).toBeTruthy();
+    await user.type(screen.getByPlaceholderText("输入你的需求…"), "继续整理交付材料");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() =>
+      expect(bridge.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: null,
+          projectId: personalProjectId,
+          text: "继续整理交付材料",
+        }),
+      ),
+    );
+  });
+
+  it("archives and restores a project without deleting its local directories", async () => {
+    cleanup();
+    const bridge = createBridge();
+    let current = projectDetail;
+    vi.mocked(bridge.getProject).mockImplementation(async () => current);
+    vi.mocked(bridge.archiveProject).mockImplementation(async () => {
+      current = {
+        ...current,
+        project: {
+          ...current.project,
+          archivedAt: "2026-09-04T12:00:00.000Z",
+          revision: 3,
+        },
+      };
+      return current.project;
+    });
+    vi.mocked(bridge.restoreProject).mockImplementation(async () => {
+      current = {
+        ...current,
+        project: { ...current.project, archivedAt: null, revision: 4 },
+      };
+      return current.project;
+    });
+    renderApp(bridge, `/projects/${personalProjectId}`);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "项目设置" }));
+    await user.selectOptions(screen.getByLabelText("新目录访问权限"), "read_only");
+    await user.click(screen.getByRole("button", { name: "添加目录" }));
+    await waitFor(() =>
+      expect(bridge.chooseProjectDirectory).toHaveBeenCalledWith({
+        operationId: expect.any(String),
+        projectId: personalProjectId,
+        projectDirectoryId: null,
+        expectedProjectRevision: 2,
+        desiredAccess: "read_only",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "归档项目" }));
+    await waitFor(() =>
+      expect(bridge.archiveProject).toHaveBeenCalledWith({
+        operationId: expect.any(String),
+        projectId: personalProjectId,
+        expectedRevision: 2,
+      }),
+    );
+    expect(await screen.findByText("项目已归档；本机文件没有被删除。")).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "恢复项目" }));
+    await waitFor(() =>
+      expect(bridge.restoreProject).toHaveBeenCalledWith({
+        operationId: expect.any(String),
+        projectId: personalProjectId,
+        expectedRevision: 3,
+      }),
+    );
+  });
+
+  it("previews project permission differences and moves a conversation without rewriting history", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listProjects).mockResolvedValue([projectSummary]);
+    vi.mocked(bridge.getProject).mockResolvedValue(projectDetail);
+    vi.mocked(bridge.moveConversationToProject)
+      .mockResolvedValueOnce({
+        ...snapshot.conversation,
+        projectId: personalProjectId,
+        revision: 4,
+      })
+      .mockResolvedValueOnce({
+        ...snapshot.conversation,
+        projectId: null,
+        revision: 5,
+      });
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "移动到项目…" }));
+    await user.selectOptions(screen.getByLabelText("目标项目"), personalProjectId);
+
+    expect(screen.getByText("只影响下一轮生成；现有消息、成果和已完成运行保持不变。")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "下一轮将继承" })).toBeTruthy();
+    expect(screen.getByText("delivery-workspace")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认更改" }));
+
+    await waitFor(() =>
+      expect(bridge.moveConversationToProject).toHaveBeenNthCalledWith(1, {
+        operationId: expect.any(String),
+        conversationId,
+        projectId: personalProjectId,
+        expectedConversationRevision: 3,
+      }),
+    );
+    expect(screen.getByText("生成代码块和表格")).toBeTruthy();
+    expect(await screen.findByRole("link", { name: "客户交付" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "更改或移出项目…" }));
+    await user.selectOptions(screen.getByLabelText("目标项目"), "");
+
+    expect(screen.getByRole("heading", { name: "下一轮将不再继承" })).toBeTruthy();
+    expect(screen.getByText("仅为此对话添加的文件和目录不会被移除。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认更改" }));
+
+    await waitFor(() =>
+      expect(bridge.moveConversationToProject).toHaveBeenNthCalledWith(2, {
+        operationId: expect.any(String),
+        conversationId,
+        projectId: null,
+        expectedConversationRevision: 4,
+      }),
+    );
+    expect(screen.getByText("生成代码块和表格")).toBeTruthy();
+  });
+
+  it("labels project-inherited context separately from conversation-only scopes", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.getConversation).mockResolvedValue({
+      ...snapshot,
+      conversation: { ...snapshot.conversation, projectId: personalProjectId },
+    });
+    vi.mocked(bridge.getProject).mockResolvedValue(projectDetail);
+    vi.mocked(bridge.listWorkspaces).mockResolvedValue([
+      {
+        id: projectWorkspaceGrantId,
+        ownerProfileId: "local-default",
+        conversationId,
+        displayName: "delivery-workspace",
+        rootPath: "C:\\delivery-workspace",
+        access: "read_write",
+        allowNetwork: false,
+        expiresAt: null,
+        revokedAt: null,
+        createdAt: timestamp,
+        bindingRole: "primary",
+        bindingSource: "project",
+      },
+      {
+        id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        ownerProfileId: "local-default",
+        conversationId,
+        displayName: "private-notes",
+        rootPath: "C:\\private-notes",
+        access: "read_only",
+        allowNetwork: false,
+        expiresAt: null,
+        revokedAt: null,
+        createdAt: timestamp,
+        bindingRole: "additional",
+        bindingSource: "user_added",
+      },
+    ]);
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("link", { name: "客户交付" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "切换上下文" }));
+
+    expect(await screen.findByRole("region", { name: "项目上下文来源" })).toBeTruthy();
+    expect(screen.getByText("优先使用中文，并在提交前运行测试。")).toBeTruthy();
+    expect(screen.getByText(/^来自项目 · 主目录 · 读写 ·/)).toBeTruthy();
+    expect(screen.getByText(/^仅此对话 · 附加目录 · 只读 ·/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "撤销 delivery-workspace 工作区" })).toBeNull();
+    expect(screen.getByRole("button", { name: "撤销 private-notes 工作区" })).toBeTruthy();
   });
 });

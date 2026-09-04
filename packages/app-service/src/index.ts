@@ -4,5 +4,6 @@ export * from "./chat-app-service";
 export * from "./memory-consolidation-scheduler";
 export * from "./memory-extraction-scheduler";
 export * from "./pi-host-client";
+export * from "./project-app-service";
 export * from "./sync-coordinator";
 export * from "./tool-app-service";

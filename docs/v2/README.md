@@ -2,11 +2,12 @@
 
 > 状态：`PRODUCT_CONTRACT_APPROVED / IMPLEMENTATION_IN_PROGRESS`
 >
-> 修订日期：2026-08-30
+> 修订日期：2026-09-04
 >
 > 当前效力：已批准的个人客户端产品合同和实施边界。用户已授权重构；M1、Pi Foundation、M2
 > 至 M9 本地实现检查点已完成，M8/M9 外部 Beta 与发布证据正在补齐；新主线只在 `apps/`、
-> `services/` 和 `packages/` 推进。
+> `services/` 和 `packages/` 推进。个人项目 PRJ-001 至 PRJ-012 已完成本地实现、崩溃恢复、
+> Electron E2E 和机器发布门禁；真实双设备、Remote 真机和签名包发布级原生验收尚未完成。
 
 ## 1. 当前已经确定的方向
 
@@ -25,6 +26,7 @@
 13. `已确定`：Windows 支持 Windows 10 以上；“较新的 macOS”当前具体化为 macOS 14 及以上。
 14. `已确定`：V1 的 agent harness 完全由维护中的 Pi 提供；V2 只实现宿主、产品投影和能力/权限 Broker，不重复实现 Agent Loop、Session、压缩、重试或工具调用生命周期。
 15. `已确定`：V1 提供 Codex Remote 同类远程能力；手机可开始、Queue、Steer、Stop、审批和审阅桌面任务，桌面保持唯一执行面。
+16. `已确定`：V1 增加可选的个人项目；项目可组织对话、说明和多个本机目录，但不成为启动聊天的前置条件。
 
 这里的“个人客户端”表示产品围绕单个用户的对话、文件、工具、历史和个人成果展开；用户可能处于企业工作环境，但首版不要求企业先完成组织部署、角色配置或团队治理。
 
@@ -95,6 +97,16 @@
 44. [24-memory-system-method.md](24-memory-system-method.md)：当前长期记忆的完整运行方法，包括显式/自动写入、召回注入、冲突合并、安全、同步、计费、评测和剩余门禁。
 45. [25-pi-runtime-remote-update-plan.md](25-pi-runtime-remote-update-plan.md)：Pi Runtime 从应用整包依赖演进为签名、版本化、可灰度和可自动回滚的独立远程升级方案，以及 `0.84.3 → 0.84.4` 专项门禁。
 46. [evidence/pi-0.84.4-upgrade-2026-08-30.md](evidence/pi-0.84.4-upgrade-2026-08-30.md)：Pi `0.84.4` 普通依赖升级、实际模块加载、Session 兼容、生产 Bundle、真实 DeepSeek 和本地门禁例外证据。
+47. [26-personal-projects-plan.md](26-personal-projects-plan.md)：个人项目、主/附加目录、对话继承、跨设备重连、安全边界和分阶段开发任务。
+48. [evidence/prj-005-2026-09-04.md](evidence/prj-005-2026-09-04.md)：项目说明与设备目录惰性协调到每轮 Generation、普通对话隔离和专项回归证据。
+49. [evidence/prj-006-2026-09-04.md](evidence/prj-006-2026-09-04.md)：项目 Main/Preload 固定 Bridge、主帧 sender 校验和 Renderer 任意路径负向门禁证据。
+50. [evidence/prj-007-2026-09-04.md](evidence/prj-007-2026-09-04.md)：独立项目侧栏、首页、设置、项目内新对话和桌面用户流程测试证据。
+51. [evidence/prj-008-2026-09-04.md](evidence/prj-008-2026-09-04.md)：对话项目胶囊、上下文来源、归属移动确认、历史保持和桌面回归测试证据。
+52. [evidence/prj-009-2026-09-04.md](evidence/prj-009-2026-09-04.md)：项目同步白名单、双副本恢复、主目录冲突安全顺序、墓碑撤权和路径 canary 证据。
+53. [evidence/prj-010-2026-09-04.md](evidence/prj-010-2026-09-04.md)：Remote 加密项目快照、新任务项目选择、手机目录只读状态和权限负向边界证据。
+54. [evidence/prj-011-2026-09-04.md](evidence/prj-011-2026-09-04.md)：目录授权崩溃重放、项目中断恢复、完整回归和 Electron 双目录/重启 E2E 证据。
+55. [evidence/prj-012-2026-09-04.md](evidence/prj-012-2026-09-04.md)：Personal Projects 日期化证据索引、机器发布门禁、外部阻塞和更新说明收口证据。
+56. [release/03-personal-projects-update-notes.md](release/03-personal-projects-update-notes.md)：Personal Projects 用户可见变更、恢复边界、Personal Beta 验收和发布回滚清单。
 
 ## 5. V1 与未来方向边界
 
@@ -102,6 +114,7 @@
 | --- | --- |
 | 新对话、流式回答、停止和重试 | 企业组织与成员目录 |
 | 对话历史、搜索、重命名和删除 | 产品/团队负责人工作台 |
+| 可选个人项目、项目说明、多目录上下文和对话归类 | 团队项目、成员角色、共享与组织策略 |
 | 个人账户云同步、设备恢复和同步状态 | 组织目录、SSO、SCIM 和管理员身份治理 |
 | 文件上传、个人资料和上下文选择 | 团队知识库和权限继承 |
 | Web 搜索、系统默认浏览器/隔离安全浏览器、Shell、桌面控制、MCP 与权限确认 | 组织级连接器、策略和审批 |

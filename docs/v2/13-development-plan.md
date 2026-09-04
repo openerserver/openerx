@@ -1,8 +1,8 @@
 # UWA 2.0 V1 开发计划
 
-> 状态：`M0-M9 LOCAL COMPLETE / EXTERNAL BETA AND RELEASE GATES PENDING`
+> 状态：`M0-M9 LOCAL BASELINE COMPLETE / PERSONAL PROJECTS IN PROGRESS / EXTERNAL BETA AND RELEASE GATES PENDING`
 >
-> 更新日期：2026-08-28（Asia/Shanghai）
+> 更新日期：2026-09-04（Asia/Shanghai）
 >
 > 适用范围：Electron + React 的 Windows/macOS 执行主机与 React Native iOS/Android Remote Companion
 
@@ -11,12 +11,13 @@
 V1 完成必须同时满足：
 
 1. 用户打开桌面客户端即可聊天，并能停止、重试、搜索和恢复历史。
-2. Conversation、Message、文件、成果和设置独立于 Pi 私有 Session 保存。
+2. Project、Conversation、Message、文件、成果和设置独立于 Pi 私有 Session 保存。
 3. 同一账户可在 Windows 与 macOS 间同步和恢复。
 4. 模型、Token、报价、费用、额度、积分、余额、充值和账单可逐笔解释。
 5. 文件、Web、浏览器、Shell、桌面控制、MCP 和 Skill 达到 Codex 能力基线。
 6. 用户可从 iOS/Android 安全控制已配对的在线桌面主机，完成 Start、Queue、Steer、Stop、审批和结果审阅。
 7. 黄金任务、安全、资金、桌面/移动矩阵打包、签名和更新门禁全部通过。
+8. 用户可选使用个人项目组织对话、说明和多个本机目录，且跨设备恢复不会继承目录路径或权限。
 
 ## 2. 不可变架构原则
 
@@ -30,6 +31,7 @@ V1 完成必须同时满足：
 - Pi API、事件或工具语义与 V2 既有概念冲突时，以 Pi 为准，并同步修改 V2 合同。
 - 手机是控制面、桌面是执行面；Remote Start/Steer/Queue/Stop 直接映射 Pi `prompt()`/`steer()`/`followUp()`/`abort()`。
 - Remote Relay 只路由有时效、可验签、可去重的产品命令和事件，不拥有 Pi Session、运行时队列或权限决策。
+- Project 是产品上下文容器，不是 Pi Session、代码仓库、权限主体或另一套运行时；目录执行继续复用 WorkspaceGrant 与 Broker。
 
 规范性决策见 [ADR-V2-007](adr/007-pi-harness-boundary.md)。
 
@@ -47,8 +49,9 @@ V1 完成必须同时满足：
 | BCU Browser Computer-Use | BCU-003 MACOS AX + WINDOWS EDGE/CHROME UIA LIVE PASS + BRIDGE SECURITY FOUNDATION / PHASE PARTIAL | ADR-V2-017、V2 严格合同与内核、Main/Pi 接线、macOS 默认浏览器精确窗口 AX Adapter、Windows 11 默认 Edge/Chrome 精确 HWND/UIA Adapter、像素遮罩、真实百度烟测、代表性原生动作矩阵、物理/合成输入接管边界、fresh-baseline 恢复、真实 Main/Preload/Renderer Tool Center 接管/恢复/关窗，以及 Bridge 固定 origin/启动 nonce、一次性精确标签页授权、防重放/断连状态机和 Adapter 路由 | macOS 物理输入与原生 Tool Center runners 已 PASS；当前 Windows 11 x64 默认 Edge 与默认 Chrome 的语义搜索、Backspace/滚动/刷新、合成输入 monitor 隔离、精确截图/关窗已 PASS，未签名包已验证；Bridge 仍需 MV3 扩展、Native Messaging/Main owner-only 传输、可信连接 UI、真实烟测和签名安装权限；Windows 其他 OS/DPI/多屏/签名矩阵、Firefox 与托管 Chromium 仍待完成；`legacy_dom_v1` 仅保留为显式 feature flag 回滚；[BCU-001 证据](evidence/bcu-001-2026-08-27.md)；[BCU-002 证据](evidence/bcu-002-2026-08-27.md)；[BCU-003 证据](evidence/bcu-003-2026-08-27.md)；[2026-08-28 live gates PASS](evidence/bcu-003-live-input-2026-08-28.md)；[Bridge foundation](evidence/bcu-003-browser-bridge-foundation-2026-08-28.md)；[Windows Edge/Chrome evidence](evidence/bcu-003-windows-system-browser-2026-08-29.md) |
 | M6 Remote Control Alpha | LOCAL COMPLETE | Expo 手机控制面、同账户配对、E2EE 协议、出站 Connector、密文 Gateway、Pi 原生命令映射、远程审批和事件游标 | iOS/Android 真机、Windows/macOS 主机矩阵、APNs/FCM 生产投递、移动附件闭环与真实网络故障演练仍是发布门禁；[实现与质量证据](evidence/m6-2026-08-26.md) |
 | M7 Skill | LOCAL COMPLETE | Pi-native Skill 包、Scope、生命周期、Broker 和同步 | 签名目录、跨平台脚本运行时与原生矩阵仍是发布门禁；[实现与质量证据](evidence/m7-2026-08-26.md) |
+| PRJ Personal Projects | LOCAL COMPLETE | PRJ-001 至 PRJ-012：合同、SQLite/Repository、App Service、设备目录授权、Generation 继承、Main/Preload、桌面与对话 UI、云同步、Remote、崩溃恢复、Electron E2E 和机器发布门禁 | 真实双设备、签名 Windows/macOS 目录重连和 iOS/Android Remote 真机矩阵；[专项方案](26-personal-projects-plan.md)；[最终本地证据](evidence/prj-012-2026-09-04.md)；[更新说明](release/03-personal-projects-update-notes.md) |
 | M8 Personal Beta | EXTERNAL IN PROGRESS | 诊断/性能/数据恢复本地检查点；真实 DeepSeek SSE→Pi→桌面瀑布与 Usage→服务端 Charge 首个闭环 | 目标用户、真实长请求 Stop/失败、Provider 账单对账、支付、Remote 真机、原生与签名矩阵；[M8 证据](evidence/m8-2026-08-26.md)；[流式瀑布证据](evidence/streaming-waterfall-2026-08-26.md) |
-| M9 V1 Release | LOCAL COMPLETE | 签名发布工作流、Ed25519 更新清单、Main-only 更新、EAS/隐私清单、发布图扫描、回滚手册 | 12 组外部发布证据与明确用户批准；[实现与质量证据](evidence/m9-2026-08-26.md) |
+| M9 V1 Release | LOCAL COMPLETE | 签名发布工作流、Ed25519 更新清单、Main-only 更新、EAS/隐私清单、发布图扫描、回滚手册 | 13 组外部发布证据与明确用户批准；[实现与质量证据](evidence/m9-2026-08-26.md) |
 
 受支持启动路径必须在展示聊天界面前准备好真实 Platform Model Gateway 和默认
 `platform/auto` 模型，不把“模型未配置”暴露为用户状态。本地开发的 `npm run dev:v2`
@@ -68,14 +71,16 @@ flowchart LR
   M3 --> M6["M6 Remote Control"]
   M5 --> M6
   M5 --> M7["M7 Skill"]
+  M5 --> PRJ["PRJ Personal Projects"]
   M6 --> M8["M8 Personal Beta"]
   M7 --> M8
+  PRJ --> M8
   M8 --> M9["M9 Release"]
 ```
 
 账户/模型与计费可以和桌面文件能力并行，但收费执行必须在 Usage、报价、预留和账本真值完成后开放。
 
-加入 Remote 后，6 至 8 人团队的总规划基线为 29 至 39 周；4 至 6 人团队为 38 至 50 周。M6 Remote 与 M7 Skill 可在 M5 完成后部分并行，但 M8 Beta 必须等待两者都通过。
+加入 Remote 后，6 至 8 人团队的原总规划基线为 29 至 39 周；4 至 6 人团队为 38 至 50 周。个人项目新增 6–8 个工程日的实现工作，不含真实双设备、签名包和 Remote 真机证据。M8 Beta 退出和 V1 Release 现在额外依赖 PRJ 门禁。
 
 ## 5. 里程碑
 
@@ -222,6 +227,17 @@ macOS arm64/x64 组合，生产 APNs/FCM、真实 HTTPS/WSS 部署、移动附�
 - 启动、性能、诊断、数据导出/删除、故障恢复和高频体验修复。
 - 50 条黄金任务与 Remote 专项矩阵达到 Beta 阈值，所有硬门禁通过。
 
+### PRJ：Personal Projects — 6 至 8 个工程日
+
+- Project、可同步的 ProjectDirectory、设备级 ProjectDirectoryBinding、Conversation.projectId 与 SQLite v31。
+- 可选项目、项目说明、一个主目录和多个附加目录。
+- 项目目录惰性协调为现有 WorkspaceGrant/WorkspaceBinding，不新增 Broker 旁路。
+- 项目元数据与对话归属同步；目录绝对路径、句柄和 Grant 保持设备本地。
+- 桌面项目侧栏/首页/设置、对话移动和 Remote 只读项目目录状态。
+- 具体 PRJ-001 至 PRJ-012、迁移和验收门禁见 [26-personal-projects-plan.md](26-personal-projects-plan.md)。
+
+退出条件：专项方案第 10 节全部产品、权限、同步、恢复和工程门禁通过，且形成日期化实现证据。
+
 ### M9：V1 Release — 2 至 3 周
 
 状态：`LOCAL RELEASE FOUNDATION COMPLETE (2026-08-26) / EXTERNAL RELEASE BLOCKED`
@@ -293,6 +309,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 7. 更新实现状态和可复现证据。
 8. Pi 相关工作直接使用 Pi API，不复制其 loop/session/compaction/retry/tool lifecycle。
 9. Remote 相关工作保持手机控制面、桌面执行面，并直接使用 Pi `prompt/steer/followUp/abort`，不复制队列或 SessionManager。
+10. Project 相关工作保持元数据可同步、目录授权设备本地；主/附加目录在 Generation 开始前冻结为现有 Broker Grant。
 
 ## 8. 发布 Gate
 
@@ -303,6 +320,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 | Model + Usage | Pi Provider、统一流事件、自动/明确选模、实际模型、Token 去重、错误归一化 | 真实长请求停止/失败与 Provider 账单对账 |
 | Billing | 报价、预留、账本、Webhook、退款、对账 | 支付测试环境与合规确认 |
 | File | Scope、解析、引用、版本、渲染 | 每种办公成果真实打开 |
+| Personal Projects | Project/Conversation revision、主/附加目录不变量、Broker 继承、绝对路径同步 canary | Windows/macOS 双设备重连、签名包目录选择与 Remote 只读状态 |
 | Tool | Pi tool lifecycle、Broker、取消、MCP | 浏览器/Shell/桌面双平台 |
 | Codex 对齐 | P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 的合同、Run 快照、工作区 Patch/Diff、分层指令、独立 MCP、按需工具发现、Office 真实成果、丰富 Run Item、桌面 MCP Authorization Code + PKCE、fail-closed Host readiness、legacy macOS Browser/Shell/Desktop 本机矩阵，以及 Developer ID 签名 macOS arm64 的 TCC/安装升级回滚/受控交互 | BCU 双后端 Browser Host、Apple 公证与分发安装、live Provider、第三方实网 OAuth、任意 Office 预览和 Windows 原生矩阵 |
 | Skill | Pi 加载、安装、更新、卸载、失败隔离 | 个人/工作区 Skill 双平台 |
@@ -318,6 +336,7 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 | Pi Session 与产品历史耦合 | 产品历史独立持久化；Pi ref 仅内部使用，失败时明确终态 |
 | Electron 权限扩大 | 最小 Bridge、独立 Pi Host、Broker Scope、负向 IPC/路径测试 |
 | 同步冲突或重复 | operationId、revision、cursor、墓碑和双设备回放测试 |
+| Project 被误作权限或运行时边界 | Project 只保存产品配置；执行前解析为当前设备有效 Grant，未重连时 fail closed |
 | 用量或计费重复 | Usage/Charge 稳定去重、冻结价格、追加式账本和对账 |
 | Tool/Skill 权限旁路 | Pi 只发起调用；实际能力全部经 Broker |
 | Remote 暴露桌面主机 | Connector 只出站连接，Relay 不可解密，主机无公网/localhost Remote 监听端口 |
@@ -328,7 +347,11 @@ Android Remote 真机、Windows/macOS 原生矩阵和签名安装包仍为 `pend
 
 ## 10. 当前下一步
 
-### 10.1 当前执行切片：PBASH-008 本机 fail-closed 完成，外部发布受阻
+### 10.1 新增获批切片：PRJ-001 至 PRJ-012
+
+PRJ-001 至 PRJ-012 已完成本地检查点；项目目录授权中断可幂等重放，普通对话不会继承中间态 Grant，Electron E2E 覆盖双目录、项目对话、App Service 崩溃、整机重启、归档和恢复。日期化证据、更新说明与机器可读 Gate 已收口，Personal Projects 已加入 M8 Personal Beta 和 M9 Release Gate，证据见 [PRJ-012](evidence/prj-012-2026-09-04.md)。`releaseClaim=false`；下一步属于外部验证，不再是本地实施切片：真实双设备、签名 Windows/macOS 包和 iOS/Android Remote 真机矩阵。
+
+### 10.2 既有执行切片：PBASH-008 本机 fail-closed 完成，外部发布受阻
 
 用户已接受 [ADR-V2-018](adr/018-brokered-bash-and-platform-sandbox.md)，并已完成
 [PBASH 实施计划](20-pbash-implementation-plan.md) 的 PBASH-001 至 PBASH-003：严格
@@ -363,7 +386,7 @@ platform/OS build，并验证 Linux/Windows、缺失 backend、probe 失败和 u
 已经收口。当前 `sandbox-exec` 后端已被 macOS 标记 deprecated，Developer ID 签名/
 公证包、macOS x64、替代后端评估、Linux/WSL2 和 Windows backend 仍不得宣称完成。
 
-### 10.2 既有外部门禁
+### 10.3 既有外部门禁
 
 M9 本地发布基础、Codex 对齐 P0、CX-101 至 CX-109 与 CX-110-D1/D2/D3 已完成本地检查点。
 CX-110-D3 已验证 Developer ID 签名 macOS arm64 包的稳定 TCC 身份、隔离安装/升级/真回滚、

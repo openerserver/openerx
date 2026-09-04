@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "checkpoint": "PRJ-012-personal-projects-local-release-foundation",
+  "updatedAt": "2026-09-04",
+  "releaseClaim": false,
+  "localImplementation": {
+    "status": "complete",
+    "completedSlices": 12,
+    "expectedSlices": 12,
+    "datedEvidenceRecords": 11,
+    "electronE2E": "pass",
+    "requiredEvidence": [
+      "docs/v2/evidence/prj-001-002-2026-09-04.md",
+      "docs/v2/evidence/prj-003-2026-09-04.md",
+      "docs/v2/evidence/prj-004-2026-09-04.md",
+      "docs/v2/evidence/prj-005-2026-09-04.md",
+      "docs/v2/evidence/prj-006-2026-09-04.md",
+      "docs/v2/evidence/prj-007-2026-09-04.md",
+      "docs/v2/evidence/prj-008-2026-09-04.md",
+      "docs/v2/evidence/prj-009-2026-09-04.md",
+      "docs/v2/evidence/prj-010-2026-09-04.md",
+      "docs/v2/evidence/prj-011-2026-09-04.md",
+      "docs/v2/evidence/prj-012-2026-09-04.md"
+    ],
+    "releaseNotes": "docs/v2/release/03-personal-projects-update-notes.md"
+  },
+  "externalBeta": {
+    "status": "pending_external",
+    "completedEvidence": [],
+    "requiredEvidence": [
+      "signed-windows-macos-directory-picker-and-reconnect",
+      "physical-cross-device-project-sync-and-conflict-recovery",
+      "ios-android-remote-project-read-only-matrix"
+    ]
+  },
+  "externalRelease": {
+    "status": "pending_external",
+    "userApproval": false,
+    "publishAllowed": false,
+    "completedEvidence": [],
+    "requiredEvidence": ["personal-projects-signed-cross-device-directory-reconnect-and-remote"]
+  }
+}

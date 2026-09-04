@@ -3,6 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import {
   type CloudDataDeletionResult,
   cloudDataDeletionResultSchema,
+  projectDirectorySyncPayloadSchema,
+  projectSyncPayloadSchema,
   type SyncChange,
   type SyncConflict,
   type SyncOperation,
@@ -34,7 +36,10 @@ const forbiddenPayloadKeys = new Set([
   "accesstoken",
   "absolutepath",
   "cookie",
+  "canonicalpath",
+  "canonicalpathhash",
   "credential",
+  "directoryhandle",
   "devicecredential",
   "filegrant",
   "localpath",
@@ -48,6 +53,10 @@ const forbiddenPayloadKeys = new Set([
   "shellhistory",
   "sourcerelativepath",
   "sourcescopeid",
+  "workspacegrant",
+  "workspacegrantid",
+  "projectdirectorybinding",
+  "projectdirectorybindingid",
 ]);
 
 function canonicalKey(key: string): string {
@@ -67,6 +76,22 @@ function assertSyncSafe(value: unknown, path = "payload"): void {
       throw new Error(`SYNC_FORBIDDEN_FIELD:${path}.${key}`);
     }
     assertSyncSafe(entry, `${path}.${key}`);
+  }
+}
+
+function assertTypedPayload(operation: SyncOperation): void {
+  if (operation.mutation === "delete" || operation.payload === null) return;
+  if (operation.objectType === "project") {
+    const project = projectSyncPayloadSchema.parse(operation.payload);
+    if (project.id !== operation.objectId || project.ownerProfileId !== operation.accountId) {
+      throw new Error("ACCOUNT_SCOPE_VIOLATION");
+    }
+  }
+  if (operation.objectType === "project_directory") {
+    const directory = projectDirectorySyncPayloadSchema.parse(operation.payload);
+    if (directory.id !== operation.objectId || directory.ownerProfileId !== operation.accountId) {
+      throw new Error("ACCOUNT_SCOPE_VIOLATION");
+    }
   }
 }
 
@@ -118,6 +143,7 @@ export class AccountSyncService {
     const operation = syncOperationSchema.parse(input);
     this.#assertScope(principal, operation);
     if (operation.payload) assertSyncSafe(operation.payload);
+    assertTypedPayload(operation);
     const hash = requestHash(operation);
     const replay = this.#database
       .prepare("SELECT request_hash, result_json FROM sync_operations WHERE operation_id = ?")

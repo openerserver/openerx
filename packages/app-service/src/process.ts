@@ -9,6 +9,7 @@ import {
   automationSchedulerReconcileFrameSchema,
   chatCommandEnvelopeSchema,
   type ErrorEnvelope,
+  projectCommandEnvelopeSchema,
   remoteApplyCommandRequestFrameSchema,
   remoteConnectorConfigureFrameSchema,
   remoteConnectorDisableFrameSchema,
@@ -23,6 +24,7 @@ import {
   ChatRepository,
   FileRepository,
   MemoryRepository,
+  ProjectRepository,
   RemoteRepository,
   SkillRepository,
   ToolRepository,
@@ -35,6 +37,7 @@ import { MainCapabilityClient } from "./main-capability-client";
 import { MemoryConsolidationScheduler, PiMemoryClusterer } from "./memory-consolidation-scheduler";
 import { MemoryExtractionScheduler, PiMemoryExtractor } from "./memory-extraction-scheduler";
 import { MessagePortPiHostClient } from "./pi-host-client";
+import { ProjectAppService } from "./project-app-service";
 import { HttpAccountSyncTransport, SyncCoordinator } from "./sync-coordinator";
 import { ToolAppService } from "./tool-app-service";
 
@@ -109,15 +112,21 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
     emit: (event) => service.emitExternal(event),
     additionalAdapters: [new SkillToolAdapter(skills)],
   });
+  const projectRepository = new ProjectRepository(
+    path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
+    { ownerProfileId: bootstrap.ownerProfileId, deviceId: bootstrap.deviceId },
+  );
+  const syncCoordinator = new SyncCoordinator(repository, new HttpAccountSyncTransport(), files);
   service = new ChatAppService(
     repository,
     piHost,
-    new SyncCoordinator(repository, new HttpAccountSyncTransport(), files),
+    syncCoordinator,
     files,
     toolService,
     remoteRepository,
     skills,
     memoryRepository,
+    projectRepository,
   );
   const automationRepository = new AutomationRepository(
     path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
@@ -134,6 +143,7 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
   const automationService = new AutomationAppService(automationRepository, () =>
     automationScheduler.tick(),
   );
+  const projectService = new ProjectAppService(projectRepository, toolService);
   const memoryExtractionScheduler = new MemoryExtractionScheduler({
     chatRepository: repository,
     memoryRepository,
@@ -245,13 +255,39 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
     if (!request.success) return;
     try {
       const automationRequest = automationCommandEnvelopeSchema.safeParse(request.data.request);
-      const data = automationRequest.success
-        ? await automationService.handle(automationRequest.data)
-        : await service.handle(
-            chatCommandEnvelopeSchema.parse(request.data.request),
-            request.data.authorization,
-            request.data.byok,
-          );
+      const projectRequest = projectCommandEnvelopeSchema.safeParse(request.data.request);
+      let data: unknown;
+      if (automationRequest.success) {
+        data = await automationService.handle(automationRequest.data);
+      } else if (projectRequest.success) {
+        data = projectService.handle(projectRequest.data);
+        if (
+          projectRequest.data.command !== "project.list" &&
+          projectRequest.data.command !== "project.get"
+        ) {
+          const snapshot = projectRepository.remoteSnapshot(false);
+          remotePort.postMessage({
+            kind: "remote.event.publish",
+            eventKind: snapshot.kind,
+            conversationId: null,
+            occurredAt: snapshot.generatedAt,
+            payload: snapshot,
+          });
+          if (request.data.authorization) {
+            try {
+              await syncCoordinator.syncOnce(request.data.authorization);
+            } catch {
+              // Project writes and their transactional outbox remain valid while offline.
+            }
+          }
+        }
+      } else {
+        data = await service.handle(
+          chatCommandEnvelopeSchema.parse(request.data.request),
+          request.data.authorization,
+          request.data.byok,
+        );
+      }
       mainPort.postMessage({
         kind: "app-service.response",
         requestId: request.data.requestId,
@@ -284,6 +320,7 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
     memoryExtractionScheduler.stop();
     automationScheduler.stop();
     automationRepository.close();
+    projectRepository.close();
     mainCapabilities.close();
     service.close();
   });

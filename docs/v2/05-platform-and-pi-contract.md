@@ -18,6 +18,7 @@ V1 技术架构首先服务个人客户端：
 8. 模型可替换，Pi 版本可在稳定宿主边界内升级，产品历史不依赖 Pi 内部状态。
 9. 手机可以安全控制已配对的在线桌面主机，但所有实际执行仍由桌面上的 Pi 和设备能力完成。
 10. 不建设暂时没有用户价值的企业管理面。
+11. 个人项目可以复用说明和多个目录，但每轮执行仍冻结为现有 Broker 可验证的工作区授权。
 
 ## 2. 目标拓扑
 
@@ -30,7 +31,7 @@ flowchart TD
   UI[React Renderer] --> PRELOAD[Typed Preload Bridge]
   PRELOAD --> MAIN[Electron Main Process]
   MAIN --> APP[Personal App Service / Utility Process]
-  APP --> STORE[Conversation and File Store]
+  APP --> STORE[Project Conversation and File Store]
   APP --> SEARCH[Personal Search Index]
   APP --> SUPERVISOR[Pi Host Supervisor]
   SUPERVISOR --> HOST[Isolated Pi Host]
@@ -88,6 +89,7 @@ V1 已确认系统矩阵：
 
 - 应用生命周期、窗口、菜单、托盘、深链接和更新。
 - 文件对话框、系统打开/另存为和安全外链。
+- 项目目录选择器与本机授权句柄；不接受 Renderer 伪造路径。
 - 账户登录回调、设备标识和系统凭证库会话。
 - 创建并监督 Personal App Service 与 Pi Host。
 - 不承载长时间 AI 执行或 CPU 密集任务。
@@ -100,7 +102,7 @@ V1 已确认系统矩阵：
 
 ### 4.3 React Renderer
 
-- 新对话、历史、搜索、文件、助手/技能、浏览器活动与证据面板、终端面板、账户同步、用量/费用、
+- 新对话、个人项目、历史、搜索、文件、助手/技能、浏览器活动与证据面板、终端面板、账户同步、用量/费用、
   充值、账单和设置。
 - 使用 React + TypeScript + Vite。
 - 只消费版本化 Bridge/API 和恢复型事件。
@@ -109,7 +111,7 @@ V1 已确认系统矩阵：
 
 ### 4.4 Personal App Service
 
-- Conversation、Message、文件、成果和搜索。
+- Project、Conversation、Message、文件、成果和搜索。
 - 账户同步队列、模型目录、模型路由、用量/费用只读缓存、设置和权限。
 - 请求服务端报价和充值订单，但无权修改余额、账本或支付状态。
 - 创建简单响应或复杂 WorkItem。
@@ -118,7 +120,7 @@ V1 已确认系统矩阵：
 ### 4.5 Pi Host Supervisor 与产品投影
 
 - 为一次产品执行分配稳定的 Message、WorkItem、ExecutionRun 和 generation 标识，并绑定内部 Pi Session 引用。
-- 在进入 Pi 前校验账户、模型、报价/预留、文件 Scope 和设备能力前置条件。
+- 在进入 Pi 前解析项目上下文，并校验账户、模型、报价/预留、文件 Scope 和设备能力前置条件。
 - 监督 Pi Host 的进程生命周期，决定产品层是等待、明确失败，还是请求 Pi 恢复已有 Session。
 - 将 Pi 事件投影为可持久化、可同步、可恢复的产品事件；WorkItem 和 ExecutionRun 是产品监督与审计视图，不是第二套 Agent 计划器。
 - 不实现 Agent Loop、Session/SessionManager、上下文压缩、内部重试、步骤规划或工具调用生命周期；这些全部由 Pi 提供。
@@ -128,7 +130,7 @@ V1 已确认系统矩阵：
 - 只在该受监督 utility process 中加载维护中的 Pi 包；Main、Preload、Renderer 和 App Service 不直接导入 Pi。
 - 为每个执行创建或恢复 Pi `AgentSession`，并绑定明确的隔离工作目录。
 - 把 Platform Model Gateway 客户端和 V2 能力工具注册给 Pi，不建立第二套 loop 或 tool dispatcher。
-- 挂载当前对话明确授权的输入。
+- 挂载当前对话明确授权的输入；项目主目录作为默认工作目录，项目附加目录作为额外授权根。
 - 限制 CPU、内存、磁盘、时长和网络。
 - 不暴露用户 Home、全局凭证和未授权文件夹。
 - 浏览器、Shell、桌面控制和 Skill 脚本使用独立能力 Broker，不通过 Renderer 直接启动。
@@ -205,6 +207,10 @@ Message -> WorkItem/ExecutionRun product projection -> Pi AgentSession
 两条路径使用同一个 Pi harness，共享 Conversation、模型配置、权限、事件、用量、报价和结算合同。复杂路径增加的是产品可见的后台状态、权限等待、成果和恢复投影，不是另一个负责拆解步骤的 Agent 编排器。普通问答不强制创建用户可见 WorkItem。
 
 两条路径的模型请求都必须经过 Platform Model Gateway。收费请求在执行前取得 Billing Authorization；桌面端和 Pi Host 不保存上游 Provider API Key，也不能绕过平台 Token 与费用记录直接调用未登记模型。
+
+### 6.1 项目上下文解析
+
+Personal App Service 在每轮生成前把 Project 和 Conversation 快照解析为现有执行合同：项目主目录映射为 `activeExecutionGrantId`，附加目录映射为 `additionalExecutionGrantIds`，对话单独添加的目录继续使用 `source=user_added`。该快照进入 Pi 后不可被项目切换中途改写；项目只是产品组织层，不成为 Pi Session、工具调度器或沙箱授权主体。
 
 ## 7. Pi Host 进程合同
 
@@ -294,12 +300,13 @@ V2 将工具定义和 Skill 上下文注册给 Pi。Pi 负责模型到工具的�
 V1 已确定支持账户云同步；已确认架构采用账户云真值与本地缓存相结合的模式：
 
 - 账户范围的结构化历史由云端版本化存储作为真值，本地数据库提供缓存、搜索和离线队列。
+- Project 元数据、说明、目录逻辑占位和 Conversation 归属属于账户范围；目录绝对路径和 Grant 属于设备范围。
 - 文件和成果使用云对象存储与本机应用管理目录的受控副本。
 - 登录会话进入系统 Keychain/凭证库；上游模型密钥不下发客户端。
 - 搜索索引可以重建，不作为唯一真值。
 - 使用独立 Sync Adapter、幂等操作、对象 revision、墓碑和稳定游标。
 - 明确哪些数据上传、加密、保留和删除；冲突保留版本，不静默覆盖。
-- 本地绝对路径、设备权限、Cookie、Shell 历史、密钥、日志和临时工作区禁止同步。
+- 项目目录和其他本地绝对路径、设备权限、Cookie、Shell 历史、密钥、日志和临时工作区禁止同步。
 - 用户可以查看同步状态、重试、导出和删除个人数据。不提供匿名本地模式；断网时允许读取缓存和排队受支持的内容写入。
 - 额度、积分、充值余额、支付、费用和账单不进入普通离线写队列；本机只能缓存服务端只读快照，联网后重新核对。
 - RemoteHost、设备公钥、配对状态和撤销记录属于账户安全数据；短期 Remote 命令/运行详情按端到端加密与 TTL 处理，不混入普通内容冲突合并。

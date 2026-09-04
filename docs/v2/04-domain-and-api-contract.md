@@ -2,7 +2,7 @@
 
 > 状态：`APPROVED_PRODUCT_SCOPE / IMPLEMENTATION_IN_PROGRESS`
 >
-> 合同类型：Conversation-first 个人客户端对象、长任务、Remote Control 与接口边界
+> 合同类型：Conversation-first、Project-aware 个人客户端对象、长任务、Remote Control 与接口边界
 
 ## 1. V1 业务真值
 
@@ -11,6 +11,9 @@
 - UserProfile
 - AccountIdentity
 - DeviceSession
+- Project
+- ProjectDirectory
+- ProjectDirectoryBinding
 - Conversation
 - Message
 - Attachment
@@ -61,6 +64,11 @@
 ```mermaid
 erDiagram
   USER_PROFILE ||--o{ CONVERSATION : owns
+  USER_PROFILE ||--o{ PROJECT : owns
+  PROJECT ||--o{ CONVERSATION : contains
+  PROJECT ||--o{ PROJECT_DIRECTORY : configures
+  PROJECT_DIRECTORY ||--o{ PROJECT_DIRECTORY_BINDING : connects
+  DEVICE_SESSION ||--o{ PROJECT_DIRECTORY_BINDING : authorizes
   ACCOUNT_IDENTITY ||--|| USER_PROFILE : identifies
   ACCOUNT_IDENTITY ||--o{ DEVICE_SESSION : signs_in
   ACCOUNT_IDENTITY ||--o{ REMOTE_HOST : owns
@@ -106,12 +114,36 @@ erDiagram
 
 账户、用户资料和设备会话是不同对象。退出一台设备不能删除 UserProfile；撤销 DeviceSession 后，该设备不得继续拉取或写入云数据。
 
+### 3.1A Project、ProjectDirectory 与 ProjectDirectoryBinding
+
+Project 是当前个人账户的可选上下文容器，建议字段：
+
+- `id`、`ownerProfileId`、`name`、`instructions`
+- `pinnedRank`
+- `createdAt`、`updatedAt`、`archivedAt`
+- `revision`、`syncState` 和 `lastSyncedAt`
+
+ProjectDirectory 是可同步的逻辑目录配置，建议字段：
+
+- `id`、`projectId`、`displayName`
+- `role`（`primary | additional`）
+- `desiredAccess`（`read_only | read_write`）
+- `createdAt`、`updatedAt`、`revision`
+
+ProjectDirectoryBinding 表示逻辑目录在某台桌面设备上的本机授权连接，建议字段：
+
+- `id`、`projectDirectoryId`、`deviceId`、`workspaceGrantId`
+- `lastValidatedAt`、`revokedAt`、`revision`
+
+项目可以没有目录；有逻辑目录时恰有一个主目录。Project 和 ProjectDirectory 可同步；ProjectDirectoryBinding、`rootPath`、canonical hash、句柄与 Grant 禁止同步。完整不变量和迁移见 [26-personal-projects-plan.md](26-personal-projects-plan.md)。
+
 ### 3.2 Conversation
 
 建议字段：
 
 - `id`
 - `ownerProfileId`
+- `projectId`（可空）
 - `title`
 - `activeBranchId`
 - `selectedModelRef`
@@ -121,6 +153,8 @@ erDiagram
 - `revision`、`syncState` 和 `lastSyncedAt`
 
 Conversation 负责产品历史和上下文选择，不直接承载 Pi 私有 Session 状态。
+
+一个 Conversation 最多属于一个同账户 Project。改变 `projectId` 只影响后续轮次，不重写历史 Message、Attachment、Artifact 或 Pi Session 引用。
 
 ### 3.3 Message 与 MessagePart
 
@@ -385,6 +419,8 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 /api/v2/profile
 /api/v2/account
 /api/v2/devices
+/api/v2/projects
+/api/v2/projects/:id/directories
 /api/v2/conversations
 /api/v2/conversations/:id/messages
 /api/v2/search
@@ -420,6 +456,7 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 
 - 请求和响应有版本化 Schema。
 - 消息发送支持客户端幂等键。
+- Project 写入和 Conversation 归属变更使用 `operationId`、`expectedRevision` 与同账户校验；Renderer 不能直接提交任意本地路径。
 - 流式事件可按游标补读。
 - 模型流使用类型化 `delta/completed/failed` 终态；只有 `completed` 可携带权威 Usage 并进入结算。
 - Preload 只暴露按业务动作定义的窄接口，不暴露原始 `ipcRenderer`、Node 或文件系统对象。
@@ -447,6 +484,7 @@ Electron Renderer 通过类型化 Preload Bridge 调用桌面能力；业务合�
 - 文件存储与元数据存储分开。
 - 云同步通过显式 Sync Adapter 实现，不把同步状态混入 Pi Session。
 - 账户范围内容以服务端 revision 为真值；Token 以 UsageRecord 为真值；费用与余额以服务端 ChargeRecord 和不可变账本为真值。本地缓存必须可重建。
+- Project 元数据、说明、目录逻辑占位和 Conversation 的 `projectId` 进入同步白名单；项目目录在新设备上默认为 `reconnect_required`。
 - 额度、积分、充值余额、支付、费用和账单只允许服务端写入，不进入普通离线同步写队列。
-- 设备级绝对路径、权限 Grant、Cookie、Shell 历史、平台密钥、诊断日志和 Pi 临时目录禁止同步。
+- 项目目录和其他设备级绝对路径、权限 Grant、Cookie、Shell 历史、平台密钥、诊断日志和 Pi 临时目录禁止同步。
 - 未来增加 Organization 时通过新增 Scope 迁移，不要求 V1 预建完整企业 Schema。

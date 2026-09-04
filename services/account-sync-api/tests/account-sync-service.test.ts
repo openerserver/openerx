@@ -16,7 +16,10 @@ function setup() {
   return { service, tick: () => (now += 1_000) };
 }
 
-function principal(accountId = randomUUID(), deviceId = randomUUID()): SyncPrincipal {
+function principal(
+  accountId: string = randomUUID(),
+  deviceId: string = randomUUID(),
+): SyncPrincipal {
   return { accountId, deviceId, sessionId: randomUUID() };
 }
 
@@ -26,12 +29,13 @@ function operation(
   baseRevision: number,
   payload: Record<string, unknown> | null,
   mutation: "upsert" | "delete" = "upsert",
+  objectType: SyncOperation["objectType"] = "conversation",
 ): SyncOperation {
   return {
     operationId: randomUUID(),
     accountId: actor.accountId,
     deviceId: actor.deviceId,
-    objectType: "conversation",
+    objectType,
     objectId,
     mutation,
     baseRevision,
@@ -127,6 +131,110 @@ describe("AccountSyncService", () => {
         }),
       ),
     ).toThrow("SYNC_FORBIDDEN_FIELD");
+  });
+
+  it("accepts portable project payloads and rejects project-local authority", () => {
+    const { service } = setup();
+    const actor = principal();
+    const projectId = randomUUID();
+    const projectPayload = {
+      id: projectId,
+      ownerProfileId: actor.accountId,
+      name: "跨设备项目",
+      instructions: "保持逻辑上下文。",
+      pinnedRank: null,
+      createdAt: "2026-08-25T10:00:00.000Z",
+      updatedAt: "2026-08-25T10:00:00.000Z",
+      archivedAt: null,
+      revision: 1,
+    };
+    expect(
+      service.push(actor, operation(actor, projectId, 0, projectPayload, "upsert", "project")),
+    ).toMatchObject({ status: "committed", revision: 1 });
+    const otherDevice = principal(actor.accountId);
+    service.push(
+      actor,
+      operation(
+        actor,
+        projectId,
+        1,
+        { ...projectPayload, name: "设备 A", revision: 2 },
+        "upsert",
+        "project",
+      ),
+    );
+    const projectConflict = service.push(
+      otherDevice,
+      operation(
+        otherDevice,
+        projectId,
+        1,
+        { ...projectPayload, name: "设备 B", revision: 2 },
+        "upsert",
+        "project",
+      ),
+    );
+    expect(projectConflict).toMatchObject({
+      status: "conflict",
+      conflict: {
+        clientPayload: { name: "设备 B" },
+        serverPayload: { name: "设备 A" },
+      },
+    });
+
+    const directoryId = randomUUID();
+    const directoryPayload = {
+      id: directoryId,
+      ownerProfileId: actor.accountId,
+      projectId,
+      displayName: "逻辑主目录",
+      role: "primary",
+      desiredAccess: "read_write",
+      createdAt: "2026-08-25T10:00:00.000Z",
+      updatedAt: "2026-08-25T10:00:00.000Z",
+      deletedAt: null,
+      revision: 1,
+    };
+    expect(
+      service.push(
+        actor,
+        operation(
+          actor,
+          directoryId,
+          0,
+          directoryPayload,
+          "upsert",
+          "project_directory",
+        ),
+      ),
+    ).toMatchObject({ status: "committed", revision: 1 });
+
+    expect(() =>
+      service.push(
+        actor,
+        operation(
+          actor,
+          randomUUID(),
+          0,
+          { ...directoryPayload, id: randomUUID(), workspaceGrantId: randomUUID() },
+          "upsert",
+          "project_directory",
+        ),
+      ),
+    ).toThrow("SYNC_FORBIDDEN_FIELD");
+    expect(() =>
+      service.push(
+        actor,
+        operation(
+          actor,
+          projectId,
+          1,
+          { ...projectPayload, ownerProfileId: randomUUID() },
+          "upsert",
+          "project",
+        ),
+      ),
+    ).toThrow("ACCOUNT_SCOPE_VIOLATION");
   });
 
   it("deletes every active cloud object with retained tombstones and account isolation", () => {

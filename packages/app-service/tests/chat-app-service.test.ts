@@ -19,7 +19,7 @@ import {
   SkillRepository,
   ToolRepository,
 } from "@openerx/storage";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatAppService, type PiHostClient, ToolAppService } from "../src";
 
 interface TestGeneration {
@@ -127,6 +127,42 @@ class ScriptedPiHostClient implements PiHostClient {
       this.#generations.delete(generationId);
     }
     for (const listener of this.#listeners) listener(frame);
+  }
+}
+
+class DeferredPiHostClient implements PiHostClient {
+  readonly prompts: PiPromptFrame[] = [];
+  #resolvePrompt: (() => void) | null = null;
+
+  prompt(frame: PiPromptFrame): Promise<void> {
+    this.prompts.push(frame);
+    return new Promise((resolve) => {
+      this.#resolvePrompt = resolve;
+    });
+  }
+
+  release(): void {
+    this.#resolvePrompt?.();
+    this.#resolvePrompt = null;
+  }
+
+  async abort(): Promise<void> {}
+  async control(): Promise<void> {}
+
+  onEvent(_listener: (event: PiHostEventFrame) => void): () => void {
+    return () => undefined;
+  }
+
+  onFileToolRequest(_listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void {
+    return () => undefined;
+  }
+
+  onToolRequest(_listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void {
+    return () => undefined;
+  }
+
+  onActivity(_listener: (frame: PiActivityEvent) => void): () => void {
+    return () => undefined;
   }
 }
 
@@ -336,23 +372,79 @@ afterEach(() => {
 
 async function waitForTerminal(service: ChatAppService, conversationId: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("terminal event timeout")), 2_000);
-    const unsubscribe = service.onEvent((event) => {
+    let unsubscribe = (): void => undefined;
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reject(new Error("terminal event timeout"));
+    }, 10_000);
+    const finish = (): void => {
+      clearTimeout(timeout);
+      unsubscribe();
+      resolve();
+    };
+    unsubscribe = service.onEvent((event) => {
       if (
         event.conversationId === conversationId &&
         ["message.completed", "message.stopped", "message.interrupted", "message.failed"].includes(
           event.type,
         )
       ) {
-        clearTimeout(timeout);
-        unsubscribe();
-        resolve();
+        finish();
       }
     });
+    void service
+      .handle({ command: "chat.get", input: { conversationId } })
+      .then((value) => {
+        const snapshot = value as ConversationSnapshot;
+        if (
+          ["completed", "stopped", "interrupted", "failed"].includes(
+            snapshot.messages.at(-1)?.status ?? "",
+          )
+        ) {
+          finish();
+        }
+      })
+      .catch((error: unknown) => {
+        clearTimeout(timeout);
+        unsubscribe();
+        reject(error);
+      });
   });
 }
 
 describe("ChatAppService", () => {
+  it("returns the send receipt without waiting for the model session to start", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-immediate-send-receipt-"));
+    temporaryDirectories.push(directory);
+    const pi = new DeferredPiHostClient();
+    const service = new ChatAppService(new ChatRepository(path.join(directory, "chat.sqlite")), pi);
+    let receipt: { conversationId: string } | undefined;
+    const send = service
+      .handle({
+        command: "chat.send",
+        input: {
+          conversationId: null,
+          text: "立即进入新对话",
+          idempotencyKey: "immediate-send-receipt-0001",
+        },
+      })
+      .then((value) => {
+        receipt = value as { conversationId: string };
+        return value;
+      });
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(receipt?.conversationId).toBeTruthy();
+      expect(pi.prompts).toHaveLength(1);
+    } finally {
+      pi.release();
+      await send;
+      service.close();
+    }
+  });
+
   it("honors chat-level recall controls and source-linked forgetting", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-app-service-"));
     temporaryDirectories.push(directory);
@@ -696,7 +788,7 @@ describe("ChatAppService", () => {
       ),
     ).toBe(true);
     service.close();
-  }, 15_000);
+  }, 30_000);
 
   it("creates a persistent run before a pure-chat prompt", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-app-service-run-"));
@@ -741,17 +833,19 @@ describe("ChatAppService", () => {
     const [workItem] = toolsRepository.listWorkItems(receipt.conversationId);
     expect(workItem?.messageId).toBe(receipt.assistantMessageId);
     if (!workItem) throw new Error("work item missing");
-    expect(toolsRepository.workItemDetail(workItem.id)).toMatchObject({
-      run: {
-        branchId: receipt.branchId,
-        thinkingLevel: "medium",
-        initialToolNames: ["openerx_tool_search"],
-        availableToolNames: expect.arrayContaining(["openerx_tool_search", "openerx_calculate"]),
-        skillInstallationIds: [],
-        instructionSources: [],
-      },
-      toolCalls: [],
-    });
+    await vi.waitFor(() =>
+      expect(toolsRepository.workItemDetail(workItem.id)).toMatchObject({
+        run: {
+          branchId: receipt.branchId,
+          thinkingLevel: "medium",
+          initialToolNames: ["openerx_tool_search"],
+          availableToolNames: expect.arrayContaining(["openerx_tool_search", "openerx_calculate"]),
+          skillInstallationIds: [],
+          instructionSources: [],
+        },
+        toolCalls: [],
+      }),
+    );
     await waitForTerminal(service, receipt.conversationId);
     expect(toolsRepository.workItemDetail(workItem.id).run.status).toBe("completed");
     service.close();

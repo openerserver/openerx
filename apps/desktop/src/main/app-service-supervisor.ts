@@ -26,6 +26,7 @@ import {
   type NormalizedToolResult,
   parseAutomationCommandResult,
   parseChatCommandResult,
+  parseProjectCommandResult,
   piHostContractVersion,
   type RemoteConnectorConfigureFrame,
   remoteConnectorReadyFrameSchema,
@@ -407,10 +408,16 @@ export class AppServiceSupervisor {
                   pending.command as Parameters<typeof parseAutomationCommandResult>[0],
                   response.data.data,
                 )
-              : parseChatCommandResult(
-                  pending.command as Parameters<typeof parseChatCommandResult>[0],
-                  response.data.data,
-                ),
+              : pending.command.startsWith("project.") ||
+                  pending.command === "conversation.moveToProject"
+                ? parseProjectCommandResult(
+                    pending.command as Parameters<typeof parseProjectCommandResult>[0],
+                    response.data.data,
+                  )
+                : parseChatCommandResult(
+                    pending.command as Parameters<typeof parseChatCommandResult>[0],
+                    response.data.data,
+                  ),
           );
         } catch (error) {
           pending.reject(

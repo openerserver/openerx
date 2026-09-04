@@ -12,7 +12,7 @@ import type {
 } from "@openerx/contracts";
 import { SkillPackageService } from "@openerx/skills";
 import { ChatRepository, SkillRepository } from "@openerx/storage";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatAppService, type PiHostClient } from "../src";
 
 const roots: string[] = [];
@@ -91,6 +91,7 @@ describe("ChatAppService Skill lifecycle", () => {
         skillInstallationId: builtIn.id,
       },
     });
+    await vi.waitFor(() => expect(pi.prompts).toHaveLength(1));
     expect(pi.prompts[0]?.history).toEqual([
       expect.objectContaining({ text: expect.stringContaining("/skill:structured-report") }),
     ]);
@@ -119,6 +120,7 @@ describe("ChatAppService Skill lifecycle", () => {
         idempotencyKey: "skill-isolation-0001",
       },
     });
+    await vi.waitFor(() => expect(pi.prompts).toHaveLength(2));
     expect(pi.prompts[1]?.skills).toEqual(
       expect.not.arrayContaining([expect.objectContaining({ installationId: builtIn.id })]),
     );

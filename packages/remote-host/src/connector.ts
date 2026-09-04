@@ -11,6 +11,7 @@ import {
   type RemoteHostRegistrationInput,
   type RemoteProductEvent,
   remoteCommandReceiptSchema,
+  remoteProjectSnapshotPayloadSchema,
 } from "@openerx/contracts";
 import {
   commandCipherContext,
@@ -318,6 +319,14 @@ export class RemoteHostConnector {
           this.#receipt(command, "rejected", result.errorCode, result.currentRevision),
         );
         return;
+      }
+      if (payload.kind === "project.list") {
+        await this.publishEvent({
+          kind: "project.snapshot",
+          conversationId: null,
+          payload: remoteProjectSnapshotPayloadSchema.parse(result.result),
+          ttlMs: 24 * 60 * 60_000,
+        });
       }
       this.#mark(command.commandId, "applied", "OK", result.appliedRevision);
       await this.#transport.recordReceipt(

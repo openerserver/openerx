@@ -50,7 +50,7 @@ import {
   orderedLocalWebSearchProviders,
   piHostContractVersion,
 } from "@openerx/contracts";
-import type { ToolRepository } from "@openerx/storage";
+import type { ProjectWorkspaceBindingInput, ToolRepository } from "@openerx/storage";
 import {
   BaiduJsonSearchProvider,
   BingHtmlSearchProvider,
@@ -348,6 +348,11 @@ export interface PreparedGenerationTools {
   localWebSearchConfiguration?: FrozenLocalWebSearchConfiguration;
 }
 
+export interface ReconciledProjectWorkspaces {
+  activeExecutionGrantId?: string;
+  additionalExecutionGrantIds: string[];
+}
+
 export class ToolAppService {
   readonly #repository: ToolRepository;
   readonly #defaultWorkspaceDirectory: string;
@@ -617,6 +622,7 @@ export class ToolAppService {
     access: WorkspaceGrant["access"];
     allowNetwork: boolean;
     expiresAt: string | null;
+    projectOperationId?: string;
   }): WorkspaceGrant {
     if (input.expiresAt && Date.parse(input.expiresAt) <= Date.now()) {
       throw new Error("WORKSPACE_EXPIRY_INVALID");
@@ -633,8 +639,9 @@ export class ToolAppService {
       access: input.access,
       allowNetwork: input.allowNetwork,
       expiresAt: input.expiresAt,
+      ...(input.projectOperationId ? { projectOperationId: input.projectOperationId } : {}),
       ...(input.conversationId
-        ? { binding: { role: "primary" as const, source: "project" as const } }
+        ? { binding: { role: "primary" as const, source: "user_added" as const } }
         : {}),
     });
   }
@@ -655,6 +662,12 @@ export class ToolAppService {
     }
 
     const existing = this.#repository.listWorkspaceGrants(conversationId).find((grant) => {
+      if (
+        grant.bindingSource === "project" ||
+        this.#repository.isProjectSourceWorkspaceGrant(grant.id)
+      ) {
+        return false;
+      }
       try {
         return lstatSync(realpathSync(grant.rootPath)).isDirectory();
       } catch {
@@ -689,6 +702,39 @@ export class ToolAppService {
 
   revokeWorkspace(workspaceGrantId: string): WorkspaceGrant {
     return this.#repository.revokeWorkspaceGrant(workspaceGrantId);
+  }
+
+  reconcileProjectWorkspaces(input: {
+    conversationId: string;
+    directories: ProjectWorkspaceBindingInput[];
+  }): ReconciledProjectWorkspaces {
+    const validDirectories = input.directories.filter((directory) => {
+      try {
+        const source = this.#repository.activeWorkspaceGrant(directory.sourceWorkspaceGrantId);
+        return lstatSync(realpathSync(source.rootPath)).isDirectory();
+      } catch {
+        try {
+          this.#repository.revokeWorkspaceGrant(directory.sourceWorkspaceGrantId);
+        } catch {
+          // Already revoked or absent: omit it from the frozen Generation scope.
+        }
+        return false;
+      }
+    });
+    const grants = this.#repository.reconcileProjectWorkspaceBindings({
+      conversationId: input.conversationId,
+      directories: validDirectories,
+    });
+    const activeExecutionGrantId = validDirectories.find(({ role }) => role === "primary")
+      ? grants[validDirectories.findIndex(({ role }) => role === "primary")]?.id
+      : undefined;
+    const additionalExecutionGrantIds = grants
+      .filter((_, index) => validDirectories[index]?.role === "additional")
+      .map(({ id }) => id);
+    return {
+      ...(activeExecutionGrantId ? { activeExecutionGrantId } : {}),
+      additionalExecutionGrantIds,
+    };
   }
 
   async prepareGeneration(input: {

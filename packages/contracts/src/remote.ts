@@ -85,6 +85,7 @@ export const remoteDevicePairingSchema = z
   });
 
 export const remoteCommandKindSchema = z.enum([
+  "project.list",
   "task.start",
   "session.prompt",
   "session.steer",
@@ -183,6 +184,7 @@ export const attentionRequestSchema = z
 
 export const remoteProductEventKindSchema = z.enum([
   "host.presence_changed",
+  "project.snapshot",
   "conversation.updated",
   "message.delta",
   "message.completed",
@@ -242,12 +244,65 @@ export const pushSubscriptionSchema = z
   })
   .strict();
 
-export const remotePromptPayloadSchema = z
+export const remoteTaskStartPayloadSchema = z
   .object({
-    kind: z.enum(["task.start", "session.prompt"]),
+    kind: z.literal("task.start"),
     text: z.string().trim().min(1).max(100_000),
     clientOperationId: z.string().min(8).max(200),
     executionMode: z.enum(["attended", "unattended"]).optional(),
+    projectId: entityIdSchema.nullable().optional(),
+  })
+  .strict();
+
+export const remoteSessionPromptPayloadSchema = z
+  .object({
+    kind: z.literal("session.prompt"),
+    text: z.string().trim().min(1).max(100_000),
+    clientOperationId: z.string().min(8).max(200),
+    executionMode: z.enum(["attended", "unattended"]).optional(),
+  })
+  .strict();
+
+export const remotePromptPayloadSchema = z.union([
+  remoteTaskStartPayloadSchema,
+  remoteSessionPromptPayloadSchema,
+]);
+
+export const remoteProjectListPayloadSchema = z
+  .object({
+    kind: z.literal("project.list"),
+    includeArchived: z.boolean().default(false),
+  })
+  .strict();
+
+export const remoteProjectDirectoryStatusSchema = z
+  .object({
+    projectDirectoryId: entityIdSchema,
+    displayName: z.string().trim().min(1).max(240),
+    role: z.enum(["primary", "additional"]),
+    desiredAccess: z.enum(["read_only", "read_write"]),
+    connectionState: z.enum(["connected", "reconnect_required"]),
+  })
+  .strict();
+
+export const remoteProjectSummarySchema = z
+  .object({
+    projectId: entityIdSchema,
+    name: z.string().trim().min(1).max(80),
+    instructions: z.string().max(20_000),
+    pinnedRank: z.number().int().nonnegative().nullable(),
+    archivedAt: timestampSchema.nullable(),
+    revision: z.number().int().positive(),
+    conversationCount: z.number().int().nonnegative(),
+    directories: z.array(remoteProjectDirectoryStatusSchema).max(100),
+  })
+  .strict();
+
+export const remoteProjectSnapshotPayloadSchema = z
+  .object({
+    kind: z.literal("project.snapshot"),
+    generatedAt: timestampSchema,
+    projects: z.array(remoteProjectSummarySchema).max(500),
   })
   .strict();
 
@@ -295,7 +350,9 @@ export const remoteAttentionResponsePayloadSchema = z
   .strict();
 
 export const remoteCommandPayloadSchema = z.discriminatedUnion("kind", [
-  remotePromptPayloadSchema,
+  remoteProjectListPayloadSchema,
+  remoteTaskStartPayloadSchema,
+  remoteSessionPromptPayloadSchema,
   remoteSteerPayloadSchema,
   remoteFollowUpPayloadSchema,
   remoteAbortPayloadSchema,
@@ -509,6 +566,9 @@ export type RemoteProductEvent = z.infer<typeof remoteProductEventSchema>;
 export type RemoteEventCursor = z.infer<typeof remoteEventCursorSchema>;
 export type PushSubscription = z.infer<typeof pushSubscriptionSchema>;
 export type RemoteCommandPayload = z.infer<typeof remoteCommandPayloadSchema>;
+export type RemoteProjectDirectoryStatus = z.infer<typeof remoteProjectDirectoryStatusSchema>;
+export type RemoteProjectSummary = z.infer<typeof remoteProjectSummarySchema>;
+export type RemoteProjectSnapshotPayload = z.infer<typeof remoteProjectSnapshotPayloadSchema>;
 export type RemotePairingAcceptInput = z.infer<typeof remotePairingAcceptInputSchema>;
 export type RemoteHostRegistrationInput = z.infer<typeof remoteHostRegistrationInputSchema>;
 export type RemoteEventPublishInput = z.infer<typeof remoteEventPublishInputSchema>;

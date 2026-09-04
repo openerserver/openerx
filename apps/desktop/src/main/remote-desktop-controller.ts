@@ -120,7 +120,14 @@ export class RemoteDesktopController {
       platform: this.device.platform,
       arch: this.device.arch,
       appVersion: this.appVersion,
-      capabilities: ["task.start", "session.control", "permission.decide", "review.read"],
+      capabilities: [
+        "task.start",
+        "project.list",
+        "project.start",
+        "session.control",
+        "permission.decide",
+        "review.read",
+      ],
       remoteEnabled,
     };
   }

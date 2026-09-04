@@ -14,7 +14,12 @@ import type {
   RemoteCommandPayload,
 } from "@openerx/contracts";
 import { remoteCommandSchema } from "@openerx/contracts";
-import { ChatRepository, RemoteRepository, ToolRepository } from "@openerx/storage";
+import {
+  ChatRepository,
+  ProjectRepository,
+  RemoteRepository,
+  ToolRepository,
+} from "@openerx/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatAppService, type PiHostClient, ToolAppService } from "../src";
 
@@ -268,6 +273,81 @@ describe("ChatAppService remote Pi mapping", () => {
     expect(result).toMatchObject({ ok: true, appliedRevision: expect.any(Number) });
     expect(service.currentRemoteRevision(null)).toBe(0);
     service.close();
+  });
+
+  it("lists safe projects and starts a new task with the selected project instructions", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-project-"));
+    directories.push(directory);
+    const databasePath = path.join(directory, "profile.sqlite");
+    const chat = new ChatRepository(databasePath, { ownerProfileId: authorization.accountId });
+    const projects = new ProjectRepository(databasePath, {
+      ownerProfileId: authorization.accountId,
+    });
+    const project = projects.createProject({
+      operationId: randomUUID(),
+      name: "手机项目",
+      instructions: "先运行项目测试。",
+    });
+    const pi = new RemotePiHostClient();
+    const service = new ChatAppService(
+      chat,
+      pi,
+      null,
+      null,
+      null,
+      new RemoteRepository(databasePath),
+      null,
+      null,
+      projects,
+    );
+
+    try {
+      const listPayload = { kind: "project.list" as const, includeArchived: false };
+      const listResult = await service.applyRemoteCommand(
+        remoteCommand(listPayload, {
+          conversationId: null,
+          generationId: null,
+          baseRevision: 0,
+        }),
+        listPayload,
+        authorization,
+      );
+      expect(listResult).toMatchObject({
+        ok: true,
+        result: {
+          kind: "project.snapshot",
+          projects: [{ projectId: project.id, name: "手机项目", directories: [] }],
+        },
+      });
+
+      const startPayload = {
+        kind: "task.start" as const,
+        text: "检查当前项目",
+        clientOperationId: "mobile-project-task-0001",
+        projectId: project.id,
+      };
+      const startResult = await service.applyRemoteCommand(
+        remoteCommand(startPayload, {
+          conversationId: null,
+          generationId: null,
+          baseRevision: 0,
+        }),
+        startPayload,
+        authorization,
+      );
+      expect(startResult).toMatchObject({ ok: true });
+      const receipt = startResult.ok
+        ? (startResult.result as { conversationId: string } | undefined)
+        : undefined;
+      if (!receipt) throw new Error("Remote project receipt missing");
+      expect(chat.getConversation(receipt.conversationId).conversation.projectId).toBe(project.id);
+      expect(pi.prompts[0]?.history.find(({ role }) => role === "system")?.text).toContain(
+        "先运行项目测试。",
+      );
+    } finally {
+      service.close();
+      projects.close();
+    }
   });
 
   it("freezes attended and unattended Remote prompts into distinct Bash write modes", async () => {

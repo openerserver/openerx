@@ -262,12 +262,12 @@ describe("ToolAppService", () => {
 
     expect(tools.workspaceGrant(defaultWorkspace.id).revokedAt).not.toBeNull();
     expect(tools.primaryWorkspaceGrant(base.conversationId)?.id).toBe(selected.id);
-    expect(selected).toMatchObject({ bindingRole: "primary", bindingSource: "project" });
+    expect(selected).toMatchObject({ bindingRole: "primary", bindingSource: "user_added" });
     expect(tools.listWorkspaceBindings(base.conversationId)).toEqual([
       expect.objectContaining({
         workspaceGrantId: selected.id,
         role: "primary",
-        source: "project",
+        source: "user_added",
       }),
     ]);
     expect(service.listWorkspaces(base.conversationId).map(({ id }) => id)).toEqual([selected.id]);

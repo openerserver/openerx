@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,7 @@ const mobileApp = json("apps/mobile/app.json").expo;
 const eas = json("apps/mobile/eas.json");
 const m8 = json("tests/v2/golden/m8-gate-status.json");
 const m9 = json("tests/v2/golden/m9-gate-status.json");
+const personalProjects = json("tests/v2/golden/personal-projects-gate-status.json");
 const configureMobile = require(path.join(root, "apps/mobile/app.config.js"));
 const failures = [];
 
@@ -53,6 +54,41 @@ assert(
   m9.localImplementation?.status === "complete",
   "M9 local implementation ledger is incomplete",
 );
+assert(personalProjects.schemaVersion === 1, "Personal Projects gate schema is unsupported");
+assert(
+  personalProjects.localImplementation?.status === "complete",
+  "Personal Projects local implementation ledger is incomplete",
+);
+assert(
+  personalProjects.localImplementation?.completedSlices ===
+    personalProjects.localImplementation?.expectedSlices,
+  "Personal Projects implementation slices are incomplete",
+);
+assert(
+  personalProjects.localImplementation?.electronE2E === "pass",
+  "Personal Projects Electron E2E evidence is missing",
+);
+const personalProjectEvidence = personalProjects.localImplementation?.requiredEvidence ?? [];
+assert(
+  personalProjectEvidence.length === personalProjects.localImplementation?.datedEvidenceRecords,
+  "Personal Projects dated evidence count does not match its ledger",
+);
+for (const evidence of personalProjectEvidence) {
+  assert(existsSync(path.join(root, evidence)), `missing Personal Projects evidence: ${evidence}`);
+}
+const personalProjectReleaseNotes = personalProjects.localImplementation?.releaseNotes;
+assert(
+  typeof personalProjectReleaseNotes === "string" &&
+    personalProjectReleaseNotes.length > 0 &&
+    existsSync(path.join(root, personalProjectReleaseNotes)),
+  "Personal Projects release notes are missing",
+);
+assert(
+  personalProjects.releaseClaim ===
+    (personalProjects.externalRelease?.status === "approved" &&
+      personalProjects.externalRelease?.publishAllowed === true),
+  "Personal Projects release claim does not match external approval state",
+);
 
 const previousReleaseMode = process.env.OPENERX_RELEASE_MODE;
 const previousProjectId = process.env.EXPO_PROJECT_ID;
@@ -79,6 +115,36 @@ if (mode === "publish") {
   assert(m8.externalBeta?.status === "complete", "M8 external Beta is not complete");
   assert(m9.externalRelease?.status === "approved", "M9 external release is not approved");
   assert(m9.externalRelease?.userApproval === true, "explicit user release approval is missing");
+  assert(
+    personalProjects.externalBeta?.status === "complete",
+    "Personal Projects external Beta is not complete",
+  );
+  assert(
+    personalProjects.externalRelease?.status === "approved",
+    "Personal Projects external release is not approved",
+  );
+  assert(
+    personalProjects.externalRelease?.userApproval === true,
+    "Personal Projects explicit release approval is missing",
+  );
+  assert(
+    personalProjects.externalRelease?.publishAllowed === true &&
+      personalProjects.releaseClaim === true,
+    "Personal Projects publish claim is blocked",
+  );
+  const projectBetaCompleted = new Set(personalProjects.externalBeta?.completedEvidence ?? []);
+  for (const evidence of personalProjects.externalBeta?.requiredEvidence ?? []) {
+    assert(projectBetaCompleted.has(evidence), `missing Personal Projects Beta evidence: ${evidence}`);
+  }
+  const projectReleaseCompleted = new Set(
+    personalProjects.externalRelease?.completedEvidence ?? [],
+  );
+  for (const evidence of personalProjects.externalRelease?.requiredEvidence ?? []) {
+    assert(
+      projectReleaseCompleted.has(evidence),
+      `missing Personal Projects release evidence: ${evidence}`,
+    );
+  }
   const completed = new Set(m9.externalRelease?.completedEvidence ?? []);
   for (const evidence of m9.externalRelease?.requiredEvidence ?? []) {
     assert(completed.has(evidence), `missing external release evidence: ${evidence}`);

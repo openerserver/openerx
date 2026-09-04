@@ -49,6 +49,7 @@ import {
   cloudDataDeletionResultSchema,
   conversationMemorySettingsGetInputSchema,
   conversationMemorySettingsUpdateInputSchema,
+  conversationMoveToProjectInputSchema,
   createRechargeOrderInputSchema,
   type DesktopBridge,
   desktopEnvironmentSchema,
@@ -88,10 +89,23 @@ import {
   modelCatalogEntrySchema,
   modelServiceSettingsSchema,
   modelServiceSettingsUpdateSchema,
+  type ProjectCommandEnvelope,
+  type ProjectCommandResultMap,
   parseChatCommandResult,
+  parseProjectCommandResult,
   permissionListInputSchema,
   permissionResolveInputSchema,
   personalDataSummarySchema,
+  projectArchiveCommandInputSchema,
+  projectCreateInputSchema,
+  projectDirectoryChooseInputSchema,
+  projectDirectoryDisconnectInputSchema,
+  projectDirectoryRemoveInputSchema,
+  projectDirectorySetPrimaryInputSchema,
+  projectDirectoryStateSchema,
+  projectGetInputSchema,
+  projectListInputSchema,
+  projectUpdateInputSchema,
   rechargeOrderSchema,
   refundOrderSchema,
   releaseUpdateStateSchema,
@@ -137,6 +151,15 @@ async function invokeChat<C extends keyof ChatCommandResultMap>(
 ): Promise<ChatCommandResultMap[C]> {
   const result: unknown = await ipcRenderer.invoke(channel, input);
   return parseChatCommandResult(command, result);
+}
+
+async function invokeProject<C extends keyof ProjectCommandResultMap>(
+  channel: string,
+  command: C & ProjectCommandEnvelope["command"],
+  input: unknown,
+): Promise<ProjectCommandResultMap[C]> {
+  const result: unknown = await ipcRenderer.invoke(channel, input);
+  return parseProjectCommandResult(command, result);
 }
 
 const bridge: DesktopBridge = {
@@ -587,6 +610,65 @@ const bridge: DesktopBridge = {
       ipcChannels.workspaceRevoke,
       "workspace.revoke",
       workspaceRevokeInputSchema.parse(input),
+    ),
+  listProjects: async (input = {}) =>
+    invokeProject(ipcChannels.projectList, "project.list", projectListInputSchema.parse(input)),
+  getProject: async (input) =>
+    invokeProject(ipcChannels.projectGet, "project.get", projectGetInputSchema.parse(input)),
+  createProject: async (input) =>
+    invokeProject(
+      ipcChannels.projectCreate,
+      "project.create",
+      projectCreateInputSchema.parse(input),
+    ),
+  updateProject: async (input) =>
+    invokeProject(
+      ipcChannels.projectUpdate,
+      "project.update",
+      projectUpdateInputSchema.parse(input),
+    ),
+  archiveProject: async (input) =>
+    invokeProject(
+      ipcChannels.projectArchive,
+      "project.archive",
+      projectArchiveCommandInputSchema.parse(input),
+    ),
+  restoreProject: async (input) =>
+    invokeProject(
+      ipcChannels.projectRestore,
+      "project.restore",
+      projectArchiveCommandInputSchema.parse(input),
+    ),
+  chooseProjectDirectory: async (input) => {
+    const value: unknown = await ipcRenderer.invoke(
+      ipcChannels.projectDirectoryChoose,
+      projectDirectoryChooseInputSchema.parse(input),
+    );
+    return value === null ? null : projectDirectoryStateSchema.parse(value);
+  },
+  setPrimaryProjectDirectory: async (input) =>
+    invokeProject(
+      ipcChannels.projectDirectorySetPrimary,
+      "project.directory.setPrimary",
+      projectDirectorySetPrimaryInputSchema.parse(input),
+    ),
+  disconnectProjectDirectory: async (input) =>
+    invokeProject(
+      ipcChannels.projectDirectoryDisconnect,
+      "project.directory.disconnect",
+      projectDirectoryDisconnectInputSchema.parse(input),
+    ),
+  removeProjectDirectory: async (input) =>
+    invokeProject(
+      ipcChannels.projectDirectoryRemove,
+      "project.directory.remove",
+      projectDirectoryRemoveInputSchema.parse(input),
+    ),
+  moveConversationToProject: async (input) =>
+    invokeProject(
+      ipcChannels.conversationMoveToProject,
+      "conversation.moveToProject",
+      conversationMoveToProjectInputSchema.parse(input),
     ),
   listFiles: async (input = {}) =>
     invokeChat(ipcChannels.fileList, "file.list", fileListInputSchema.parse(input)),

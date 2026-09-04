@@ -22,7 +22,9 @@ ledger to simulate missing evidence.
 2. Replace `2.0.0-alpha.0` with the intended release version in root, desktop and mobile application
    metadata; increment iOS/Android build numbers through EAS.
 3. Complete every item in `02-security-privacy-commerce-checklist.md` and every external evidence group
-   in `tests/v2/golden/m9-gate-status.json`.
+   in `tests/v2/golden/m9-gate-status.json`, including the Personal Projects matrix tracked by
+   `tests/v2/golden/personal-projects-gate-status.json` and
+   [Personal Projects 更新说明](03-personal-projects-update-notes.md).
 4. Record explicit user approval, then change the ledger only to match evidence already stored.
 5. Run `npm ci`, `npm run check:v2`, `npm run test:e2e:v2` and `npm run audit:prod:v2` on the frozen SHA.
 6. Dispatch `V2 signed release candidate` first with `preview`; this requires protected-environment
@@ -105,6 +107,8 @@ duplicate Charge, credential exposure, Remote duplicate execution, severe crash 
 - Never rewrite or truncate server Usage, Charge, ledger, payment or statement records.
 - Never derive price, Token usage or final cost on a client; clients only reload final Billing state.
 - Preserve Conversation/Message truth independently from Pi Session files.
+- Preserve Project、ProjectDirectory、Conversation.projectId and device-local ProjectDirectoryBinding /
+  WorkspaceGrant links; never restore a path or Grant from synchronized metadata.
 - Preserve account/device boundaries, outbox operations, tombstones and cloud-object checksums.
 - Schema migration must be forward compatible with the retained previous stable package or explicitly
   declare manual recovery before publication.

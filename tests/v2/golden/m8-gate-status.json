@@ -17,6 +17,7 @@
       "ios-android-remote-device-matrix",
       "windows-x64-and-macos-arm64-x64",
       "signed-install-upgrade-and-rollback",
+      "personal-projects-signed-cross-device-directory-reconnect-and-remote",
       "target-user-task-and-feedback-records"
     ]
   },

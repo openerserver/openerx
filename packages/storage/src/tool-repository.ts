@@ -103,8 +103,19 @@ export interface WorkspaceBinding {
   conversationId: string;
   role: WorkspaceBindingRole;
   source: WorkspaceBindingSource;
+  projectDirectoryBindingId?: string;
+  sourceRevision?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectWorkspaceBindingInput {
+  projectDirectoryBindingId: string;
+  sourceWorkspaceGrantId: string;
+  sourceRevision: number;
+  displayName: string;
+  role: WorkspaceBindingRole;
+  desiredAccess: WorkspaceGrant["access"];
 }
 
 export type WorkspaceChangeSetRecord = WorkspaceChangeSet;
@@ -798,20 +809,46 @@ export class ToolRepository {
     access: WorkspaceGrant["access"];
     allowNetwork: boolean;
     expiresAt: string | null;
+    projectOperationId?: string;
     binding?: {
       role: WorkspaceBindingRole;
       source: WorkspaceBindingSource;
+      projectDirectoryBindingId?: string;
+      sourceRevision?: number;
     };
   }): WorkspaceGrant {
     return this.#transaction(() => {
+      if (input.projectOperationId) {
+        const existing = this.#database
+          .prepare(
+            `SELECT * FROM workspace_grants
+             WHERE owner_profile_id = ? AND project_operation_id = ?`,
+          )
+          .get(this.#ownerProfileId, input.projectOperationId) as SqlRow | undefined;
+        if (existing) {
+          const grant = this.#workspaceGrant(existing);
+          if (
+            grant.revokedAt ||
+            grant.conversationId !== input.conversationId ||
+            grant.displayName !== input.displayName ||
+            grant.rootPath !== input.rootPath ||
+            grant.access !== input.access ||
+            grant.allowNetwork !== input.allowNetwork ||
+            grant.expiresAt !== input.expiresAt
+          ) {
+            throw new Error("IDEMPOTENCY_KEY_REUSED");
+          }
+          return grant;
+        }
+      }
       const id = this.#idFactory();
       const createdAt = this.#now();
       this.#database
         .prepare(
           `INSERT INTO workspace_grants
            (id, owner_profile_id, conversation_id, display_name, root_path, access,
-            allow_network, expires_at, revoked_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+            allow_network, expires_at, revoked_at, created_at, project_operation_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
         )
         .run(
           id,
@@ -823,6 +860,7 @@ export class ToolRepository {
           input.allowNetwork ? 1 : 0,
           input.expiresAt,
           createdAt,
+          input.projectOperationId ?? null,
         );
       this.createScope({
         capability: "workspace",
@@ -886,6 +924,8 @@ export class ToolRepository {
     conversationId: string;
     role: WorkspaceBindingRole;
     source: WorkspaceBindingSource;
+    projectDirectoryBindingId?: string;
+    sourceRevision?: number;
   }): WorkspaceBinding {
     return this.#transaction(() => {
       const grant = this.activeWorkspaceGrant(input.workspaceGrantId, input.conversationId);
@@ -900,6 +940,96 @@ export class ToolRepository {
       if (!binding) throw new Error("WORKSPACE_BINDING_NOT_FOUND");
       return this.#workspaceBinding(binding);
     });
+  }
+
+  reconcileProjectWorkspaceBindings(input: {
+    conversationId: string;
+    directories: ProjectWorkspaceBindingInput[];
+  }): WorkspaceGrant[] {
+    if (input.directories.filter(({ role }) => role === "primary").length > 1) {
+      throw new Error("PROJECT_PRIMARY_DIRECTORY_REQUIRED");
+    }
+    const desired = new Map<string, ProjectWorkspaceBindingInput>();
+    for (const directory of input.directories) {
+      if (desired.has(directory.projectDirectoryBindingId)) {
+        throw new Error("PROJECT_SCOPE_MISMATCH");
+      }
+      desired.set(directory.projectDirectoryBindingId, directory);
+    }
+
+    const existingRows = this.#database
+      .prepare(
+        `SELECT binding.* FROM workspace_bindings AS binding
+         JOIN workspace_grants AS grant ON grant.id = binding.workspace_grant_id
+         WHERE binding.owner_profile_id = ? AND binding.conversation_id = ?
+           AND binding.source = 'project' AND grant.revoked_at IS NULL
+           AND (grant.expires_at IS NULL OR grant.expires_at > ?)
+         ORDER BY binding.updated_at DESC, binding.workspace_grant_id`,
+      )
+      .all(this.#ownerProfileId, input.conversationId, this.#now()) as SqlRow[];
+    const reusable = new Map<string, SqlRow>();
+    for (const row of existingRows) {
+      const bindingId = row.project_directory_binding_id
+        ? String(row.project_directory_binding_id)
+        : null;
+      const expected = bindingId ? desired.get(bindingId) : undefined;
+      if (
+        !bindingId ||
+        !expected ||
+        Number(row.source_revision) !== expected.sourceRevision ||
+        reusable.has(bindingId)
+      ) {
+        this.revokeWorkspaceGrant(String(row.workspace_grant_id));
+        continue;
+      }
+      reusable.set(bindingId, row);
+    }
+
+    const grants: WorkspaceGrant[] = [];
+    for (const directory of input.directories) {
+      const existing = reusable.get(directory.projectDirectoryBindingId);
+      if (existing) {
+        this.bindWorkspace({
+          workspaceGrantId: String(existing.workspace_grant_id),
+          conversationId: input.conversationId,
+          role: directory.role,
+          source: "project",
+          projectDirectoryBindingId: directory.projectDirectoryBindingId,
+          sourceRevision: directory.sourceRevision,
+        });
+        grants.push(this.workspaceGrant(String(existing.workspace_grant_id)));
+        continue;
+      }
+
+      const source = this.activeWorkspaceGrant(directory.sourceWorkspaceGrantId);
+      if (
+        source.conversationId !== null ||
+        source.access !== directory.desiredAccess ||
+        source.allowNetwork
+      ) {
+        throw new Error("PROJECT_SCOPE_MISMATCH");
+      }
+      grants.push(
+        this.grantWorkspace({
+          conversationId: input.conversationId,
+          displayName: directory.displayName,
+          rootPath: source.rootPath,
+          access: directory.desiredAccess,
+          allowNetwork: false,
+          expiresAt: source.expiresAt,
+          binding: {
+            role: directory.role,
+            source: "project",
+            projectDirectoryBindingId: directory.projectDirectoryBindingId,
+            sourceRevision: directory.sourceRevision,
+          },
+        }),
+      );
+    }
+    if (input.directories.some(({ role }) => role === "primary")) {
+      this.revokeDefaultWorkspaceGrants(input.conversationId);
+    }
+    return grants;
   }
 
   revokeDefaultWorkspaceGrants(conversationId: string): WorkspaceGrant[] {
@@ -957,6 +1087,24 @@ export class ToolRepository {
           )
           .all(this.#ownerProfileId, now);
     return (rows as SqlRow[]).map((row) => this.#workspaceGrant(row));
+  }
+
+  isProjectSourceWorkspaceGrant(workspaceGrantId: string): boolean {
+    const row = this.#database
+      .prepare(
+        `SELECT 1 FROM workspace_grants AS grant
+         WHERE grant.owner_profile_id = ? AND grant.id = ?
+           AND (
+             grant.project_operation_id IS NOT NULL OR EXISTS (
+               SELECT 1 FROM project_directory_bindings AS project_binding
+               WHERE project_binding.owner_profile_id = grant.owner_profile_id
+                 AND project_binding.workspace_grant_id = grant.id
+             )
+           )
+         LIMIT 1`,
+      )
+      .get(this.#ownerProfileId, workspaceGrantId) as SqlRow | undefined;
+    return Boolean(row);
   }
 
   workspaceGrant(id: string): WorkspaceGrant {
@@ -2026,6 +2174,10 @@ export class ToolRepository {
       conversationId: String(row.conversation_id),
       role: row.role as WorkspaceBindingRole,
       source: row.source as WorkspaceBindingSource,
+      ...(row.project_directory_binding_id
+        ? { projectDirectoryBindingId: String(row.project_directory_binding_id) }
+        : {}),
+      ...(row.source_revision ? { sourceRevision: Number(row.source_revision) } : {}),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -2036,8 +2188,17 @@ export class ToolRepository {
     conversationId: string;
     role: WorkspaceBindingRole;
     source: WorkspaceBindingSource;
+    projectDirectoryBindingId?: string;
+    sourceRevision?: number;
     createdAt: string;
   }): void {
+    const hasProjectSource = input.source === "project";
+    if (
+      hasProjectSource !== Boolean(input.projectDirectoryBindingId) ||
+      hasProjectSource !== Boolean(input.sourceRevision)
+    ) {
+      throw new Error("WORKSPACE_PROJECT_BINDING_METADATA_INVALID");
+    }
     if (input.role === "primary") {
       this.#database
         .prepare(
@@ -2050,12 +2211,16 @@ export class ToolRepository {
     this.#database
       .prepare(
         `INSERT INTO workspace_bindings
-         (workspace_grant_id, owner_profile_id, conversation_id, role, source, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+         (workspace_grant_id, owner_profile_id, conversation_id, role, source, created_at,
+          updated_at, project_directory_binding_id, source_revision)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(workspace_grant_id) DO UPDATE SET
+           conversation_id = excluded.conversation_id,
            role = excluded.role,
            source = excluded.source,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at,
+           project_directory_binding_id = excluded.project_directory_binding_id,
+           source_revision = excluded.source_revision`,
       )
       .run(
         input.workspaceGrantId,
@@ -2065,6 +2230,8 @@ export class ToolRepository {
         input.source,
         input.createdAt,
         input.createdAt,
+        input.projectDirectoryBindingId ?? null,
+        input.sourceRevision ?? null,
       );
   }
 

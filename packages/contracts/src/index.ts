@@ -17,6 +17,7 @@ export * from "./model-service";
 export * from "./pi";
 export * from "./platform";
 export * from "./process";
+export * from "./project";
 export * from "./redaction";
 export * from "./release";
 export * from "./remote";

@@ -14,6 +14,92 @@ afterEach(() => {
 });
 
 describe("database migrations", () => {
+  it("adds personal projects while keeping directory grants device-local", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-project-migration-"));
+    directories.push(directory);
+    const database = new DatabaseSync(path.join(directory, "openerx.sqlite"));
+    migrateDatabase(database, { throughVersion: 30 });
+    const now = "2026-09-04T00:00:00.000Z";
+    const conversationId = "20000000-0000-4000-8000-000000000001";
+    const branchId = "20000000-0000-4000-8000-000000000002";
+    const grantId = "20000000-0000-4000-8000-000000000003";
+    database
+      .prepare(
+        `INSERT INTO conversations
+         (id, owner_profile_id, title, active_branch_id, selected_model_ref, thinking_level,
+          created_at, updated_at, archived_at, deleted_at, revision)
+         VALUES (?, 'local-default', 'legacy manual workspace', ?, 'platform/auto', 'medium',
+                 ?, ?, NULL, NULL, 1)`,
+      )
+      .run(conversationId, branchId, now, now);
+    database
+      .prepare(
+        `INSERT INTO workspace_grants
+         (id, owner_profile_id, conversation_id, display_name, root_path, access, allow_network,
+          expires_at, revoked_at, created_at)
+         VALUES (?, 'local-default', ?, 'legacy', 'C:\\legacy', 'read_write', 0,
+                 NULL, NULL, ?)`,
+      )
+      .run(grantId, conversationId, now);
+    database
+      .prepare(
+        `INSERT INTO workspace_bindings
+         (workspace_grant_id, owner_profile_id, conversation_id, role, source, created_at, updated_at)
+         VALUES (?, 'local-default', ?, 'primary', 'project', ?, ?)`,
+      )
+      .run(grantId, conversationId, now, now);
+
+    migrateDatabase(database);
+
+    expect(
+      database
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'table' AND name IN
+             ('projects', 'project_directories', 'project_directory_bindings')
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: "project_directories" },
+      { name: "project_directory_bindings" },
+      { name: "projects" },
+    ]);
+    expect(
+      database
+        .prepare("SELECT source FROM workspace_bindings WHERE workspace_grant_id = ?")
+        .get(grantId),
+    ).toEqual({ source: "user_added" });
+    expect(
+      database
+        .prepare("SELECT name FROM pragma_table_info('conversations') WHERE name = 'project_id'")
+        .get(),
+    ).toEqual({ name: "project_id" });
+    expect(
+      database
+        .prepare(
+          `SELECT name FROM pragma_table_info('workspace_bindings')
+           WHERE name IN ('project_directory_binding_id', 'source_revision') ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([{ name: "project_directory_binding_id" }, { name: "source_revision" }]);
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM pragma_table_info('workspace_grants') WHERE name = 'project_operation_id'",
+        )
+        .get(),
+    ).toEqual({ name: "project_operation_id" });
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'workspace_grants_project_operation_idx'",
+        )
+        .get(),
+    ).toEqual({ name: "workspace_grants_project_operation_idx" });
+    database.close();
+  });
+
   it("enables untouched legacy memory defaults without overriding explicit choices", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-memory-default-migration-"));
     directories.push(directory);

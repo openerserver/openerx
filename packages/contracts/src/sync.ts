@@ -6,6 +6,8 @@ const timestampSchema = z.string().refine((value) => !Number.isNaN(Date.parse(va
 });
 
 export const syncObjectTypeSchema = z.enum([
+  "project",
+  "project_directory",
   "conversation",
   "branch",
   "message",

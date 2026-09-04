@@ -9,6 +9,7 @@ import {
 import { errorEnvelopeSchema } from "./errors";
 import { automaticMemoryCreatedEventSchema } from "./memory";
 import { hostToolAvailabilitySchema } from "./model";
+import { projectCommandEnvelopeSchema } from "./project";
 import { remoteConnectorConfigureFrameSchema, remoteConnectorDisableFrameSchema } from "./remote";
 import { normalizedToolResultSchema, toolOperationSchema } from "./tool";
 
@@ -67,7 +68,11 @@ export const appServiceRequestFrameSchema = z
   .object({
     kind: z.literal("app-service.request"),
     requestId: z.uuid(),
-    request: z.union([chatCommandEnvelopeSchema, automationCommandEnvelopeSchema]),
+    request: z.union([
+      chatCommandEnvelopeSchema,
+      automationCommandEnvelopeSchema,
+      projectCommandEnvelopeSchema,
+    ]),
     authorization: appServiceAuthorizationSchema.optional(),
     byok: appServiceByokConfigurationSchema.optional(),
   })

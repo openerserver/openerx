@@ -20,6 +20,8 @@ import {
   memorySettingsSchema,
   messageSchema,
   type PiHistoryMessage,
+  projectDirectorySyncPayloadSchema,
+  projectSyncPayloadSchema,
   type SearchResult,
   type SyncConflict,
   type SyncOperation,
@@ -146,6 +148,7 @@ export class ChatRepository {
 
   createGeneration(input: {
     conversationId?: string | null;
+    projectId?: string | null;
     text: string;
     idempotencyKey: string;
     modelRef?: string;
@@ -169,20 +172,26 @@ export class ChatRepository {
       if (input.conversationId) {
         conversation = this.#getConversationEntity(input.conversationId);
         if (conversation.deletedAt) throw new Error("Conversation not found");
+        if (input.projectId !== undefined && input.projectId !== conversation.projectId) {
+          throw new Error("PROJECT_SCOPE_MISMATCH");
+        }
         branchId = conversation.activeBranchId;
       } else {
         const conversationId = this.#idFactory();
         branchId = this.#idFactory();
+        const projectId = input.projectId ?? null;
+        if (projectId) this.#assertProjectAvailable(projectId);
         this.#database
           .prepare(
             `INSERT INTO conversations
-             (id, owner_profile_id, title, active_branch_id, selected_model_ref, thinking_level,
+             (id, owner_profile_id, project_id, title, active_branch_id, selected_model_ref, thinking_level,
               created_at, updated_at, archived_at, deleted_at, revision)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1)`,
           )
           .run(
             conversationId,
             this.#ownerProfileId,
+            projectId,
             deriveConversationTitle(input.text),
             branchId,
             input.modelRef ?? this.#selectedModelRef,
@@ -797,6 +806,32 @@ export class ChatRepository {
     if (this.pendingSyncOperations().length > 0) throw new Error("SYNC_PENDING_WRITES_EXIST");
     if (this.syncConflicts().length > 0) throw new Error("SYNC_UNRESOLVED_CONFLICTS_EXIST");
     this.#transaction(() => {
+      const now = this.#now();
+      this.#database
+        .prepare(
+          `UPDATE workspace_grants SET revoked_at = COALESCE(revoked_at, ?)
+           WHERE id IN (
+             SELECT workspace_grant_id FROM project_directory_bindings
+             WHERE owner_profile_id = ?
+             UNION
+             SELECT workspace_grant_id FROM workspace_bindings
+             WHERE owner_profile_id = ? AND project_directory_binding_id IS NOT NULL
+           )`,
+        )
+        .run(now, this.#ownerProfileId, this.#ownerProfileId);
+      this.#database
+        .prepare(
+          `UPDATE capability_scopes SET revoked_at = COALESCE(revoked_at, ?)
+           WHERE owner_profile_id = ? AND resource_type = 'workspace'
+             AND resource IN (
+               SELECT workspace_grant_id FROM project_directory_bindings
+               WHERE owner_profile_id = ?
+               UNION
+               SELECT workspace_grant_id FROM workspace_bindings
+               WHERE owner_profile_id = ? AND project_directory_binding_id IS NOT NULL
+             )`,
+        )
+        .run(now, this.#ownerProfileId, this.#ownerProfileId, this.#ownerProfileId);
       this.#database.exec(`
         DELETE FROM memory_merge_reviews;
         DELETE FROM memory_semantic_cluster_state;
@@ -813,6 +848,10 @@ export class ChatRepository {
         DELETE FROM messages;
         DELETE FROM branches;
         DELETE FROM conversations;
+        DELETE FROM workspace_bindings WHERE project_directory_binding_id IS NOT NULL;
+        DELETE FROM project_directory_bindings;
+        DELETE FROM project_directories;
+        DELETE FROM projects;
         DELETE FROM idempotency;
         DELETE FROM sync_object_state;
         DELETE FROM sync_replica_state;
@@ -1094,6 +1133,7 @@ export class ChatRepository {
     return conversationSchema.parse({
       id: row.id,
       ownerProfileId: row.owner_profile_id,
+      projectId: row.project_id,
       title: row.title,
       activeBranchId: row.active_branch_id,
       selectedModelRef: row.selected_model_ref,
@@ -1112,6 +1152,17 @@ export class ChatRepository {
       | undefined;
     if (!row) throw new Error("Branch not found");
     return this.#branch(row);
+  }
+
+  #assertProjectAvailable(projectId: string): void {
+    const row = this.#database
+      .prepare(
+        `SELECT archived_at FROM projects
+         WHERE id = ? AND owner_profile_id = ?`,
+      )
+      .get(projectId, this.#ownerProfileId) as { archived_at: string | null } | undefined;
+    if (!row) throw new Error("PROJECT_NOT_FOUND");
+    if (row.archived_at) throw new Error("PROJECT_ARCHIVED");
   }
 
   #branch(row: SqlRow): Branch {
@@ -1389,6 +1440,53 @@ export class ChatRepository {
     }
   }
 
+  #revokeSyncedProjectDirectory(projectDirectoryId: string, now: string): void {
+    const bindings = this.#database
+      .prepare(
+        `SELECT id, workspace_grant_id FROM project_directory_bindings
+         WHERE project_directory_id = ? AND owner_profile_id = ? AND revoked_at IS NULL`,
+      )
+      .all(projectDirectoryId, this.#ownerProfileId) as Array<{
+      id: string;
+      workspace_grant_id: string;
+    }>;
+    for (const binding of bindings) {
+      this.#database
+        .prepare(
+          `UPDATE workspace_grants
+           SET revoked_at = COALESCE(revoked_at, ?)
+           WHERE id = ? OR id IN (
+             SELECT workspace_grant_id FROM workspace_bindings
+             WHERE project_directory_binding_id = ?
+           )`,
+        )
+        .run(now, binding.workspace_grant_id, binding.id);
+      this.#database
+        .prepare(
+          `UPDATE capability_scopes
+           SET revoked_at = COALESCE(revoked_at, ?)
+           WHERE owner_profile_id = ? AND resource_type = 'workspace'
+             AND (
+               resource = ? OR resource IN (
+                 SELECT workspace_grant_id FROM workspace_bindings
+                 WHERE project_directory_binding_id = ?
+               )
+             )`,
+        )
+        .run(now, this.#ownerProfileId, binding.workspace_grant_id, binding.id);
+      this.#database
+        .prepare("DELETE FROM workspace_bindings WHERE project_directory_binding_id = ?")
+        .run(binding.id);
+      this.#database
+        .prepare(
+          `UPDATE project_directory_bindings
+           SET revoked_at = COALESCE(revoked_at, ?), updated_at = ?, revision = revision + 1
+           WHERE id = ? AND owner_profile_id = ?`,
+        )
+        .run(now, now, binding.id, this.#ownerProfileId);
+    }
+  }
+
   #applySyncChange(
     objectType: string,
     objectId: string,
@@ -1396,6 +1494,26 @@ export class ChatRepository {
     payload: Record<string, unknown> | null,
   ): void {
     if (tombstone) {
+      if (objectType === "project_directory") {
+        const now = this.#now();
+        this.#revokeSyncedProjectDirectory(objectId, now);
+        this.#database
+          .prepare(
+            `UPDATE project_directories
+             SET deleted_at = COALESCE(deleted_at, ?), updated_at = ?
+             WHERE id = ? AND owner_profile_id = ?`,
+          )
+          .run(now, now, objectId, this.#ownerProfileId);
+      }
+      if (objectType === "project") {
+        const now = this.#now();
+        this.#database
+          .prepare(
+            `UPDATE projects SET archived_at = COALESCE(archived_at, ?), updated_at = ?
+             WHERE id = ? AND owner_profile_id = ?`,
+          )
+          .run(now, now, objectId, this.#ownerProfileId);
+      }
       if (objectType === "conversation") {
         this.#database
           .prepare("UPDATE conversations SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?")
@@ -1455,6 +1573,79 @@ export class ChatRepository {
       return;
     }
     if (!payload) throw new Error("SYNC_PAYLOAD_MISSING");
+    if (objectType === "project") {
+      const project = projectSyncPayloadSchema.parse(payload);
+      if (project.ownerProfileId !== this.#ownerProfileId || project.id !== objectId) {
+        throw new Error("ACCOUNT_SCOPE_VIOLATION");
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO projects
+           (id, owner_profile_id, name, instructions, pinned_rank, created_at, updated_at,
+            archived_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             instructions = excluded.instructions,
+             pinned_rank = excluded.pinned_rank,
+             updated_at = excluded.updated_at,
+             archived_at = excluded.archived_at,
+             revision = excluded.revision
+           WHERE owner_profile_id = excluded.owner_profile_id`,
+        )
+        .run(
+          project.id,
+          project.ownerProfileId,
+          project.name,
+          project.instructions,
+          project.pinnedRank,
+          project.createdAt,
+          project.updatedAt,
+          project.archivedAt,
+          project.revision,
+        );
+      return;
+    }
+    if (objectType === "project_directory") {
+      const directory = projectDirectorySyncPayloadSchema.parse(payload);
+      if (directory.ownerProfileId !== this.#ownerProfileId || directory.id !== objectId) {
+        throw new Error("ACCOUNT_SCOPE_VIOLATION");
+      }
+      const project = this.#database
+        .prepare("SELECT owner_profile_id FROM projects WHERE id = ?")
+        .get(directory.projectId) as { owner_profile_id: string } | undefined;
+      if (!project || project.owner_profile_id !== this.#ownerProfileId) {
+        throw new Error("ACCOUNT_SCOPE_VIOLATION");
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO project_directories
+           (id, owner_profile_id, project_id, display_name, role, desired_access,
+            created_at, updated_at, deleted_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             project_id = excluded.project_id,
+             display_name = excluded.display_name,
+             role = excluded.role,
+             desired_access = excluded.desired_access,
+             updated_at = excluded.updated_at,
+             deleted_at = NULL,
+             revision = excluded.revision
+           WHERE owner_profile_id = excluded.owner_profile_id`,
+        )
+        .run(
+          directory.id,
+          directory.ownerProfileId,
+          directory.projectId,
+          directory.displayName,
+          directory.role,
+          directory.desiredAccess,
+          directory.createdAt,
+          directory.updatedAt,
+          directory.revision,
+        );
+      return;
+    }
     if (objectType === "memory_settings") {
       const settings = memorySettingsSchema.parse(payload);
       if (settings.ownerProfileId !== this.#ownerProfileId || objectId !== this.#ownerProfileId) {
@@ -1724,12 +1915,13 @@ export class ChatRepository {
       this.#database
         .prepare(
           `INSERT INTO conversations
-           (id, owner_profile_id, title, active_branch_id, selected_model_ref, thinking_level,
-            created_at, updated_at, archived_at, deleted_at, revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-             owner_profile_id = excluded.owner_profile_id,
-             title = excluded.title,
+            (id, owner_profile_id, project_id, title, active_branch_id, selected_model_ref, thinking_level,
+             created_at, updated_at, archived_at, deleted_at, revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              owner_profile_id = excluded.owner_profile_id,
+              project_id = excluded.project_id,
+              title = excluded.title,
              active_branch_id = excluded.active_branch_id,
              selected_model_ref = excluded.selected_model_ref,
              thinking_level = excluded.thinking_level,
@@ -1741,6 +1933,7 @@ export class ChatRepository {
         .run(
           conversation.id,
           conversation.ownerProfileId,
+          conversation.projectId,
           conversation.title,
           conversation.activeBranchId,
           conversation.selectedModelRef,

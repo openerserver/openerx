@@ -315,7 +315,7 @@ export class McpToolAdapter implements ToolAdapter {
     if (existing) return existing;
     const config = this.#config(serverId);
     if (!config.enabled) throw new Error("MCP_SERVER_DISABLED");
-    const client = new Client({ name: "openerx", version: "2.0.0-alpha.0" });
+    const client = new Client({ name: "openerx", version: "2.0.1" });
     if (config.transport === "stdio") {
       const transport = new StdioClientTransport({
         command: config.command,
@@ -361,7 +361,7 @@ export class McpToolAdapter implements ToolAdapter {
         if (!callback) throw new Error("MCP_OAUTH_AUTHORIZATION_REQUIRED");
         await transport.finishAuth(callback);
         await activeClient.close().catch(() => undefined);
-        activeClient = new Client({ name: "openerx", version: "2.0.0-alpha.0" });
+        activeClient = new Client({ name: "openerx", version: "2.0.1" });
         await activeClient.connect(createTransport());
       } finally {
         await oauthProvider?.close();

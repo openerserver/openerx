@@ -29,7 +29,7 @@
 | ID | V1 必须能力 | 用户可见结果 | 关键边界 |
 | --- | --- | --- | --- |
 | FILE-01 | 添加文件 | 选择、拖放、粘贴文件或图片，解析状态可见 | 只读取用户添加的文件 |
-| FILE-02 | 添加文件夹/工作区 | 用户可授权一个文件夹，并查看路径、读写范围与有效期 | 阻止路径穿越和符号链接逃逸 |
+| FILE-02 | 添加文件夹/工作区 | 用户可为对话或个人项目授权目录；项目支持一个主目录和多个附加目录，并显示路径、角色、读写范围与有效期 | 阻止路径穿越、符号链接逃逸和跨设备权限继承 |
 | FILE-03 | 搜索与引用 | 可在授权文件中搜索，并引用文件名、页码、工作表、单元格范围或文本位置 | 引用必须可回到来源 |
 | FILE-04 | 创建与编辑 | 可创建、修改、重命名和保存文本、代码、文档、表格、演示文稿及结构化文件 | 不静默覆盖原文件；修改形成版本或可审阅差异 |
 | FILE-05 | 办公文件预览 | DOCX、XLSX、PPTX 和 PDF 可在客户端预览 | 预览失败不影响下载或另存 |
@@ -115,6 +115,7 @@ Web、Shell、Browser、Desktop、MCP、图片生成、工作区和 Skill 属于
 ## 6. 用户界面入口
 
 - 输入框：附件、模型和 Skill 选择。
+- 侧栏与项目页：创建个人项目、开始项目对话、管理主/附加目录和查看当前设备连接状态。
 - 消息区：工具活动、权限卡、来源和文件成果。
 - 右侧面板：文件预览、浏览器活动/语义与视觉证据、终端和长任务详情；真实网页保持独立窗口/标签页。
 - 文件页：个人文件、成果、版本和同步状态。
@@ -143,6 +144,7 @@ Web、Shell、Browser、Desktop、MCP、图片生成、工作区和 Skill 属于
 - [Web search](https://learn.chatgpt.com/docs/web-search)
 - [Model Context Protocol](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 - [Build skills](https://learn.chatgpt.com/docs/build-skills)
+- [Projects](https://learn.chatgpt.com/zh-Hans/docs/projects)
 - [Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)
 
 这些链接用于定义 V1 的公开能力参照，不表示 UWA 依赖 OpenAI 私有客户端实现。
