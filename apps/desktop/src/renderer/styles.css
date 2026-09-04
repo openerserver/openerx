@@ -1918,6 +1918,55 @@ h1 {
   min-width: 0;
 }
 
+.assistant-activity-overview {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 0 10px;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--workspace-muted-strong);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--workspace-border);
+  cursor: pointer;
+}
+
+.assistant-activity-overview > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.assistant-activity-overview strong {
+  color: var(--workspace-text);
+  font-weight: 600;
+}
+
+.assistant-activity-overview small {
+  color: var(--workspace-muted);
+  font-size: 10px;
+}
+
+.assistant-activity-overview svg {
+  flex: 0 0 auto;
+  color: var(--workspace-muted);
+  opacity: 0.72;
+  transition: transform 140ms ease;
+}
+
+.assistant-activity-overview.is-open svg {
+  transform: rotate(180deg);
+}
+
+.assistant-activity-overview + .assistant-response {
+  margin-top: 14px;
+}
+
 .assistant-response-parts {
   display: grid;
   gap: 16px;
@@ -1926,6 +1975,12 @@ h1 {
 .assistant-response-part {
   position: relative;
   min-width: 0;
+}
+
+.assistant-response-part-activities {
+  display: grid;
+  gap: 0;
+  margin-top: 6px;
 }
 
 .assistant-response-parts[data-response-part-count]:not([data-response-part-count="1"])
@@ -4983,6 +5038,16 @@ h1 {
   border: 0;
   border-bottom: 1px solid var(--workspace-border);
   border-radius: 0;
+}
+
+.conversation-workspace .tool-activity.tool-activity-segment {
+  padding: 0;
+  border-bottom: 0;
+}
+
+.tool-activity-segment > .run-timeline {
+  margin-top: 0;
+  border-top: 0;
 }
 
 .conversation-workspace .tool-activity > summary {

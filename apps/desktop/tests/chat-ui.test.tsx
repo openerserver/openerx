@@ -2282,7 +2282,7 @@ describe("M1 chat renderer", () => {
     expect(await screen.findByText("Unicom Work Assistant")).toBeTruthy();
     const workspace = await screen.findByRole("region", { name: "对话工作区" });
     const rail = await screen.findByRole("complementary", { name: "成果与来源" });
-    const activity = workspace.querySelector(".tool-activity");
+    const activity = workspace.querySelector(".assistant-activity-overview");
     const userMessage = workspace.querySelector(".message-user");
     const assistantMessage = workspace.querySelector(".message-assistant");
     const composer = workspace.querySelector(".composer");
@@ -2292,9 +2292,7 @@ describe("M1 chat renderer", () => {
 
     expect(activity.textContent).toContain("用时 8s");
     expect(activity.textContent).not.toContain("已完成");
-    expect(
-      activity.compareDocumentPosition(assistantMessage) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).not.toBe(0);
+    expect(assistantMessage.contains(activity)).toBe(true);
     expect(userMessage.querySelector(".message-state-header")).toBeNull();
     expect(assistantMessage.querySelector(".message-state-header")).toBeNull();
     const userContent = userMessage.querySelector(".message-content");
@@ -2338,6 +2336,26 @@ describe("M1 chat renderer", () => {
         requestedBackend: "system_default" as const,
       },
     };
+    const userMessage = snapshot.messages[0];
+    const assistantMessage = snapshot.messages[1];
+    if (!userMessage || !assistantMessage) throw new Error("CHAT_BROWSER_FIXTURE_INVALID");
+    vi.mocked(bridge.getConversation).mockResolvedValue({
+      ...snapshot,
+      messages: [
+        userMessage,
+        {
+          ...assistantMessage,
+          parts: [
+            { id: crypto.randomUUID(), type: "text", text: "我先打开网页核实。" },
+            {
+              id: crypto.randomUUID(),
+              type: "text",
+              text: "网页核实完成，下面是结论。",
+            },
+          ],
+        },
+      ],
+    });
     const workItem: WorkItem = {
       id: workItemId,
       ownerProfileId: "local-default",
@@ -2430,9 +2448,26 @@ describe("M1 chat renderer", () => {
       permissions: [],
       items: [
         {
-          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc",
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
           runId,
           sequence: 1,
+          piItemRef: "model:1",
+          status: "completed",
+          content: {
+            type: "model",
+            modelRef: "platform/standard",
+            summary: "准备网页核实",
+          },
+          startedAt: timestamp,
+          completedAt: timestamp,
+          errorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc",
+          runId,
+          sequence: 2,
           piItemRef: "browser:1",
           status: "completed",
           content: {
@@ -2449,6 +2484,23 @@ describe("M1 chat renderer", () => {
           createdAt: timestamp,
           updatedAt: "2026-08-25T09:00:08.000Z",
         },
+        {
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbd",
+          runId,
+          sequence: 3,
+          piItemRef: "model:2",
+          status: "completed",
+          content: {
+            type: "model",
+            modelRef: "platform/standard",
+            summary: "完成网页核实",
+          },
+          startedAt: timestamp,
+          completedAt: timestamp,
+          errorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
       ],
     };
     vi.mocked(bridge.listWorkItems).mockResolvedValue([workItem]);
@@ -2456,14 +2508,19 @@ describe("M1 chat renderer", () => {
     renderApp(bridge, `/chat/${conversationId}`);
     const user = userEvent.setup();
 
-    await screen.findAllByText("用时 8s");
-    const activitySummary = document.querySelector<HTMLElement>(".tool-activity > summary");
-    if (!activitySummary) throw new Error("Browser activity summary missing");
-    await user.click(activitySummary);
+    const activityOverview = await screen.findByRole("button", { name: /用时 8s/u });
+    expect(activityOverview.getAttribute("aria-expanded")).toBe("true");
 
     const action = await screen.findByText("在 Microsoft Edge 中打开了网页");
     const browserActivity = action.closest<HTMLDetailsElement>(".browser-activity-row");
     if (!browserActivity) throw new Error("Browser activity row missing");
+    const firstUpdate = screen.getByRole("region", { name: "UWA 进度更新 1" });
+    const secondUpdate = screen.getByRole("region", { name: "UWA 进度更新 2" });
+    expect(firstUpdate.contains(browserActivity)).toBe(true);
+    expect(secondUpdate.contains(browserActivity)).toBe(false);
+    expect(
+      browserActivity.compareDocumentPosition(secondUpdate) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
     expect(browserActivity.open).toBe(false);
     expect(browserActivity.querySelectorAll(":scope > pre")).toHaveLength(0);
     const technicalDetails = browserActivity.querySelector<HTMLDetailsElement>(

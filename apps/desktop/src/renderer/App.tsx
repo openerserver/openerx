@@ -2585,16 +2585,24 @@ function MessageCard({
   message,
   attachments,
   filesById,
+  activities = [],
+  onOpenBrowserPreview,
 }: {
   message: Message;
   attachments: Attachment[];
   filesById: ReadonlyMap<string, PersonalFile>;
+  activities?: WorkItem[];
+  onOpenBrowserPreview?: (preview: BrowserCallPreview) => void;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.parts[0]?.text ?? "");
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<"positive" | "negative" | null>(null);
+  const [activitiesOpen, setActivitiesOpen] = useState(true);
+  const [selectedActivityRunIds, setSelectedActivityRunIds] = useState<
+    Record<string, string | null>
+  >({});
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const conversationId = message.conversationId;
   useEffect(() => {
@@ -2656,6 +2664,31 @@ function MessageCard({
   });
   const execution: UsageRecord | undefined = usageRecords.data?.at(-1);
   const showMessageStatus = message.status !== "completed";
+  const primaryActivity = activities[0];
+  const activityElapsed = primaryActivity
+    ? elapsedTime(primaryActivity.createdAt, primaryActivity.completedAt)
+    : null;
+  const activityRunning = activities.some((activity) => activity.status !== "completed");
+
+  const activityAfterPart = (partIndex: number, partCount: number): ReactNode => {
+    if (!activitiesOpen || !onOpenBrowserPreview) return null;
+    return (
+      <div className="assistant-response-part-activities">
+        {activities.map((workItem) => (
+          <ToolActivity
+            key={`${workItem.id}:${partIndex}`}
+            workItem={workItem}
+            segment={{ index: partIndex, count: partCount }}
+            selectedRunId={selectedActivityRunIds[workItem.id] ?? workItem.activeRunId}
+            onSelectRun={(runId) =>
+              setSelectedActivityRunIds((current) => ({ ...current, [workItem.id]: runId }))
+            }
+            onOpenBrowserPreview={onOpenBrowserPreview}
+          />
+        ))}
+      </div>
+    );
+  };
 
   return (
     <article
@@ -2723,63 +2756,82 @@ function MessageCard({
             </div>
           </form>
         ) : message.role === "assistant" ? (
-          <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
-            {assistantTextParts.length > 0 ? (
-              <div
-                className="assistant-response-parts"
-                data-response-part-count={assistantTextParts.length}
+          <>
+            {activities.length > 0 ? (
+              <button
+                type="button"
+                className={`assistant-activity-overview ${activitiesOpen ? "is-open" : ""}`}
+                aria-expanded={activitiesOpen}
+                onClick={() => setActivitiesOpen((open) => !open)}
               >
-                {assistantTextParts.map((part, index) => (
-                  <section
-                    key={part.id}
-                    className="assistant-response-part"
-                    aria-label={
-                      assistantTextParts.length > 1
-                        ? `UWA 进度更新 ${index + 1}`
-                        : undefined
-                    }
-                  >
-                    <div className="markdown-body">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          a: ({ href, children }) => (
-                            <a href={href} target="_blank" rel="noreferrer">
-                              {children}
-                            </a>
-                          ),
-                          pre: ({ children }) => (
-                            <div className="code-block">
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  const code =
-                                    event.currentTarget.nextElementSibling?.textContent ?? "";
-                                  void copyText(code, "代码已复制到剪贴板。");
-                                }}
-                              >
-                                {actionNotice === "代码已复制到剪贴板。"
-                                  ? "已复制"
-                                  : "复制代码"}
-                              </button>
-                              <pre>{children}</pre>
-                            </div>
-                          ),
-                        }}
-                      >
-                        {part.text}
-                      </ReactMarkdown>
-                    </div>
-                  </section>
-                ))}
-              </div>
-            ) : (
-              <div className="markdown-body">
-                <p className="thinking">正在思考…</p>
-              </div>
-            )}
-            {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
-          </div>
+                <span>
+                  <strong>{activityElapsed ? `用时 ${activityElapsed}` : primaryActivity?.title}</strong>
+                  {activities.length > 1 ? <small>{activities.length} 次运行</small> : null}
+                  <CaretDown size={13} weight="bold" aria-hidden="true" />
+                </span>
+                {activityRunning ? <small>进行中</small> : null}
+              </button>
+            ) : null}
+            <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
+              {assistantTextParts.length > 0 ? (
+                <div
+                  className="assistant-response-parts"
+                  data-response-part-count={assistantTextParts.length}
+                >
+                  {assistantTextParts.map((part, index) => (
+                    <section
+                      key={part.id}
+                      className="assistant-response-part"
+                      aria-label={
+                        assistantTextParts.length > 1
+                          ? `UWA 进度更新 ${index + 1}`
+                          : undefined
+                      }
+                    >
+                      <div className="markdown-body">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            a: ({ href, children }) => (
+                              <a href={href} target="_blank" rel="noreferrer">
+                                {children}
+                              </a>
+                            ),
+                            pre: ({ children }) => (
+                              <div className="code-block">
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    const code =
+                                      event.currentTarget.nextElementSibling?.textContent ?? "";
+                                    void copyText(code, "代码已复制到剪贴板。");
+                                  }}
+                                >
+                                  {actionNotice === "代码已复制到剪贴板。"
+                                    ? "已复制"
+                                    : "复制代码"}
+                                </button>
+                                <pre>{children}</pre>
+                              </div>
+                            ),
+                          }}
+                        >
+                          {part.text}
+                        </ReactMarkdown>
+                      </div>
+                      {activityAfterPart(index, assistantTextParts.length)}
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <div className="markdown-body">
+                  <p className="thinking">正在思考…</p>
+                  {activityAfterPart(0, 1)}
+                </div>
+              )}
+              {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
+            </div>
+          </>
         ) : (
           <p className="user-text">{text}</p>
         )}
@@ -3158,18 +3210,50 @@ function BrowserToolCall({
   );
 }
 
+function assistantActivityItems(
+  items: WorkItemDetail["items"],
+  segment: { index: number; count: number },
+  historicalRun: boolean,
+): WorkItemDetail["items"] {
+  if (historicalRun) {
+    return segment.index === 0 ? items.filter((item) => item.content.type !== "reasoning") : [];
+  }
+  const groupedItems = Array.from({ length: segment.count }, () => [] as WorkItemDetail["items"]);
+  let modelRound = -1;
+  for (const item of items) {
+    if (item.content.type === "model") {
+      modelRound += 1;
+      continue;
+    }
+    if (item.content.type === "reasoning") continue;
+    const targetIndex = Math.min(Math.max(modelRound, 0), segment.count - 1);
+    groupedItems[targetIndex]?.push(item);
+  }
+  return groupedItems[segment.index] ?? [];
+}
+
 function ToolActivity({
   workItem,
   onOpenBrowserPreview,
+  segment,
+  selectedRunId: controlledSelectedRunId,
+  onSelectRun,
 }: {
   workItem: WorkItem;
   onOpenBrowserPreview: (preview: BrowserCallPreview) => void;
+  segment?: { index: number; count: number };
+  selectedRunId?: string | null;
+  onSelectRun?: (runId: string) => void;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
-  const [selectedRunId, setSelectedRunId] = useState(workItem.activeRunId);
+  const [localSelectedRunId, setLocalSelectedRunId] = useState(workItem.activeRunId);
+  const selectedRunId =
+    controlledSelectedRunId === undefined ? localSelectedRunId : controlledSelectedRunId;
   useEffect(() => {
-    if (!selectedRunId && workItem.activeRunId) setSelectedRunId(workItem.activeRunId);
-  }, [selectedRunId, workItem.activeRunId]);
+    if (controlledSelectedRunId === undefined && !localSelectedRunId && workItem.activeRunId) {
+      setLocalSelectedRunId(workItem.activeRunId);
+    }
+  }, [controlledSelectedRunId, localSelectedRunId, workItem.activeRunId]);
   const detail = useQuery({
     queryKey: ["tools", "work-item", workItem.id, selectedRunId],
     queryFn: () =>
@@ -3252,22 +3336,29 @@ function ToolActivity({
   const elapsed = elapsedTime(workItem.createdAt, workItem.completedAt);
   const showTitle = elapsed && workItem.title !== "对话轮次";
   const showStatus = workItem.status !== "completed";
-  return (
-    <details className="tool-activity" open={shouldOpen || undefined}>
-      <summary>
-        <span className="tool-activity-heading">
-          <strong>{elapsed ? `用时 ${elapsed}` : workItem.title}</strong>
-          {showTitle ? <span className="tool-activity-title">{workItem.title}</span> : null}
-          <CaretDown className="tool-activity-caret" size={13} weight="bold" aria-hidden="true" />
-        </span>
-        {showStatus ? (
-          <span className={`tool-state tool-state-${workItem.status}`}>
-            {workItemStatusLabel[workItem.status]}
-          </span>
-        ) : null}
-      </summary>
-      {detail.isPending ? <p className="muted-copy">正在读取工具活动…</p> : null}
-      {value && value.runs.length > 1 ? (
+  const timelineItems = segment
+    ? assistantActivityItems(
+        value?.items ?? [],
+        segment,
+        Boolean(selectedRunId && selectedRunId !== workItem.activeRunId),
+      )
+    : (value?.items ?? []);
+  const showsSegmentMetadata = segment?.index === 0;
+  const hasSegmentMetadata =
+    showsSegmentMetadata &&
+    (detail.isPending ||
+      Boolean(detail.error) ||
+      Boolean(value && (value.runs.length > 1 || usageRecords.length > 0)));
+  if (segment && timelineItems.length === 0 && !hasSegmentMetadata) return <></>;
+  const activityContent = (
+    <>
+      {detail.isPending && (!segment || segment.index === 0) ? (
+        <p className="muted-copy">正在读取工具活动…</p>
+      ) : null}
+      {detail.error && (!segment || segment.index === 0) ? (
+        <p className="inline-error">暂时无法读取工具活动。</p>
+      ) : null}
+      {(!segment || showsSegmentMetadata) && value && value.runs.length > 1 ? (
         <div className="run-replay-header">
           <span>
             Run #{value.run.attempt} · {value.run.selectedModelRef}
@@ -3277,7 +3368,10 @@ function ToolActivity({
             <select
               aria-label="选择要回放的 Run"
               value={value.run.id}
-              onChange={(event) => setSelectedRunId(event.target.value)}
+              onChange={(event) => {
+                setLocalSelectedRunId(event.target.value);
+                onSelectRun?.(event.target.value);
+              }}
             >
               {value.runs.map((run) => (
                 <option value={run.id} key={run.id}>
@@ -3288,7 +3382,7 @@ function ToolActivity({
           </label>
         </div>
       ) : null}
-      {usageRecords.length > 0 ? (
+      {(!segment || showsSegmentMetadata) && usageRecords.length > 0 ? (
         <div className="usage-line" role="status" aria-label="执行轮次 Token 用量">
           <span>{usageRecords.length} 个模型轮次</span>
           <span>输入 {tokenValue(usageTotal.inputTokens)}</span>
@@ -3299,7 +3393,7 @@ function ToolActivity({
         </div>
       ) : null}
       <div className="run-timeline">
-        {value?.items.map((item) => {
+        {timelineItems.map((item) => {
           const content = item.content;
           if (content.type === "tool") {
             const call = toolCalls.get(content.toolCallId);
@@ -3570,6 +3664,31 @@ function ToolActivity({
           );
         })}
       </div>
+    </>
+  );
+  if (segment) {
+    return <div className="tool-activity tool-activity-segment">{activityContent}</div>;
+  }
+  return (
+    <details className="tool-activity" open={shouldOpen || undefined}>
+      <summary>
+        <span className="tool-activity-heading">
+          <strong>{elapsed ? `用时 ${elapsed}` : workItem.title}</strong>
+          {showTitle ? <span className="tool-activity-title">{workItem.title}</span> : null}
+          <CaretDown
+            className="tool-activity-caret"
+            size={13}
+            weight="bold"
+            aria-hidden="true"
+          />
+        </span>
+        {showStatus ? (
+          <span className={`tool-state tool-state-${workItem.status}`}>
+            {workItemStatusLabel[workItem.status]}
+          </span>
+        ) : null}
+      </summary>
+      {activityContent}
     </details>
   );
 }
@@ -4307,25 +4426,18 @@ function ChatPage({
                       {messageTimestamp(message.createdAt)}
                     </time>
                   ) : null}
-                  {message.role === "assistant"
-                    ? activities.map((workItem) => (
-                        <ToolActivity
-                          key={workItem.id}
-                          workItem={workItem}
-                          onOpenBrowserPreview={(preview) => {
-                            setSelectedArtifactId(null);
-                            setSelectedBrowserPreview(preview);
-                            setRailOpen(true);
-                          }}
-                        />
-                      ))
-                    : null}
                   <MessageCard
                     message={message}
                     attachments={snapshot.data.attachments.filter(
                       ({ messageId }) => messageId === message.id,
                     )}
                     filesById={filesById}
+                    activities={message.role === "assistant" ? activities : []}
+                    onOpenBrowserPreview={(preview) => {
+                      setSelectedArtifactId(null);
+                      setSelectedBrowserPreview(preview);
+                      setRailOpen(true);
+                    }}
                   />
                   {message.role !== "assistant"
                     ? activities.map((workItem) => (

@@ -181,3 +181,54 @@ Browser console inspection was unavailable because the native renderer could not
 - [ ] Capture and compare the native Electron window.
 
 final result: blocked
+
+---
+
+# Per-response tool activity design QA
+
+- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-b352ae64-a4f0-49c3-8fa2-4f8f9bfc4345.png`
+- Implementation screenshot: unavailable; the local capture surface does not expose the native UWA Electron window.
+- Viewport: source image 1842 × 1222 px; intended UWA comparison viewport is the current desktop window.
+- State: a multi-update assistant response with elapsed time visible and tool calls interleaved beneath the update that initiated them.
+
+## Full-view comparison evidence
+
+The Codex reference was inspected at original resolution. Its defining hierarchy is chronological: an assistant update appears first, its related tool activity follows immediately below, and the next assistant update continues afterward. The running UWA development build accepted the renderer and stylesheet changes through hot reload without a renderer crash, but a same-state native screenshot could not be captured.
+
+## Focused-region comparison evidence
+
+The implementation now uses persisted model-round markers as structural boundaries. Non-model run items are assigned to the assistant response part for that round, while the elapsed-time control remains a compact top-level overview. Browser calls keep their existing compact disclosure and on-demand preview behavior.
+
+## Findings
+
+- [P2] Rendered fidelity cannot be visually confirmed.
+  - Location: multi-part assistant response timeline.
+  - Evidence: source screenshot is available, but the native implementation screenshot is missing.
+  - Impact: final line spacing, divider weight, and vertical-rail alignment remain unverified.
+  - Fix: capture the current UWA window with at least two assistant updates and one intervening browser/tool call, then compare it with the source.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing UWA message typography is preserved; tool rows use the existing compact muted treatment.
+- Spacing and layout rhythm: calls are inserted with a 6 px top gap under their associated response part; the overview has a 14 px separation from the response body.
+- Colors and visual tokens: existing workspace text, muted, border, accent, and raised-surface tokens are reused.
+- Image quality and asset fidelity: no new image assets were introduced; existing Phosphor icons remain in use.
+- Copy and content: elapsed time remains visible; raw model and reasoning rows are omitted from the active chronological view so the visible sequence emphasizes user-readable updates and actions.
+
+## Primary interactions tested
+
+- Expand and collapse all calls for an assistant response.
+- Place a browser call beneath the first of two assistant updates.
+- Keep the next assistant update after that browser call in DOM order.
+- Expand the browser activity and open its screenshot preview.
+- Select a historical run without exposing raw reasoning.
+
+## Implementation checklist
+
+- [x] Distribute active run events by persisted model round.
+- [x] Preserve the elapsed-time overview and collapse control.
+- [x] Preserve browser preview and historical run selection.
+- [x] Pass all 64 renderer interaction tests and desktop TypeScript validation.
+- [ ] Capture and compare the native Electron window.
+
+final result: blocked
