@@ -2945,6 +2945,28 @@ const browserActionLabel: Record<string, string> = {
   close: "关闭浏览器窗口",
 };
 
+const browserCompletedActionLabel: Record<string, string> = {
+  open: "打开了网页",
+  observe: "查看了网页",
+  focus: "聚焦了页面元素",
+  invoke: "操作了页面元素",
+  click: "点击了页面元素",
+  submit: "提交了页面内容",
+  setValue: "填写了页面内容",
+  type: "输入了页面内容",
+  select: "选择了页面选项",
+  key: "使用了键盘",
+  scroll: "滚动了页面",
+  drag: "拖动了页面元素",
+  back: "返回了上一页",
+  forward: "前往了下一页",
+  reload: "刷新了页面",
+  upload: "上传了文件",
+  download: "下载了文件",
+  detach: "交还了浏览器控制",
+  close: "关闭了浏览器窗口",
+};
+
 type BrowserResultImage = Extract<ToolCall["resultContent"][number], { type: "image" }>;
 
 interface BrowserCallPreview {
@@ -3059,6 +3081,14 @@ function browserTargetLabel(preview: BrowserCallPreview): string {
   }
 }
 
+function browserActivityLabel(preview: BrowserCallPreview): string {
+  if (preview.status !== "completed") {
+    return `${preview.applicationLabel} · ${preview.actionLabel}`;
+  }
+  const completedAction = browserCompletedActionLabel[preview.action] ?? preview.actionLabel;
+  return `在 ${preview.applicationLabel} 中${completedAction}`;
+}
+
 function BrowserToolCall({
   call,
   preview,
@@ -3068,59 +3098,63 @@ function BrowserToolCall({
   preview: BrowserCallPreview;
   onOpenPreview: (preview: BrowserCallPreview) => void;
 }): React.JSX.Element {
+  const discloseByDefault = ["failed", "waiting_for_permission"].includes(call.status);
   return (
-    <section className="run-item-row tool-call-row browser-call-row">
-      <header className="browser-call-heading">
-        <div className="browser-call-leading">
-          <span className="browser-call-icon" aria-hidden="true">
-            <Desktop size={16} weight="regular" />
-          </span>
-          <span>
-            <strong>{preview.actionLabel}</strong>
-            <small>
-              {preview.applicationLabel} · {browserTargetLabel(preview)}
-            </small>
-          </span>
+    <details
+      className={`run-item-row tool-call-row browser-activity-row browser-activity-${call.status}`}
+      open={discloseByDefault || undefined}
+    >
+      <summary>
+        <Desktop size={17} weight="regular" aria-hidden="true" />
+        <span>{browserActivityLabel(preview)}</span>
+        {call.status === "completed" ? null : (
+          <small className="browser-activity-state">{toolCallStatusLabel[call.status]}</small>
+        )}
+        <CaretDown
+          className="browser-activity-caret"
+          size={13}
+          weight="bold"
+          aria-hidden="true"
+        />
+      </summary>
+      <div className="browser-activity-content">
+        <div className="browser-activity-target">
+          <strong>{browserTargetLabel(preview)}</strong>
+          {preview.url ? <span title={preview.url}>{preview.url}</span> : null}
         </div>
-        <span className={`browser-call-state browser-call-state-${call.status}`}>
-          {toolCallStatusLabel[call.status]}
-        </span>
-      </header>
-      {preview.resultSummary ? <p className="browser-call-summary">{preview.resultSummary}</p> : null}
-      {preview.url ? (
-        <span className="browser-call-url" title={preview.url}>
-          {preview.url}
-        </span>
-      ) : null}
-      <div className="browser-call-actions">
-        {preview.image ? (
-          <button type="button" onClick={() => onOpenPreview(preview)}>
-            查看画面
-          </button>
+        {preview.resultSummary ? <p>{preview.resultSummary}</p> : null}
+        <div className="browser-activity-actions">
+          {preview.image ? (
+            <button type="button" onClick={() => onOpenPreview(preview)}>
+              查看画面
+            </button>
+          ) : null}
+          {preview.url ? (
+            <a href={preview.url} rel="noreferrer" target="_blank">
+              在浏览器中打开
+            </a>
+          ) : null}
+          <details className="browser-activity-technical">
+            <summary>技术详情</summary>
+            <div>
+              <strong>类型化输入</strong>
+              <pre>{JSON.stringify(preview.input, null, 2)}</pre>
+              {preview.rawText ? (
+                <>
+                  <strong>原始结果</strong>
+                  <pre>{preview.rawText}</pre>
+                </>
+              ) : null}
+            </div>
+          </details>
+        </div>
+        {call.errorCode ? (
+          <p className="inline-error">
+            {toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}
+          </p>
         ) : null}
-        {preview.url ? (
-          <a href={preview.url} rel="noreferrer" target="_blank">
-            在浏览器中打开
-          </a>
-        ) : null}
-        <details className="browser-call-details">
-          <summary>技术详情</summary>
-          <div>
-            <strong>类型化输入</strong>
-            <pre>{JSON.stringify(preview.input, null, 2)}</pre>
-            {preview.rawText ? (
-              <>
-                <strong>原始结果</strong>
-                <pre>{preview.rawText}</pre>
-              </>
-            ) : null}
-          </div>
-        </details>
       </div>
-      {call.errorCode ? (
-        <p className="inline-error">{toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}</p>
-      ) : null}
-    </section>
+    </details>
   );
 }
 
@@ -3221,9 +3255,11 @@ function ToolActivity({
   return (
     <details className="tool-activity" open={shouldOpen || undefined}>
       <summary>
-        <TerminalWindow size={17} />
-        <strong>{elapsed ? `用时 ${elapsed}` : workItem.title}</strong>
-        {showTitle ? <span className="tool-activity-title">{workItem.title}</span> : null}
+        <span className="tool-activity-heading">
+          <strong>{elapsed ? `用时 ${elapsed}` : workItem.title}</strong>
+          {showTitle ? <span className="tool-activity-title">{workItem.title}</span> : null}
+          <CaretDown className="tool-activity-caret" size={13} weight="bold" aria-hidden="true" />
+        </span>
         {showStatus ? (
           <span className={`tool-state tool-state-${workItem.status}`}>
             {workItemStatusLabel[workItem.status]}
@@ -3231,27 +3267,25 @@ function ToolActivity({
         ) : null}
       </summary>
       {detail.isPending ? <p className="muted-copy">正在读取工具活动…</p> : null}
-      {value ? (
+      {value && value.runs.length > 1 ? (
         <div className="run-replay-header">
           <span>
             Run #{value.run.attempt} · {value.run.selectedModelRef}
           </span>
-          {value.runs.length > 1 ? (
-            <label>
-              历史 Run
-              <select
-                aria-label="选择要回放的 Run"
-                value={value.run.id}
-                onChange={(event) => setSelectedRunId(event.target.value)}
-              >
-                {value.runs.map((run) => (
-                  <option value={run.id} key={run.id}>
-                    #{run.attempt} · {run.status}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
+          <label>
+            历史 Run
+            <select
+              aria-label="选择要回放的 Run"
+              value={value.run.id}
+              onChange={(event) => setSelectedRunId(event.target.value)}
+            >
+              {value.runs.map((run) => (
+                <option value={run.id} key={run.id}>
+                  #{run.attempt} · {run.status}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       ) : null}
       {usageRecords.length > 0 ? (

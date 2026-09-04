@@ -123,3 +123,61 @@ P3: on very narrow windows, the combined label will ellipsize before wrapping so
 ## Final result
 
 final result: passed
+
+---
+
+# Browser activity display design QA
+
+- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-b9cd91d9-e2c2-4c0e-a209-6f8b14fb9490.png`
+- Implementation screenshot: unavailable; the local computer-use surface does not expose native Electron windows.
+- Viewport: source image 1918 × 1081 px; desktop density unknown. Intended UWA comparison viewport matches the current desktop window.
+- State: elapsed-time group visible; individual browser activity collapsed by default, then expanded to reveal actions.
+
+## Full-view comparison evidence
+
+The Codex reference image was opened at original resolution. The UWA development build launched successfully, but its native Electron window was not exposed to the available capture surface, so a valid same-state implementation screenshot could not be produced.
+
+## Focused-region comparison evidence
+
+The reference activity region shows a low-emphasis icon, one concise past-tense action line, no card border, and details disclosed only on demand. The implementation adopts that hierarchy in the browser activity component, but visual spacing and typography could not be judged from a rendered capture.
+
+## Findings
+
+- [P2] Rendered fidelity cannot be visually confirmed.
+  - Location: browser activity row and elapsed-time disclosure.
+  - Evidence: the source is available, but the native implementation screenshot is missing.
+  - Impact: exact icon alignment, line height, spacing, and token contrast remain unverified.
+  - Fix: capture the UWA Electron window at the same desktop scale and compare the collapsed and expanded states against the source.
+
+## Required fidelity surfaces
+
+- Fonts and typography: source inspected; implementation capture blocked.
+- Spacing and layout rhythm: source inspected; implementation capture blocked.
+- Colors and visual tokens: source uses subdued neutral activity text; implementation uses existing UWA muted tokens, pending visual confirmation.
+- Image quality and asset fidelity: no new raster assets; the existing Phosphor icon system is retained.
+- Copy and content: browser actions use concise past-tense Chinese activity summaries.
+
+## Primary interactions tested
+
+- Expand the elapsed-time group.
+- Expand a collapsed browser activity row.
+- Open the browser image preview.
+- Return from the image preview to outputs and sources.
+
+Browser console inspection was unavailable because the native renderer could not be attached through the approved computer-use surface.
+
+## Comparison history
+
+- Initial implementation used a bordered status card with always-visible actions.
+- Current iteration removes the card treatment, hides completed-state chrome, uses a compact icon/action disclosure row, and moves controls into the expanded state.
+- Post-fix visual evidence remains blocked by native-window capture availability.
+
+## Implementation checklist
+
+- [x] Match Codex's compact activity hierarchy.
+- [x] Keep completed browser calls collapsed by default.
+- [x] Preserve screenshot preview and technical details behind disclosure.
+- [x] Cover the interaction with automated UI tests.
+- [ ] Capture and compare the native Electron window.
+
+final result: blocked

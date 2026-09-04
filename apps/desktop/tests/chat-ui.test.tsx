@@ -2461,18 +2461,23 @@ describe("M1 chat renderer", () => {
     if (!activitySummary) throw new Error("Browser activity summary missing");
     await user.click(activitySummary);
 
-    const action = await screen.findByText("打开网页");
-    const browserCard = action.closest<HTMLElement>(".browser-call-row");
-    if (!browserCard) throw new Error("Browser call card missing");
-    expect(browserCard.textContent).toContain("Microsoft Edge");
-    expect(browserCard.querySelectorAll(":scope > pre")).toHaveLength(0);
-    const technicalDetails = browserCard.querySelector<HTMLDetailsElement>(
-      "details.browser-call-details",
+    const action = await screen.findByText("在 Microsoft Edge 中打开了网页");
+    const browserActivity = action.closest<HTMLDetailsElement>(".browser-activity-row");
+    if (!browserActivity) throw new Error("Browser activity row missing");
+    expect(browserActivity.open).toBe(false);
+    expect(browserActivity.querySelectorAll(":scope > pre")).toHaveLength(0);
+    const technicalDetails = browserActivity.querySelector<HTMLDetailsElement>(
+      "details.browser-activity-technical",
     );
     expect(technicalDetails?.open).toBe(false);
     expect(technicalDetails?.textContent).toContain(rawMarker);
 
-    await user.click(within(browserCard).getByRole("button", { name: "查看画面" }));
+    const browserActivitySummary = browserActivity.querySelector<HTMLElement>(":scope > summary");
+    if (!browserActivitySummary) throw new Error("Browser activity disclosure missing");
+    await user.click(browserActivitySummary);
+    expect(browserActivity.open).toBe(true);
+
+    await user.click(within(browserActivity).getByRole("button", { name: "查看画面" }));
     const preview = await screen.findByRole("complementary", { name: "浏览器画面" });
     expect(
       within(preview).getByRole("img", { name: "今天星期几？ - 搜索的浏览器画面" }),
