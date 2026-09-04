@@ -3,6 +3,9 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    exclude: ["@openerx/contracts"],
+  },
   server: {
     watch: {
       ignored: ["**/out/**"],
