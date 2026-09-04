@@ -27,6 +27,7 @@ import type {
   SyncConflict,
   ThinkingLevel,
   TokenAggregateField,
+  ToolCall,
   ToolPermissionMode,
   ToolRuntimeCapability,
   ToolRuntimeReadiness,
@@ -2913,7 +2914,223 @@ const workItemStatusLabel: Record<WorkItem["status"], string> = {
   cancelled: "已取消",
 };
 
-function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
+const toolCallStatusLabel: Record<ToolCall["status"], string> = {
+  requested: "准备中",
+  waiting_for_permission: "等待授权",
+  running: "操作中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+const browserActionLabel: Record<string, string> = {
+  open: "打开网页",
+  observe: "查看网页",
+  focus: "聚焦页面元素",
+  invoke: "操作页面元素",
+  click: "点击页面元素",
+  submit: "提交页面内容",
+  setValue: "填写页面内容",
+  type: "输入页面内容",
+  select: "选择页面选项",
+  key: "使用键盘操作",
+  scroll: "滚动页面",
+  drag: "拖动页面元素",
+  back: "返回上一页",
+  forward: "前往下一页",
+  reload: "刷新页面",
+  upload: "上传文件",
+  download: "下载文件",
+  detach: "交还浏览器控制",
+  close: "关闭浏览器窗口",
+};
+
+type BrowserResultImage = Extract<ToolCall["resultContent"][number], { type: "image" }>;
+
+interface BrowserCallPreview {
+  callId: string;
+  action: string;
+  actionLabel: string;
+  applicationLabel: string;
+  image: BrowserResultImage | null;
+  input: ToolCall["input"];
+  rawText: string;
+  resultSummary: string | null;
+  sessionId: string | null;
+  state: string | null;
+  status: ToolCall["status"];
+  title: string | null;
+  url: string | null;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function browserResultPayload(call: ToolCall): Record<string, unknown> | null {
+  for (const part of call.resultContent) {
+    if (part.type !== "text") continue;
+    const jsonStart = part.text.indexOf("\n{");
+    if (jsonStart < 0) continue;
+    try {
+      const parsed = objectValue(JSON.parse(part.text.slice(jsonStart + 1)));
+      if (parsed) return parsed;
+    } catch {
+      // Historical browser results are display data. Keep the compact card usable if parsing fails.
+    }
+  }
+  return null;
+}
+
+function trustedBrowserUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function browserApplicationLabel(value: unknown): string {
+  if (typeof value !== "string") return "系统默认浏览器";
+  const applicationId = value.toLocaleLowerCase();
+  if (applicationId.includes("edge")) return "Microsoft Edge";
+  if (applicationId.includes("chrome")) return "Google Chrome";
+  if (applicationId.includes("firefox")) return "Mozilla Firefox";
+  if (applicationId.includes("safari")) return "Safari";
+  return "系统默认浏览器";
+}
+
+function browserCallPreview(call: ToolCall): BrowserCallPreview | null {
+  if (call.input?.operation !== "browser_computer_use") return null;
+  const request = call.input.request;
+  const payload = browserResultPayload(call);
+  const observation = objectValue(payload?.observation);
+  const session = objectValue(payload?.session);
+  const descriptor = observation ?? session;
+  const rawText = call.resultContent
+    .filter(
+      (part): part is Extract<ToolCall["resultContent"][number], { type: "text" }> =>
+        part.type === "text",
+    )
+    .map(({ text }) => text)
+    .join("\n");
+  const image =
+    [...call.resultContent]
+      .reverse()
+      .find(
+        (part): part is Extract<ToolCall["resultContent"][number], { type: "image" }> =>
+          part.type === "image",
+      ) ?? null;
+  const inputUrl = "url" in request ? request.url : null;
+  const descriptorUrl = trustedBrowserUrl(descriptor?.url);
+  return {
+    callId: call.id,
+    action: request.action,
+    actionLabel: browserActionLabel[request.action] ?? `浏览器操作：${request.action}`,
+    applicationLabel: browserApplicationLabel(descriptor?.applicationId),
+    image,
+    input: call.input,
+    rawText,
+    resultSummary: call.resultSummary,
+    sessionId:
+      typeof descriptor?.sessionId === "string"
+        ? descriptor.sessionId
+        : "sessionId" in request
+          ? request.sessionId
+          : null,
+    state: typeof descriptor?.state === "string" ? descriptor.state : null,
+    status: call.status,
+    title: typeof observation?.title === "string" ? observation.title : null,
+    url: descriptorUrl ?? trustedBrowserUrl(inputUrl),
+  };
+}
+
+function browserTargetLabel(preview: BrowserCallPreview): string {
+  if (preview.title) return preview.title;
+  if (!preview.url) return preview.applicationLabel;
+  try {
+    return new URL(preview.url).hostname;
+  } catch {
+    return preview.applicationLabel;
+  }
+}
+
+function BrowserToolCall({
+  call,
+  preview,
+  onOpenPreview,
+}: {
+  call: ToolCall;
+  preview: BrowserCallPreview;
+  onOpenPreview: (preview: BrowserCallPreview) => void;
+}): React.JSX.Element {
+  return (
+    <section className="run-item-row tool-call-row browser-call-row">
+      <header className="browser-call-heading">
+        <div className="browser-call-leading">
+          <span className="browser-call-icon" aria-hidden="true">
+            <Desktop size={16} weight="regular" />
+          </span>
+          <span>
+            <strong>{preview.actionLabel}</strong>
+            <small>
+              {preview.applicationLabel} · {browserTargetLabel(preview)}
+            </small>
+          </span>
+        </div>
+        <span className={`browser-call-state browser-call-state-${call.status}`}>
+          {toolCallStatusLabel[call.status]}
+        </span>
+      </header>
+      {preview.resultSummary ? <p className="browser-call-summary">{preview.resultSummary}</p> : null}
+      {preview.url ? (
+        <span className="browser-call-url" title={preview.url}>
+          {preview.url}
+        </span>
+      ) : null}
+      <div className="browser-call-actions">
+        {preview.image ? (
+          <button type="button" onClick={() => onOpenPreview(preview)}>
+            查看画面
+          </button>
+        ) : null}
+        {preview.url ? (
+          <a href={preview.url} rel="noreferrer" target="_blank">
+            在浏览器中打开
+          </a>
+        ) : null}
+        <details className="browser-call-details">
+          <summary>技术详情</summary>
+          <div>
+            <strong>类型化输入</strong>
+            <pre>{JSON.stringify(preview.input, null, 2)}</pre>
+            {preview.rawText ? (
+              <>
+                <strong>原始结果</strong>
+                <pre>{preview.rawText}</pre>
+              </>
+            ) : null}
+          </div>
+        </details>
+      </div>
+      {call.errorCode ? (
+        <p className="inline-error">{toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}</p>
+      ) : null}
+    </section>
+  );
+}
+
+function ToolActivity({
+  workItem,
+  onOpenBrowserPreview,
+}: {
+  workItem: WorkItem;
+  onOpenBrowserPreview: (preview: BrowserCallPreview) => void;
+}): React.JSX.Element {
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState(workItem.activeRunId);
   useEffect(() => {
@@ -3053,6 +3270,17 @@ function ToolActivity({ workItem }: { workItem: WorkItem }): React.JSX.Element {
           if (content.type === "tool") {
             const call = toolCalls.get(content.toolCallId);
             if (!call) return null;
+            const browserPreview = browserCallPreview(call);
+            if (browserPreview) {
+              return (
+                <BrowserToolCall
+                  call={call}
+                  key={item.id}
+                  preview={browserPreview}
+                  onOpenPreview={onOpenBrowserPreview}
+                />
+              );
+            }
             const visibleParts = call.resultContent.filter(
               (part) =>
                 !(part.type === "source" && projectedSources.has(call.id)) &&
@@ -3562,12 +3790,111 @@ function ConversationToolbar({
   );
 }
 
+function browserSessionStateLabel(state: string | null): string {
+  switch (state) {
+    case "opening":
+      return "正在打开";
+    case "active":
+      return "自动操作中";
+    case "paused_for_user":
+      return "用户已接管";
+    case "detached":
+      return "已交还浏览器";
+    case "closing":
+      return "正在关闭";
+    case "closed":
+      return "会话已关闭";
+    case "failed":
+      return "浏览器会话失败";
+    default:
+      return "画面快照";
+  }
+}
+
+function BrowserPreviewRail({
+  preview,
+  onBack,
+  onClose,
+}: {
+  preview: BrowserCallPreview;
+  onBack: () => void;
+  onClose: () => void;
+}): React.JSX.Element {
+  return (
+    <aside
+      className="conversation-rail conversation-rail-preview browser-preview-rail"
+      aria-label="浏览器画面"
+    >
+      <header className="conversation-rail-header artifact-preview-header">
+        <button
+          type="button"
+          className="artifact-preview-back"
+          aria-label="返回成果与来源"
+          onClick={onBack}
+        >
+          <ArrowLeft size={17} weight="regular" />
+        </button>
+        <div>
+          <strong>{preview.title ?? preview.actionLabel}</strong>
+          <span>
+            {preview.applicationLabel} · {browserSessionStateLabel(preview.state)}
+          </span>
+        </div>
+        <button type="button" className="icon-button" aria-label="隐藏浏览器画面" onClick={onClose}>
+          <X size={17} weight="regular" />
+        </button>
+      </header>
+      <div className="browser-preview-toolbar">
+        <div>
+          <Desktop size={16} weight="regular" aria-hidden="true" />
+          <span>{preview.actionLabel}</span>
+        </div>
+        {preview.url ? (
+          <a href={preview.url} rel="noreferrer" target="_blank">
+            在浏览器中打开
+          </a>
+        ) : null}
+      </div>
+      <section className="browser-preview-body" aria-live="polite">
+        {preview.image ? (
+          <img
+            alt={`${preview.title ?? preview.applicationLabel}的浏览器画面`}
+            src={`data:${preview.image.mimeType};base64,${preview.image.data}`}
+          />
+        ) : (
+          <div className="artifact-preview-state">这次操作没有返回浏览器截图。</div>
+        )}
+        <dl className="browser-preview-meta">
+          <div>
+            <dt>状态</dt>
+            <dd>{toolCallStatusLabel[preview.status]}</dd>
+          </div>
+          {preview.url ? (
+            <div>
+              <dt>网址</dt>
+              <dd title={preview.url}>{preview.url}</dd>
+            </div>
+          ) : null}
+          {preview.sessionId ? (
+            <div>
+              <dt>会话</dt>
+              <dd>{preview.sessionId}</dd>
+            </div>
+          ) : null}
+        </dl>
+      </section>
+    </aside>
+  );
+}
+
 function ConversationRail({
   artifacts,
   files,
   workItems,
+  selectedBrowserPreview,
   selectedArtifactId,
   onSelectArtifact,
+  onBackFromBrowserPreview,
   onBackToOverview,
   onAddSource,
   onClose,
@@ -3575,8 +3902,10 @@ function ConversationRail({
   artifacts: Artifact[];
   files: PersonalFile[];
   workItems: WorkItem[];
+  selectedBrowserPreview: BrowserCallPreview | null;
   selectedArtifactId: string | null;
   onSelectArtifact: (artifactId: string) => void;
+  onBackFromBrowserPreview: () => void;
   onBackToOverview: () => void;
   onAddSource: () => void;
   onClose: () => void;
@@ -3596,13 +3925,25 @@ function ConversationRail({
     mutationFn: async (artifactId: string) => await window.openerx.saveArtifact({ artifactId }),
   });
   useEffect(() => {
-    if (!selectedArtifactId) return;
+    if (!selectedArtifactId && !selectedBrowserPreview) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") onBackToOverview();
+      if (event.key !== "Escape") return;
+      if (selectedBrowserPreview) onBackFromBrowserPreview();
+      else onBackToOverview();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onBackToOverview, selectedArtifactId]);
+  }, [onBackFromBrowserPreview, onBackToOverview, selectedArtifactId, selectedBrowserPreview]);
+
+  if (selectedBrowserPreview) {
+    return (
+      <BrowserPreviewRail
+        preview={selectedBrowserPreview}
+        onBack={onBackFromBrowserPreview}
+        onClose={onClose}
+      />
+    );
+  }
 
   if (selectedArtifactId) {
     return (
@@ -3806,6 +4147,8 @@ function ChatPage({
   const [following, setFollowing] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [selectedBrowserPreview, setSelectedBrowserPreview] =
+    useState<BrowserCallPreview | null>(null);
   const snapshot = useQuery({
     queryKey: chatKeys.conversation(conversationId),
     queryFn: () => window.openerx.getConversation({ conversationId }),
@@ -3834,6 +4177,7 @@ function ChatPage({
     lastMessageListScrollTopRef.current = 0;
     setFollowing(true);
     setSelectedArtifactId(null);
+    setSelectedBrowserPreview(null);
   }, [conversationId]);
   useEffect(() => {
     if (!ready) return;
@@ -3901,7 +4245,7 @@ function ChatPage({
   const filesById = new Map((conversationFiles.data ?? []).map((file) => [file.id, file] as const));
   return (
     <main
-      className={`conversation-workspace ${railOpen ? "rail-is-open" : ""} ${selectedArtifactId ? "artifact-preview-is-open" : ""}`}
+      className={`conversation-workspace ${railOpen ? "rail-is-open" : ""} ${selectedArtifactId ? "artifact-preview-is-open" : ""} ${selectedBrowserPreview ? "browser-preview-is-open" : ""}`}
     >
       <section className="conversation-page" aria-label="对话工作区">
         <ConversationToolbar
@@ -3931,7 +4275,15 @@ function ChatPage({
                   ) : null}
                   {message.role === "assistant"
                     ? activities.map((workItem) => (
-                        <ToolActivity key={workItem.id} workItem={workItem} />
+                        <ToolActivity
+                          key={workItem.id}
+                          workItem={workItem}
+                          onOpenBrowserPreview={(preview) => {
+                            setSelectedArtifactId(null);
+                            setSelectedBrowserPreview(preview);
+                            setRailOpen(true);
+                          }}
+                        />
                       ))
                     : null}
                   <MessageCard
@@ -3943,7 +4295,15 @@ function ChatPage({
                   />
                   {message.role !== "assistant"
                     ? activities.map((workItem) => (
-                        <ToolActivity key={workItem.id} workItem={workItem} />
+                        <ToolActivity
+                          key={workItem.id}
+                          workItem={workItem}
+                          onOpenBrowserPreview={(preview) => {
+                            setSelectedArtifactId(null);
+                            setSelectedBrowserPreview(preview);
+                            setRailOpen(true);
+                          }}
+                        />
                       ))
                     : null}
                 </section>
@@ -3977,12 +4337,18 @@ function ChatPage({
           artifacts={artifacts.data ?? []}
           files={conversationFiles.data ?? []}
           workItems={workItems.data ?? []}
+          selectedBrowserPreview={selectedBrowserPreview}
           selectedArtifactId={selectedArtifactId}
-          onSelectArtifact={setSelectedArtifactId}
+          onSelectArtifact={(artifactId) => {
+            setSelectedBrowserPreview(null);
+            setSelectedArtifactId(artifactId);
+          }}
+          onBackFromBrowserPreview={() => setSelectedBrowserPreview(null)}
           onBackToOverview={() => setSelectedArtifactId(null)}
           onAddSource={onToggleContext}
           onClose={() => {
             setSelectedArtifactId(null);
+            setSelectedBrowserPreview(null);
             setRailOpen(false);
           }}
         />

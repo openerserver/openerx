@@ -2318,6 +2318,174 @@ describe("M1 chat renderer", () => {
     expect(within(rail).getByRole("heading", { name: "本次运行" })).toBeTruthy();
   });
 
+  it("presents real-browser calls as compact activity with an on-demand preview", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const workItemId = "66666666-6666-4666-8666-666666666667";
+    const runId = "77777777-7777-4777-8777-777777777778";
+    const stepId = "88888888-8888-4888-8888-888888888889";
+    const toolCallId = "99999999-9999-4999-8999-999999999990";
+    const sessionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab";
+    const rawMarker = "RAW_BROWSER_OBSERVATION_MARKER";
+    const browserUrl = "https://www.bing.com/search?q=today";
+    const browserInput = {
+      idempotencyKey: "browser-open-test",
+      operation: "browser_computer_use" as const,
+      request: {
+        contractVersion: "browser_computer_use_v2" as const,
+        action: "open" as const,
+        url: browserUrl,
+        requestedBackend: "system_default" as const,
+      },
+    };
+    const workItem: WorkItem = {
+      id: workItemId,
+      ownerProfileId: "local-default",
+      conversationId,
+      messageId: assistantMessageId,
+      title: "对话轮次",
+      status: "completed",
+      activeRunId: runId,
+      createdAt: timestamp,
+      updatedAt: "2026-08-25T09:00:08.000Z",
+      completedAt: "2026-08-25T09:00:08.000Z",
+      revision: 1,
+    };
+    const run = {
+      id: runId,
+      workItemId,
+      attempt: 1,
+      status: "completed" as const,
+      piPackageVersion: "0.84.4",
+      piHostContractVersion: 2,
+      selectedModelRef: "platform/auto",
+      effectiveModelRef: "platform/standard",
+      branchId,
+      thinkingLevel: "high" as const,
+      fallbackReason: null,
+      initialToolNames: ["openerx_browser"],
+      availableToolNames: ["openerx_browser"],
+      skillInstallationIds: [],
+      instructionSources: [],
+      piSessionRef: `run:${runId}`,
+      usageRecords: [],
+      cancellationRequestedAt: null,
+      lastPiEventSequence: 2,
+      retryCount: 0,
+      compactionCount: 0,
+      errorCode: null,
+      createdAt: timestamp,
+      startedAt: timestamp,
+      completedAt: "2026-08-25T09:00:08.000Z",
+      updatedAt: "2026-08-25T09:00:08.000Z",
+    };
+    const detail: WorkItemDetail = {
+      workItem,
+      runs: [run],
+      run,
+      steps: [],
+      toolCalls: [
+        {
+          id: toolCallId,
+          runId,
+          stepId,
+          piCallRef: "browser:1",
+          toolName: "openerx_browser",
+          source: "openerx",
+          status: "completed",
+          risk: "L1",
+          idempotencyKey: "browser-open-test",
+          input: browserInput,
+          inputSummary: "在系统默认浏览器中打开网页",
+          targetSummary: browserUrl,
+          resultSummary: "已在系统默认浏览器中打开专用窗口",
+          resultContent: [
+            {
+              type: "text",
+              text: `已在系统默认浏览器中打开专用窗口\n${JSON.stringify({
+                marker: rawMarker,
+                observation: {
+                  sessionId,
+                  applicationId: "windows.microsoft-edge",
+                  state: "active",
+                  title: "今天星期几？ - 搜索",
+                  url: browserUrl,
+                },
+              })}`,
+            },
+            {
+              type: "image",
+              mimeType: "image/svg+xml",
+              data: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString(
+                "base64",
+              ),
+            },
+          ],
+          errorCode: null,
+          startedAt: timestamp,
+          completedAt: "2026-08-25T09:00:08.000Z",
+          updatedAt: "2026-08-25T09:00:08.000Z",
+        },
+      ],
+      permissions: [],
+      items: [
+        {
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc",
+          runId,
+          sequence: 1,
+          piItemRef: "browser:1",
+          status: "completed",
+          content: {
+            type: "tool",
+            toolCallId,
+            toolName: "openerx_browser",
+            input: browserInput,
+            inputSummary: "在系统默认浏览器中打开网页",
+            targetSummary: browserUrl,
+          },
+          startedAt: timestamp,
+          completedAt: "2026-08-25T09:00:08.000Z",
+          errorCode: null,
+          createdAt: timestamp,
+          updatedAt: "2026-08-25T09:00:08.000Z",
+        },
+      ],
+    };
+    vi.mocked(bridge.listWorkItems).mockResolvedValue([workItem]);
+    vi.mocked(bridge.getWorkItem).mockResolvedValue(detail);
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    await screen.findAllByText("用时 8s");
+    const activitySummary = document.querySelector<HTMLElement>(".tool-activity > summary");
+    if (!activitySummary) throw new Error("Browser activity summary missing");
+    await user.click(activitySummary);
+
+    const action = await screen.findByText("打开网页");
+    const browserCard = action.closest<HTMLElement>(".browser-call-row");
+    if (!browserCard) throw new Error("Browser call card missing");
+    expect(browserCard.textContent).toContain("Microsoft Edge");
+    expect(browserCard.querySelectorAll(":scope > pre")).toHaveLength(0);
+    const technicalDetails = browserCard.querySelector<HTMLDetailsElement>(
+      "details.browser-call-details",
+    );
+    expect(technicalDetails?.open).toBe(false);
+    expect(technicalDetails?.textContent).toContain(rawMarker);
+
+    await user.click(within(browserCard).getByRole("button", { name: "查看画面" }));
+    const preview = await screen.findByRole("complementary", { name: "浏览器画面" });
+    expect(
+      within(preview).getByRole("img", { name: "今天星期几？ - 搜索的浏览器画面" }),
+    ).toBeTruthy();
+    expect(within(preview).getByRole("link", { name: "在浏览器中打开" }).getAttribute("href")).toBe(
+      browserUrl,
+    );
+    expect(preview.textContent).not.toContain(rawMarker);
+
+    await user.click(within(preview).getByRole("button", { name: "返回成果与来源" }));
+    expect(await screen.findByRole("complementary", { name: "成果与来源" })).toBeTruthy();
+  });
+
   it("previews a current-task deliverable inside the conversation without navigating to files", async () => {
     cleanup();
     const bridge = createBridge();
