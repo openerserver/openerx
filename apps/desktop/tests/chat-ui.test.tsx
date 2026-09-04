@@ -2294,10 +2294,11 @@ describe("M1 chat renderer", () => {
     expect(activity.textContent).not.toContain("已完成");
     expect(activity.getAttribute("aria-expanded")).toBe("false");
     expect(assistantMessage.contains(activity)).toBe(true);
-    expect(assistantMessage.querySelector(".assistant-response")).toBeNull();
-    expect(assistantMessage.querySelector(".message-actions")).toBeNull();
+    expect(assistantMessage.querySelector(".assistant-conclusion-response")).toBeTruthy();
+    expect(assistantMessage.querySelector(".message-actions")).toBeTruthy();
     await userEvent.setup().click(activity as HTMLElement);
-    expect(assistantMessage.querySelector(".assistant-response")).toBeTruthy();
+    expect(assistantMessage.querySelectorAll(".assistant-response")).toHaveLength(2);
+    expect(assistantMessage.querySelector(".assistant-conclusion-response")).toBeTruthy();
     expect(userMessage.querySelector(".message-state-header")).toBeNull();
     expect(assistantMessage.querySelector(".message-state-header")).toBeNull();
     const userContent = userMessage.querySelector(".message-content");
@@ -2515,19 +2516,23 @@ describe("M1 chat renderer", () => {
 
     const activityOverview = await screen.findByRole("button", { name: /用时 8s/u });
     expect(activityOverview.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("我先打开网页核实。")).toBeNull();
+    expect(screen.getByText("网页核实完成，下面是结论。")).toBeTruthy();
     expect(screen.queryByText("在 Microsoft Edge 中打开了网页")).toBeNull();
     await user.click(activityOverview);
     expect(activityOverview.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("我先打开网页核实。")).toBeTruthy();
+    expect(screen.getByText("网页核实完成，下面是结论。")).toBeTruthy();
 
     const action = await screen.findByText("在 Microsoft Edge 中打开了网页");
     const browserActivity = action.closest<HTMLDetailsElement>(".tool-activity-segment");
     if (!browserActivity) throw new Error("Browser activity disclosure missing");
     const firstUpdate = screen.getByRole("region", { name: "UWA 进度更新 1" });
-    const secondUpdate = screen.getByRole("region", { name: "UWA 进度更新 2" });
+    const finalAnswer = screen.getByRole("region", { name: "UWA 最终答复" });
     expect(firstUpdate.contains(browserActivity)).toBe(true);
-    expect(secondUpdate.contains(browserActivity)).toBe(false);
+    expect(finalAnswer.contains(browserActivity)).toBe(false);
     expect(
-      browserActivity.compareDocumentPosition(secondUpdate) & Node.DOCUMENT_POSITION_FOLLOWING,
+      browserActivity.compareDocumentPosition(finalAnswer) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
     expect(browserActivity.open).toBe(false);
     const technicalDetails = browserActivity.querySelector<HTMLDetailsElement>(
@@ -2553,6 +2558,11 @@ describe("M1 chat renderer", () => {
 
     await user.click(within(preview).getByRole("button", { name: "返回成果与来源" }));
     expect(await screen.findByRole("complementary", { name: "成果与来源" })).toBeTruthy();
+
+    await user.click(activityOverview);
+    expect(activityOverview.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("我先打开网页核实。")).toBeNull();
+    expect(screen.getByText("网页核实完成，下面是结论。")).toBeTruthy();
   });
 
   it("previews a current-task deliverable inside the conversation without navigating to files", async () => {

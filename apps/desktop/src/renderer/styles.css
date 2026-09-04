@@ -1967,6 +1967,10 @@ h1 {
   margin-top: 14px;
 }
 
+.assistant-response + .assistant-conclusion-response {
+  margin-top: 18px;
+}
+
 .assistant-response-parts {
   display: grid;
   gap: 16px;

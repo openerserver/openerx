@@ -189,15 +189,15 @@ final result: blocked
 - Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-721b2c13-0a22-42fa-b3f2-b9bdcdd8c5dc.png`
 - Implementation screenshot: unavailable; the local capture surface does not expose the native UWA Electron window.
 - Viewport: source image 1918 × 1081 px; intended UWA comparison viewport is the current desktop window.
-- State: the elapsed-time disclosure controls the complete multi-update response timeline; after it opens, each interleaved tool activity remains independently collapsed until selected.
+- State: the elapsed-time disclosure controls only intermediate updates and their tool activity; the final conclusion remains visible in both collapsed and expanded states. After the process opens, each interleaved tool activity remains independently collapsed until selected.
 
 ## Full-view comparison evidence
 
-The Codex reference was inspected at original resolution. Its defining hierarchy is chronological and nested: the elapsed-time row owns the response timeline, while each related tool activity appears as a compact disclosure between assistant updates. The running UWA development build accepted the renderer and stylesheet changes through hot reload without a renderer crash, but a same-state native screenshot could not be captured.
+The Codex reference was inspected at original resolution. Its defining hierarchy is chronological and nested: the elapsed-time row owns the process timeline, while each related tool activity appears as a compact disclosure between assistant updates. The final conclusion is a separate, persistent result below that disclosure. The running UWA development build accepted the renderer and stylesheet changes through hot reload without a renderer crash, but a same-state native screenshot could not be captured.
 
 ## Focused-region comparison evidence
 
-The implementation now uses persisted model-round markers as structural boundaries. The elapsed-time control mounts the complete assistant timeline on expansion; each model round then presents one independently collapsed activity summary. Expanding that summary reveals typed input, results, browser actions, and technical details without adding a second browser disclosure layer.
+The implementation now uses persisted model-round markers as structural boundaries. The elapsed-time control mounts only the intermediate assistant timeline on expansion; the last completed text part renders as an always-visible final-answer region outside that timeline. Each process round presents one independently collapsed activity summary. Expanding that summary reveals typed input, results, browser actions, and technical details without adding a second browser disclosure layer.
 
 ## Findings
 
@@ -218,7 +218,8 @@ The implementation now uses persisted model-round markers as structural boundari
 ## Primary interactions tested
 
 - Confirm the assistant response timeline is hidden before the elapsed-time disclosure is opened.
-- Expand the elapsed-time disclosure and reveal the complete response timeline.
+- Confirm the final conclusion remains visible before and after toggling the elapsed-time disclosure.
+- Expand the elapsed-time disclosure and reveal the intermediate process timeline.
 - Place a browser call beneath the first of two assistant updates.
 - Keep the next assistant update after that browser call in DOM order.
 - Confirm each response-level tool activity is collapsed after the timeline opens.
@@ -233,11 +234,15 @@ The implementation now uses persisted model-round markers as structural boundari
 - Earlier finding [P1]: collapsing the elapsed-time row hid only tool activity while leaving assistant updates visible, and expanding it exposed tool details immediately.
 - Fix: move the complete response timeline under the elapsed-time disclosure, then add an independent collapsed disclosure around each response-level activity group.
 - Post-fix evidence: automated coverage verifies that the response timeline is initially absent, appears after the elapsed-time row is selected, and leaves the browser activity closed until its own summary is selected.
+- Earlier finding [P1]: the elapsed-time disclosure also contained the final conclusion, so collapsing process history removed the answer the user needed to read.
+- Fix: split the last completed assistant text part into a persistent final-answer region; keep intermediate updates and their tool calls under the elapsed-time disclosure, and keep diagnostics and response actions with the visible conclusion.
+- Post-fix evidence: automated coverage verifies that the intermediate update is absent while collapsed and visible while expanded, while the final conclusion and response actions remain present in both states. Native pixel comparison remains blocked by capture availability.
 
 ## Implementation checklist
 
 - [x] Distribute active run events by persisted model round.
-- [x] Let the elapsed-time row control the complete response timeline.
+- [x] Let the elapsed-time row control only intermediate response updates.
+- [x] Keep the final conclusion and its response actions outside that disclosure.
 - [x] Keep each response-level tool activity independently collapsed.
 - [x] Preserve browser preview and historical run selection.
 - [x] Pass all 64 renderer interaction tests and desktop TypeScript validation.

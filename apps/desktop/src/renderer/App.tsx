@@ -2650,7 +2650,16 @@ function MessageCard({
   const text = message.parts.map((part) => part.text).join("\n\n");
   const assistantTextParts = message.parts.filter((part) => part.text.length > 0);
   const running = message.role === "assistant" && ["pending", "streaming"].includes(message.status);
-  const assistantTimelineVisible = activities.length === 0 || activitiesOpen;
+  const hasSeparateConclusion =
+    message.role === "assistant" &&
+    activities.length > 0 &&
+    !running &&
+    assistantTextParts.length > 0;
+  const conclusionPart = hasSeparateConclusion ? assistantTextParts.at(-1) : undefined;
+  const processTextParts = hasSeparateConclusion
+    ? assistantTextParts.slice(0, -1)
+    : assistantTextParts;
+  const assistantTimelineVisible = activities.length === 0 || activitiesOpen || running;
   const usage = useQuery({
     queryKey: ["usage", "message", message.id],
     queryFn: () => window.openerx.getUsage({ messageId: message.id }),
@@ -2690,6 +2699,37 @@ function MessageCard({
       </div>
     );
   };
+
+  const assistantMarkdown = (value: string): ReactNode => (
+    <div className="markdown-body">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ),
+          pre: ({ children }) => (
+            <div className="code-block">
+              <button
+                type="button"
+                onClick={(event) => {
+                  const code = event.currentTarget.nextElementSibling?.textContent ?? "";
+                  void copyText(code, "代码已复制到剪贴板。");
+                }}
+              >
+                {actionNotice === "代码已复制到剪贴板。" ? "已复制" : "复制代码"}
+              </button>
+              <pre>{children}</pre>
+            </div>
+          ),
+        }}
+      >
+        {value}
+      </ReactMarkdown>
+    </div>
+  );
 
   return (
     <article
@@ -2775,12 +2815,12 @@ function MessageCard({
             ) : null}
             {assistantTimelineVisible ? (
               <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
-                {assistantTextParts.length > 0 ? (
+                {processTextParts.length > 0 ? (
                   <div
                     className="assistant-response-parts"
                     data-response-part-count={assistantTextParts.length}
                   >
-                    {assistantTextParts.map((part, index) => (
+                    {processTextParts.map((part, index) => (
                       <section
                         key={part.id}
                         className="assistant-response-part"
@@ -2790,40 +2830,14 @@ function MessageCard({
                             : undefined
                         }
                       >
-                        <div className="markdown-body">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              a: ({ href, children }) => (
-                                <a href={href} target="_blank" rel="noreferrer">
-                                  {children}
-                                </a>
-                              ),
-                              pre: ({ children }) => (
-                                <div className="code-block">
-                                  <button
-                                    type="button"
-                                    onClick={(event) => {
-                                      const code =
-                                        event.currentTarget.nextElementSibling?.textContent ?? "";
-                                      void copyText(code, "代码已复制到剪贴板。");
-                                    }}
-                                  >
-                                    {actionNotice === "代码已复制到剪贴板。"
-                                      ? "已复制"
-                                      : "复制代码"}
-                                  </button>
-                                  <pre>{children}</pre>
-                                </div>
-                              ),
-                            }}
-                          >
-                            {part.text}
-                          </ReactMarkdown>
-                        </div>
+                        {assistantMarkdown(part.text)}
                         {activityAfterPart(index, assistantTextParts.length)}
                       </section>
                     ))}
+                  </div>
+                ) : conclusionPart ? (
+                  <div className="assistant-response-parts assistant-response-tools-only">
+                    <section className="assistant-response-part">{activityAfterPart(0, 1)}</section>
                   </div>
                 ) : (
                   <div className="markdown-body">
@@ -2832,6 +2846,13 @@ function MessageCard({
                   </div>
                 )}
                 {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
+              </div>
+            ) : null}
+            {conclusionPart ? (
+              <div className="assistant-response assistant-conclusion-response">
+                <section className="assistant-response-part" aria-label="UWA 最终答复">
+                  {assistantMarkdown(conclusionPart.text)}
+                </section>
               </div>
             ) : null}
           </>
@@ -2843,7 +2864,7 @@ function MessageCard({
             {messageFailureLabel(message.errorCode)}
           </p>
         ) : null}
-        {assistantTimelineVisible && ((usage.data && usage.data.records > 0) || execution) ? (
+        {(usage.data && usage.data.records > 0) || execution ? (
           <details className="message-diagnostics">
             <summary>运行详情</summary>
             {usage.data && usage.data.records > 0 ? (
@@ -2867,7 +2888,7 @@ function MessageCard({
           </details>
         ) : null}
       </div>
-      {!editing && (message.role !== "assistant" || assistantTimelineVisible) ? (
+      {!editing ? (
         <footer className="message-actions">
           {text ? (
             <button
