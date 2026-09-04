@@ -297,8 +297,11 @@ const bridge: DesktopBridge = {
     );
     return byokConnectionTestResultSchema.parse(result);
   },
-  clearByokApiKey: async () => {
-    const result: unknown = await ipcRenderer.invoke(ipcChannels.modelServiceApiKeyClear);
+  clearByokApiKey: async (providerId) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.modelServiceApiKeyClear,
+      providerId,
+    );
     return modelServiceSettingsSchema.parse(result);
   },
   getUsage: async (input = {}) => {

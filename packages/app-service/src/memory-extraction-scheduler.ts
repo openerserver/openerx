@@ -8,6 +8,7 @@ import type {
   MemoryExtractionJob,
   PiMemoryExtractFrame,
 } from "@openerx/contracts";
+import { isByokModelRef } from "@openerx/contracts";
 import type { ChatRepository, MemoryRepository } from "@openerx/storage";
 import type { PiHostClient } from "./pi-host-client";
 
@@ -48,11 +49,15 @@ export interface MemoryExtractor {
 
 export class PiMemoryExtractor implements MemoryExtractor {
   readonly #piHost: PiHostClient;
-  readonly #executionContext: () => MemoryExecutionContext | Promise<MemoryExecutionContext>;
+  readonly #executionContext: (
+    modelRef?: string,
+  ) => MemoryExecutionContext | Promise<MemoryExecutionContext>;
 
   constructor(
     piHost: PiHostClient,
-    executionContext: () => MemoryExecutionContext | Promise<MemoryExecutionContext>,
+    executionContext: (modelRef?: string) =>
+      | MemoryExecutionContext
+      | Promise<MemoryExecutionContext>,
   ) {
     this.#piHost = piHost;
     this.#executionContext = executionContext;
@@ -61,11 +66,11 @@ export class PiMemoryExtractor implements MemoryExtractor {
   async extract(request: MemoryExtractionRequest): Promise<AutomaticMemoryExtractionOutput> {
     let context: MemoryExecutionContext;
     try {
-      context = await this.#executionContext();
+      context = await this.#executionContext(request.snapshot.conversation.selectedModelRef);
     } catch {
       throw new Error("MEMORY_EXECUTION_CONTEXT_UNAVAILABLE");
     }
-    const usesByok = request.snapshot.conversation.selectedModelRef === "platform/byok";
+    const usesByok = isByokModelRef(request.snapshot.conversation.selectedModelRef);
     const authorization: AppServiceAuthorization | undefined = usesByok
       ? undefined
       : context.authorization;

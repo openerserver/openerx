@@ -539,7 +539,7 @@ describe("ChatAppService", () => {
           conversationId: null,
           text: "BYOK conversation",
           idempotencyKey: "execution-mode-byok-1",
-          modelRef: "platform/byok",
+          modelRef: "platform/byok.deepseek.flash",
         },
       },
       authorization,
@@ -548,6 +548,15 @@ describe("ChatAppService", () => {
     await waitForTerminal(service, byokReceipt.conversationId);
     expect(pi.prompts[0]).toMatchObject({ byok });
     expect(pi.prompts[0]?.platform).toBeUndefined();
+    await expect(
+      service.handle({
+        command: "chat.selectModel",
+        input: {
+          conversationId: byokReceipt.conversationId,
+          modelRef: "platform/byok.qwen.plus",
+        },
+      }),
+    ).resolves.toMatchObject({ selectedModelRef: "platform/byok.qwen.plus" });
     await expect(
       service.handle({
         command: "chat.selectModel",

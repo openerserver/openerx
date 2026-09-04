@@ -125,8 +125,8 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
   );
   const automationScheduler = new AutomationScheduler({
     repository: automationRepository,
-    dispatcher: new ChatAutomationDispatcher(service, () =>
-      mainCapabilities.automationExecutionContext(),
+    dispatcher: new ChatAutomationDispatcher(service, (modelRef) =>
+      mainCapabilities.automationExecutionContext(modelRef),
     ),
     hostId: bootstrap.deviceId,
     onRunChanged: (run) => mainPort.postMessage({ kind: "automation.run.event", run }),
@@ -137,7 +137,9 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
   const memoryExtractionScheduler = new MemoryExtractionScheduler({
     chatRepository: repository,
     memoryRepository,
-    extractor: new PiMemoryExtractor(piHost, () => mainCapabilities.automationExecutionContext()),
+    extractor: new PiMemoryExtractor(piHost, (modelRef) =>
+      mainCapabilities.automationExecutionContext(modelRef),
+    ),
     onMemoriesCreated: (memories, job) =>
       mainPort.postMessage({
         kind: "memory.created.event",

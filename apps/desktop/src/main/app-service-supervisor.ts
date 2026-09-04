@@ -86,7 +86,9 @@ export class AppServiceSupervisor {
   #remoteHandshakeComplete = false;
   #remoteConfiguration: RemoteConnectorConfigureFrame | null = null;
   #capabilityHost: MainCapabilityHost | null = null;
-  #automationExecutionContextProvider: (() => Promise<AutomationExecutionContext>) | null = null;
+  #automationExecutionContextProvider:
+    | ((modelRef?: string) => Promise<AutomationExecutionContext>)
+    | null = null;
   readonly #capabilityHostFactory: ((profileDirectory: string) => MainCapabilityHost) | null;
   readonly #capabilityRequests = new Map<string, AbortController>();
 
@@ -174,7 +176,9 @@ export class AppServiceSupervisor {
     return () => this.#memoryListeners.delete(listener);
   }
 
-  setAutomationExecutionContextProvider(provider: () => Promise<AutomationExecutionContext>): void {
+  setAutomationExecutionContextProvider(
+    provider: (modelRef?: string) => Promise<AutomationExecutionContext>,
+  ): void {
     this.#automationExecutionContextProvider = provider;
   }
 
@@ -430,7 +434,7 @@ export class AppServiceSupervisor {
         });
         return;
       }
-      void provider().then(
+      void provider(automationContextRequest.data.modelRef).then(
         (context) =>
           this.#mainPort?.postMessage({
             kind: "main.automation-context.response",

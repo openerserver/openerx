@@ -15,6 +15,7 @@ import type {
   RemoteCommand,
   RemoteCommandPayload,
 } from "@openerx/contracts";
+import { isByokModelRef } from "@openerx/contracts";
 import { type FileAppService, FileServiceError } from "@openerx/file-service";
 import type { SkillPackageService } from "@openerx/skills";
 import type {
@@ -275,10 +276,7 @@ export class ChatAppService {
       case "chat.selectModel": {
         const currentModelRef = this.#repository.getConversation(request.input.conversationId)
           .conversation.selectedModelRef;
-        if (
-          (currentModelRef === "platform/byok") !==
-          (request.input.modelRef === "platform/byok")
-        ) {
+        if (isByokModelRef(currentModelRef) !== isByokModelRef(request.input.modelRef)) {
           throw new Error("CONVERSATION_EXECUTION_MODE_LOCKED");
         }
         const result = this.#repository.selectConversationModel(
@@ -713,7 +711,7 @@ export class ChatAppService {
   ): Promise<void> {
     for (const event of draft.events) this.#emit(event);
     if (!draft.created) return;
-    const usesByok = draft.selectedModelRef === "platform/byok";
+    const usesByok = isByokModelRef(draft.selectedModelRef);
     const selectedAuthorization = usesByok ? undefined : authorization;
     const selectedByok = usesByok ? byok : undefined;
     const generationId = randomUUID();

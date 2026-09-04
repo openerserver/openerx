@@ -34,7 +34,13 @@ import type {
   WorkItem,
   WorkItemDetail,
 } from "@openerx/contracts";
-import { defaultByokModelConfiguration } from "@openerx/contracts";
+import {
+  type ByokProviderId,
+  byokProviderPresets,
+  defaultByokModelConfiguration,
+  defaultByokModelRef,
+  isByokModelRef,
+} from "@openerx/contracts";
 import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/model";
 import {
   ArrowClockwise,
@@ -152,9 +158,9 @@ function initialThemePreference(): ThemePreference {
 
 function initialDefaultModelRef(): string {
   try {
-    return window.localStorage.getItem(defaultModelStorageKey) || "platform/byok";
+    return window.localStorage.getItem(defaultModelStorageKey) || defaultByokModelRef;
   } catch {
-    return "platform/byok";
+    return defaultByokModelRef;
   }
 }
 
@@ -1036,7 +1042,7 @@ function Composer({
   const compatibleConversationModels = conversation
     ? models.data?.filter(
         ({ modelRef }) =>
-          (modelRef === "platform/byok") === (conversation.selectedModelRef === "platform/byok"),
+          isByokModelRef(modelRef) === isByokModelRef(conversation.selectedModelRef),
       )
     : undefined;
   const selectedConversationModel = compatibleConversationModels?.find(
@@ -4588,6 +4594,18 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     mode: "byok",
     byok: defaultByokModelConfiguration(),
   });
+  const [providerKeys, setProviderKeys] = useState<Partial<Record<ByokProviderId, string>>>({});
+  const [testModelIds, setTestModelIds] = useState<Record<ByokProviderId, string>>(() =>
+    byokProviderPresets.reduce(
+      (result, provider) => ({ ...result, [provider.id]: provider.models[0]?.id ?? "" }),
+      {} as Record<ByokProviderId, string>,
+    ),
+  );
+  const [providerTestFeedback, setProviderTestFeedback] = useState<
+    Partial<
+      Record<ByokProviderId, { status: "testing" | "success" | "error"; message: string }>
+    >
+  >({});
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     if (!settings.data) return;
@@ -4597,51 +4615,95 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     }));
   }, [settings.data]);
   const save = useMutation({
-    mutationFn: () => window.openerx.updateModelServiceSettings(draft),
+    mutationFn: () => {
+      const providerApiKeys = Object.fromEntries(
+        Object.entries(providerKeys)
+          .map(([providerId, apiKey]) => [providerId, apiKey?.trim()] as const)
+          .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+      ) as Partial<Record<ByokProviderId, string>>;
+      return window.openerx.updateModelServiceSettings({
+        ...draft,
+        ...(Object.keys(providerApiKeys).length > 0 ? { providerApiKeys } : {}),
+      });
+    },
     onSuccess: async (value) => {
       queryClient.setQueryData(["model-service", "settings"], value);
       await queryClient.invalidateQueries({ queryKey: ["models", "catalog"] });
       setDraft((current) => ({ ...current, apiKey: undefined }));
+      setProviderKeys({});
+      const configuredProviders = Object.values(value.providerCredentials).filter(Boolean).length;
       setNotice(
         value.mode === "byok"
-          ? "BYOK 已启用，新任务将直接连接所配置的 API。"
+          ? `模型 API 已保存 · 已配置 ${configuredProviders} 个厂商，可在任务中直接切换。`
           : "已切换到托管服务模式。",
       );
     },
   });
   const test = useMutation({
-    mutationFn: () => window.openerx.testByokConnection({ ...draft, mode: "byok" }),
-    onSuccess: (value) =>
-      setNotice(
-        `连接成功 · ${value.latencyMs} ms${value.reportedModel ? ` · ${value.reportedModel}` : ""}`,
-      ),
+    mutationFn: ({
+      providerId,
+      configuration,
+    }: {
+      providerId: ByokProviderId;
+      configuration: NonNullable<ModelServiceSettingsUpdate["byok"]>;
+    }) =>
+      window.openerx.testByokConnection({
+        mode: "byok",
+        byok: configuration,
+        ...(providerKeys[providerId]?.trim()
+          ? { providerApiKeys: { [providerId]: providerKeys[providerId].trim() } }
+          : {}),
+      }),
+    onMutate: ({ providerId }) => {
+      const providerName =
+        byokProviderPresets.find(({ id }) => id === providerId)?.label ?? providerId;
+      setProviderTestFeedback((current) => ({
+        ...current,
+        [providerId]: { status: "testing", message: `${providerName} 正在测试连接…` },
+      }));
+    },
+    onSuccess: (value, { providerId }) => {
+      setProviderTestFeedback((current) => ({
+        ...current,
+        [providerId]: {
+          status: "success",
+          message: `连接成功 · ${value.latencyMs} ms${value.reportedModel ? ` · ${value.reportedModel}` : ""}`,
+        },
+      }));
+    },
+    onError: (error, { providerId }) => {
+      setProviderTestFeedback((current) => ({
+        ...current,
+        [providerId]: {
+          status: "error",
+          message: userFacingError(error, "连接失败，请检查 API Key、网络和模型可用性。"),
+        },
+      }));
+    },
   });
   const clearKey = useMutation({
-    mutationFn: () => window.openerx.clearByokApiKey(),
-    onSuccess: (value) => {
+    mutationFn: (providerId?: ByokProviderId) => window.openerx.clearByokApiKey(providerId),
+    onSuccess: (value, providerId) => {
       queryClient.setQueryData(["model-service", "settings"], value);
-      setDraft((current) => ({ ...current, mode: value.mode, apiKey: undefined }));
-      setNotice("API Key 已删除；BYOK 模式保持不变，需要重新配置后才能发送消息。");
+      if (providerId) {
+        setProviderKeys((current) => ({ ...current, [providerId]: "" }));
+      } else {
+        setDraft((current) => ({ ...current, mode: value.mode, apiKey: undefined }));
+      }
+      const providerName = byokProviderPresets.find(({ id }) => id === providerId)?.label;
+      setNotice(`${providerName ?? "自定义接口"} API Key 已删除。`);
     },
   });
   const byok = draft.byok;
   const patchByok = (patch: Partial<NonNullable<ModelServiceSettingsUpdate["byok"]>>): void => {
     if (byok) setDraft({ ...draft, byok: { ...byok, ...patch } });
   };
-  const applyDeepSeekPreset = (): void => {
-    setDraft({
-      ...draft,
-      mode: "byok",
-      byok: defaultByokModelConfiguration(),
-    });
-    setNotice("已应用 DeepSeek 官方 API 预设；请填写 API Key 后测试并保存。");
-  };
   return (
     <section className="settings-card settings-stack" aria-label="模型服务模式">
       <div className="settings-heading">
         <div>
           <h2>模型服务</h2>
-          <p>默认使用 BYOK；请求从本机直接发送到你的 OpenAI-compatible API，无需 UWA 服务端。</p>
+          <p>各厂商地址和模型均已预置。可同时保存多个 Key，请求从本机直连对应厂商。</p>
         </div>
       </div>
       <label htmlFor="model-service-mode">运行模式</label>
@@ -4655,106 +4717,236 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       </select>
       {draft.mode === "byok" && byok ? (
         <>
-          <div className="toolbar-actions">
-            <button type="button" onClick={applyDeepSeekPreset}>
-              应用 DeepSeek 预设
-            </button>
-          </div>
-          <label htmlFor="byok-base-url">Base URL</label>
-          <input
-            id="byok-base-url"
-            type="url"
-            value={byok.baseUrl}
-            onChange={(event) => patchByok({ baseUrl: event.target.value })}
-          />
-          <label htmlFor="byok-api-key">API Key</label>
-          <input
-            id="byok-api-key"
-            type="password"
-            value={draft.apiKey ?? ""}
-            placeholder={
-              settings.data?.credentialConfigured ? "已安全保存；留空表示不更改" : "输入 API Key"
-            }
-            onChange={(event) => setDraft({ ...draft, apiKey: event.target.value || undefined })}
-          />
-          <label htmlFor="byok-model-id">模型 ID</label>
-          <input
-            id="byok-model-id"
-            value={byok.modelId}
-            onChange={(event) =>
-              patchByok({ modelId: event.target.value, displayName: event.target.value })
-            }
-          />
-          <label htmlFor="byok-context-window">上下文窗口</label>
-          <input
-            id="byok-context-window"
-            type="number"
-            min="1024"
-            value={byok.contextWindow}
-            onChange={(event) => patchByok({ contextWindow: Number(event.target.value) })}
-          />
-          <label htmlFor="byok-max-output">最大输出 Token</label>
-          <input
-            id="byok-max-output"
-            type="number"
-            min="1"
-            value={byok.maxOutputTokens}
-            onChange={(event) => patchByok({ maxOutputTokens: Number(event.target.value) })}
-          />
-          <label>
-            <input
-              type="checkbox"
-              checked={byok.capabilities.imageInput}
-              onChange={(event) =>
-                patchByok({
-                  capabilities: { ...byok.capabilities, imageInput: event.target.checked },
-                })
-              }
-            />
-            支持图片输入
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={byok.capabilities.functionCalling}
-              onChange={(event) =>
-                patchByok({
-                  capabilities: { ...byok.capabilities, functionCalling: event.target.checked },
-                })
-              }
-            />
-            支持工具调用
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={byok.capabilities.reasoning}
-              onChange={(event) =>
-                patchByok({
-                  capabilities: { ...byok.capabilities, reasoning: event.target.checked },
-                })
-              }
-            />
-            支持推理
-          </label>
-          <div className="toolbar-actions">
-            <button type="button" onClick={() => test.mutate()} disabled={test.isPending}>
-              测试连接
-            </button>
+          <fieldset className="model-provider-grid">
+            <legend className="visually-hidden">国内模型厂商</legend>
+            {byokProviderPresets.map((provider) => {
+              const selectedModel =
+                provider.models.find(({ id }) => id === testModelIds[provider.id]) ??
+                provider.models[0];
+              const configured = settings.data?.providerCredentials[provider.id] === true;
+              const hasDraftKey = Boolean(providerKeys[provider.id]?.trim());
+              const testFeedback = providerTestFeedback[provider.id];
+              return (
+                <article
+                  className="model-provider-card"
+                  key={provider.id}
+                  aria-label={`${provider.label} 配置`}
+                >
+                  <div className="model-provider-heading">
+                    <div>
+                      <h3>{provider.label}</h3>
+                      <small>{provider.models.length} 个预置模型</small>
+                    </div>
+                    <span className={configured ? "is-configured" : undefined}>
+                      {configured ? "已配置" : "未配置"}
+                    </span>
+                  </div>
+                  <label htmlFor={`provider-key-${provider.id}`}>{provider.label} API Key</label>
+                  <input
+                    id={`provider-key-${provider.id}`}
+                    type="password"
+                    autoComplete="off"
+                    value={providerKeys[provider.id] ?? ""}
+                    placeholder={configured ? "已安全保存；留空表示不更改" : provider.apiKeyPlaceholder}
+                    onChange={(event) => {
+                      setProviderKeys((current) => ({
+                        ...current,
+                        [provider.id]: event.target.value,
+                      }));
+                      setProviderTestFeedback((feedback) => {
+                        const next = { ...feedback };
+                        delete next[provider.id];
+                        return next;
+                      });
+                    }}
+                  />
+                  <label htmlFor={`provider-model-${provider.id}`}>连接测试模型</label>
+                  <select
+                    id={`provider-model-${provider.id}`}
+                    value={selectedModel?.id ?? ""}
+                    onChange={(event) =>
+                      setTestModelIds((current) => ({
+                        ...current,
+                        [provider.id]: event.target.value,
+                      }))
+                    }
+                  >
+                    {provider.models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedModel ? (
+                    <p className="model-provider-meta">
+                      {selectedModel.configuration.contextWindow.toLocaleString()} Token 上下文 ·
+                      {selectedModel.configuration.capabilities.imageInput ? " 图片" : " 文本"} ·
+                      {selectedModel.configuration.capabilities.functionCalling
+                        ? " 工具调用"
+                        : " 无工具调用"}
+                    </p>
+                  ) : null}
+                  <div className="toolbar-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!selectedModel) return;
+                        if (!configured && !hasDraftKey) {
+                          setProviderTestFeedback((current) => ({
+                            ...current,
+                            [provider.id]: {
+                              status: "error",
+                              message: `请先填写 ${provider.label} API Key。`,
+                            },
+                          }));
+                          return;
+                        }
+                        test.mutate({
+                          providerId: provider.id,
+                          configuration: selectedModel.configuration,
+                        });
+                      }}
+                      disabled={test.isPending || !selectedModel}
+                    >
+                      {testFeedback?.status === "testing" ? "测试中…" : "测试连接"}
+                    </button>
+                    {configured ? (
+                      <button
+                        type="button"
+                        onClick={() => clearKey.mutate(provider.id)}
+                        disabled={clearKey.isPending}
+                      >
+                        删除 Key
+                      </button>
+                    ) : null}
+                  </div>
+                  {testFeedback ? (
+                    <p
+                      className={`model-provider-feedback ${
+                        testFeedback.status === "error" ? "inline-error" : "inline-success"
+                      }`}
+                      role={testFeedback.status === "error" ? "alert" : "status"}
+                    >
+                      {testFeedback.message}
+                    </p>
+                  ) : null}
+                </article>
+              );
+            })}
+          </fieldset>
+          <div className="toolbar-actions model-provider-save">
             <button
               type="button"
               className="primary-action"
               onClick={() => save.mutate()}
               disabled={save.isPending}
             >
-              保存并启用
+              保存全部并启用
             </button>
-            {settings.data?.credentialConfigured ? (
-              <button type="button" onClick={() => clearKey.mutate()} disabled={clearKey.isPending}>
-                删除 API Key
-              </button>
-            ) : null}
           </div>
+          <details className="settings-disclosure model-custom-provider">
+            <summary>
+              自定义 OpenAI-compatible 接口
+              <small>仅在使用其他厂商或私有网关时需要</small>
+            </summary>
+            <div className="settings-card settings-stack">
+              <label htmlFor="byok-base-url">Base URL</label>
+              <input
+                id="byok-base-url"
+                type="url"
+                value={byok.baseUrl}
+                onChange={(event) => patchByok({ baseUrl: event.target.value })}
+              />
+              <label htmlFor="byok-api-key">API Key</label>
+              <input
+                id="byok-api-key"
+                type="password"
+                value={draft.apiKey ?? ""}
+                placeholder={
+                  settings.data?.credentialConfigured
+                    ? "已安全保存；留空表示不更改"
+                    : "输入 API Key"
+                }
+                onChange={(event) =>
+                  setDraft({ ...draft, apiKey: event.target.value || undefined })
+                }
+              />
+              <label htmlFor="byok-model-id">模型 ID</label>
+              <input
+                id="byok-model-id"
+                value={byok.modelId}
+                onChange={(event) =>
+                  patchByok({ modelId: event.target.value, displayName: event.target.value })
+                }
+              />
+              <label htmlFor="byok-context-window">上下文窗口</label>
+              <input
+                id="byok-context-window"
+                type="number"
+                min="1024"
+                value={byok.contextWindow}
+                onChange={(event) => patchByok({ contextWindow: Number(event.target.value) })}
+              />
+              <label htmlFor="byok-max-output">最大输出 Token</label>
+              <input
+                id="byok-max-output"
+                type="number"
+                min="1"
+                value={byok.maxOutputTokens}
+                onChange={(event) => patchByok({ maxOutputTokens: Number(event.target.value) })}
+              />
+              <label>
+                <input
+                  type="checkbox"
+                  checked={byok.capabilities.imageInput}
+                  onChange={(event) =>
+                    patchByok({
+                      capabilities: { ...byok.capabilities, imageInput: event.target.checked },
+                    })
+                  }
+                />
+                支持图片输入
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={byok.capabilities.functionCalling}
+                  onChange={(event) =>
+                    patchByok({
+                      capabilities: {
+                        ...byok.capabilities,
+                        functionCalling: event.target.checked,
+                      },
+                    })
+                  }
+                />
+                支持工具调用
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={byok.capabilities.reasoning}
+                  onChange={(event) =>
+                    patchByok({
+                      capabilities: { ...byok.capabilities, reasoning: event.target.checked },
+                    })
+                  }
+                />
+                支持推理
+              </label>
+              {settings.data?.credentialConfigured ? (
+                <div className="toolbar-actions">
+                  <button
+                    type="button"
+                    onClick={() => clearKey.mutate(undefined)}
+                    disabled={clearKey.isPending}
+                  >
+                    删除自定义 Key
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </details>
         </>
       ) : (
         <button
@@ -4767,10 +4959,10 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
         </button>
       )}
       {notice ? <p className="inline-success">{notice}</p> : null}
-      {settings.error || save.error || test.error || clearKey.error ? (
+      {settings.error || save.error || clearKey.error ? (
         <p className="inline-error">
           {userFacingError(
-            settings.error ?? save.error ?? test.error ?? clearKey.error,
+            settings.error ?? save.error ?? clearKey.error,
             "模型服务配置失败。",
           )}
         </p>

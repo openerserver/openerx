@@ -5,16 +5,37 @@ import path from "node:path";
 import {
   type AppServiceByokConfiguration,
   type ByokConnectionTestResult,
+  type ByokModelConfiguration,
+  type ByokProviderId,
   byokConnectionTestResultSchema,
+  byokProviderPresets,
   defaultByokModelConfiguration,
   type ModelServiceSettings,
   type ModelServiceSettingsUpdate,
   modelServiceSettingsSchema,
   modelServiceSettingsUpdateSchema,
+  resolveByokModelPreset,
 } from "@openerx/contracts";
 import type { ToolCredentialVault } from "./credential-vault";
 
 const credentialRef = "model-service:byok:api-key";
+
+function providerCredentialRef(providerId: ByokProviderId): string {
+  return `model-service:byok:${providerId}:api-key`;
+}
+
+function matchingProvider(configuration: ByokModelConfiguration | null | undefined) {
+  if (!configuration) return null;
+  return (
+    byokProviderPresets.find((provider) =>
+      provider.models.some(
+        (model) =>
+          model.configuration.baseUrl === configuration.baseUrl.replace(/\/$/u, "") &&
+          model.configuration.modelId === configuration.modelId,
+      ),
+    ) ?? null
+  );
+}
 
 type HostResolver = (hostname: string) => Promise<string[]>;
 
@@ -114,7 +135,7 @@ export class ModelServiceSettingsStore {
   ) {}
 
   async state(): Promise<ModelServiceSettings> {
-    let stored: Omit<ModelServiceSettings, "credentialConfigured"> = {
+    let stored: Omit<ModelServiceSettings, "credentialConfigured" | "providerCredentials"> = {
       mode: "byok",
       byok: defaultByokModelConfiguration(),
       updatedAt: null,
@@ -130,7 +151,21 @@ export class ModelServiceSettingsStore {
     } catch {
       credentialConfigured = false;
     }
-    return modelServiceSettingsSchema.parse({ ...stored, credentialConfigured });
+    const legacyProvider = credentialConfigured ? matchingProvider(stored.byok) : null;
+    const providerCredentials: Partial<Record<ByokProviderId, boolean>> = {};
+    for (const provider of byokProviderPresets) {
+      try {
+        await this.credentials.resolve(providerCredentialRef(provider.id));
+        providerCredentials[provider.id] = true;
+      } catch {
+        providerCredentials[provider.id] = legacyProvider?.id === provider.id;
+      }
+    }
+    return modelServiceSettingsSchema.parse({
+      ...stored,
+      credentialConfigured,
+      providerCredentials,
+    });
   }
 
   async update(raw: ModelServiceSettingsUpdate): Promise<ModelServiceSettings> {
@@ -139,8 +174,18 @@ export class ModelServiceSettingsStore {
       ? { ...input.byok, baseUrl: assertSafeBaseUrl(input.byok.baseUrl) }
       : null;
     if (input.apiKey) await this.credentials.save(credentialRef, input.apiKey);
+    for (const [providerId, apiKey] of Object.entries(input.providerApiKeys ?? {})) {
+      await this.credentials.save(providerCredentialRef(providerId as ByokProviderId), apiKey);
+    }
     const current = await this.state();
-    if (input.mode === "byok" && !input.apiKey && !current.credentialConfigured) {
+    const hasProviderCredential = Object.values(current.providerCredentials).some(Boolean);
+    if (
+      input.mode === "byok" &&
+      !input.apiKey &&
+      Object.keys(input.providerApiKeys ?? {}).length === 0 &&
+      !current.credentialConfigured &&
+      !hasProviderCredential
+    ) {
       throw new Error("BYOK_API_KEY_REQUIRED");
     }
     const stored = { mode: input.mode, byok, updatedAt: new Date().toISOString() };
@@ -155,14 +200,44 @@ export class ModelServiceSettingsStore {
     return await this.state();
   }
 
-  async clearApiKey(): Promise<ModelServiceSettings> {
-    await this.credentials.clear(credentialRef);
+  async clearApiKey(providerId?: ByokProviderId): Promise<ModelServiceSettings> {
+    if (!providerId) {
+      await this.credentials.clear(credentialRef);
+      return await this.state();
+    }
+    const current = await this.state();
+    await this.credentials.clear(providerCredentialRef(providerId));
+    if (current.credentialConfigured && matchingProvider(current.byok)?.id === providerId) {
+      await this.credentials.clear(credentialRef);
+    }
     return await this.state();
   }
 
-  async execution(): Promise<AppServiceByokConfiguration | undefined> {
+  async execution(modelRef?: string): Promise<AppServiceByokConfiguration | undefined> {
     const state = await this.state();
-    if (state.mode !== "byok" || !state.byok || !state.credentialConfigured) return undefined;
+    if (state.mode !== "byok") return undefined;
+    const requested = modelRef ? resolveByokModelPreset(modelRef) : null;
+    const storedProvider = matchingProvider(state.byok);
+    const selectedProvider =
+      requested?.provider ??
+      (storedProvider && state.providerCredentials[storedProvider.id] ? storedProvider : null) ??
+      byokProviderPresets.find(({ id }) => state.providerCredentials[id]) ??
+      null;
+    const selectedModel = requested?.model ?? selectedProvider?.models[0] ?? null;
+    if (selectedProvider && selectedModel) {
+      let apiKey: string;
+      try {
+        apiKey = await this.credentials.resolve(providerCredentialRef(selectedProvider.id));
+      } catch {
+        if (!state.credentialConfigured || storedProvider?.id !== selectedProvider.id) {
+          return undefined;
+        }
+        apiKey = await this.credentials.resolve(credentialRef);
+      }
+      await assertSafeResolvedHost(selectedModel.configuration.baseUrl, this.resolver);
+      return { ...selectedModel.configuration, apiKey };
+    }
+    if (!state.byok || !state.credentialConfigured) return undefined;
     await assertSafeResolvedHost(state.byok.baseUrl, this.resolver);
     return { ...state.byok, apiKey: await this.credentials.resolve(credentialRef) };
   }
@@ -172,7 +247,16 @@ export class ModelServiceSettingsStore {
     if (!input.byok) throw new Error("BYOK_NOT_CONFIGURED");
     const baseUrl = assertSafeBaseUrl(input.byok.baseUrl);
     await assertSafeResolvedHost(baseUrl, this.resolver);
-    const apiKey = input.apiKey ?? (await this.credentials.resolve(credentialRef));
+    const provider = matchingProvider(input.byok);
+    let apiKey = provider ? input.providerApiKeys?.[provider.id] : undefined;
+    if (!apiKey && provider) {
+      try {
+        apiKey = await this.credentials.resolve(providerCredentialRef(provider.id));
+      } catch {
+        apiKey = undefined;
+      }
+    }
+    apiKey ??= input.apiKey ?? (await this.credentials.resolve(credentialRef));
     const started = performance.now();
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",

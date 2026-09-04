@@ -36,13 +36,13 @@ export interface AutomationChatCommandTarget {
 
 export class ChatAutomationDispatcher implements AutomationDispatcher {
   readonly #target: AutomationChatCommandTarget;
-  readonly #executionContext: () =>
+  readonly #executionContext: (modelRef?: string) =>
     | AutomationExecutionContext
     | Promise<AutomationExecutionContext>;
 
   constructor(
     target: AutomationChatCommandTarget,
-    executionContext: () =>
+    executionContext: (modelRef?: string) =>
       | AutomationExecutionContext
       | Promise<AutomationExecutionContext> = () => ({}),
   ) {
@@ -57,7 +57,7 @@ export class ChatAutomationDispatcher implements AutomationDispatcher {
     if (definition.kind === "heartbeat" && !definition.target.conversationId) {
       throw new Error("AUTOMATION_HEARTBEAT_TARGET_REQUIRED");
     }
-    const context = await this.#executionContext();
+    const context = await this.#executionContext(definition.execution.modelRef);
     const result = (await this.#target.handle(
       {
         command: "chat.send",

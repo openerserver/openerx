@@ -8848,6 +8848,96 @@ summary:focus-visible {
   justify-self: start;
 }
 
+.settings-account-page #model-section .model-provider-grid {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-account-page #model-section .model-provider-card {
+  display: grid;
+  gap: 9px;
+  padding: 16px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--workspace-panel) 82%, transparent);
+}
+
+.settings-account-page #model-section .model-provider-card label {
+  color: var(--workspace-muted-strong);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.settings-account-page #model-section .model-provider-card :is(input, select) {
+  width: 100%;
+}
+
+.settings-account-page #model-section .model-provider-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+
+.settings-account-page #model-section .model-provider-heading h3 {
+  margin: 0;
+  color: var(--workspace-text);
+  font-size: 14px;
+}
+
+.settings-account-page #model-section .model-provider-heading small,
+.settings-account-page #model-section .model-provider-meta {
+  margin: 3px 0 0;
+  color: var(--workspace-muted);
+  font-size: 11px;
+}
+
+.settings-account-page #model-section .model-provider-heading > span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--workspace-muted) 12%, transparent);
+  color: var(--workspace-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.settings-account-page #model-section .model-provider-heading > span.is-configured {
+  border: 1px solid var(--workspace-success-border);
+  background: var(--workspace-success-surface);
+  color: var(--workspace-muted-strong);
+}
+
+.settings-account-page #model-section .model-provider-card .toolbar-actions {
+  align-self: end;
+  margin-top: 3px;
+}
+
+.settings-account-page #model-section .model-provider-feedback {
+  margin: 0;
+  font-size: 11px;
+}
+
+.settings-account-page #model-section .model-provider-save,
+.settings-account-page #model-section .model-custom-provider {
+  grid-column: 1 / -1;
+}
+
+.settings-account-page #model-section .model-provider-save {
+  justify-content: flex-end;
+}
+
+.settings-account-page #model-section .model-custom-provider > .settings-card {
+  margin-top: 12px;
+}
+
 @media (max-width: 760px) {
   .settings-account-page .settings-section-content > *,
   .settings-account-page .settings-section-panel,
@@ -8871,6 +8961,10 @@ summary:focus-visible {
   .settings-account-page #model-section .settings-card > label:not([for]),
   .settings-account-page #model-section .settings-card > button {
     grid-column: 1;
+  }
+
+  .settings-account-page #model-section .model-provider-grid {
+    grid-template-columns: 1fr;
   }
 }
 

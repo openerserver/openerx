@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AccountIdentity, DeviceSession } from "@openerx/contracts";
+import { type AccountIdentity, byokModelRef, type DeviceSession } from "@openerx/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type CredentialProtector,
@@ -154,6 +154,51 @@ describe("ModelServiceSettingsStore", () => {
     await expect(store.state()).resolves.toMatchObject({
       mode: "byok",
       credentialConfigured: false,
+    });
+  });
+
+  it("stores independent API keys for multiple preset providers", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-model-settings-"));
+    temporaryDirectories.push(directory);
+    const credentialPath = path.join(directory, "model-service.bin");
+    const store = new ModelServiceSettingsStore(
+      path.join(directory, "model-service.json"),
+      new ToolCredentialVault(credentialPath, new TestProtector()),
+      async () => ["93.184.216.34"],
+    );
+
+    const state = await store.update({
+      mode: "byok",
+      byok: {
+        baseUrl: "https://api.deepseek.com",
+        modelId: "deepseek-v4-flash",
+        displayName: "DeepSeek V4 Flash",
+        contextWindow: 1_000_000,
+        maxOutputTokens: 384_000,
+        capabilities: { imageInput: false, functionCalling: true, reasoning: true },
+      },
+      providerApiKeys: {
+        deepseek: "sk-deepseek-secret",
+        qwen: "sk-qwen-secret",
+      },
+    });
+
+    expect(state.providerCredentials).toMatchObject({ deepseek: true, qwen: true });
+    await expect(store.execution(byokModelRef("deepseek", "pro"))).resolves.toMatchObject({
+      apiKey: "sk-deepseek-secret",
+      modelId: "deepseek-v4-pro",
+    });
+    await expect(store.execution(byokModelRef("qwen", "plus"))).resolves.toMatchObject({
+      apiKey: "sk-qwen-secret",
+      modelId: "qwen3.7-plus",
+    });
+    expect((await readFile(credentialPath)).toString()).not.toContain("sk-deepseek-secret");
+    expect((await readFile(credentialPath)).toString()).not.toContain("sk-qwen-secret");
+
+    await store.clearApiKey("deepseek");
+    await expect(store.execution(byokModelRef("deepseek", "pro"))).resolves.toBeUndefined();
+    await expect(store.execution(byokModelRef("qwen", "plus"))).resolves.toMatchObject({
+      apiKey: "sk-qwen-secret",
     });
   });
 

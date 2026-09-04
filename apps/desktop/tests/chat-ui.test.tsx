@@ -154,6 +154,7 @@ function createBridge(): DesktopBridge {
         capabilities: { imageInput: false, functionCalling: true, reasoning: true },
       },
       credentialConfigured: false,
+      providerCredentials: {},
       updatedAt: null,
     }),
     updateModelServiceSettings: vi.fn(),
@@ -1282,7 +1283,7 @@ describe("M1 chat renderer", () => {
     window.localStorage.removeItem("openerx.defaultModelRef");
   });
 
-  it("configures and tests an OpenAI-compatible BYOK provider", async () => {
+  it("stores and tests API keys for multiple preset model providers", async () => {
     cleanup();
     const bridge = createBridge();
     vi.mocked(bridge.updateModelServiceSettings).mockResolvedValue({
@@ -1296,39 +1297,45 @@ describe("M1 chat renderer", () => {
         capabilities: { imageInput: false, functionCalling: true, reasoning: false },
       },
       credentialConfigured: true,
+      providerCredentials: { deepseek: true, qwen: true },
       updatedAt: timestamp,
     });
     vi.mocked(bridge.testByokConnection).mockResolvedValue({
       ok: true,
       latencyMs: 42,
-      reportedModel: "example-model",
+      reportedModel: "qwen3.7-plus",
     });
     renderApp(bridge, "/settings/account");
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole("button", { name: "模型" }));
     await user.selectOptions(await screen.findByLabelText("运行模式"), "byok");
-    await user.click(screen.getByRole("button", { name: "应用 DeepSeek 预设" }));
-    expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe(
-      "https://api.deepseek.com",
-    );
-    expect((screen.getByLabelText("模型 ID") as HTMLInputElement).value).toBe("deepseek-v4-flash");
-    await user.clear(screen.getByLabelText("Base URL"));
-    await user.type(screen.getByLabelText("Base URL"), "https://api.example.com/v1");
-    await user.type(screen.getByLabelText("API Key"), "sk-test-secret");
-    await user.clear(screen.getByLabelText("模型 ID"));
-    await user.type(screen.getByLabelText("模型 ID"), "example-model");
-    await user.click(screen.getByRole("button", { name: "测试连接" }));
+    const deepSeekCard = screen.getByRole("article", { name: "DeepSeek 配置" });
+    const qwenCard = screen.getByRole("article", { name: "阿里云百炼 · 通义千问 配置" });
+    expect(within(deepSeekCard).getByRole("option", { name: "DeepSeek V4 Pro" })).toBeTruthy();
+    expect(within(qwenCard).getByRole("option", { name: "Qwen 3.7 Plus" })).toBeTruthy();
+    await user.type(screen.getByLabelText("DeepSeek API Key"), "sk-deepseek-secret");
+    await user.type(screen.getByLabelText("阿里云百炼 · 通义千问 API Key"), "sk-qwen-secret");
+    await user.selectOptions(within(qwenCard).getByLabelText("连接测试模型"), "plus");
+    await user.click(within(qwenCard).getByRole("button", { name: "测试连接" }));
     expect(await screen.findByText(/连接成功 · 42 ms/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "保存并启用" }));
+    expect(bridge.testByokConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerApiKeys: { qwen: "sk-qwen-secret" },
+        byok: expect.objectContaining({
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          modelId: "qwen3.7-plus",
+        }),
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "保存全部并启用" }));
     expect(bridge.updateModelServiceSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "byok",
-        apiKey: "sk-test-secret",
-        byok: expect.objectContaining({
-          baseUrl: "https://api.example.com/v1",
-          modelId: "example-model",
-        }),
+        providerApiKeys: {
+          deepseek: "sk-deepseek-secret",
+          qwen: "sk-qwen-secret",
+        },
       }),
     );
   });
@@ -2916,7 +2923,7 @@ describe("M1 chat renderer", () => {
       name: "每日巡检",
       prompt: "检查项目并运行测试",
       kind: "standalone",
-      execution: { modelRef: "platform/byok", catchUpPolicy: "latest_once" },
+      execution: { modelRef: "platform/byok.deepseek.flash", catchUpPolicy: "latest_once" },
       schedule: { mode: "rrule", expression: "FREQ=DAILY" },
     });
   });

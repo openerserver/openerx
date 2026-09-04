@@ -23,6 +23,9 @@ import {
   billingStatementRequestSchema,
   browserComputerUseSessionControlInputSchema,
   browserSessionDescriptorSchema,
+  byokModelRef,
+  byokProviderIdSchema,
+  byokProviderPresets,
   chatActivateBranchInputSchema,
   chatArchiveInputSchema,
   chatCommandEnvelopeSchema,
@@ -40,6 +43,7 @@ import {
   chatStopInputSchema,
   conversationMemorySettingsGetInputSchema,
   conversationMemorySettingsUpdateInputSchema,
+  conversationSnapshotSchema,
   createRechargeOrderInputSchema,
   desktopEnvironmentSchema,
   desktopLoginStartupSettingsSchema,
@@ -462,7 +466,32 @@ function registerIpcHandlers(
   ipcMain.handle(ipcChannels.modelList, async (event) => {
     assertTrustedIpcSender(event);
     const settings = await modelSettings.state();
-    const byokModel = settings.byok
+    const presetModels = byokProviderPresets.flatMap((provider) =>
+      provider.models.map((model) => ({
+        modelRef: byokModelRef(provider.id, model.id),
+        displayName: `${provider.label} · ${model.label}`,
+        version: model.configuration.modelId,
+        capabilities: {
+          textInput: true,
+          imageInput: model.configuration.capabilities.imageInput,
+          fileInput: false,
+          functionCalling: model.configuration.capabilities.functionCalling,
+          structuredOutput: false,
+        },
+        contextWindow: model.configuration.contextWindow,
+        maxOutputTokens: model.configuration.maxOutputTokens,
+        status: settings.providerCredentials[provider.id]
+          ? ("available" as const)
+          : ("unavailable" as const),
+        priceRef: `byok/${provider.id}`,
+        priceSummary: `${provider.label} 直接计费`,
+        free: false,
+        thinkingLevels: model.configuration.capabilities.reasoning
+          ? (["off", "medium", "high"] as const)
+          : (["off"] as const),
+      })),
+    );
+    const customByokModel = settings.byok && settings.credentialConfigured
       ? {
           modelRef: "platform/byok" as const,
           displayName: settings.byok.displayName,
@@ -486,12 +515,11 @@ function registerIpcHandlers(
         }
       : null;
     if (settings.mode === "byok") {
-      if (!byokModel) throw new Error("BYOK_NOT_CONFIGURED");
-      return [byokModel];
+      return customByokModel ? [...presetModels, customByokModel] : presetModels;
     }
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     const hostedModels = await platformClient.listModels(await accounts.accessToken());
-    return byokModel ? [...hostedModels, byokModel] : hostedModels;
+    return customByokModel ? [...hostedModels, customByokModel] : hostedModels;
   });
   ipcMain.handle(ipcChannels.modelServiceSettingsGet, async (event) => {
     assertTrustedIpcSender(event);
@@ -505,9 +533,11 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     return await modelSettings.test(modelServiceSettingsUpdateSchema.parse(raw));
   });
-  ipcMain.handle(ipcChannels.modelServiceApiKeyClear, async (event) => {
+  ipcMain.handle(ipcChannels.modelServiceApiKeyClear, async (event, raw: unknown) => {
     assertTrustedIpcSender(event);
-    return await modelSettings.clearApiKey();
+    return await modelSettings.clearApiKey(
+      raw === undefined ? undefined : byokProviderIdSchema.parse(raw),
+    );
   });
   ipcMain.handle(ipcChannels.usageGet, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
@@ -603,7 +633,33 @@ function registerIpcHandlers(
         input: inputSchema.parse(input),
       });
       const modelService = needsAuthorization ? await modelSettings.state() : undefined;
-      const byok = modelService?.mode === "byok" ? await modelSettings.execution() : undefined;
+      const launchesGeneration =
+        request.command === "chat.send" ||
+        request.command === "chat.regenerate" ||
+        request.command === "chat.edit";
+      let selectedModelRef: string | undefined;
+      if (launchesGeneration) {
+        if (request.command === "chat.send" && request.input.modelRef) {
+          selectedModelRef = request.input.modelRef;
+        } else {
+          const conversationId = request.input.conversationId;
+          if (conversationId) {
+            const snapshot = conversationSnapshotSchema.parse(
+              await supervisor.request(
+                chatCommandEnvelopeSchema.parse({
+                  command: "chat.get",
+                  input: { conversationId },
+                }),
+              ),
+            );
+            selectedModelRef = snapshot.conversation.selectedModelRef;
+          }
+        }
+      }
+      const byok =
+        modelService?.mode === "byok" && launchesGeneration
+          ? await modelSettings.execution(selectedModelRef)
+          : undefined;
       const authorization =
         (needsAccountAuthorization || (needsAuthorization && modelService?.mode !== "byok")) &&
         platformUrl &&
@@ -1310,14 +1366,14 @@ app.whenReady().then(async () => {
     new ToolCredentialVault(path.join(profileDirectory, "credentials", "model-service.bin")),
   );
   const loginStartup = new DesktopLoginStartupService(app, process.platform, process.execPath);
-  supervisor.setAutomationExecutionContextProvider(async () => {
+  supervisor.setAutomationExecutionContextProvider(async (modelRef) => {
     const settings = await modelSettings.state();
     const authorization =
       platformUrl && accounts.state().status === "signed_in"
         ? await accounts.authorization(platformUrl)
         : undefined;
     if (settings.mode === "byok") {
-      const byok = await modelSettings.execution();
+      const byok = await modelSettings.execution(modelRef);
       if (!byok) throw new Error("BYOK_API_KEY_REQUIRED");
       return { ...(authorization ? { authorization } : {}), byok };
     }

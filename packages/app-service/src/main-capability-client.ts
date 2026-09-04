@@ -168,7 +168,7 @@ export class MainCapabilityClient {
     }
   }
 
-  async automationExecutionContext(): Promise<AutomationExecutionContext> {
+  async automationExecutionContext(modelRef?: string): Promise<AutomationExecutionContext> {
     const requestId = randomUUID();
     return await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -176,7 +176,11 @@ export class MainCapabilityClient {
         reject(new Error("MAIN_AUTOMATION_CONTEXT_TIMEOUT"));
       }, 15_000);
       this.#pendingAutomationContexts.set(requestId, { resolve, reject, timeout });
-      this.port.postMessage({ kind: "main.automation-context.request", requestId });
+      this.port.postMessage({
+        kind: "main.automation-context.request",
+        requestId,
+        ...(modelRef ? { modelRef } : {}),
+      });
     });
   }
 

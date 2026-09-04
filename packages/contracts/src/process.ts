@@ -138,6 +138,10 @@ export const mainAutomationContextRequestFrameSchema = z
   .object({
     kind: z.literal("main.automation-context.request"),
     requestId: z.uuid(),
+    modelRef: z
+      .string()
+      .regex(/^platform\/[a-z0-9][a-z0-9._-]*$/)
+      .optional(),
   })
   .strict();
 
