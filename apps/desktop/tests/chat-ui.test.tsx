@@ -2292,6 +2292,7 @@ describe("M1 chat renderer", () => {
 
     expect(activity.textContent).toContain("用时 8s");
     expect(activity.textContent).not.toContain("已完成");
+    expect(activity.getAttribute("aria-expanded")).toBe("false");
     expect(assistantMessage.contains(activity)).toBe(true);
     expect(userMessage.querySelector(".message-state-header")).toBeNull();
     expect(assistantMessage.querySelector(".message-state-header")).toBeNull();
@@ -2509,6 +2510,9 @@ describe("M1 chat renderer", () => {
     const user = userEvent.setup();
 
     const activityOverview = await screen.findByRole("button", { name: /用时 8s/u });
+    expect(activityOverview.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("在 Microsoft Edge 中打开了网页")).toBeNull();
+    await user.click(activityOverview);
     expect(activityOverview.getAttribute("aria-expanded")).toBe("true");
 
     const action = await screen.findByText("在 Microsoft Edge 中打开了网页");
@@ -2781,6 +2785,7 @@ describe("M1 chat renderer", () => {
     renderApp(bridge, `/chat/${conversationId}`);
     const user = userEvent.setup();
 
+    await user.click(await screen.findByRole("button", { name: /用时/u }));
     expect(await screen.findByText("执行计划")).toBeTruthy();
     expect(screen.getByText("文件差异 · src/run.ts")).toBeTruthy();
     expect(screen.getByText("上下文压缩 · threshold")).toBeTruthy();

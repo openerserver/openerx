@@ -2599,7 +2599,7 @@ function MessageCard({
   const [editText, setEditText] = useState(message.parts[0]?.text ?? "");
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<"positive" | "negative" | null>(null);
-  const [activitiesOpen, setActivitiesOpen] = useState(true);
+  const [activitiesOpen, setActivitiesOpen] = useState(false);
   const [selectedActivityRunIds, setSelectedActivityRunIds] = useState<
     Record<string, string | null>
   >({});

@@ -186,10 +186,10 @@ final result: blocked
 
 # Per-response tool activity design QA
 
-- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-b352ae64-a4f0-49c3-8fa2-4f8f9bfc4345.png`
+- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-41bc6918-ecd1-408e-a7b6-55da183a6b27.png`
 - Implementation screenshot: unavailable; the local capture surface does not expose the native UWA Electron window.
-- Viewport: source image 1842 × 1222 px; intended UWA comparison viewport is the current desktop window.
-- State: a multi-update assistant response with elapsed time visible and tool calls interleaved beneath the update that initiated them.
+- Viewport: source image 1918 × 1081 px; intended UWA comparison viewport is the current desktop window.
+- State: a multi-update assistant response with the elapsed-time disclosure collapsed by default; after expansion, tool calls are interleaved beneath the update that initiated them.
 
 ## Full-view comparison evidence
 
@@ -217,11 +217,18 @@ The implementation now uses persisted model-round markers as structural boundari
 
 ## Primary interactions tested
 
+- Confirm tool activity is hidden before the elapsed-time disclosure is opened.
 - Expand and collapse all calls for an assistant response.
 - Place a browser call beneath the first of two assistant updates.
 - Keep the next assistant update after that browser call in DOM order.
 - Expand the browser activity and open its screenshot preview.
 - Select a historical run without exposing raw reasoning.
+
+## Comparison history
+
+- Earlier finding [P2]: the implementation opened the elapsed-time disclosure by default while the Codex reference presents the compact collapsed state first.
+- Fix: initialize the disclosure as collapsed and retain the same per-response placement after the user expands it.
+- Post-fix evidence: automated interaction coverage confirms the browser action is absent initially and appears only after opening the elapsed-time disclosure; native pixel comparison remains blocked by capture availability.
 
 ## Implementation checklist
 
