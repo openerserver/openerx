@@ -2650,6 +2650,7 @@ function MessageCard({
   const text = message.parts.map((part) => part.text).join("\n\n");
   const assistantTextParts = message.parts.filter((part) => part.text.length > 0);
   const running = message.role === "assistant" && ["pending", "streaming"].includes(message.status);
+  const assistantTimelineVisible = activities.length === 0 || activitiesOpen;
   const usage = useQuery({
     queryKey: ["usage", "message", message.id],
     queryFn: () => window.openerx.getUsage({ messageId: message.id }),
@@ -2772,65 +2773,67 @@ function MessageCard({
                 {activityRunning ? <small>进行中</small> : null}
               </button>
             ) : null}
-            <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
-              {assistantTextParts.length > 0 ? (
-                <div
-                  className="assistant-response-parts"
-                  data-response-part-count={assistantTextParts.length}
-                >
-                  {assistantTextParts.map((part, index) => (
-                    <section
-                      key={part.id}
-                      className="assistant-response-part"
-                      aria-label={
-                        assistantTextParts.length > 1
-                          ? `UWA 进度更新 ${index + 1}`
-                          : undefined
-                      }
-                    >
-                      <div className="markdown-body">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            a: ({ href, children }) => (
-                              <a href={href} target="_blank" rel="noreferrer">
-                                {children}
-                              </a>
-                            ),
-                            pre: ({ children }) => (
-                              <div className="code-block">
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    const code =
-                                      event.currentTarget.nextElementSibling?.textContent ?? "";
-                                    void copyText(code, "代码已复制到剪贴板。");
-                                  }}
-                                >
-                                  {actionNotice === "代码已复制到剪贴板。"
-                                    ? "已复制"
-                                    : "复制代码"}
-                                </button>
-                                <pre>{children}</pre>
-                              </div>
-                            ),
-                          }}
-                        >
-                          {part.text}
-                        </ReactMarkdown>
-                      </div>
-                      {activityAfterPart(index, assistantTextParts.length)}
-                    </section>
-                  ))}
-                </div>
-              ) : (
-                <div className="markdown-body">
-                  <p className="thinking">正在思考…</p>
-                  {activityAfterPart(0, 1)}
-                </div>
-              )}
-              {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
-            </div>
+            {assistantTimelineVisible ? (
+              <div className={`assistant-response ${running ? "response-waterfall" : ""}`}>
+                {assistantTextParts.length > 0 ? (
+                  <div
+                    className="assistant-response-parts"
+                    data-response-part-count={assistantTextParts.length}
+                  >
+                    {assistantTextParts.map((part, index) => (
+                      <section
+                        key={part.id}
+                        className="assistant-response-part"
+                        aria-label={
+                          assistantTextParts.length > 1
+                            ? `UWA 进度更新 ${index + 1}`
+                            : undefined
+                        }
+                      >
+                        <div className="markdown-body">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ href, children }) => (
+                                <a href={href} target="_blank" rel="noreferrer">
+                                  {children}
+                                </a>
+                              ),
+                              pre: ({ children }) => (
+                                <div className="code-block">
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      const code =
+                                        event.currentTarget.nextElementSibling?.textContent ?? "";
+                                      void copyText(code, "代码已复制到剪贴板。");
+                                    }}
+                                  >
+                                    {actionNotice === "代码已复制到剪贴板。"
+                                      ? "已复制"
+                                      : "复制代码"}
+                                  </button>
+                                  <pre>{children}</pre>
+                                </div>
+                              ),
+                            }}
+                          >
+                            {part.text}
+                          </ReactMarkdown>
+                        </div>
+                        {activityAfterPart(index, assistantTextParts.length)}
+                      </section>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="markdown-body">
+                    <p className="thinking">正在思考…</p>
+                    {activityAfterPart(0, 1)}
+                  </div>
+                )}
+                {running && text ? <span className="stream-tail" aria-hidden="true" /> : null}
+              </div>
+            ) : null}
           </>
         ) : (
           <p className="user-text">{text}</p>
@@ -2840,7 +2843,7 @@ function MessageCard({
             {messageFailureLabel(message.errorCode)}
           </p>
         ) : null}
-        {(usage.data && usage.data.records > 0) || execution ? (
+        {assistantTimelineVisible && ((usage.data && usage.data.records > 0) || execution) ? (
           <details className="message-diagnostics">
             <summary>运行详情</summary>
             {usage.data && usage.data.records > 0 ? (
@@ -2864,7 +2867,7 @@ function MessageCard({
           </details>
         ) : null}
       </div>
-      {!editing ? (
+      {!editing && (message.role !== "assistant" || assistantTimelineVisible) ? (
         <footer className="message-actions">
           {text ? (
             <button
@@ -3145,12 +3148,62 @@ function BrowserToolCall({
   call,
   preview,
   onOpenPreview,
+  embedded = false,
 }: {
   call: ToolCall;
   preview: BrowserCallPreview;
   onOpenPreview: (preview: BrowserCallPreview) => void;
+  embedded?: boolean;
 }): React.JSX.Element {
   const discloseByDefault = ["failed", "waiting_for_permission"].includes(call.status);
+  const content = (
+    <div className="browser-activity-content">
+      <div className="browser-activity-target">
+        <strong>{browserTargetLabel(preview)}</strong>
+        {preview.url ? <span title={preview.url}>{preview.url}</span> : null}
+      </div>
+      {preview.resultSummary ? <p>{preview.resultSummary}</p> : null}
+      <div className="browser-activity-actions">
+        {preview.image ? (
+          <button type="button" onClick={() => onOpenPreview(preview)}>
+            查看画面
+          </button>
+        ) : null}
+        {preview.url ? (
+          <a href={preview.url} rel="noreferrer" target="_blank">
+            在浏览器中打开
+          </a>
+        ) : null}
+        <details className="browser-activity-technical">
+          <summary>技术详情</summary>
+          <div>
+            <strong>类型化输入</strong>
+            <pre>{JSON.stringify(preview.input, null, 2)}</pre>
+            {preview.rawText ? (
+              <>
+                <strong>原始结果</strong>
+                <pre>{preview.rawText}</pre>
+              </>
+            ) : null}
+          </div>
+        </details>
+      </div>
+      {call.errorCode ? (
+        <p className="inline-error">
+          {toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}
+        </p>
+      ) : null}
+    </div>
+  );
+  if (embedded) {
+    return (
+      <section
+        className={`run-item-row tool-call-row browser-activity-embedded browser-activity-${call.status}`}
+      >
+        {content}
+      </section>
+    );
+  }
   return (
     <details
       className={`run-item-row tool-call-row browser-activity-row browser-activity-${call.status}`}
@@ -3169,43 +3222,7 @@ function BrowserToolCall({
           aria-hidden="true"
         />
       </summary>
-      <div className="browser-activity-content">
-        <div className="browser-activity-target">
-          <strong>{browserTargetLabel(preview)}</strong>
-          {preview.url ? <span title={preview.url}>{preview.url}</span> : null}
-        </div>
-        {preview.resultSummary ? <p>{preview.resultSummary}</p> : null}
-        <div className="browser-activity-actions">
-          {preview.image ? (
-            <button type="button" onClick={() => onOpenPreview(preview)}>
-              查看画面
-            </button>
-          ) : null}
-          {preview.url ? (
-            <a href={preview.url} rel="noreferrer" target="_blank">
-              在浏览器中打开
-            </a>
-          ) : null}
-          <details className="browser-activity-technical">
-            <summary>技术详情</summary>
-            <div>
-              <strong>类型化输入</strong>
-              <pre>{JSON.stringify(preview.input, null, 2)}</pre>
-              {preview.rawText ? (
-                <>
-                  <strong>原始结果</strong>
-                  <pre>{preview.rawText}</pre>
-                </>
-              ) : null}
-            </div>
-          </details>
-        </div>
-        {call.errorCode ? (
-          <p className="inline-error">
-            {toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}
-          </p>
-        ) : null}
-      </div>
+      {content}
     </details>
   );
 }
@@ -3230,6 +3247,41 @@ function assistantActivityItems(
     groupedItems[targetIndex]?.push(item);
   }
   return groupedItems[segment.index] ?? [];
+}
+
+function assistantActivitySummary(
+  items: WorkItemDetail["items"],
+  toolCalls: ReadonlyMap<string, ToolCall>,
+  projectedSources: ReadonlySet<string>,
+  projectedDiffs: ReadonlySet<string>,
+  projectedCommands: ReadonlySet<string>,
+): string {
+  const labels = items.flatMap((item) => {
+    const content = item.content;
+    if (content.type === "tool") {
+      const call = toolCalls.get(content.toolCallId);
+      const browserPreview = call ? browserCallPreview(call) : null;
+      if (browserPreview) return [browserActivityLabel(browserPreview)];
+      if (
+        projectedSources.has(content.toolCallId) ||
+        projectedDiffs.has(content.toolCallId) ||
+        projectedCommands.has(content.toolCallId)
+      ) {
+        return [];
+      }
+      return [call?.inputSummary ?? content.inputSummary ?? content.toolName];
+    }
+    if (content.type === "command") return ["运行了命令"];
+    if (content.type === "diff") return ["编辑了文件"];
+    if (content.type === "source") return ["查看了来源"];
+    if (content.type === "plan") return ["更新了执行计划"];
+    if (content.type === "approval") return ["请求了工具授权"];
+    if (content.type === "compaction") return ["压缩了上下文"];
+    if (content.type === "model") return [content.summary];
+    if (content.type === "retry") return ["重试了模型调用"];
+    return [];
+  });
+  return [...new Set(labels)].join(" · ") || "工具调用";
 }
 
 function ToolActivity({
@@ -3343,6 +3395,18 @@ function ToolActivity({
         Boolean(selectedRunId && selectedRunId !== workItem.activeRunId),
       )
     : (value?.items ?? []);
+  const segmentLabel = assistantActivitySummary(
+    timelineItems,
+    toolCalls,
+    projectedSources,
+    projectedDiffs,
+    projectedCommands,
+  );
+  const segmentUsesBrowser = timelineItems.some((item) => {
+    if (item.content.type !== "tool") return false;
+    const call = toolCalls.get(item.content.toolCallId);
+    return call ? Boolean(browserCallPreview(call)) : false;
+  });
   const showsSegmentMetadata = segment?.index === 0;
   const hasSegmentMetadata =
     showsSegmentMetadata &&
@@ -3403,6 +3467,7 @@ function ToolActivity({
               return (
                 <BrowserToolCall
                   call={call}
+                  embedded={Boolean(segment)}
                   key={item.id}
                   preview={browserPreview}
                   onOpenPreview={onOpenBrowserPreview}
@@ -3667,7 +3732,32 @@ function ToolActivity({
     </>
   );
   if (segment) {
-    return <div className="tool-activity tool-activity-segment">{activityContent}</div>;
+    return (
+      <details className="tool-activity tool-activity-segment">
+        <summary>
+          <span className="tool-activity-heading">
+            {segmentUsesBrowser ? (
+              <Desktop size={17} weight="regular" aria-hidden="true" />
+            ) : (
+              <TerminalWindow size={17} weight="regular" aria-hidden="true" />
+            )}
+            <span>{detail.isPending ? "正在读取工具调用…" : segmentLabel}</span>
+            <CaretDown
+              className="tool-activity-caret"
+              size={13}
+              weight="bold"
+              aria-hidden="true"
+            />
+          </span>
+          {showStatus ? (
+            <span className={`tool-state tool-state-${workItem.status}`}>
+              {workItemStatusLabel[workItem.status]}
+            </span>
+          ) : null}
+        </summary>
+        {activityContent}
+      </details>
+    );
   }
   return (
     <details className="tool-activity" open={shouldOpen || undefined}>

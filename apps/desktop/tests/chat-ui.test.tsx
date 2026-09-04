@@ -2294,6 +2294,10 @@ describe("M1 chat renderer", () => {
     expect(activity.textContent).not.toContain("已完成");
     expect(activity.getAttribute("aria-expanded")).toBe("false");
     expect(assistantMessage.contains(activity)).toBe(true);
+    expect(assistantMessage.querySelector(".assistant-response")).toBeNull();
+    expect(assistantMessage.querySelector(".message-actions")).toBeNull();
+    await userEvent.setup().click(activity as HTMLElement);
+    expect(assistantMessage.querySelector(".assistant-response")).toBeTruthy();
     expect(userMessage.querySelector(".message-state-header")).toBeNull();
     expect(assistantMessage.querySelector(".message-state-header")).toBeNull();
     const userContent = userMessage.querySelector(".message-content");
@@ -2516,8 +2520,8 @@ describe("M1 chat renderer", () => {
     expect(activityOverview.getAttribute("aria-expanded")).toBe("true");
 
     const action = await screen.findByText("在 Microsoft Edge 中打开了网页");
-    const browserActivity = action.closest<HTMLDetailsElement>(".browser-activity-row");
-    if (!browserActivity) throw new Error("Browser activity row missing");
+    const browserActivity = action.closest<HTMLDetailsElement>(".tool-activity-segment");
+    if (!browserActivity) throw new Error("Browser activity disclosure missing");
     const firstUpdate = screen.getByRole("region", { name: "UWA 进度更新 1" });
     const secondUpdate = screen.getByRole("region", { name: "UWA 进度更新 2" });
     expect(firstUpdate.contains(browserActivity)).toBe(true);
@@ -2526,7 +2530,6 @@ describe("M1 chat renderer", () => {
       browserActivity.compareDocumentPosition(secondUpdate) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
     expect(browserActivity.open).toBe(false);
-    expect(browserActivity.querySelectorAll(":scope > pre")).toHaveLength(0);
     const technicalDetails = browserActivity.querySelector<HTMLDetailsElement>(
       "details.browser-activity-technical",
     );
@@ -2534,7 +2537,7 @@ describe("M1 chat renderer", () => {
     expect(technicalDetails?.textContent).toContain(rawMarker);
 
     const browserActivitySummary = browserActivity.querySelector<HTMLElement>(":scope > summary");
-    if (!browserActivitySummary) throw new Error("Browser activity disclosure missing");
+    if (!browserActivitySummary) throw new Error("Browser activity summary missing");
     await user.click(browserActivitySummary);
     expect(browserActivity.open).toBe(true);
 
@@ -2786,12 +2789,19 @@ describe("M1 chat renderer", () => {
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole("button", { name: /用时/u }));
+    const activityLabel = await screen.findByText(/更新了执行计划/u);
+    const activity = activityLabel.closest<HTMLDetailsElement>(".tool-activity-segment");
+    if (!activity) throw new Error("Tool activity disclosure missing");
+    expect(activity.open).toBe(false);
+    const activitySummary = activity.querySelector<HTMLElement>(":scope > summary");
+    if (!activitySummary) throw new Error("Tool activity summary missing");
+    await user.click(activitySummary);
     expect(await screen.findByText("执行计划")).toBeTruthy();
     expect(screen.getByText("文件差异 · src/run.ts")).toBeTruthy();
     expect(screen.getByText("上下文压缩 · threshold")).toBeTruthy();
     expect(screen.queryByText("PRIVATE_RAW_CHAIN_OF_THOUGHT")).toBeNull();
     await user.selectOptions(screen.getByLabelText("选择要回放的 Run"), historicalRunId);
-    expect(await screen.findByText("历史模型轮次已完成")).toBeTruthy();
+    expect((await screen.findAllByText("历史模型轮次已完成")).length).toBeGreaterThan(0);
     expect(bridge.getWorkItem).toHaveBeenCalledWith({
       workItemId,
       runId: historicalRunId,

@@ -186,18 +186,18 @@ final result: blocked
 
 # Per-response tool activity design QA
 
-- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-41bc6918-ecd1-408e-a7b6-55da183a6b27.png`
+- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-721b2c13-0a22-42fa-b3f2-b9bdcdd8c5dc.png`
 - Implementation screenshot: unavailable; the local capture surface does not expose the native UWA Electron window.
 - Viewport: source image 1918 × 1081 px; intended UWA comparison viewport is the current desktop window.
-- State: a multi-update assistant response with the elapsed-time disclosure collapsed by default; after expansion, tool calls are interleaved beneath the update that initiated them.
+- State: the elapsed-time disclosure controls the complete multi-update response timeline; after it opens, each interleaved tool activity remains independently collapsed until selected.
 
 ## Full-view comparison evidence
 
-The Codex reference was inspected at original resolution. Its defining hierarchy is chronological: an assistant update appears first, its related tool activity follows immediately below, and the next assistant update continues afterward. The running UWA development build accepted the renderer and stylesheet changes through hot reload without a renderer crash, but a same-state native screenshot could not be captured.
+The Codex reference was inspected at original resolution. Its defining hierarchy is chronological and nested: the elapsed-time row owns the response timeline, while each related tool activity appears as a compact disclosure between assistant updates. The running UWA development build accepted the renderer and stylesheet changes through hot reload without a renderer crash, but a same-state native screenshot could not be captured.
 
 ## Focused-region comparison evidence
 
-The implementation now uses persisted model-round markers as structural boundaries. Non-model run items are assigned to the assistant response part for that round, while the elapsed-time control remains a compact top-level overview. Browser calls keep their existing compact disclosure and on-demand preview behavior.
+The implementation now uses persisted model-round markers as structural boundaries. The elapsed-time control mounts the complete assistant timeline on expansion; each model round then presents one independently collapsed activity summary. Expanding that summary reveals typed input, results, browser actions, and technical details without adding a second browser disclosure layer.
 
 ## Findings
 
@@ -217,11 +217,12 @@ The implementation now uses persisted model-round markers as structural boundari
 
 ## Primary interactions tested
 
-- Confirm tool activity is hidden before the elapsed-time disclosure is opened.
-- Expand and collapse all calls for an assistant response.
+- Confirm the assistant response timeline is hidden before the elapsed-time disclosure is opened.
+- Expand the elapsed-time disclosure and reveal the complete response timeline.
 - Place a browser call beneath the first of two assistant updates.
 - Keep the next assistant update after that browser call in DOM order.
-- Expand the browser activity and open its screenshot preview.
+- Confirm each response-level tool activity is collapsed after the timeline opens.
+- Expand a browser activity once and open its screenshot preview.
 - Select a historical run without exposing raw reasoning.
 
 ## Comparison history
@@ -229,11 +230,15 @@ The implementation now uses persisted model-round markers as structural boundari
 - Earlier finding [P2]: the implementation opened the elapsed-time disclosure by default while the Codex reference presents the compact collapsed state first.
 - Fix: initialize the disclosure as collapsed and retain the same per-response placement after the user expands it.
 - Post-fix evidence: automated interaction coverage confirms the browser action is absent initially and appears only after opening the elapsed-time disclosure; native pixel comparison remains blocked by capture availability.
+- Earlier finding [P1]: collapsing the elapsed-time row hid only tool activity while leaving assistant updates visible, and expanding it exposed tool details immediately.
+- Fix: move the complete response timeline under the elapsed-time disclosure, then add an independent collapsed disclosure around each response-level activity group.
+- Post-fix evidence: automated coverage verifies that the response timeline is initially absent, appears after the elapsed-time row is selected, and leaves the browser activity closed until its own summary is selected.
 
 ## Implementation checklist
 
 - [x] Distribute active run events by persisted model round.
-- [x] Preserve the elapsed-time overview and collapse control.
+- [x] Let the elapsed-time row control the complete response timeline.
+- [x] Keep each response-level tool activity independently collapsed.
 - [x] Preserve browser preview and historical run selection.
 - [x] Pass all 64 renderer interaction tests and desktop TypeScript validation.
 - [ ] Capture and compare the native Electron window.

@@ -5045,8 +5045,29 @@ h1 {
   border-bottom: 0;
 }
 
+.conversation-workspace .tool-activity-segment > summary {
+  justify-content: flex-start;
+  gap: 8px;
+  color: var(--workspace-muted-strong);
+  cursor: pointer;
+}
+
+.tool-activity-segment > summary .tool-activity-heading {
+  overflow: hidden;
+}
+
+.tool-activity-segment > summary .tool-activity-heading > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-activity-segment > summary .tool-state {
+  margin-left: auto;
+}
+
 .tool-activity-segment > .run-timeline {
-  margin-top: 0;
+  margin: 2px 0 8px 25px;
   border-top: 0;
 }
 
@@ -5136,6 +5157,12 @@ h1 {
   gap: 8px;
   margin: 2px 0 10px 25px;
   padding: 7px 0 0;
+  color: var(--workspace-muted-strong);
+}
+
+.browser-activity-embedded > .browser-activity-content {
+  display: grid;
+  gap: 8px;
   color: var(--workspace-muted-strong);
 }
 
