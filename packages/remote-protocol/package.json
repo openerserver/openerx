@@ -1,0 +1,22 @@
+{
+  "name": "@openerx/remote-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.3.0",
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
+    "@openerx/contracts": "0.0.0"
+  },
+  "license": "Apache-2.0"
+}

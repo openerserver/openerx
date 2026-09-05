@@ -1,0 +1,71 @@
+{
+  "name": "openerx",
+  "version": "2.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "OpenERX open-source personal AI desktop client",
+  "packageManager": "npm@11.3.0",
+  "engines": {
+    "node": ">=24.3.0",
+    "npm": ">=11.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "audit:v2": "npm audit --audit-level=high --registry=https://registry.npmjs.org",
+    "check:public": "node scripts/check-public-source.mjs",
+    "notices:update": "node scripts/third-party-notices.mjs --write",
+    "notices:check": "node scripts/third-party-notices.mjs --check",
+    "notices:release": "node scripts/third-party-notices.mjs --release",
+    "check:source": "npm run check:public && npm run notices:check && npm run check:boundaries:v2 && npm run check:builtin-skills:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run audit:v2",
+    "test:package": "node apps/desktop/scripts/smoke-packaged.mjs",
+    "archive:package": "node scripts/archive-package.mjs",
+    "check:package": "npm run verify:package:v2 && npm run verify:release-artifacts --workspace @openerx/desktop && npm run verify:native-signature --workspace @openerx/desktop && npm run test:package",
+    "audit:prod:v2": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org",
+    "check:boundaries:v2": "node scripts/check-v2-boundaries.mjs",
+    "check:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs",
+    "check:release-graph:v2": "node scripts/m9/check-release-graph.mjs",
+    "check:release:v2": "node scripts/m9/check-release-readiness.mjs --mode local",
+    "dev:deepseek": "vite build --config tests/v2/vite.deepseek-platform.config.mts --logLevel error && node --env-file-if-exists=.env scripts/dev-deepseek.mjs",
+    "dev:desktop": "npm run start --workspace @openerx/desktop",
+    "dev:v2": "npm run dev:deepseek",
+    "eval:pbash:model": "vite build --config scripts/pbash/vite.model-ab.config.mts --logLevel error && node --env-file-if-exists=.env .vite/pbash-model-ab/pbash-model-ab.mjs",
+    "eval:memory:model": "vite build --config scripts/memory/vite.model-golden.config.mts --logLevel error && node --env-file-if-exists=.env .vite/memory-model-golden/memory-model-golden.mjs",
+    "probe:lws:v2": "node scripts/lws/run-daily-probe.mjs",
+    "lint:v2": "biome check apps packages services scripts tests package.json tsconfig.base.json",
+    "lint:v2:fix": "biome check --write apps packages services scripts tests package.json tsconfig.base.json",
+    "typecheck:v2": "npm run typecheck --workspaces --if-present",
+    "test:v2": "npm run test --workspaces --if-present && vitest run tests/v2",
+    "test:deepseek": "vite build --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-smoke/deepseek-smoke.mjs",
+    "test:deepseek:vision": "vite build --mode vision --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-vision-smoke/deepseek-vision-smoke.mjs",
+    "test:deepseek:tools": "vite build --mode tool --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-tool-smoke/deepseek-tool-smoke.mjs",
+    "test:e2e:v2": "npm run test:e2e --workspace @openerx/desktop",
+    "build:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run build --workspace @openerx/desktop",
+    "package:v2": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run package --workspace @openerx/desktop",
+    "package:cx110:d3:macos": "npm run build --workspace @openerx/contracts && npm run build --workspace @openerx/release && npm run package --workspace @openerx/desktop -- --arch=$(node -p process.arch)",
+    "check:cx110:d3:macos": "npm run verify:d3:macos --workspace @openerx/desktop && npm run test:e2e:d3:macos --workspace @openerx/desktop",
+    "release:gate:v2": "node scripts/m9/check-release-readiness.mjs --mode publish",
+    "release:manifest:v2": "vite build --config scripts/m9/vite.release-manifest.config.mts --logLevel error && node .vite/release-tools/release-manifest.mjs",
+    "verify:package:v2": "npm run verify:fuses --workspace @openerx/desktop",
+    "check:v2": "npm run check:boundaries:v2 && npm run check:builtin-skills:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2 && npm run verify:release-artifacts --workspace @openerx/desktop && npm run verify:native-signature --workspace @openerx/desktop",
+    "update:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs --write"
+  },
+  "overrides": {
+    "@electron/packager": "20.3.0",
+    "@electron/rebuild": "4.2.0",
+    "@electron/get": "5.0.0",
+    "tar": "7.5.22",
+    "tmp": "0.2.7"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@biomejs/biome": "2.5.10",
+    "jsdom": "29.0.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

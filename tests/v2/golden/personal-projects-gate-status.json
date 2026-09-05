@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "checkpoint": "PRJ-012-open-source-desktop-release-foundation",
+  "scope": "open-source-desktop",
+  "updatedAt": "2026-09-05",
+  "releaseClaim": false,
+  "localImplementation": {
+    "status": "complete",
+    "completedSlices": 12,
+    "expectedSlices": 12,
+    "evidenceRecords": 1,
+    "electronE2E": "pass",
+    "requiredEvidence": ["docs/TESTING.md"],
+    "releaseNotes": "docs/v2/release/03-personal-projects-update-notes.md"
+  },
+  "externalBeta": {
+    "status": "pending_external",
+    "completedEvidence": [],
+    "requiredEvidence": [
+      "signed-windows-macos-directory-picker-and-reconnect",
+      "desktop-project-permission-isolation-and-recovery"
+    ]
+  },
+  "externalRelease": {
+    "status": "pending_external",
+    "userApproval": false,
+    "publishAllowed": false,
+    "completedEvidence": [],
+    "requiredEvidence": ["personal-projects-signed-desktop-directory-reconnect-and-permissions"]
+  }
+}

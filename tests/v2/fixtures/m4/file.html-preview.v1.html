@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenERX isolated preview fixture</title>
+    <style>
+      body { margin: 0; padding: 32px; color: #27342f; background: #f3f6f2; font: 16px/1.5 system-ui; }
+      article { max-width: 680px; margin: auto; padding: 28px; background: white; border: 1px solid #9fb7aa; border-radius: 16px; }
+      h1 { color: #14372b; }
+    </style>
+  </head>
+  <body>
+    <article>
+      <h1>Isolated HTML preview</h1>
+      <p id="bridge-state">The preview must expose neither Node nor the OpenERX bridge.</p>
+      <script>
+        document.body.dataset.nodeExposed = String(typeof process !== "undefined");
+        document.body.dataset.bridgeExposed = String(typeof window.openerx !== "undefined");
+      </script>
+    </article>
+  </body>
+</html>

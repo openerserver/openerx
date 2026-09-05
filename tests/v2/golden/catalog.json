@@ -1,0 +1,584 @@
+{
+  "catalogVersion": "2026-08-25.v1",
+  "platforms": ["windows-x64", "macos-arm64", "macos-x64"],
+  "evidencePathTemplate": "docs/v2/evidence/golden/{platform}/{taskId}/",
+  "tasks": [
+    {
+      "id": "GT-CHAT-01",
+      "category": "chat",
+      "gate": "hard",
+      "input": {
+        "fixture": "chat.general-knowledge.v1",
+        "prompt": "法国的首都是哪里？只回答城市名。"
+      },
+      "expected": [
+        "response streams before completion",
+        "final answer is 巴黎",
+        "message completes once"
+      ]
+    },
+    {
+      "id": "GT-CHAT-02",
+      "category": "chat",
+      "gate": "hard",
+      "input": {
+        "fixture": "chat.email-rewrite.v1",
+        "prompt": "把夹具中的项目延期说明改写成正式邮件，不添加事实。"
+      },
+      "expected": [
+        "subject greeting body and signoff are copyable",
+        "all dates and names match fixture"
+      ]
+    },
+    {
+      "id": "GT-CHAT-03",
+      "category": "chat",
+      "gate": "hard",
+      "input": {
+        "fixture": "chat.bilingual-terms.v1",
+        "prompt": "中英双向翻译夹具内容，保留 API、OpenERX 和全部数字。"
+      },
+      "expected": ["both directions are present", "terms and numbers are unchanged"]
+    },
+    {
+      "id": "GT-CHAT-04",
+      "category": "chat",
+      "gate": "hard",
+      "input": {
+        "fixture": "chat.markdown.v1",
+        "prompt": "用一个 TypeScript 代码块和一个三列表格回答夹具问题。"
+      },
+      "expected": ["code block and table render correctly", "copy and scroll remain usable"]
+    },
+    {
+      "id": "GT-CHAT-05",
+      "category": "chat",
+      "gate": "hard",
+      "input": { "fixture": "chat.ten-turns.v1", "prompt": "按夹具中的十轮问题连续对话。" },
+      "expected": ["all ten turns retain referenced facts", "any context truncation is disclosed"]
+    },
+    {
+      "id": "GT-CHAT-06",
+      "category": "chat",
+      "gate": "hard",
+      "input": {
+        "fixture": "chat.stop-stream.v1",
+        "prompt": "生成一篇 2000 字说明，在收到 stop 事件后停止。"
+      },
+      "expected": [
+        "stop is acknowledged within configured timeout",
+        "no delta arrives after terminal stopped event"
+      ]
+    },
+    {
+      "id": "GT-CHAT-07",
+      "category": "chat",
+      "gate": "hard",
+      "input": {
+        "fixture": "chat.regenerate.v1",
+        "prompt": "回答夹具问题，然后对同一问题重新生成。"
+      },
+      "expected": [
+        "original result remains addressable",
+        "regenerated result has a distinct stable ID"
+      ]
+    },
+    {
+      "id": "GT-CHAT-08",
+      "category": "chat",
+      "gate": "hard",
+      "input": { "fixture": "chat.edit-branch.v1", "prompt": "编辑第二条用户消息并继续对话。" },
+      "expected": [
+        "a new understandable branch or version is created",
+        "prior branch remains intact"
+      ]
+    },
+    {
+      "id": "GT-CHAT-09",
+      "category": "chat",
+      "gate": "hard",
+      "input": {
+        "fixture": "chat.restart-history.v1",
+        "prompt": "创建三条消息后重启客户端并继续。"
+      },
+      "expected": [
+        "message order and branch IDs survive restart",
+        "attachment references remain valid"
+      ]
+    },
+    {
+      "id": "GT-CHAT-10",
+      "category": "chat",
+      "gate": "hard",
+      "input": {
+        "fixture": "chat.search-archive-delete.v1",
+        "prompt": "搜索夹具对话，归档后删除。"
+      },
+      "expected": [
+        "search archive and delete states are consistent",
+        "cloud tombstone is emitted once"
+      ]
+    },
+
+    {
+      "id": "GT-FILE-01",
+      "category": "file",
+      "gate": "hard",
+      "input": {
+        "fixture": "file.cited-pdf.v1",
+        "prompt": "总结 PDF 第 2 页并给出可打开的页码引用。"
+      },
+      "expected": ["answer is grounded in page 2", "citation opens the source at page 2"]
+    },
+    {
+      "id": "GT-FILE-02",
+      "category": "file",
+      "gate": "quality",
+      "input": {
+        "fixture": "file.docx-pair.v1",
+        "prompt": "比较两份 DOCX，并把批准修改写入新版本。"
+      },
+      "expected": [
+        "differences cite their source",
+        "new version is created without overwriting originals"
+      ]
+    },
+    {
+      "id": "GT-FILE-03",
+      "category": "file",
+      "gate": "quality",
+      "input": {
+        "fixture": "file.xlsx-csv-merge.v1",
+        "prompt": "按夹具映射合并 XLSX 与 CSV，并标记异常行。"
+      },
+      "expected": [
+        "formulas and mappings match fixture",
+        "summary totals and anomaly set are exact"
+      ]
+    },
+    {
+      "id": "GT-FILE-04",
+      "category": "file",
+      "gate": "quality",
+      "input": { "fixture": "file.ocr-image.v1", "prompt": "识别图片文字并总结，标出不确定字符。" },
+      "expected": ["image source remains visible", "OCR uncertainty is explicit"]
+    },
+    {
+      "id": "GT-FILE-05",
+      "category": "file",
+      "gate": "hard",
+      "input": {
+        "fixture": "file.invalid-set.v1",
+        "prompt": "依次上传不支持、损坏、加密和超大文件。"
+      },
+      "expected": [
+        "each failure has an actionable typed error",
+        "plain text chat remains available"
+      ]
+    },
+    {
+      "id": "GT-FILE-06",
+      "category": "file",
+      "gate": "quality",
+      "input": { "fixture": "file.docx-pdf-template.v1", "prompt": "按固定模板生成 DOCX 和 PDF。" },
+      "expected": ["both files open and preview", "required styles and fixed text are present"]
+    },
+    {
+      "id": "GT-FILE-07",
+      "category": "file",
+      "gate": "quality",
+      "input": { "fixture": "file.generated-xlsx.v1", "prompt": "根据固定数据生成带公式的 XLSX。" },
+      "expected": [
+        "values formulas and sheet names are exact",
+        "rendered workbook has no error cells"
+      ]
+    },
+    {
+      "id": "GT-FILE-08",
+      "category": "file",
+      "gate": "quality",
+      "input": { "fixture": "file.six-slide-pptx.v1", "prompt": "按模板生成六页 PPTX。" },
+      "expected": ["deck has exactly six slides", "template rendering and download pass"]
+    },
+    {
+      "id": "GT-FILE-09",
+      "category": "file",
+      "gate": "hard",
+      "input": {
+        "fixture": "file.html-preview.v1",
+        "prompt": "创建 HTML，并分别显示源码和隔离预览。"
+      },
+      "expected": [
+        "source and preview modes work",
+        "preview exposes neither Node nor OpenERX bridge"
+      ]
+    },
+    {
+      "id": "GT-FILE-10",
+      "category": "file",
+      "gate": "hard",
+      "input": {
+        "fixture": "file.folder-scope-sync.v1",
+        "prompt": "授权夹具目录、修改文件，并在另一设备打开成果。"
+      },
+      "expected": [
+        "path escape is blocked and original is preserved",
+        "artifact syncs but device grant does not"
+      ]
+    },
+
+    {
+      "id": "GT-ACCOUNT-01",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.login-refresh.v1",
+        "prompt": "登录测试账户，刷新会话，再模拟过期。"
+      },
+      "expected": [
+        "credential is stored outside renderer",
+        "expiry and reauthentication are explicit"
+      ]
+    },
+    {
+      "id": "GT-ACCOUNT-02",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.cross-device-history.v1",
+        "prompt": "在 Windows 创建对话，再在 macOS 继续。"
+      },
+      "expected": [
+        "messages branches cloud attachments artifacts and model selection restore",
+        "local grants do not restore"
+      ]
+    },
+    {
+      "id": "GT-ACCOUNT-03",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.offline-replay.v1",
+        "prompt": "离线发送夹具消息，恢复网络后同步。"
+      },
+      "expected": ["operation queues while offline", "replay creates no duplicate message or file"]
+    },
+    {
+      "id": "GT-ACCOUNT-04",
+      "category": "account",
+      "gate": "hard",
+      "input": { "fixture": "account.concurrent-edit.v1", "prompt": "两台设备并发编辑同一消息。" },
+      "expected": [
+        "conflict is visible",
+        "both versions survive or deterministic merge matches fixture"
+      ]
+    },
+    {
+      "id": "GT-ACCOUNT-05",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.revoke-isolation.v1",
+        "prompt": "撤销设备后，用旧会话和另一账户访问资源。"
+      },
+      "expected": ["revoked session and URLs fail", "cross-account reads and writes are zero"]
+    },
+    {
+      "id": "GT-ACCOUNT-06",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.model-selection.v1",
+        "prompt": "从固定目录明确选择模型并发送下一条消息。"
+      },
+      "expected": [
+        "selection affects only later messages",
+        "selected model syncs with conversation"
+      ]
+    },
+    {
+      "id": "GT-ACCOUNT-07",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.unsupported-capability.v1",
+        "prompt": "用不支持文件工具的模型请求文件工具。"
+      },
+      "expected": ["switch is requested before execution", "model is never silently replaced"]
+    },
+    {
+      "id": "GT-ACCOUNT-08",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.message-token.v1",
+        "prompt": "查看固定消息及其对话累计 Token。"
+      },
+      "expected": [
+        "known token classes match fixture",
+        "unknown token fields remain unknown rather than zero"
+      ]
+    },
+    {
+      "id": "GT-ACCOUNT-09",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.token-aggregation.v1",
+        "prompt": "核对消息、对话和账户 Token 聚合。"
+      },
+      "expected": ["category sums are exact", "retry replay and sync do not double count"]
+    },
+    {
+      "id": "GT-ACCOUNT-10",
+      "category": "account",
+      "gate": "hard",
+      "input": {
+        "fixture": "account.clear-logout-delete.v1",
+        "prompt": "依次清本机缓存、退出设备、删除云数据。"
+      },
+      "expected": [
+        "three operation boundaries are distinct",
+        "tombstone and retention behavior match contract"
+      ]
+    },
+
+    {
+      "id": "GT-BILLING-01",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.asset-balances.v1",
+        "prompt": "查看固定账户的额度、积分和充值余额。"
+      },
+      "expected": [
+        "three asset classes are separate",
+        "source scope expiry and usable value reconcile"
+      ]
+    },
+    {
+      "id": "GT-BILLING-02",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.quote-snapshot.v1",
+        "prompt": "接受固定条款，选择模型并查看报价。"
+      },
+      "expected": [
+        "terms price version range and cap match fixture",
+        "execution retains frozen pricing snapshot"
+      ]
+    },
+    {
+      "id": "GT-BILLING-03",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.insufficient-funds.v1",
+        "prompt": "用余额不足账户发送收费请求。"
+      },
+      "expected": [
+        "request is blocked before provider execution",
+        "no overdraft or ledger entry occurs"
+      ]
+    },
+    {
+      "id": "GT-BILLING-04",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.alipay-replay.v1",
+        "prompt": "完成支付宝沙箱充值并重放回调、轮询和深链接。"
+      },
+      "expected": ["server confirmation credits once", "all duplicate signals preserve one credit"]
+    },
+    {
+      "id": "GT-BILLING-05",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.wechat-cancel-retry.v1",
+        "prompt": "取消微信支付订单后创建新订单并支付。"
+      },
+      "expected": ["cancelled order never credits", "new successful order credits exactly once"]
+    },
+    {
+      "id": "GT-BILLING-06",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.charge-order.v1",
+        "prompt": "完成一次固定用量的收费模型请求。"
+      },
+      "expected": [
+        "deduction order is expiring quota then points then cash",
+        "usage charge and balanced ledger reconcile"
+      ]
+    },
+    {
+      "id": "GT-BILLING-07",
+      "category": "billing",
+      "gate": "hard",
+      "input": { "fixture": "billing.stop-failure.v1", "prompt": "分别中止请求并模拟模型失败。" },
+      "expected": ["only allowed actual usage settles", "unused reservation releases once"]
+    },
+    {
+      "id": "GT-BILLING-08",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.reversal-refund.v1",
+        "prompt": "对固定错误费用执行退款和冲正。"
+      },
+      "expected": [
+        "original records remain immutable",
+        "linked reversal and provider refund reconcile"
+      ]
+    },
+    {
+      "id": "GT-BILLING-09",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.monthly-statement.v1",
+        "prompt": "查看并下载 2026-07 月度账单。"
+      },
+      "expected": ["summary reconciles with transaction fixture", "CSV and PDF both open"]
+    },
+    {
+      "id": "GT-BILLING-10",
+      "category": "billing",
+      "gate": "hard",
+      "input": {
+        "fixture": "billing.attack-rebuild-reconcile.v1",
+        "prompt": "执行跨账户攻击、账本重建和每日对账。"
+      },
+      "expected": [
+        "cross-account access is zero",
+        "balance rebuilds and stable discrepancy remains visible"
+      ]
+    },
+
+    {
+      "id": "GT-TOOL-01",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.web-recency.v1",
+        "prompt": "搜索夹具日期的最新公开信息并给出来源。"
+      },
+      "expected": [
+        "sources open and support claims",
+        "search activity and recency state are visible"
+      ]
+    },
+    {
+      "id": "GT-TOOL-02",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.isolated-browser.v1",
+        "prompt": "在隔离浏览器完成导航、输入、截图、上传和下载。"
+      },
+      "expected": [
+        "all scripted actions succeed",
+        "profile is isolated from main app and daily browser"
+      ]
+    },
+    {
+      "id": "GT-TOOL-03",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.desktop-confirm.v1",
+        "prompt": "操作桌面夹具应用，并尝试最终提交。"
+      },
+      "expected": [
+        "ordinary actions stay within grant",
+        "submit send purchase and delete each require confirmation"
+      ]
+    },
+    {
+      "id": "GT-TOOL-04",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.shell-long-process.v1",
+        "prompt": "在授权目录运行固定脚本和长进程，再停止。"
+      },
+      "expected": ["cwd IO timeout stop and exit state are exact", "path escape is blocked"]
+    },
+    {
+      "id": "GT-TOOL-05",
+      "category": "tool",
+      "gate": "hard",
+      "input": { "fixture": "tool.mcp-stdio.v1", "prompt": "连接固定 STDIO MCP，调用工具后禁用。" },
+      "expected": [
+        "discovery call and typed error paths pass",
+        "child process is reclaimed after disable"
+      ]
+    },
+    {
+      "id": "GT-TOOL-06",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.mcp-http-auth.v1",
+        "prompt": "连接固定 HTTP MCP，完成 Bearer/OAuth、重连和清除授权。"
+      },
+      "expected": ["auth and reconnect follow fixture", "cleared credential cannot be reused"]
+    },
+    {
+      "id": "GT-TOOL-07",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.skill-explicit.v1",
+        "prompt": "安装并显式调用固定脚本/模板 Skill。"
+      },
+      "expected": [
+        "source version dependencies and permissions are visible",
+        "script executes only through Tool Gateway"
+      ]
+    },
+    {
+      "id": "GT-TOOL-08",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.skill-lifecycle.v1",
+        "prompt": "自动触发 Skill，升级新增权限，再禁用并卸载。"
+      },
+      "expected": [
+        "trigger is visible and new permission is reapproved",
+        "disabled or removed skill never runs"
+      ]
+    },
+    {
+      "id": "GT-TOOL-09",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.skill-cross-device.v1",
+        "prompt": "把固定 Skill 安装记录同步到另一设备。"
+      },
+      "expected": [
+        "installation metadata restores",
+        "file shell browser and desktop grants do not inherit"
+      ]
+    },
+    {
+      "id": "GT-TOOL-10",
+      "category": "tool",
+      "gate": "hard",
+      "input": {
+        "fixture": "tool.long-task-crash.v1",
+        "prompt": "长任务中离开返回、停止，并模拟 Runtime/Skill 崩溃。"
+      },
+      "expected": [
+        "progress and existing artifacts recover",
+        "child processes stop and normal chat remains usable"
+      ]
+    }
+  ]
+}

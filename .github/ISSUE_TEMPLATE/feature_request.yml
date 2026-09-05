@@ -1,0 +1,19 @@
+name: Feature request / 功能建议
+description: 提议通用核心的改进
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的实际问题
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案与预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案和平台限制

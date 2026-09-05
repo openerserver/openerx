@@ -1,0 +1,17 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.docx binary
+*.jpeg binary
+*.jpg binary
+*.pdf binary
+*.png binary
+*.pptx binary
+*.webp binary
+*.xlsx binary
+
+# Preserve upstream license text whitespace; generated files are reviewed via
+# their generator, provenance and inventory instead of hand-editing legal text.
+THIRD_PARTY_LICENSES.txt linguist-generated=true -whitespace
+third-party/notices.json linguist-generated=true

@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "lws-history-gate-v1",
+  "checkpoint": "LWS-006-local-web-search-readiness",
+  "updatedAt": "2026-08-29T03:38:48.263Z",
+  "history": {
+    "firstDate": "2026-08-29",
+    "lastDate": "2026-08-29",
+    "uniqueDays": 1,
+    "requiredUniqueDays": 7,
+    "reportDates": ["2026-08-29"]
+  },
+  "localAlpha": {
+    "status": "insufficient_history",
+    "successRateThreshold": 0.95,
+    "p95DurationMsThreshold": 3000,
+    "expectedRunsPerProvider": 3,
+    "providers": [
+      {
+        "providerId": "direct:baidu-json",
+        "plannedRuns": 3,
+        "observedRuns": 3,
+        "successes": 2,
+        "failures": 1,
+        "successRate": 0.6667,
+        "p50DurationMs": 793,
+        "p95DurationMs": 793,
+        "errorCounts": {
+          "LOCAL_SEARCH_PROVIDER_CHALLENGE": 1
+        },
+        "expectedRuns": 3,
+        "missingRuns": 0,
+        "uniqueDays": 1,
+        "relevanceTopFiveRate": 1,
+        "duplicateRate": 0,
+        "sourceUrlValidityRate": 1,
+        "status": "insufficient_history"
+      },
+      {
+        "providerId": "direct:bing-html",
+        "plannedRuns": 3,
+        "observedRuns": 3,
+        "successes": 2,
+        "failures": 1,
+        "successRate": 0.6667,
+        "p50DurationMs": 429,
+        "p95DurationMs": 1069,
+        "errorCounts": {
+          "LOCAL_SEARCH_PROVIDER_CHALLENGE": 1
+        },
+        "expectedRuns": 3,
+        "missingRuns": 0,
+        "uniqueDays": 1,
+        "relevanceTopFiveRate": 0.3,
+        "duplicateRate": 0,
+        "sourceUrlValidityRate": 1,
+        "status": "insufficient_history"
+      }
+    ]
+  },
+  "platformMatrix": {
+    "required": ["darwin-arm64", "darwin-x64", "win32-x64"],
+    "observed": [
+      {
+        "platform": "darwin-arm64",
+        "dates": ["2026-08-29"],
+        "evidence": "live_probe"
+      }
+    ],
+    "missing": ["darwin-x64", "win32-x64"]
+  },
+  "release": {
+    "status": "pending_external",
+    "releaseReady": false,
+    "completedEvidence": [],
+    "requiredEvidence": [
+      {
+        "id": "seven-unique-day-local-alpha-gate",
+        "status": "insufficient_history"
+      },
+      {
+        "id": "provider-terms-approved",
+        "status": "pending_external"
+      },
+      {
+        "id": "source-openability-and-manual-quality",
+        "status": "pending_manual"
+      },
+      {
+        "id": "macos-arm64-x64-and-windows-x64-live",
+        "status": "pending_external"
+      },
+      {
+        "id": "signed-install-upgrade-rollback",
+        "status": "pending_external"
+      },
+      {
+        "id": "signed-package-full-e2e",
+        "status": "pending_external"
+      }
+    ]
+  }
+}

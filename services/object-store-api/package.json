@@ -1,0 +1,18 @@
+{
+  "name": "@openerx/object-store-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openerx/contracts": "0.0.0"
+  },
+  "license": "Apache-2.0"
+}

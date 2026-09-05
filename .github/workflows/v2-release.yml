@@ -1,0 +1,153 @@
+name: OpenERX signed release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Signed update channel
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - stable
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openerx-v2-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Release approval and quality gates
+    runs-on: ubuntu-24.04
+    environment: production-release
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Validate preview candidate foundation
+        if: inputs.channel == 'preview'
+        run: npm run check:release:v2
+      - name: Validate stable publication approval
+        if: inputs.channel == 'stable'
+        run: npm run release:gate:v2
+      - run: npm run check:release-graph:v2
+      - run: npm run check:public
+      - run: npm run notices:check
+      - run: npm run notices:release
+      - run: npm run check:builtin-skills:v2
+      - run: npm run audit:v2
+      - run: npm run lint:v2
+      - run: npm run typecheck:v2
+      - run: npm run test:v2
+
+  desktop:
+    name: Signed desktop ${{ matrix.target }}
+    needs: preflight
+    environment: production-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2022
+            platform: win32
+            arch: x64
+          - target: macos-arm64
+            os: macos-14
+            platform: darwin
+            arch: arm64
+          - target: macos-x64
+            os: macos-15-intel
+            platform: darwin
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      OPENERX_RELEASE_MODE: "1"
+      OPENERX_RELEASE_CHANNEL: ${{ inputs.channel }}
+      OPENERX_UPDATE_MANIFEST_URL: ${{ vars.OPENERX_UPDATE_MANIFEST_URL }}
+      OPENERX_UPDATE_KEY_ID: ${{ vars.OPENERX_UPDATE_KEY_ID }}
+      OPENERX_UPDATE_PUBLIC_KEY_BASE64: ${{ secrets.OPENERX_UPDATE_PUBLIC_KEY_BASE64 }}
+      OPENERX_MAC_SIGN_IDENTITY: ${{ vars.OPENERX_MAC_SIGN_IDENTITY }}
+      OPENERX_PROJECT_URL: ${{ vars.OPENERX_PROJECT_URL }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Import macOS signing and notarization credentials
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MAC_CERTIFICATE_BASE64: ${{ secrets.MAC_CERTIFICATE_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          MAC_KEYCHAIN_PASSWORD: ${{ secrets.MAC_KEYCHAIN_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/openerx-release.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/openerx-release.keychain-db"
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$MAC_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 --decode > "$API_KEY_PATH"
+          security create-keychain -p "$MAC_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$MAC_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$MAC_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$MAC_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "APPLE_API_KEY=$API_KEY_PATH" >> "$GITHUB_ENV"
+      - name: Materialize Windows certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'openerx-release.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          "WINDOWS_CERTIFICATE_FILE=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - run: npm run build --workspace @openerx/contracts
+      - run: npm run build --workspace @openerx/release
+      - run: npm run make --workspace @openerx/desktop -- --arch=${{ matrix.arch }}
+      - run: npm run verify:fuses --workspace @openerx/desktop
+      - run: npm run verify:release-artifacts --workspace @openerx/desktop
+        env:
+          OPENERX_RELEASE_TARGET: ${{ matrix.platform }}-${{ matrix.arch }}
+      - run: npm run verify:native-signature --workspace @openerx/desktop
+      - run: npm run test:package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: OpenERX-${{ matrix.target }}-${{ inputs.channel }}-signed
+          path: apps/desktop/out/make/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary macOS signing material
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/openerx-release.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/openerx-release.p12" "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+      - name: Remove temporary Windows certificate
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'openerx-release.pfx'
+          if (Test-Path -LiteralPath $certificatePath) { Remove-Item -LiteralPath $certificatePath -Force }

@@ -1,0 +1,84 @@
+name: OpenERX CI
+
+on:
+  workflow_dispatch: {}
+  pull_request: {}
+  push: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openerx-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Source checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run check:source
+        env:
+          OPENERX_BUILTIN_SKILL_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2022
+            platform: win32
+            arch: x64
+          - target: macos-arm64
+            os: macos-14
+            platform: darwin
+            arch: arm64
+          - target: macos-x64
+            os: macos-15-intel
+            platform: darwin
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run notices:check
+      - run: npm run build --workspace @openerx/contracts
+      - run: npm run build --workspace @openerx/release
+      - run: npm run package --workspace @openerx/desktop -- --arch=${{ matrix.arch }}
+      - run: npm run verify:fuses --workspace @openerx/desktop
+      - run: npm run verify:release-artifacts --workspace @openerx/desktop
+        env:
+          OPENERX_RELEASE_TARGET: ${{ matrix.platform }}-${{ matrix.arch }}
+      - run: npm run verify:native-signature --workspace @openerx/desktop
+      - run: npm run test:package
+      - run: npm run archive:package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: OpenERX-${{ matrix.target }}-unsigned
+          path: apps/desktop/out/artifacts/
+          if-no-files-found: error
+          retention-days: 7

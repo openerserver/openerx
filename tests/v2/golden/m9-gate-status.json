@@ -1,0 +1,26 @@
+{
+  "checkpoint": "M9-open-source-desktop-release",
+  "scope": "open-source-desktop",
+  "updatedAt": "2026-09-05",
+  "localImplementation": {
+    "status": "complete",
+    "completedTasks": 8,
+    "expectedTasks": 8
+  },
+  "externalRelease": {
+    "status": "pending_external",
+    "userApproval": false,
+    "completedEvidence": [],
+    "requiredEvidence": [
+      "m8-personal-beta-approved",
+      "byok-provider-streaming-stop-and-failure-recovery",
+      "windows-signed-install-upgrade-rollback",
+      "macos-signed-notarized-install-upgrade-rollback",
+      "personal-projects-signed-desktop-directory-reconnect-and-permissions",
+      "approved-benchmark-machine-budgets",
+      "security-privacy-retention-review",
+      "release-rollback-drill",
+      "explicit-user-release-approval"
+    ]
+  }
+}

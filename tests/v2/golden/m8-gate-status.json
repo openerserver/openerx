@@ -1,0 +1,29 @@
+{
+  "checkpoint": "M8-open-source-desktop-beta",
+  "scope": "open-source-desktop",
+  "updatedAt": "2026-09-05",
+  "localImplementation": {
+    "status": "complete",
+    "catalogTasks": 50,
+    "evidenceRecords": 50,
+    "minimumExpectedResults": 46
+  },
+  "externalBeta": {
+    "status": "pending_external",
+    "targetUsers": { "minimum": 5, "maximum": 20, "completed": 0 },
+    "completedEvidence": [],
+    "requiredEvidence": [
+      "byok-provider-streaming-stop-and-failure-recovery",
+      "windows-x64-and-macos-arm64-x64",
+      "signed-install-upgrade-and-rollback",
+      "personal-projects-signed-desktop-directory-reconnect-and-permissions",
+      "target-user-task-and-feedback-records"
+    ]
+  },
+  "performanceBudgets": {
+    "status": "provisional_local",
+    "desktopInteractiveMs": 5000,
+    "appServiceReadyMs": 5000,
+    "idleRssMiB": 512
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "skills": [
+    {
+      "installationId": "00000000-0000-4000-8000-000000000701",
+      "name": "structured-report",
+      "version": "1.0.2-openerx",
+      "checksum": "9eaad712cf2435d78f718d93c7973d76549f28a8e5d9865127db7d0e76297eba"
+    },
+    {
+      "installationId": "00000000-0000-4000-8000-000000000702",
+      "name": "documents",
+      "version": "1.0.2-openerx",
+      "checksum": "0b4f83f13658b52587f394cb1284c729fae6eddd02be6c15f871cbb269671d06"
+    },
+    {
+      "installationId": "00000000-0000-4000-8000-000000000703",
+      "name": "spreadsheets",
+      "version": "1.0.2-openerx",
+      "checksum": "f7d455afa921ff859508f114179c755ff3bfb601d45f5d92181989e507fa29d0"
+    },
+    {
+      "installationId": "00000000-0000-4000-8000-000000000704",
+      "name": "presentations",
+      "version": "1.0.2-openerx",
+      "checksum": "673310b11b0d991a391d0edb79b3bf0c2f8e7a89d625a36400a01e6971e273b4"
+    },
+    {
+      "installationId": "00000000-0000-4000-8000-000000000705",
+      "name": "pdf",
+      "version": "1.0.2-openerx",
+      "checksum": "493dbc909bd8f3d8456d84eb0f98b5b91b73d13b3276ddf8b88d1cd7afbaf129"
+    }
+  ]
+}
