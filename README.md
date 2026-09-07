@@ -1,62 +1,81 @@
 # OpenERX
 
-OpenERX 是 Apache-2.0 许可的个人 AI 桌面客户端，使用 Electron、React 和 TypeScript 构建。桌面端、本地 Agent Host、工具与 Skill、安全边界、同步协议和可选平台服务都在本仓库共同维护。
+OpenERX 是一款开源、本地优先的 AI 桌面助手，将 AI 对话、项目文件、工具、Skill 和自动化任务整合在一个工作空间中。
 
-本仓库是产品的唯一通用核心。移动版、企业品牌素材、企业集成与私有交付配置不在本仓库；企业产品通过 Git submodule 引用本仓库，并在构建时注入品牌清单，不维护桌面代码副本。`v1-backup` 不属于开源内容。
+接入自己的模型 API Key，即可开始对话、处理文件并组织日常工作，无需注册 OpenERX 账号或部署服务器。OpenERX 使用 Electron、React 和 TypeScript 构建，采用 Apache License 2.0 开源。
 
-> 当前是源码发布准备版本，不代表已有签名及完整跨平台验收的正式安装包。支持 BYOK、本地对话与项目、文件处理、工具、Skill、记忆和自动化；实际限制见 [开发指南](docs/DEVELOPMENT.md)。
+## 主要功能
 
-## 目录
+- **AI 对话**：配置模型提供商和自己的 API Key（BYOK），在桌面端管理对话与上下文。
+- **项目与文件**：按项目组织对话、设置项目说明、连接本地目录，让 AI 围绕具体工作提供帮助。
+- **工具与 Skill**：使用文件处理等工具，通过 Skill 扩展任务能力，并管理工具调用权限。
+- **记忆管理**：保存和管理可供后续对话参考的长期信息，按需开启或关闭记忆。
+- **自动化任务**：设置定时任务，在桌面应用运行时执行，并查看任务状态与结果。
+- **本地优先**：对话、项目和应用数据主要保存在本机；模型调用及联网工具按需连接相应服务。
 
-| 路径 | 职责 |
-| --- | --- |
-| `apps/desktop` | Electron Main、Preload 与 React Renderer |
-| `packages/app-service` | 本地业务 API、记忆、自动化、对话与同步协调 |
-| `packages/branding` | 公共品牌默认值与受控品牌清单加载器 |
-| `packages/pi-host` | Pi Agent Session 组合、事件投影与隔离进程入口 |
-| `packages/release` | 发布清单、版本、通道与架构验证 |
-| `packages` | 合同、工具、Skill、存储和可观测性共享包 |
-| `services` | 身份、同步、模型、用量、账本与支付服务 |
+## 快速开始
 
-## 本地开发
+以下步骤用于从源码启动桌面应用。桌面打包目标为 Windows x64 和 macOS Apple Silicon / Intel。
 
-需要 Git、Node.js 24.3+ 与 npm 11+；推荐 [`.node-version`](.node-version) 中的版本。克隆后在仓库根目录运行：
+### 环境要求
+
+- Git
+- Node.js 24.3 或更高版本，推荐使用 [`.node-version`](.node-version) 指定的版本
+- npm 11 或更高版本
+- macOS 需安装 Xcode Command Line Tools
+
+### 安装与运行
 
 ```bash
+git clone https://github.com/openerserver/openerx.git
+cd openerx
 npm ci
 npm run dev:desktop
 ```
 
-在「设置 → 模型」选择 BYOK 提供商并填写自己的 API Key。默认模式不需要平台登录、服务器或 `.env`；未配置 Key 时不能发送模型请求。第三方模型调用可能产生费用，请自行设置服务商限额。
+### 开始使用
 
-源码检查及打包：
+1. 打开「设置 → 模型」，选择模型提供商并填写自己的 API Key。
+2. 新建对话，或创建项目并添加项目说明、本地目录。
+3. 根据任务需要启用工具、安装 Skill 或创建自动化任务。
+
+默认启动无需配置 `.env`。模型服务可能按使用量收费，费用由对应提供商收取。数据存储和网络访问说明见 [隐私说明](docs/PRIVACY.md)。
+
+## 构建
+
+在仓库根目录运行：
 
 ```bash
-npm run check:source
 npm run package:v2
 npm run check:package
 ```
 
-## 品牌扩展
+应用默认输出到 `apps/desktop/out/`。本地构建生成未签名的开发包。
 
-默认构建使用 OpenERX 品牌。私有发行版设置 `OPENERX_BRAND_MANIFEST`，指向仓库外或企业仓库内的品牌 JSON；清单可配置产品名、助手名、颜色和相对路径 PNG/SVG 素材。品牌资源会在构建时嵌入，通用桌面源码无需分叉。
+如需生成 Windows 安装程序或 macOS ZIP：
 
-`apps/mobile/`、`v1-backup/`、`deliverables/` 和 `docs/presentations/` 已加入根级忽略规则，不能作为开源内容提交。
+```bash
+npm run make --workspace @openerx/desktop
+```
 
-## 功能边界与资料
+## 开发
 
-- 打包目标为 Windows x64、macOS arm64/x64；Linux 用于源码检查，不承诺 Linux 桌面工具支持。未签名应用输出到 `apps/desktop/out/`，不是正式发行版。
-- Shell、Skill 脚本、浏览器和桌面操作受平台能力与授权限制。Windows Shell 依赖额外配置的外部沙箱，本仓库不捆绑该外部程序。
-- 自动化依赖桌面后台进程，不是托管云任务；退出、休眠及缺少模型凭据会影响运行。
-- `services/` 是可选平台实现/开发参考，不是开箱即用的生产云服务。平台账号、同步、支付、远程控制需独立部署；移动端不在本仓库。
-- 本地保存不等于全部数据均已加密。模型请求、搜索和外部工具会访问相应提供商，见 [数据与隐私](docs/PRIVACY.md)。
+项目使用 npm workspaces 管理桌面应用与共享模块。修改代码后，可运行完整源码检查：
 
-参见 [开发与故障排查](docs/DEVELOPMENT.md)、[公共架构](docs/ARCHITECTURE.md)、[桌面发布门禁](docs/RELEASE_GATES.md)、[GitHub 发布清单](docs/PUBLISHING.md)、[变更记录](CHANGELOG.md) 和 [支持说明](SUPPORT.md)。`docs/v2/` 保留通用技术参考与公共测试资料；内部产品、移动及交付材料不在公开树中。设计说明不等于功能或发行验收已经完成。
+```bash
+npm run check:source
+```
+
+该命令包含代码规范、类型检查、测试及依赖审计。更多命令、环境配置与故障排查见 [开发指南](docs/DEVELOPMENT.md)，模块设计见 [架构说明](docs/ARCHITECTURE.md)，版本变化见 [更新日志](CHANGELOG.md)。
 
 ## 参与贡献
 
-提交改动前请阅读 [贡献指南](CONTRIBUTING.md) 和 [行为准则](CODE_OF_CONDUCT.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+欢迎提交 Bug、功能建议、文档改进和代码贡献。
+
+- 遇到问题或有改进建议，请提交 [Issue](https://github.com/openerserver/openerx/issues)。
+- 提交 Pull Request 前，请阅读 [贡献指南](CONTRIBUTING.md) 和 [行为准则](CODE_OF_CONDUCT.md)。
+- 安全漏洞请按 [安全政策](SECURITY.md) 私下报告，不要在公开 Issue 中披露细节。
 
 ## 许可证
 
-本项目原创代码采用 [Apache License 2.0](LICENSE)，保留 [NOTICE](NOTICE) 中的声明。第三方依赖适用各自许可证，见 [第三方声明](THIRD_PARTY_NOTICES.md)。Apache-2.0 不授予企业商标、品牌素材或第三方服务使用权。
+OpenERX 采用 [Apache License 2.0](LICENSE)。版权声明见 [NOTICE](NOTICE)，第三方依赖的许可信息见 [第三方声明](THIRD_PARTY_NOTICES.md)。
