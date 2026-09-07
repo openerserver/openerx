@@ -32,7 +32,18 @@ export function adaptForgePackagerOptions(options) {
   return adapted;
 }
 
-function main() {
+export async function runForgeCliAction(action, entry, require) {
+  const cli = require(entry);
+  // Unlike start/package, Forge's make module only runs automatically when it
+  // is require.main. This adapter loads it as a dependency, so invoke its API.
+  if (action === "make") {
+    const options = await cli.getMakeOptions();
+    require("@electron/get").initializeProxy();
+    await require("@electron-forge/core").api.make(options);
+  }
+}
+
+async function main() {
   const require = createRequire(import.meta.url);
   const action = process.argv[2];
   if (!["start", "package", "make"].includes(action)) throw new Error("FORGE_ACTION_NOT_SUPPORTED");
@@ -53,7 +64,12 @@ function main() {
   const cliRoot = path.dirname(require.resolve("@electron-forge/cli/package.json"));
   const entry = path.join(cliRoot, "dist", `electron-forge-${action}.js`);
   process.argv = [process.execPath, entry, ...process.argv.slice(3)];
-  require(entry);
+  await runForgeCliAction(action, entry, require);
 }
 
-if (import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href) main();
+if (import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
