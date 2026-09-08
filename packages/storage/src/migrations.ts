@@ -1558,14 +1558,20 @@ export function migrateDatabase(
       throw new Error(`Database migration checksum mismatch at version ${row.version}`);
     }
   }
-  for (const migration of migrations) {
-    if (migration.version <= latestApplied || migration.version > targetVersion) continue;
+  const pending = migrations.filter(
+    ({ version }) => version > latestApplied && version <= targetVersion,
+  );
+  if (pending.length > 0) {
+    // Commit the upgrade as a unit: avoid a disk flush per historical migration,
+    // and leave the previous schema intact if any step fails.
     database.exec("BEGIN IMMEDIATE");
     try {
-      database.exec(migration.sql);
-      database
-        .prepare("INSERT INTO schema_migrations(version, checksum, applied_at) VALUES (?, ?, ?)")
-        .run(migration.version, migration.checksum, new Date().toISOString());
+      for (const migration of pending) {
+        database.exec(migration.sql);
+        database
+          .prepare("INSERT INTO schema_migrations(version, checksum, applied_at) VALUES (?, ?, ?)")
+          .run(migration.version, migration.checksum, new Date().toISOString());
+      }
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");

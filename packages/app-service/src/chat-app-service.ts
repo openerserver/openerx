@@ -55,6 +55,7 @@ export class ChatAppService {
   readonly #projects: ProjectRepository | null;
   readonly #remoteApplications = new Map<string, Promise<RemoteApplyCommandResponseFrame>>();
   #closed = false;
+  #closePromise: Promise<void> | null = null;
 
   constructor(
     repository: ChatRepository,
@@ -96,14 +97,16 @@ export class ChatAppService {
     return recovered;
   }
 
-  close(): void {
+  close(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
     this.#closed = true;
     this.#repository.close();
     this.#files?.close();
-    void this.#tools?.close();
+    this.#closePromise = this.#tools?.close() ?? Promise.resolve();
     this.#remote?.close();
     this.#skills?.close();
     this.#memories?.close();
+    return this.#closePromise;
   }
 
   onEvent(listener: (event: ChatEvent) => void): () => void {

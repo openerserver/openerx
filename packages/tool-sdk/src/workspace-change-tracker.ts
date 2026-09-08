@@ -24,6 +24,7 @@ interface SnapshotEntry {
   mtimeMs: number;
   ctimeMs: number;
   inodeKey: string;
+  birthtimeNs: string | null;
   digest: string;
   text: string | null;
   textStatus: "text" | "binary" | "too_large" | "not_applicable";
@@ -55,14 +56,15 @@ function snapshotEntry(
   relativePath: string,
   textBudget: { used: number },
 ): SnapshotEntry {
-  const stats = lstatSync(entryPath);
+  const stats = lstatSync(entryPath, { bigint: true });
   const common = {
     relativePath,
-    size: stats.size,
-    mode: stats.mode,
-    mtimeMs: stats.mtimeMs,
-    ctimeMs: stats.ctimeMs,
+    size: Number(stats.size),
+    mode: Number(stats.mode),
+    mtimeMs: Number(stats.mtimeNs) / 1_000_000,
+    ctimeMs: Number(stats.ctimeNs) / 1_000_000,
     inodeKey: `${stats.dev}:${stats.ino}`,
+    birthtimeNs: stats.birthtimeNs > 0n ? String(stats.birthtimeNs) : null,
   };
   if (stats.isSymbolicLink()) {
     return {
@@ -86,7 +88,7 @@ function snapshotEntry(
     return {
       ...common,
       entryType: "other",
-      digest: sha256(`other\0${stats.mode}\0${stats.size}\0${stats.mtimeMs}`),
+      digest: sha256(`other\0${stats.mode}\0${stats.size}\0${stats.mtimeNs}`),
       text: null,
       textStatus: "not_applicable",
     };
@@ -95,7 +97,7 @@ function snapshotEntry(
     return {
       ...common,
       entryType: "file",
-      digest: sha256(`large\0${stats.size}\0${stats.mtimeMs}\0${stats.ctimeMs}`),
+      digest: sha256(`large\0${stats.size}\0${stats.mtimeNs}\0${stats.ctimeNs}`),
       text: null,
       textStatus: "too_large",
     };
@@ -215,6 +217,17 @@ function changed(before: SnapshotEntry, after: SnapshotEntry): boolean {
   );
 }
 
+function sameFileIdentity(before: SnapshotEntry, after: SnapshotEntry): boolean {
+  if (before.entryType !== after.entryType || before.inodeKey !== after.inodeKey) return false;
+  // Unlinking a file can free its inode for an unrelated creation before the final snapshot.
+  // Birth time distinguishes those generations while surviving a rename and subsequent edits.
+  if (before.birthtimeNs !== null && after.birthtimeNs !== null) {
+    return before.birthtimeNs === after.birthtimeNs;
+  }
+  // Without birth-time support, only infer a rename when the contents also match.
+  return before.digest === after.digest;
+}
+
 function unifiedDiff(relativePath: string, before: string | null, after: string | null): string {
   const beforeLines = before === null ? [] : before.split("\n");
   const afterLines = after === null ? [] : after.split("\n");
@@ -260,7 +273,7 @@ export function collectWorkspaceWriteChanges(
     for (const previous of deleted) {
       const next = created.find(
         (candidate) =>
-          !renamedCreated.has(candidate.relativePath) && candidate.inodeKey === previous.inodeKey,
+          !renamedCreated.has(candidate.relativePath) && sameFileIdentity(previous, candidate),
       );
       if (!next) continue;
       renamedDeleted.add(previous.relativePath);

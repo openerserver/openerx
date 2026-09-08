@@ -12,6 +12,7 @@ import {
 } from "../src";
 
 const directories: string[] = [];
+const shellSandboxReady = shellToolAvailability().availableToolNames.includes("openerx_shell");
 
 function context() {
   return {
@@ -84,7 +85,7 @@ describe("ShellToolAdapter", () => {
     });
   });
 
-  it.runIf(process.platform === "darwin" || codexWindowsSandboxReady())(
+  it.runIf(shellSandboxReady)(
     "runs argv without a shell inside the approved workspace",
     async () => {
       const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
@@ -110,7 +111,7 @@ describe("ShellToolAdapter", () => {
     20_000,
   );
 
-  it.runIf(process.platform === "darwin" || codexWindowsSandboxReady())(
+  it.runIf(shellSandboxReady)(
     "retains failed command output as a typed failure result",
     async () => {
       const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-failure-"));
@@ -145,7 +146,7 @@ describe("ShellToolAdapter", () => {
     20_000,
   );
 
-  it("rejects cwd escape and refuses execution when no native sandbox exists", async () => {
+  it.runIf(shellSandboxReady || process.platform !== "win32")("rejects cwd escape", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
     directories.push(workspace);
     const adapter = new ShellToolAdapter([workspace]);
@@ -164,16 +165,23 @@ describe("ShellToolAdapter", () => {
         context(),
       ),
     ).rejects.toThrow("SHELL_CWD_OUT_OF_SCOPE");
-    if (process.platform !== "darwin" && !codexWindowsSandboxReady()) {
+    await adapter.stopAll();
+  });
+
+  it.runIf(!shellSandboxReady)("refuses execution when no native sandbox exists", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-unavailable-"));
+    directories.push(workspace);
+    const adapter = new ShellToolAdapter([workspace]);
+    for (const background of [false, true]) {
       await expect(
         adapter.execute(
           {
             operation: "shell_execute",
             cwd: workspace,
-            command: "curl",
-            args: ["https://example.com"],
+            command: process.execPath,
+            args: ["-e", "throw new Error('UNSANDBOXED_EXECUTION')"],
             timeoutMs: 1_000,
-            background: false,
+            background,
             allowNetwork: false,
             idempotencyKey: "shell-command-0003",
           },
@@ -185,6 +193,7 @@ describe("ShellToolAdapter", () => {
           : "SHELL_OS_SANDBOX_UNAVAILABLE",
       );
     }
+    await adapter.stopAll();
   });
 
   it("denies Node and Python reads outside the workspace on macOS", async () => {
@@ -334,7 +343,7 @@ describe("ShellToolAdapter", () => {
     await adapter.stopAll();
   }, 30_000);
 
-  it("starts, observes, and stops a long child process", async () => {
+  it.runIf(shellSandboxReady)("starts, observes, and stops a long child process", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
     directories.push(workspace);
     const adapter = new ShellToolAdapter([workspace]);

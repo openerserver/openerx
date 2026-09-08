@@ -1224,6 +1224,41 @@ describe("M1 chat renderer", () => {
     await waitFor(() => expect(screen.queryByText("已生成长期记忆")).toBeNull());
   });
 
+  it("keeps memory search focused when typing immediately after opening settings", async () => {
+    cleanup();
+    const animationFrames: FrameRequestCallback[] = [];
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => animationFrames.push(callback));
+    try {
+      const bridge = createBridge();
+      renderApp(bridge, "/settings/account");
+      const user = userEvent.setup();
+
+      await user.click(await screen.findByRole("button", { name: "记忆" }));
+      const search = await screen.findByLabelText<HTMLInputElement>("搜索记忆");
+      await user.type(search, "类");
+      // Navigation can finish painting after the user has already started typing.
+      act(() => {
+        while (animationFrames.length > 0) animationFrames.shift()?.(performance.now());
+      });
+      expect(document.activeElement).toBe(search);
+      await user.keyboard("型检查");
+
+      expect(search.value).toBe("类型检查");
+      await waitFor(() =>
+        expect(bridge.listMemories).toHaveBeenLastCalledWith({
+          status: "active",
+          limit: 100,
+          query: "类型检查",
+        }),
+      );
+    } finally {
+      cleanup();
+      requestAnimationFrame.mockRestore();
+    }
+  });
+
   it("searches, edits, filters, and clears saved memories by category", async () => {
     cleanup();
     const bridge = createBridge();
