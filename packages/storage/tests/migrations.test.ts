@@ -14,6 +14,58 @@ afterEach(() => {
 });
 
 describe("database migrations", () => {
+  it("rolls back the entire pending upgrade on failure and can retry after reopening", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-migration-rollback-"));
+    directories.push(directory);
+    const file = path.join(directory, "openerx.sqlite");
+    let database = new DatabaseSync(file);
+    try {
+      migrateDatabase(database, { throughVersion: 30 });
+      database.exec(`
+        CREATE TRIGGER fail_upgrade BEFORE INSERT ON schema_migrations
+        WHEN NEW.version = 32
+        BEGIN SELECT RAISE(ABORT, 'fixture upgrade failure'); END;
+      `);
+      expect(() => migrateDatabase(database)).toThrow("fixture upgrade failure");
+      expect(
+        database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get(),
+      ).toEqual({
+        version: 30,
+      });
+      expect(
+        database.prepare("SELECT name FROM sqlite_master WHERE name = 'projects'").get(),
+      ).toBeUndefined();
+      expect(
+        database
+          .prepare("SELECT name FROM pragma_table_info('conversations') WHERE name = 'project_id'")
+          .get(),
+      ).toBeUndefined();
+      expect(database.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      database.exec("DROP TRIGGER fail_upgrade");
+    } finally {
+      database.close();
+    }
+
+    database = new DatabaseSync(file);
+    try {
+      migrateDatabase(database);
+      expect(
+        database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get(),
+      ).toEqual({
+        version: 32,
+      });
+      expect(
+        database.prepare("SELECT name FROM sqlite_master WHERE name = 'projects'").get(),
+      ).toEqual({
+        name: "projects",
+      });
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(() => migrateDatabase(database)).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("adds personal projects while keeping directory grants device-local", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-project-migration-"));
     directories.push(directory);

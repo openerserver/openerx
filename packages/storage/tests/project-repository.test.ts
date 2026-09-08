@@ -595,6 +595,7 @@ describe("ProjectRepository", () => {
     sourceProjects.close();
   });
 
+  // Exercise sync, deletion, cache clearing and replay against two durable device databases.
   it("syncs portable project placeholders across devices without leaking local paths or grants", () => {
     const sourceFile = databasePath();
     const targetFile = databasePath();
@@ -750,5 +751,5 @@ describe("ProjectRepository", () => {
     targetChat.close();
     sourceChat.close();
     sourceProjects.close();
-  });
+  }, 15_000);
 });

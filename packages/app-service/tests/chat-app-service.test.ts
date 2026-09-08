@@ -354,17 +354,27 @@ function officeRequestForPrompt(
 }
 
 const temporaryDirectories: string[] = [];
+const services: ChatAppService[] = [];
+
+function trackedService(
+  ...parameters: ConstructorParameters<typeof ChatAppService>
+): ChatAppService {
+  const service = new ChatAppService(...parameters);
+  services.push(service);
+  return service;
+}
 
 function createService(): ChatAppService {
   const directory = mkdtempSync(path.join(tmpdir(), "openerx-app-service-"));
   temporaryDirectories.push(directory);
-  return new ChatAppService(
+  return trackedService(
     new ChatRepository(path.join(directory, "chat.sqlite")),
     new ScriptedPiHostClient(),
   );
 }
 
-afterEach(() => {
+afterEach(async () => {
+  for (const service of services.splice(0)) await service.close();
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -413,11 +423,43 @@ async function waitForTerminal(service: ChatAppService, conversationId: string):
 }
 
 describe("ChatAppService", () => {
+  it("waits for tool shutdown and releases each repository only once", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-service-shutdown-"));
+    temporaryDirectories.push(directory);
+    const repository = new ChatRepository(path.join(directory, "chat.sqlite"));
+    const closeRepository = vi.spyOn(repository, "close");
+    let release = (): void => undefined;
+    const toolShutdown = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const closeTools = vi.fn(() => toolShutdown);
+    const service = trackedService(repository, new ScriptedPiHostClient(), null, null, {
+      close: closeTools,
+    } as unknown as ToolAppService);
+    const shutdown = service.close();
+    let finished = false;
+    void shutdown.then(() => {
+      finished = true;
+    });
+
+    try {
+      expect(service.close()).toBe(shutdown);
+      expect(closeRepository).toHaveBeenCalledTimes(1);
+      expect(closeTools).toHaveBeenCalledTimes(1);
+      await Promise.resolve();
+      expect(finished).toBe(false);
+    } finally {
+      release();
+      await shutdown;
+    }
+    expect(finished).toBe(true);
+  });
+
   it("returns the send receipt without waiting for the model session to start", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-immediate-send-receipt-"));
     temporaryDirectories.push(directory);
     const pi = new DeferredPiHostClient();
-    const service = new ChatAppService(new ChatRepository(path.join(directory, "chat.sqlite")), pi);
+    const service = trackedService(new ChatRepository(path.join(directory, "chat.sqlite")), pi);
     let receipt: { conversationId: string } | undefined;
     const send = service
       .handle({
@@ -451,7 +493,7 @@ describe("ChatAppService", () => {
     const database = path.join(directory, "chat.sqlite");
     const pi = new ScriptedPiHostClient();
     const memoryRepository = new MemoryRepository(database);
-    const service = new ChatAppService(
+    const service = trackedService(
       new ChatRepository(database),
       pi,
       null,
@@ -574,7 +616,7 @@ describe("ChatAppService", () => {
       conversationId: source.receipt.conversationId,
       jobId: "10000000-0000-4000-8000-000000000501",
     });
-    const service = new ChatAppService(
+    const service = trackedService(
       chatRepository,
       new ScriptedPiHostClient(),
       null,
@@ -608,7 +650,7 @@ describe("ChatAppService", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-execution-mode-"));
     temporaryDirectories.push(directory);
     const pi = new ScriptedPiHostClient();
-    const service = new ChatAppService(new ChatRepository(path.join(directory, "chat.sqlite")), pi);
+    const service = trackedService(new ChatRepository(path.join(directory, "chat.sqlite")), pi);
     const authorization = {
       accountId: "11111111-1111-4111-8111-111111111111",
       accessToken: "a".repeat(32),
@@ -709,15 +751,7 @@ describe("ChatAppService", () => {
       selectedModelRef: () => "platform/auto",
       emit: (event) => service.emitExternal(event),
     });
-    service = new ChatAppService(
-      new ChatRepository(database),
-      pi,
-      null,
-      files,
-      tools,
-      null,
-      skills,
-    );
+    service = trackedService(new ChatRepository(database), pi, null, files, tools, null, skills);
     service.initialize();
 
     const officeSkills = builtIns.filter(({ name }) =>
@@ -819,7 +853,7 @@ describe("ChatAppService", () => {
       selectedModelRef: () => "platform/auto",
       emit: () => undefined,
     });
-    const service = new ChatAppService(
+    const service = trackedService(
       new ChatRepository(database),
       new ScriptedPiHostClient(),
       null,
@@ -867,7 +901,7 @@ describe("ChatAppService", () => {
     const [image] = await files.importPaths([sourceImage], null);
     if (!image) throw new Error("vision fixture import failed");
     const piHost = new ScriptedPiHostClient();
-    const service = new ChatAppService(new ChatRepository(database), piHost, null, files);
+    const service = trackedService(new ChatRepository(database), piHost, null, files);
 
     const receipt = (await service.handle({
       command: "chat.send",
@@ -1036,7 +1070,7 @@ describe("ChatAppService", () => {
       allowNetwork: false,
       expiresAt: null,
     });
-    service = new ChatAppService(new ChatRepository(database), pi, null, null, tools);
+    service = trackedService(new ChatRepository(database), pi, null, null, tools);
     service.initialize();
 
     const receipt = (await service.handle({

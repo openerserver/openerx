@@ -1,12 +1,70 @@
 import { describe, expect, it } from "vitest";
 import { assertVersionPolicy } from "../../scripts/check-builtin-skill-versions.mjs";
 import {
+  githubPullRequestTestMergeSha,
   publicContentViolations,
   publicIdentityViolations,
   publicPathViolation,
 } from "../../scripts/check-public-source.mjs";
 
 describe("public source release guards", () => {
+  it("recognizes only the runner's verified temporary pull-request merge", () => {
+    const base = "a".repeat(40);
+    const head = "b".repeat(40);
+    const merge = "c".repeat(40);
+    const environment = {
+      GITHUB_ACTIONS: "true",
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_REF: "refs/pull/9/merge",
+      GITHUB_SHA: merge,
+    };
+    const event = {
+      number: 9,
+      pull_request: { number: 9, base: { sha: base }, head: { sha: head } },
+    };
+    const commit = `tree ${"d".repeat(40)}\nparent ${base}\nparent ${head}\nauthor Contributor <person@example.com> 1 +0000\n\nMerge fixture`;
+    expect(githubPullRequestTestMergeSha(environment, event, merge, commit)).toBe(merge);
+    // The normal identity guard stays strict, including for ordinary merge commits.
+    expect(publicIdentityViolations(commit)).toEqual(["personal-commit-email"]);
+    for (const override of [
+      { GITHUB_ACTIONS: "false" },
+      { GITHUB_EVENT_NAME: "push" },
+      { GITHUB_EVENT_NAME: "pull_request_target" },
+      { GITHUB_REF: "refs/heads/main" },
+      { GITHUB_REF: "refs/pull/9/head" },
+      { GITHUB_REF: "refs/pull/10/merge" },
+      { GITHUB_SHA: head },
+    ]) {
+      expect(
+        githubPullRequestTestMergeSha({ ...environment, ...override }, event, merge, commit),
+      ).toBeNull();
+    }
+    expect(githubPullRequestTestMergeSha(environment, null, merge, commit)).toBeNull();
+    expect(githubPullRequestTestMergeSha(environment, event, head, commit)).toBeNull();
+    expect(
+      githubPullRequestTestMergeSha(environment, { ...event, number: 10 }, merge, commit),
+    ).toBeNull();
+    expect(
+      githubPullRequestTestMergeSha(
+        environment,
+        event,
+        merge,
+        `parent ${head}\nparent ${base}\n\nMerge fixture`,
+      ),
+    ).toBeNull();
+    expect(
+      githubPullRequestTestMergeSha(environment, event, merge, `parent ${base}\n\nMerge fixture`),
+    ).toBeNull();
+    expect(
+      githubPullRequestTestMergeSha(
+        environment,
+        event,
+        merge,
+        `parent ${base}\nparent ${head}\nparent ${merge}\n\nMerge fixture`,
+      ),
+    ).toBeNull();
+  });
+
   it.each([
     "v1-backup/file.ts",
     "apps/mobile/app.ts",

@@ -24,7 +24,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatAppService, type PiHostClient, ToolAppService } from "../src";
 
 const directories: string[] = [];
-afterEach(() => {
+const services: ChatAppService[] = [];
+
+function trackedService(
+  ...parameters: ConstructorParameters<typeof ChatAppService>
+): ChatAppService {
+  const service = new ChatAppService(...parameters);
+  services.push(service);
+  return service;
+}
+
+afterEach(async () => {
+  for (const service of services.splice(0)) await service.close();
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
@@ -148,7 +159,7 @@ describe("ChatAppService remote Pi mapping", () => {
     const chat = new ChatRepository(databasePath);
     const remote = new RemoteRepository(databasePath);
     const pi = new RemotePiHostClient();
-    const service = new ChatAppService(chat, pi, null, null, null, remote);
+    const service = trackedService(chat, pi, null, null, null, remote);
     const receipt = (await service.handle(
       {
         command: "chat.send",
@@ -189,7 +200,7 @@ describe("ChatAppService remote Pi mapping", () => {
     const chat = new ChatRepository(databasePath);
     const remote = new RemoteRepository(databasePath);
     const pi = new RemotePiHostClient();
-    const service = new ChatAppService(chat, pi, null, null, null, remote);
+    const service = trackedService(chat, pi, null, null, null, remote);
     const receipt = (await service.handle(
       {
         command: "chat.send",
@@ -220,7 +231,7 @@ describe("ChatAppService remote Pi mapping", () => {
     const chat = new ChatRepository(databasePath);
     const remote = new RemoteRepository(databasePath);
     const pi = new RemotePiHostClient();
-    const service = new ChatAppService(chat, pi, null, null, null, remote);
+    const service = trackedService(chat, pi, null, null, null, remote);
     const receipt = (await service.handle(
       {
         command: "chat.send",
@@ -251,7 +262,7 @@ describe("ChatAppService remote Pi mapping", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-app-"));
     directories.push(directory);
     const databasePath = path.join(directory, "profile.sqlite");
-    const service = new ChatAppService(
+    const service = trackedService(
       new ChatRepository(databasePath),
       new RemotePiHostClient(),
       null,
@@ -289,7 +300,7 @@ describe("ChatAppService remote Pi mapping", () => {
       instructions: "先运行项目测试。",
     });
     const pi = new RemotePiHostClient();
-    const service = new ChatAppService(
+    const service = trackedService(
       chat,
       pi,
       null,
@@ -358,7 +369,7 @@ describe("ChatAppService remote Pi mapping", () => {
     const toolFixture = toolEnabledService(directory, chat);
     const remote = new RemoteRepository(databasePath);
     const pi = new RemotePiHostClient();
-    const service = new ChatAppService(chat, pi, null, null, toolFixture.service, remote);
+    const service = trackedService(chat, pi, null, null, toolFixture.service, remote);
 
     for (const [index, executionMode] of ["attended", "unattended"].entries()) {
       const seed = chat.createGeneration({
@@ -409,7 +420,7 @@ describe("ChatAppService remote Pi mapping", () => {
     const toolFixture = toolEnabledService(directory, chat);
     const remote = new RemoteRepository(databasePath);
     const pi = new RemotePiHostClient();
-    const service = new ChatAppService(chat, pi, null, null, toolFixture.service, remote);
+    const service = trackedService(chat, pi, null, null, toolFixture.service, remote);
     const seed = chat.createGeneration({
       text: "seed attended Remote",
       idempotencyKey: "remote-approval-seed-0001",

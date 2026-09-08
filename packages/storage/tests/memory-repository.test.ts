@@ -669,6 +669,7 @@ describe("MemoryRepository", () => {
     repository.close();
   });
 
+  // This integration scenario durably writes 45 memories and reopens the database.
   it("persists a block-pair cursor that eventually covers an active memory catalog", () => {
     const file = databasePath();
     let repository = new MemoryRepository(file, { idFactory: ids() });
@@ -727,7 +728,7 @@ describe("MemoryRepository", () => {
         .get(),
     ).toEqual({ nextPairIndex: 0, completedCycles: 1 });
     database.close();
-  });
+  }, 15_000);
 
   it("rejects stale semantic reviews and removes pending proposals with a forgotten source", () => {
     const file = databasePath();

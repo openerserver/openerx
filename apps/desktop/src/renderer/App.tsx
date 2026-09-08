@@ -85,7 +85,15 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Navigate,
@@ -6568,18 +6576,25 @@ function AccountSettings({
   const [activeSection, setActiveSection] = useState<AccountSettingsSection>(
     () => requestedSettingsSection(location.search) ?? "account",
   );
+  const pendingSectionFocus = useRef<AccountSettingsSection | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
   useEffect(() => {
     const requested = requestedSettingsSection(location.search);
     if (requested) setActiveSection(requested);
   }, [location.search]);
+  useLayoutEffect(() => {
+    if (pendingSectionFocus.current !== activeSection) return;
+    pendingSectionFocus.current = null;
+    // Finish navigation focus before the user can interact with the new section.
+    document.getElementById(`${activeSection}-section`)?.focus({ preventScroll: true });
+  }, [activeSection]);
   const openSettingsSection = (section: AccountSettingsSection): void => {
+    if (section === activeSection) {
+      document.getElementById(`${section}-section`)?.focus({ preventScroll: true });
+      return;
+    }
+    pendingSectionFocus.current = section;
     setActiveSection(section);
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() =>
-        document.getElementById(`${section}-section`)?.focus({ preventScroll: true }),
-      );
-    });
   };
   const normalizedSettingsSearch = settingsSearch.trim().toLocaleLowerCase();
   const settingsSectionMatches = (section: AccountSettingsSection): boolean =>
