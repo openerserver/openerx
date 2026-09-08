@@ -35,8 +35,10 @@ export function loginStartupTarget(
   isPackaged: boolean,
   execPath: string,
   appPath: string,
+  windowsStore = false,
 ): LoginStartupTarget | null {
-  if (platform !== "win32") return null;
+  // MSIX login startup requires a declared StartupTask, not an ordinary Run key.
+  if (platform !== "win32" || windowsStore) return null;
   return {
     path: execPath,
     args: isPackaged ? [backgroundLaunchArgument] : [appPath, backgroundLaunchArgument],
@@ -54,11 +56,18 @@ export class DesktopLoginStartupService {
   readonly #app: LoginStartupApp;
   readonly #platform: NodeJS.Platform;
   readonly #execPath: string;
+  readonly #windowsStore: boolean;
 
-  constructor(app: LoginStartupApp, platform: NodeJS.Platform, execPath: string) {
+  constructor(
+    app: LoginStartupApp,
+    platform: NodeJS.Platform,
+    execPath: string,
+    windowsStore = false,
+  ) {
     this.#app = app;
     this.#platform = platform;
     this.#execPath = execPath;
+    this.#windowsStore = windowsStore;
   }
 
   state(): DesktopLoginStartupSettings {
@@ -67,6 +76,7 @@ export class DesktopLoginStartupService {
       this.#app.isPackaged,
       this.#execPath,
       this.#app.getAppPath(),
+      this.#windowsStore,
     );
     if (!target) {
       return desktopLoginStartupSettingsSchema.parse({
@@ -90,6 +100,7 @@ export class DesktopLoginStartupService {
       this.#app.isPackaged,
       this.#execPath,
       this.#app.getAppPath(),
+      this.#windowsStore,
     );
     if (!target) throw new Error("DESKTOP_LOGIN_STARTUP_UNSUPPORTED");
     this.#app.setLoginItemSettings({

@@ -23,6 +23,15 @@ credentials.json
 tmp/*
 npm-debug.log*
 
+# Local desktop build tools, diagnostics, and distribution outputs.
+/.codex-temp/
+/apps/desktop/out-codex/
+/deliverables/*.exe
+/deliverables/OpenERX-*-store-x64/
+/deliverables/OpenERX-store-listing-assets/
+/deliverables/*.inspect.ndjson
+/packages/tool-sdk/tests/windows-shell-diagnostic.temp.test.ts
+
 # Archived V1 local state is preserved on disk but is not part of source history.
 /v1-backup/.opencode/state/
 /v1-backup/opencode-fork/.opencode/state/

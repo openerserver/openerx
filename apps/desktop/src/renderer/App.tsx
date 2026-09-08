@@ -87,6 +87,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { DesktopControlBar } from "./DesktopControlBar";
 import {
   Navigate,
   NavLink,
@@ -325,7 +326,13 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   DESKTOP_SCREEN_CAPTURE_STATUS_UNKNOWN: "无法确认屏幕录制权限",
   DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED: "需在系统设置中允许辅助功能",
   DESKTOP_AUTOMATION_UNAVAILABLE: "系统自动化组件不可用",
-  DESKTOP_WINDOWS_NATIVE_CONTROL_UNAVAILABLE: "Windows 原生桌面控制尚未实现",
+  DESKTOP_WINDOWS_NATIVE_CONTROL_UNAVAILABLE: "Windows 桌面控制尚未启用",
+  DESKTOP_HELPER_MISSING: "Windows 桌面助手未安装，请使用包含助手的构建",
+  DESKTOP_HELPER_UNAVAILABLE: "Windows 桌面助手暂不可用",
+  DESKTOP_HELPER_INTEGRITY_FAILED: "Windows 桌面助手完整性校验失败",
+  DESKTOP_SESSION_LOCKED: "请解锁 Windows 桌面后重试",
+  DESKTOP_HELPER_ARCH_UNSUPPORTED: "当前桌面控制仅支持 Windows x64",
+  DESKTOP_CONTROL_DISABLED: "Windows 桌面控制尚未启用",
   DESKTOP_PLATFORM_UNSUPPORTED: "当前桌面平台尚未支持",
   MCP_SERVER_CONFIGURATION_REQUIRED: "需先添加并启用 MCP 服务",
   MCP_OAUTH_AUTHORIZATION_REQUIRED: "至少一个 MCP 服务需要浏览器授权",
@@ -2026,7 +2033,7 @@ function ContextDock({
 
       <footer className="context-dock-footer">
         <span>
-          <CheckCircle size={16} weight="fill" /> 内容不会用于模型训练
+          <CheckCircle size={16} weight="fill" /> 模型数据处理以服务商政策为准
         </span>
         <button
           type="button"
@@ -2038,6 +2045,7 @@ function ContextDock({
         </button>
         {privacyOpen ? (
           <p className="privacy-details">
+            当前任务的相关内容可能发送至所选模型服务，保存和训练用途以服务商政策及账户设置为准。
             文件会生成受控副本供当前任务使用；原始路径权限可以随时撤销。凭证、终端内容和本地路径不会进入诊断导出。
           </p>
         ) : null}
@@ -8716,6 +8724,7 @@ export function App(): React.JSX.Element {
       !location.pathname.startsWith("/assistant") ? (
         <AssistantCompanion onOpen={() => navigate("/assistant")} />
       ) : null}
+      <DesktopControlBar />
       {automaticMemoryNotice ? (
         <aside className="memory-created-notice" role="status" aria-live="polite">
           <Brain size={21} aria-hidden="true" />

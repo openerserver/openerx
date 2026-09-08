@@ -46,6 +46,8 @@ import {
   conversationMoveToProjectInputSchema,
   conversationSnapshotSchema,
   createRechargeOrderInputSchema,
+  desktopControlCommandSchema,
+  desktopControlSessionSchema,
   desktopEnvironmentSchema,
   desktopLoginStartupSettingsSchema,
   desktopLoginStartupSettingsUpdateSchema,
@@ -127,6 +129,7 @@ import {
   autoUpdater,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   Notification,
@@ -315,6 +318,16 @@ function registerIpcHandlers(
     return browserSessionDescriptorSchema
       .array()
       .parse(supervisor.listBrowserComputerUseSessions());
+  });
+  ipcMain.handle(ipcChannels.desktopControlSessions, (event) => {
+    assertTrustedIpcSender(event);
+    return desktopControlSessionSchema.array().parse(supervisor.listDesktopControlSessions());
+  });
+  ipcMain.handle(ipcChannels.desktopControlCommand, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    return desktopControlSessionSchema.parse(
+      await supervisor.controlDesktopSession(desktopControlCommandSchema.parse(raw)),
+    );
   });
   ipcMain.handle(ipcChannels.browserComputerUsePause, async (event, raw: unknown) => {
     assertTrustedIpcSender(event);
@@ -1383,7 +1396,7 @@ app.whenReady().then(async () => {
   const desktopPlatform = process.platform === "darwin" ? "darwin" : "win32";
   const desktopArch = process.arch === "arm64" ? "arm64" : "x64";
   const updates = new DesktopUpdateService({
-    configuration: app.isPackaged
+    configuration: app.isPackaged && !process.windowsStore
       ? loadPackagedUpdateConfiguration(app.getAppPath())
       : developmentUpdateConfiguration(),
     currentVersion: app.getVersion(),
@@ -1437,6 +1450,12 @@ app.whenReady().then(async () => {
       ),
     path.join(app.getPath("documents"), "UWA Workspace"),
   );
+  if (process.platform === "win32") {
+    globalShortcut.register("Control+Alt+Shift+F12", () => supervisor?.stopDesktopControl());
+    powerMonitor.on("lock-screen", () => supervisor?.stopDesktopControl());
+    powerMonitor.on("suspend", () => supervisor?.stopDesktopControl());
+    app.on("will-quit", () => globalShortcut.unregister("Control+Alt+Shift+F12"));
+  }
   const remote = new RemoteDesktopController(
     supervisor,
     accounts,
@@ -1449,7 +1468,12 @@ app.whenReady().then(async () => {
     path.join(profileDirectory, "model-service.json"),
     new ToolCredentialVault(path.join(profileDirectory, "credentials", "model-service.bin")),
   );
-  const loginStartup = new DesktopLoginStartupService(app, process.platform, process.execPath);
+  const loginStartup = new DesktopLoginStartupService(
+    app,
+    process.platform,
+    process.execPath,
+    Boolean(process.windowsStore),
+  );
   supervisor.setAutomationExecutionContextProvider(async (modelRef) => {
     const settings = await modelSettings.state();
     const authorization =

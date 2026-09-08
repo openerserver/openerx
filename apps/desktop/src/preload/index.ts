@@ -52,6 +52,8 @@ import {
   conversationMoveToProjectInputSchema,
   createRechargeOrderInputSchema,
   type DesktopBridge,
+  desktopControlCommandSchema,
+  desktopControlSessionSchema,
   desktopEnvironmentSchema,
   desktopLoginStartupSettingsSchema,
   desktopLoginStartupSettingsUpdateSchema,
@@ -189,6 +191,17 @@ const bridge: DesktopBridge = {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.browserComputerUseSessions);
     return browserSessionDescriptorSchema.array().parse(result);
   },
+  listDesktopControlSessions: async () =>
+    desktopControlSessionSchema
+      .array()
+      .parse(await ipcRenderer.invoke(ipcChannels.desktopControlSessions)),
+  controlDesktopSession: async (input) =>
+    desktopControlSessionSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.desktopControlCommand,
+        desktopControlCommandSchema.parse(input),
+      ),
+    ),
   pauseBrowserComputerUseSession: async (input) => {
     const result: unknown = await ipcRenderer.invoke(
       ipcChannels.browserComputerUsePause,

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type AutomationExecutionContext,
+  type DesktopExecutionContext,
   type HostToolAvailability,
   type MainOAuthResponseFrame,
   mainAutomationContextResponseFrameSchema,
@@ -56,7 +57,12 @@ export class MainCapabilityClient {
   >();
   constructor(private readonly port: MessagePortMain) {}
 
-  async execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult> {
+  async execute(
+    operation: ToolOperation,
+    signal: AbortSignal,
+    executionContext?: DesktopExecutionContext,
+  ): Promise<NormalizedToolResult> {
+    if (signal.aborted) throw new Error("TOOL_CANCELLED");
     const requestId = randomUUID();
     return await new Promise((resolve, reject) => {
       const abort = () => {
@@ -74,7 +80,12 @@ export class MainCapabilityClient {
         abort: () => signal.removeEventListener("abort", abort),
       });
       signal.addEventListener("abort", abort, { once: true });
-      this.port.postMessage({ kind: "main.capability.request", requestId, operation });
+      this.port.postMessage({
+        kind: "main.capability.request",
+        requestId,
+        operation,
+        ...(executionContext ? { executionContext } : {}),
+      });
     });
   }
 

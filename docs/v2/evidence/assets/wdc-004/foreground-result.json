@@ -1,0 +1,184 @@
+{
+  "status": "passed",
+  "foregroundMode": "automatic-background-switch",
+  "stage": "complete",
+  "helperManifest": {
+    "contractVersion": "desktop_control_v2",
+    "architecture": "x64",
+    "sha256": "b3d227e102c5d447018a5f6d155e2032d799777473aa6d9bfe9024c262a93b1e"
+  },
+  "checks": [
+    "two new isolated app windows discovered and retained",
+    "switch 1: notepad changed from background to verified foreground",
+    "switch 1: Notepad Chinese/emoji content verified on disk and captured",
+    "switch 2: calculator changed from background to verified foreground",
+    "switch 2: Calculator 1+2=3 verified through UIA and captured",
+    "switch 3: notepad changed from background to verified foreground",
+    "switch 3: Notepad Chinese/emoji content verified on disk and captured",
+    "switch 4: calculator changed from background to verified foreground",
+    "switch 4: Calculator 1+2=3 verified through UIA and captured",
+    "owned background window minimized and still discoverable",
+    "minimized target restored and activated by the production focus operation",
+    "switch 5: notepad changed from background to verified foreground",
+    "switch 5: Notepad Chinese/emoji content verified on disk and captured",
+    "single uninterrupted input monitor covered all switches and actions"
+  ],
+  "switches": [
+    {
+      "index": 1,
+      "application": "notepad",
+      "mode": "background",
+      "target": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      },
+      "status": "verified",
+      "before": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      },
+      "focusElapsedMs": 235,
+      "after": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      },
+      "screenshot": "1-notepad.png",
+      "afterActions": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      }
+    },
+    {
+      "index": 2,
+      "application": "calculator",
+      "mode": "background",
+      "target": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      },
+      "status": "verified",
+      "before": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      },
+      "focusElapsedMs": 84,
+      "after": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      },
+      "screenshot": "2-calculator.png",
+      "afterActions": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      }
+    },
+    {
+      "index": 3,
+      "application": "notepad",
+      "mode": "background",
+      "target": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      },
+      "status": "verified",
+      "before": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      },
+      "focusElapsedMs": 77,
+      "after": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      },
+      "screenshot": "3-notepad.png",
+      "afterActions": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      }
+    },
+    {
+      "index": 4,
+      "application": "calculator",
+      "mode": "background",
+      "target": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      },
+      "status": "verified",
+      "before": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      },
+      "focusElapsedMs": 108,
+      "after": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      },
+      "screenshot": "4-calculator.png",
+      "afterActions": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      }
+    },
+    {
+      "index": 5,
+      "application": "notepad",
+      "mode": "minimized",
+      "target": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      },
+      "status": "verified",
+      "before": {
+        "windowId": "14157278",
+        "processId": 14220,
+        "processStartTime": "639235015806657214"
+      },
+      "windowBefore": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024",
+        "minimized": true,
+        "visible": true
+      },
+      "focusElapsedMs": 83,
+      "after": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      },
+      "windowAfter": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024",
+        "minimized": false,
+        "visible": true
+      },
+      "screenshot": "5-notepad.png",
+      "afterActions": {
+        "windowId": "7473100",
+        "processId": 6948,
+        "processStartTime": "639244297028985024"
+      }
+    }
+  ],
+  "userTakeover": false,
+  "monitorLost": false
+}

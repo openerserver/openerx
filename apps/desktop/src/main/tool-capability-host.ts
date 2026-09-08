@@ -7,11 +7,15 @@ import {
   BROWSER_COMPUTER_USE_V2_FEATURE_FLAG,
   type BrowserSessionDescriptor,
   browserComputerUseV2Enabled,
+  DESKTOP_CONTROL_FEATURE_FLAG,
+  type DesktopControlCommand,
+  type DesktopExecutionContext,
   type HostToolAvailability,
   type NormalizedToolResult,
   type ToolOperation,
+  windowsDesktopControlEnabled,
 } from "@openerx/contracts";
-import { BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
 import { ElectronMacSystemBrowserDriver } from "./browser-computer-use/electron-mac-system-browser-driver";
 import { ElectronWindowsSystemBrowserDriver } from "./browser-computer-use/electron-windows-system-browser-driver";
 import type {
@@ -21,6 +25,9 @@ import type {
 import { SystemDefaultBrowserAdapter } from "./browser-computer-use/system-default-browser-adapter";
 import type { ToolCredentialVault } from "./credential-vault";
 import { type DesktopCaptureRecord, DesktopCaptureRegistry } from "./desktop-capture-registry";
+import { DesktopControlLease } from "./desktop-control/control-lease";
+import { DesktopControlHost } from "./desktop-control/host";
+import { WindowsDesktopDriver } from "./desktop-control/windows-driver";
 import { desktopHostToolAvailability } from "./desktop-tool-availability";
 import {
   desktopWindowCaptureOptions,
@@ -98,6 +105,8 @@ export class ElectronToolCapabilityHost {
   readonly #browserComputerUseDriver: SystemDefaultBrowserDriver;
   readonly #desktopCaptures = new DesktopCaptureRegistry();
   readonly #oauth: OAuthLoopbackController;
+  readonly #desktopLease = new DesktopControlLease();
+  readonly #windowsDesktop: DesktopControlHost | null;
 
   constructor(
     profileDirectory: string,
@@ -107,6 +116,22 @@ export class ElectronToolCapabilityHost {
   ) {
     this.#profileDirectory = profileDirectory;
     this.#oauth = oauth;
+    const helperDirectory = app.isPackaged
+      ? path.join(process.resourcesPath, "app.asar.unpacked", "native", "windows-desktop-control")
+      : path.join(app.getAppPath(), "native", "windows-desktop-helper", "bin", "publish", "x64");
+    const manifestPath = app.isPackaged
+      ? path.join(app.getAppPath(), "native", "windows-desktop-control", "manifest.json")
+      : path.join(helperDirectory, "manifest.json");
+    this.#windowsDesktop =
+      process.platform === "win32"
+        ? new DesktopControlHost(
+            new WindowsDesktopDriver(
+              path.join(helperDirectory, "openerx-desktop-helper.exe"),
+              manifestPath,
+            ),
+            this.#desktopLease,
+          )
+        : null;
     this.#browserComputerUseDriver =
       process.platform === "win32"
         ? new ElectronWindowsSystemBrowserDriver()
@@ -119,20 +144,53 @@ export class ElectronToolCapabilityHost {
     );
   }
 
-  async execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult> {
+  async execute(
+    operation: ToolOperation,
+    signal: AbortSignal,
+    executionContext?: DesktopExecutionContext,
+  ): Promise<NormalizedToolResult> {
     if (signal.aborted) throw new Error("TOOL_CANCELLED");
     const startedAt = Date.now();
-    const value =
-      operation.operation === "browser"
-        ? await this.#browser(operation)
-        : operation.operation === "browser_computer_use"
-          ? await this.#browserComputerUse.execute(operation.request, signal)
-          : operation.operation === "desktop"
-            ? await this.#desktop(operation)
-            : (() => {
-                throw new Error("MAIN_CAPABILITY_NOT_SUPPORTED");
-              })();
-    return { ...value, durationMs: Date.now() - startedAt };
+    if (operation.operation === "desktop_control") {
+      if (
+        !this.#windowsDesktop ||
+        !windowsDesktopControlEnabled(process.env[DESKTOP_CONTROL_FEATURE_FLAG])
+      )
+        throw new Error("DESKTOP_CONTROL_DISABLED");
+      if (!executionContext) throw new Error("DESKTOP_EXECUTION_CONTEXT_REQUIRED");
+      if (operation.request.action === "attach") {
+        for (const session of this.#browserComputerUse.descriptors()) {
+          try {
+            this.#browserComputerUse.pauseForUser(session.sessionId);
+          } catch {
+            /* Already detached. */
+          }
+        }
+      }
+      return await this.#windowsDesktop.execute(operation.request, signal, executionContext);
+    }
+    const browserLease =
+      process.platform === "win32" &&
+      (operation.operation === "browser" || operation.operation === "browser_computer_use")
+        ? this.#desktopLease.acquire(
+            `browser:${executionContext?.generationId ?? operation.idempotencyKey}`,
+          )
+        : null;
+    try {
+      const value =
+        operation.operation === "browser"
+          ? await this.#browser(operation)
+          : operation.operation === "browser_computer_use"
+            ? await this.#browserComputerUse.execute(operation.request, signal)
+            : operation.operation === "desktop"
+              ? await this.#desktop(operation, signal)
+              : (() => {
+                  throw new Error("MAIN_CAPABILITY_NOT_SUPPORTED");
+                })();
+      return { ...value, durationMs: Date.now() - startedAt };
+    } finally {
+      browserLease?.release();
+    }
   }
 
   async availability(): Promise<HostToolAvailability> {
@@ -163,12 +221,30 @@ export class ElectronToolCapabilityHost {
           this.#browserComputerUseDriver instanceof ElectronWindowsSystemBrowserDriver &&
           (await this.#browserComputerUseDriver.probeAvailability()))
       : true;
+    let windowsDesktopReady = false;
+    let windowsDesktopReason: string | undefined;
+    if (
+      this.#windowsDesktop &&
+      windowsDesktopControlEnabled(process.env[DESKTOP_CONTROL_FEATURE_FLAG])
+    ) {
+      try {
+        await this.#windowsDesktop.probe(AbortSignal.timeout(5000));
+        windowsDesktopReady = true;
+      } catch (error) {
+        windowsDesktopReason =
+          error instanceof Error && error.message.startsWith("DESKTOP_")
+            ? error.message
+            : "DESKTOP_HELPER_UNAVAILABLE";
+      }
+    }
     return desktopHostToolAvailability({
       platform,
       browserAvailable,
       screenCaptureStatus,
       accessibilityTrusted,
       automationAvailable,
+      windowsDesktopReady,
+      windowsDesktopReason,
     });
   }
 
@@ -181,11 +257,35 @@ export class ElectronToolCapabilityHost {
   }
 
   async resumeBrowserComputerUseSession(sessionId: string): Promise<BrowserSessionDescriptor> {
-    await this.#browserComputerUse.resumeAfterUser(sessionId, new AbortController().signal);
-    return this.#browserComputerUse.descriptor(sessionId);
+    const lease =
+      process.platform === "win32"
+        ? this.#desktopLease.acquire(`browser-resume:${sessionId}`)
+        : null;
+    try {
+      await this.#browserComputerUse.resumeAfterUser(sessionId, new AbortController().signal);
+      return this.#browserComputerUse.descriptor(sessionId);
+    } finally {
+      lease?.release();
+    }
+  }
+
+  listDesktopControlSessions() {
+    return this.#windowsDesktop?.descriptors() ?? [];
+  }
+  async controlDesktopSession(command: DesktopControlCommand) {
+    if (!this.#windowsDesktop) throw new Error("DESKTOP_PLATFORM_UNSUPPORTED");
+    if (!windowsDesktopControlEnabled(process.env[DESKTOP_CONTROL_FEATURE_FLAG])) {
+      this.#windowsDesktop.stopAll("DESKTOP_CONTROL_DISABLED");
+      throw new Error("DESKTOP_CONTROL_DISABLED");
+    }
+    return await this.#windowsDesktop.control(command);
+  }
+  stopDesktopControl(conversationId?: string) {
+    this.#windowsDesktop?.stopAll("DESKTOP_STOPPED_BY_USER", conversationId);
   }
 
   close(): void {
+    this.#windowsDesktop?.close();
     for (const browser of this.#browserSessions.values()) browser.window.destroy();
     this.#browserSessions.clear();
     this.#browserComputerUse.close();
@@ -382,6 +482,7 @@ export class ElectronToolCapabilityHost {
 
   async #desktop(
     operation: Extract<ToolOperation, { operation: "desktop" }>,
+    signal: AbortSignal,
   ): Promise<NormalizedToolResult> {
     const application = operation.application.trim().normalize("NFC");
     if (!application || /[\t\r\n]/u.test(application)) {
@@ -443,7 +544,7 @@ export class ElectronToolCapabilityHost {
     });
     let nativeTarget: unknown;
     if (process.platform === "darwin") {
-      nativeTarget = await this.#macDesktop(operation, capture);
+      nativeTarget = await this.#macDesktop(operation, capture, signal);
     } else if (process.platform === "win32") {
       throw new Error("DESKTOP_WINDOWS_NATIVE_CONTROL_UNAVAILABLE");
     } else {
@@ -482,6 +583,7 @@ export class ElectronToolCapabilityHost {
   async #macDesktop(
     operation: Extract<ToolOperation, { operation: "desktop" }>,
     capture: DesktopCaptureRecord,
+    signal: AbortSignal,
   ): Promise<unknown> {
     if (!capture.nativeProcessId || !capture.nativeWindowId) {
       throw new Error("DESKTOP_CAPTURE_IDENTITY_MISSING");
@@ -532,7 +634,7 @@ export class ElectronToolCapabilityHost {
           String(capture.imageWidth),
           String(capture.imageHeight),
         ],
-        { encoding: "utf8", maxBuffer: 64 * 1_024, timeout: 10_000 },
+        { encoding: "utf8", maxBuffer: 64 * 1_024, timeout: 10_000, signal },
       );
       const target = parseMacDesktopAutomationResult(stdout);
       if (target.bundleId !== operation.bundleId || target.processId !== capture.nativeProcessId) {

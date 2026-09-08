@@ -1,6 +1,7 @@
 import type {
   CapabilityAction,
   CapabilityScope,
+  DesktopExecutionContext,
   HostToolAvailability,
   NormalizedToolResult,
   PermissionRequest,
@@ -56,7 +57,11 @@ export type BrokerExecutionResult =
   | { status: "permission_required"; permission: PermissionRequest };
 
 export interface CapabilityHost {
-  execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult>;
+  execute(
+    operation: ToolOperation,
+    signal: AbortSignal,
+    executionContext?: DesktopExecutionContext,
+  ): Promise<NormalizedToolResult>;
 }
 
 export interface CapabilityAvailabilityHost {

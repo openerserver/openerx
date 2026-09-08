@@ -174,6 +174,10 @@ export const mainCapabilityRequestFrameSchema = z
     kind: z.literal("main.capability.request"),
     requestId: z.uuid(),
     operation: toolOperationSchema,
+    executionContext: z
+      .object({ conversationId: z.uuid(), generationId: z.uuid() })
+      .strict()
+      .optional(),
   })
   .strict();
 

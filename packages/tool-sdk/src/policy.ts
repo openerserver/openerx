@@ -219,6 +219,27 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         approval: highImpact ? "per_call" : readOnly ? "automatic" : "scope",
       };
     }
+    case "desktop_control": {
+      const request = operation.request;
+      const discovery = request.action === "list_apps";
+      const readOnly = request.action === "observe";
+      const highImpact = "effect" in request && request.effect !== "local";
+      return {
+        capability: "desktop",
+        risk: highImpact ? "L5" : discovery || readOnly ? "L2" : "L3",
+        resourceType: "application",
+        resource:
+          "applicationId" in request ? request.applicationId : "windows:application-discovery",
+        actions:
+          discovery || readOnly
+            ? ["capture"]
+            : highImpact
+              ? ["high_impact"]
+              : ["capture", "interact"],
+        reason: `Windows 桌面：${request.action}${"applicationId" in request ? ` · ${request.applicationId}` : "（应用名称与窗口列表）"}`,
+        approval: request.action === "detach" ? "automatic" : highImpact ? "per_call" : "scope",
+      };
+    }
     case "desktop": {
       const highImpact = ["submit", "send", "delete", "purchase"].includes(operation.action);
       const target = operation.bundleId
@@ -337,6 +358,8 @@ export function hasUncertainExternalSideEffect(operation: ToolOperation): boolea
       return operation.action !== "screenshot";
     case "browser_computer_use":
       return operation.request.action !== "observe" && operation.request.action !== "detach";
+    case "desktop_control":
+      return !["list_apps", "observe", "detach"].includes(operation.request.action);
     case "desktop":
       return operation.action !== "screenshot";
     case "compute":
@@ -458,6 +481,14 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
         input: `${operation.request.contractVersion}:${operation.request.action}`,
         target:
           operation.request.action === "open" ? operation.request.url : operation.request.sessionId,
+      };
+    case "desktop_control":
+      return {
+        input: `desktop_control_v2:${operation.request.action}`,
+        target:
+          "applicationId" in operation.request
+            ? operation.request.applicationId
+            : "Windows 应用列表",
       };
     case "desktop":
       return {

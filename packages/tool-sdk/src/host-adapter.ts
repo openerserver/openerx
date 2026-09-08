@@ -1,8 +1,8 @@
 import type { NormalizedToolResult, ToolOperation } from "@openerx/contracts";
-import type { CapabilityHost, ToolAdapter } from "./types";
+import type { CapabilityHost, ToolAdapter, ToolExecutionContext } from "./types";
 
 export class HostCapabilityAdapter implements ToolAdapter {
-  readonly operations = ["browser", "browser_computer_use", "desktop"] as const;
+  readonly operations = ["browser", "browser_computer_use", "desktop", "desktop_control"] as const;
   constructor(
     private readonly host: CapabilityHost,
     private readonly resolveUploadPath?: (fileId: string) => string,
@@ -13,11 +13,12 @@ export class HostCapabilityAdapter implements ToolAdapter {
 
   async execute(
     operation: ToolOperation,
-    context: { signal: AbortSignal },
+    context: Pick<ToolExecutionContext, "signal" | "projection">,
   ): Promise<NormalizedToolResult> {
     if (
       operation.operation !== "browser" &&
       operation.operation !== "browser_computer_use" &&
+      operation.operation !== "desktop_control" &&
       operation.operation !== "desktop"
     ) {
       throw new Error("HOST_OPERATION_NOT_SUPPORTED");
@@ -31,7 +32,15 @@ export class HostCapabilityAdapter implements ToolAdapter {
         context.signal,
       );
     }
-    const result = await this.host.execute(operation, context.signal);
+    const owner = context.projection
+      ? {
+          conversationId: context.projection.conversationId,
+          generationId: context.projection.generationId,
+        }
+      : undefined;
+    const result = owner
+      ? await this.host.execute(operation, context.signal, owner)
+      : await this.host.execute(operation, context.signal);
     if (operation.operation === "browser" && operation.action === "download") {
       const data = result.data;
       if (!data || typeof data !== "object" || !("path" in data) || typeof data.path !== "string") {

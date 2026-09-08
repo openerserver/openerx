@@ -10,8 +10,11 @@ import { MakerZIP } from "@electron-forge/maker-zip";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { releaseUpdateConfigurationSchema } from "@openerx/contracts";
+import { signWindowsFile, verifyWindowsFile } from "./scripts/windows-signing.mjs";
 
 const releaseMode = process.env.OPENERX_RELEASE_MODE === "1";
+const windowsStoreBuild =
+  process.platform === "win32" && process.env.OPENERX_DISTRIBUTION === "ms-store";
 const desktopDirectory = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const macEntitlements = path.join(desktopDirectory, "resources", "entitlements.mac.plist");
@@ -56,7 +59,7 @@ function requiredEnvironment(name: string): string {
 }
 
 function updateConfiguration() {
-  if (!releaseMode) {
+  if (!releaseMode || windowsStoreBuild) {
     return releaseUpdateConfigurationSchema.parse({
       enabled: false,
       channel: "internal",
@@ -103,24 +106,40 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
       },
     };
   }
-  if (!releaseMode) return {};
   if (process.platform === "win32") {
+    // Store signs the submitted MSIX. This branch is independent of signed EXE distribution.
+    if (windowsStoreBuild) return {};
+    const identityConfigured = Boolean(
+      process.env.WINDOWS_CERTIFICATE_FILE || process.env.OPENERX_WINDOWS_SIGN_THUMBPRINT,
+    );
+    if (!releaseMode && process.env.OPENERX_REQUIRE_SIGNED_WINDOWS !== "1" && !identityConfigured)
+      return {};
+    if (!process.env.WINDOWS_CERTIFICATE_FILE && !process.env.OPENERX_WINDOWS_SIGN_THUMBPRINT)
+      throw new Error("WINDOWS_SIGNING_IDENTITY_REQUIRED");
     return {
       windowsSign: {
-        certificateFile: requiredEnvironment("WINDOWS_CERTIFICATE_FILE"),
-        certificatePassword: requiredEnvironment("WINDOWS_CERTIFICATE_PASSWORD"),
-        description: "UWA personal AI desktop client",
-        website: "https://openerx.example",
+        hookFunction: async (filePath: string) => {
+          // The helper is signed before its hash is sealed inside app.asar.
+          // Signing it again here would invalidate that protected manifest.
+          const helper =
+            /[\\/]native[\\/]windows-desktop-control[\\/]openerx-desktop-helper\.exe$/iu.test(
+              filePath,
+            );
+          if (helper) verifyWindowsFile(filePath, process.env, undefined, true);
+          else signWindowsFile(filePath);
+        },
       },
     };
   }
+  if (!releaseMode) return {};
   throw new Error("RELEASE_HOST_PLATFORM_UNSUPPORTED");
 }
 
 const config: ForgeConfig = {
   packagerConfig: {
     asar: {
-      unpack: "**/{*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1}",
+      unpack:
+        "**/{*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1,openerx-desktop-helper.exe}",
     },
     appBundleId: "com.openerx.desktop",
     appCategoryType: "public.app-category-type.productivity",
@@ -155,6 +174,19 @@ const config: ForgeConfig = {
           windowsBrowserHelperSource,
           path.join(nativeDirectory, "windows-browser-accessibility.ps1"),
         );
+        if (arch === "x64") {
+          execFileSync(
+            process.execPath,
+            [
+              path.join(desktopDirectory, "scripts", "build-windows-desktop-helper.mjs"),
+              "--arch",
+              arch,
+              "--output",
+              path.join(nativeDirectory, "windows-desktop-control"),
+            ],
+            { stdio: "inherit", windowsHide: true },
+          );
+        }
       }
       const resvgNativePackage = resvgNativePackages[`${platform}-${arch}`];
       if (!resvgNativePackage) {
