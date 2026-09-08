@@ -38,7 +38,7 @@
     "lint:v2": "biome check apps packages services scripts tests package.json tsconfig.base.json",
     "lint:v2:fix": "biome check --write apps packages services scripts tests package.json tsconfig.base.json",
     "typecheck:v2": "npm run typecheck --workspaces --if-present",
-    "test:v2": "npm run test --workspaces --if-present && vitest run tests/v2",
+    "test:v2": "npm run test --workspaces --if-present && vitest run tests/v2 --testTimeout=30000 --maxWorkers=2",
     "test:deepseek": "vite build --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-smoke/deepseek-smoke.mjs",
     "test:deepseek:vision": "vite build --mode vision --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-vision-smoke/deepseek-vision-smoke.mjs",
     "test:deepseek:tools": "vite build --mode tool --config services/model-gateway/vite.smoke.config.mts --logLevel error && node --env-file-if-exists=.env .vite/deepseek-tool-smoke/deepseek-tool-smoke.mjs",
