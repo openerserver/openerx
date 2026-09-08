@@ -22,7 +22,7 @@ concurrency:
 jobs:
   preflight:
     name: Release approval and quality gates
-    runs-on: ubuntu-24.04
+    runs-on: windows-2022
     environment: production-release
     timeout-minutes: 25
     steps:
