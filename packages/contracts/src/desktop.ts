@@ -6,6 +6,7 @@ import type {
   BrowserComputerUseSessionControlInput,
   BrowserSessionDescriptor,
 } from "./browser-computer-use";
+import type { DesktopControlCommand, DesktopControlSession } from "./desktop-control";
 import type { RemoteDesktopBridge } from "./desktop-remote";
 import type { DiagnosticsBridge } from "./diagnostics";
 import type { FileBridge } from "./file";
@@ -133,6 +134,8 @@ export const ipcChannels = Object.freeze({
   localWebSearchRuntimeReset: "tool:web-search:runtime:reset",
   desktopNativePermissionRequest: "desktop:native-permission:request",
   browserComputerUseSessions: "browser-computer-use:sessions:list",
+  desktopControlSessions: "desktop-control:sessions:list",
+  desktopControlCommand: "desktop-control:session:command",
   browserComputerUsePause: "browser-computer-use:session:pause",
   browserComputerUseResume: "browser-computer-use:session:resume",
   mcpServersList: "mcp:servers:list",
@@ -232,6 +235,8 @@ export interface DesktopBridge
     input: DesktopNativePermissionRequest,
   ): Promise<DesktopNativePermissionResult>;
   listBrowserComputerUseSessions(): Promise<BrowserSessionDescriptor[]>;
+  listDesktopControlSessions?(): Promise<DesktopControlSession[]>;
+  controlDesktopSession?(command: DesktopControlCommand): Promise<DesktopControlSession>;
   pauseBrowserComputerUseSession(
     input: BrowserComputerUseSessionControlInput,
   ): Promise<BrowserSessionDescriptor>;

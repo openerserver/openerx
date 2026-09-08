@@ -8,7 +8,11 @@
       "!**/dist",
       "!**/.vite",
       "!**/out",
-      "!**/coverage"
+      "!**/coverage",
+      "!apps/desktop/native/windows-desktop-helper/bin",
+      "!apps/desktop/native/windows-desktop-helper/obj",
+      "!apps/desktop/tests/native/WdcFixture/bin",
+      "!apps/desktop/tests/native/WdcFixture/obj"
     ]
   },
   "formatter": {

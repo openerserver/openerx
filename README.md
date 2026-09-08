@@ -23,6 +23,7 @@ OpenERX 是一款开源、本地优先的 AI 桌面助手，将 AI 对话、项�
 - Node.js 24.3 或更高版本，推荐使用 [`.node-version`](.node-version) 指定的版本
 - npm 11 或更高版本
 - macOS 需安装 Xcode Command Line Tools
+- Windows x64 构建及桌面控制开发需安装 .NET 10 SDK
 
 ### 安装与运行
 
@@ -40,6 +41,8 @@ npm run dev:desktop
 3. 根据任务需要启用工具、安装 Skill 或创建自动化任务。
 
 默认启动无需配置 `.env`。模型服务可能按使用量收费，费用由对应提供商收取。数据存储和网络访问说明见 [隐私说明](docs/PRIVACY.md)。
+
+Windows 桌面控制目前为默认关闭的开发功能，已完成记事本和计算器自动前台切换验收。启用方法、运行条件及 MSIX 打包见 [Windows 桌面控制](docs/WINDOWS-DESKTOP-CONTROL.md)。
 
 ## 构建
 

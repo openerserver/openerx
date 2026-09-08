@@ -6,6 +6,9 @@
   "description": "OpenERX personal AI desktop client",
   "main": ".vite/build/main.js",
   "scripts": {
+    "package:windows-store": "node scripts/package-windows-store.mjs",
+    "build:windows-desktop-helper": "node scripts/build-windows-desktop-helper.mjs",
+    "test:e2e:windows-desktop": "vite build --config vite.windows-desktop-control.config.mts && node .vite/windows-desktop-live/run.mjs",
     "start": "node scripts/build-macos-browser-helper.mjs && node ../../scripts/forge-runner.mjs start",
     "build": "node scripts/clean-test-build.mjs && node ../../scripts/forge-runner.mjs package",
     "package": "node scripts/clean-test-build.mjs && node ../../scripts/forge-runner.mjs package",

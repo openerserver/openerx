@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { desktopHostToolAvailability } from "../src/main/desktop-tool-availability";
 
 describe("desktopHostToolAvailability", () => {
+  it("advertises Windows only after its own helper/interactive-session probe succeeds", () => {
+    const probe = {
+      platform: "win32" as const,
+      browserAvailable: false,
+      screenCaptureStatus: "unknown" as const,
+      accessibilityTrusted: false,
+      automationAvailable: false,
+    };
+    expect(
+      desktopHostToolAvailability({ ...probe, windowsDesktopReady: true }).availableToolNames,
+    ).toEqual(["openerx_desktop"]);
+    expect(
+      desktopHostToolAvailability({ ...probe, windowsDesktopReason: "DESKTOP_SESSION_LOCKED" })
+        .unavailableReasons.openerx_desktop,
+    ).toBe("DESKTOP_SESSION_LOCKED");
+  });
   it("exposes Browser and full Desktop control on an authorized macOS host", () => {
     expect(
       desktopHostToolAvailability({

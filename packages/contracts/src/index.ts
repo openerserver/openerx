@@ -6,6 +6,7 @@ export * from "./browser-computer-use";
 export * from "./chat";
 export * from "./common";
 export * from "./desktop";
+export * from "./desktop-control";
 export * from "./desktop-remote";
 export * from "./diagnostics";
 export * from "./errors";

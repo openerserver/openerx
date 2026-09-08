@@ -2,6 +2,7 @@ import { z } from "zod";
 import { brokeredBashOperationSchema } from "./brokered-bash";
 import { browserComputerUseOperationV2Schema } from "./browser-computer-use";
 import { entityIdSchema, timestampSchema } from "./common";
+import { desktopControlOperationSchema } from "./desktop-control";
 import { officeArtifactWriteInputSchema } from "./file";
 import type {
   LocalWebSearchSettingsSelection,
@@ -534,6 +535,13 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
       ...toolOperationBase,
       operation: z.literal("browser_computer_use"),
       request: browserComputerUseOperationV2Schema,
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("desktop_control"),
+      request: desktopControlOperationSchema,
     })
     .strict(),
   z

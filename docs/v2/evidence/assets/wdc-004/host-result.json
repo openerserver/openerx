@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "checks": [
+    "native probe",
+    "window identity",
+    "UIA",
+    "password masking",
+    "Chinese and emoji",
+    "file result",
+    "stale observation",
+    "commit guard",
+    "pause/resume/stop"
+  ]
+}

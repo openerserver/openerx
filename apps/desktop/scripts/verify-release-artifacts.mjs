@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { accessSync, constants, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,7 @@ const outRoot = process.env.OPENERX_PACKAGE_OUT_DIR
   ? path.resolve(process.env.OPENERX_PACKAGE_OUT_DIR)
   : path.join(desktopRoot, "out");
 const releaseMode = process.env.OPENERX_RELEASE_MODE === "1";
+const windowsStoreBuild = process.env.OPENERX_DISTRIBUTION === "ms-store";
 const expectedVersion = JSON.parse(
   readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
 ).version;
@@ -34,6 +36,27 @@ for (const archive of packages) {
     listedEntries.map((entry) => [entry.replaceAll("\\", "/"), entry]),
   );
   const entries = [...originalEntryByNormalized.keys()];
+  if (target === "win32-x64") {
+    const manifestEntry = originalEntryByNormalized.get(
+      "/native/windows-desktop-control/manifest.json",
+    );
+    if (!manifestEntry) throw new Error("RELEASE_WINDOWS_DESKTOP_MANIFEST_MISSING");
+    const manifest = JSON.parse(
+      extractFile(archive, manifestEntry.replace(/^[/\\]/u, "")).toString("utf8"),
+    );
+    const executable = path.join(
+      `${archive}.unpacked`,
+      "native",
+      "windows-desktop-control",
+      "openerx-desktop-helper.exe",
+    );
+    if (
+      manifest.contractVersion !== "desktop_control_v2" ||
+      manifest.architecture !== "x64" ||
+      createHash("sha256").update(readFileSync(executable)).digest("hex") !== manifest.sha256
+    )
+      throw new Error("RELEASE_WINDOWS_DESKTOP_INTEGRITY_FAILED");
+  }
   if (target.startsWith("darwin-") || target.startsWith("mas-")) {
     const browserHelper = path.join(
       `${archive}.unpacked`,
@@ -78,9 +101,9 @@ for (const archive of packages) {
   const updateConfig = JSON.parse(
     extractFile(archive, "release/update-config.json").toString("utf8"),
   );
-  if (releaseMode && updateConfig.enabled !== true)
+  if (releaseMode && !windowsStoreBuild && updateConfig.enabled !== true)
     throw new Error("RELEASE_UPDATE_CONFIG_DISABLED");
-  if (!releaseMode && updateConfig.enabled !== false) {
+  if ((!releaseMode || windowsStoreBuild) && updateConfig.enabled !== false) {
     throw new Error("DEVELOPMENT_UPDATE_CONFIG_ENABLED");
   }
 

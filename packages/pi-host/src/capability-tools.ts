@@ -6,12 +6,15 @@ import {
   type BrokeredBashExecutionContext,
   type BrowserComputerUseOperationV2,
   browserComputerUseV2Enabled,
+  DESKTOP_CONTROL_FEATURE_FLAG,
   type PiToolRequestFrame,
   type ToolOperation,
+  windowsDesktopControlEnabled,
 } from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
 import { desktopBrand } from "../../branding/src/index";
 import { type BrokeredBashToolTransport, createProductBrokeredBashTool } from "./bash-tool";
+import { createWindowsDesktopTool } from "./desktop-tool";
 import { productToolResult } from "./tool-result";
 
 export interface PiCapabilityToolTransport {
@@ -513,32 +516,56 @@ export function createProductCapabilityTools(input: {
         ),
     }),
     browserTool,
-    defineTool({
-      name: "openerx_desktop",
-      label: "Control desktop",
-      description:
-        "Capture or control one exact desktop application. Take a screenshot first; every interaction requires its short-lived captureId plus the target bundleId. Screenshot x/y coordinates are relative to the captured window. Every interaction requires explicit per-call approval.",
-      parameters: Type.Object(
-        {
-          action: Type.Union(
-            ["screenshot", "click", "type", "key", "submit", "send", "delete", "purchase"].map(
-              (value) => Type.Literal(value),
+    ...(process.platform === "win32" &&
+    windowsDesktopControlEnabled(process.env[DESKTOP_CONTROL_FEATURE_FLAG])
+      ? [
+          createWindowsDesktopTool(
+            async (toolCallId, request) =>
+              await invoke(toolCallId, "openerx_desktop", {
+                operation: "desktop_control",
+                request,
+              }),
+          ),
+        ]
+      : [
+          defineTool({
+            name: "openerx_desktop",
+            label: "Control desktop",
+            description:
+              "Capture or control one exact desktop application. Take a screenshot first; every interaction requires its short-lived captureId plus the target bundleId. Screenshot x/y coordinates are relative to the captured window. Ordinary interactions reuse application scope; committing actions require approval under the current permission policy.",
+            parameters: Type.Object(
+              {
+                action: Type.Union(
+                  [
+                    "screenshot",
+                    "click",
+                    "type",
+                    "key",
+                    "submit",
+                    "send",
+                    "delete",
+                    "purchase",
+                  ].map((value) => Type.Literal(value)),
+                ),
+                application: Type.String({ minLength: 1, maxLength: 300 }),
+                bundleId: Type.Optional(
+                  Type.String({
+                    minLength: 3,
+                    maxLength: 200,
+                    pattern: "^[A-Za-z0-9][A-Za-z0-9.-]+$",
+                  }),
+                ),
+                captureId: Type.Optional(Type.String({ format: "uuid" })),
+                x: Type.Optional(Type.Integer({ minimum: 0 })),
+                y: Type.Optional(Type.Integer({ minimum: 0 })),
+                text: Type.Optional(Type.String({ maxLength: 10_000 })),
+                key: Type.Optional(Type.String({ maxLength: 100 })),
+              },
+              { additionalProperties: false },
             ),
-          ),
-          application: Type.String({ minLength: 1, maxLength: 300 }),
-          bundleId: Type.Optional(
-            Type.String({ minLength: 3, maxLength: 200, pattern: "^[A-Za-z0-9][A-Za-z0-9.-]+$" }),
-          ),
-          captureId: Type.Optional(Type.String({ format: "uuid" })),
-          x: Type.Optional(Type.Integer({ minimum: 0 })),
-          y: Type.Optional(Type.Integer({ minimum: 0 })),
-          text: Type.Optional(Type.String({ maxLength: 10_000 })),
-          key: Type.Optional(Type.String({ maxLength: 100 })),
-        },
-        { additionalProperties: false },
-      ),
-      execute: async (toolCallId, params) =>
-        await invoke(toolCallId, "openerx_desktop", { operation: "desktop", ...params }),
-    }),
+            execute: async (toolCallId, params) =>
+              await invoke(toolCallId, "openerx_desktop", { operation: "desktop", ...params }),
+          }),
+        ]),
   ];
 }

@@ -16,6 +16,9 @@ import {
   automationSchedulerReconcileFrameSchema,
   type BrowserSessionDescriptor,
   type ChatEvent,
+  type DesktopControlCommand,
+  type DesktopControlSession,
+  type DesktopExecutionContext,
   type HostToolAvailability,
   mainAutomationContextRequestFrameSchema,
   mainCapabilityAvailabilityRequestFrameSchema,
@@ -51,7 +54,14 @@ interface PendingRequest {
 const appServiceStartupTimeoutMs = 10_000;
 
 export interface MainCapabilityHost {
-  execute(operation: ToolOperation, signal: AbortSignal): Promise<NormalizedToolResult>;
+  execute(
+    operation: ToolOperation,
+    signal: AbortSignal,
+    executionContext?: DesktopExecutionContext,
+  ): Promise<NormalizedToolResult>;
+  listDesktopControlSessions?(): DesktopControlSession[];
+  controlDesktopSession?(command: DesktopControlCommand): Promise<DesktopControlSession>;
+  stopDesktopControl?(conversationId?: string): void;
   availability(): Promise<HostToolAvailability>;
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[];
   pauseBrowserComputerUseSession(sessionId: string): BrowserSessionDescriptor;
@@ -211,6 +221,8 @@ export class AppServiceSupervisor {
     timeoutMs = 15_000,
     byok?: AppServiceByokConfiguration,
   ): Promise<unknown> {
+    if (request.command === "chat.stop") this.stopDesktopControl(request.input.conversationId);
+    if (request.command === "tool.scope.revoke") this.stopDesktopControl();
     await this.start();
     const port = this.#mainPort;
     if (!port) throw new Error("App Service is unavailable");
@@ -247,6 +259,18 @@ export class AppServiceSupervisor {
 
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[] {
     return this.#capabilityHost?.listBrowserComputerUseSessions() ?? [];
+  }
+
+  listDesktopControlSessions(): DesktopControlSession[] {
+    return this.#capabilityHost?.listDesktopControlSessions?.() ?? [];
+  }
+  async controlDesktopSession(command: DesktopControlCommand): Promise<DesktopControlSession> {
+    const host = this.#capabilityHost;
+    if (!host?.controlDesktopSession) throw new Error("DESKTOP_HELPER_UNAVAILABLE");
+    return await host.controlDesktopSession(command);
+  }
+  stopDesktopControl(conversationId?: string): void {
+    this.#capabilityHost?.stopDesktopControl?.(conversationId);
   }
 
   async pauseBrowserComputerUseSession(sessionId: string): Promise<BrowserSessionDescriptor> {
@@ -478,7 +502,11 @@ export class AppServiceSupervisor {
       const controller = new AbortController();
       this.#capabilityRequests.set(capabilityRequest.data.requestId, controller);
       void host
-        .execute(capabilityRequest.data.operation, controller.signal)
+        .execute(
+          capabilityRequest.data.operation,
+          controller.signal,
+          capabilityRequest.data.executionContext,
+        )
         .then(
           (result) =>
             this.#mainPort?.postMessage({
@@ -636,7 +664,16 @@ export class AppServiceSupervisor {
       return;
     }
     const event = appServiceEventFrameSchema.safeParse(data);
-    if (event.success) this.#emit(event.data.event);
+    if (event.success) {
+      if (
+        event.data.event.conversationId &&
+        ["run.completed", "run.failed", "run.interrupted", "run.cancelling"].includes(
+          event.data.event.type,
+        )
+      )
+        this.stopDesktopControl(event.data.event.conversationId);
+      this.#emit(event.data.event);
+    }
   }
 
   #resolveIfReady(): void {

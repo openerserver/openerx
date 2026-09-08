@@ -13,6 +13,8 @@ export interface DesktopToolAvailabilityProbe {
   screenCaptureStatus: ScreenCaptureStatus;
   accessibilityTrusted: boolean;
   automationAvailable: boolean;
+  windowsDesktopReady?: boolean;
+  windowsDesktopReason?: string;
 }
 
 export function desktopHostToolAvailability(
@@ -42,6 +44,14 @@ export function desktopHostToolAvailability(
   }
 
   if (probe.platform === "win32") {
+    if (probe.windowsDesktopReady) {
+      availableToolNames.push("openerx_desktop");
+      return { availableToolNames, unavailableReasons };
+    }
+    if (probe.windowsDesktopReason) {
+      unavailableReasons.openerx_desktop = probe.windowsDesktopReason;
+      return { availableToolNames, unavailableReasons };
+    }
     unavailableReasons.openerx_desktop = probe.automationAvailable
       ? "DESKTOP_WINDOWS_NATIVE_CONTROL_UNAVAILABLE"
       : "DESKTOP_AUTOMATION_UNAVAILABLE";

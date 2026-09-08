@@ -1,14 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyWindowsFile } from "./windows-signing.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outRoot = process.env.OPENERX_PACKAGE_OUT_DIR
   ? path.resolve(process.env.OPENERX_PACKAGE_OUT_DIR)
   : path.join(desktopRoot, "out");
 const releaseMode = process.env.OPENERX_RELEASE_MODE === "1";
-const requireSigned = releaseMode || process.env.OPENERX_REQUIRE_SIGNED_MACOS === "1";
+const requireSigned =
+  releaseMode ||
+  process.env.OPENERX_REQUIRE_SIGNED_MACOS === "1" ||
+  process.env.OPENERX_REQUIRE_SIGNED_WINDOWS === "1";
 const requireNotarized = releaseMode || process.env.OPENERX_REQUIRE_NOTARIZED_MACOS === "1";
 const brandManifestPath = process.env.OPENERX_BRAND_MANIFEST;
 const executableName = brandManifestPath
@@ -102,18 +106,18 @@ for (const target of targets) {
     }
   } else {
     if (process.platform !== "win32") throw new Error("WINDOWS_SIGNATURE_REQUIRES_WINDOWS_RUNNER");
-    const escaped = target.replaceAll("'", "''");
-    const signature = spawnSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$s=Get-AuthenticodeSignature -LiteralPath '${escaped}'; if ($s.Status -ne 'Valid') { exit 1 }`,
-      ],
-      { encoding: "utf8" },
+    verifyWindowsFile(target);
+    const helper = path.join(
+      path.dirname(target),
+      "resources",
+      "app.asar.unpacked",
+      "native",
+      "windows-desktop-control",
+      "openerx-desktop-helper.exe",
     );
-    if (signature.status !== 0) throw new Error(`WINDOWS_AUTHENTICODE_INVALID:${relative}`);
+    if (existsSync(helper)) {
+      verifyWindowsFile(helper, process.env, undefined, true);
+    }
   }
   console.log(
     `[m9-native-signature] SIGNED OK: ${relative}; notarization=${requireNotarized ? "valid" : "not-required"}`,

@@ -73,6 +73,26 @@ describe("Windows login startup", () => {
     expect(app.setLoginItemSettings).not.toHaveBeenCalled();
   });
 
+  it("reports MSIX startup as unsupported without reading or changing Run keys", () => {
+    const app = fakeApp();
+    app.registered = true;
+    const executable = "C:\\Program Files\\WindowsApps\\UWA\\UWA.exe";
+    const service = new DesktopLoginStartupService(app, "win32", executable, true);
+
+    expect(loginStartupTarget("win32", true, executable, "C:\\UWA", true)).toBeNull();
+    expect(service.state()).toEqual({
+      supported: false,
+      openAtLogin: false,
+      launchesInBackground: false,
+    });
+    for (const openAtLogin of [true, false]) {
+      expect(() => service.update({ openAtLogin })).toThrow("DESKTOP_LOGIN_STARTUP_UNSUPPORTED");
+    }
+    expect(app.getLoginItemSettings).not.toHaveBeenCalled();
+    expect(app.setLoginItemSettings).not.toHaveBeenCalled();
+    expect(app.registered).toBe(true);
+  });
+
   it("only treats the background flag as login startup on Windows", () => {
     expect(isBackgroundLoginStartup("win32", ["OpenERX.exe", backgroundLaunchArgument])).toBe(true);
     expect(isBackgroundLoginStartup("darwin", ["OpenERX", backgroundLaunchArgument])).toBe(false);
