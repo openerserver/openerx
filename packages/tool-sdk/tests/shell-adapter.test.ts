@@ -3,15 +3,33 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codexWindowsSandboxReady,
   ShellToolAdapter,
   shellToolAvailability,
   ToolAdapterError,
 } from "../src";
+import type { WindowsSandboxCommandHost } from "../src/codex-windows-shell-adapter";
 
 const directories: string[] = [];
+
+// Exercise the adapter boundary on stock Windows CI without installing Codex
+// or replacing its production sandbox with an unsandboxed child process.
+function windowsHostFixture() {
+  let finish!: (result: { exitCode: number; stdout: string; stderr: string }) => void;
+  const completion = new Promise<{ exitCode: number; stdout: string; stderr: string }>(
+    (resolve) => {
+      finish = resolve;
+    },
+  );
+  const stop = vi.fn(async () => finish({ exitCode: 0, stdout: "tick\n", stderr: "" }));
+  const start = vi.fn<WindowsSandboxCommandHost["start"]>(async (input) => {
+    input.onOutput("tick\n", "stdout", false);
+    return { processId: "fixture-process", completion, write: vi.fn(async () => {}), stop };
+  });
+  return { start, stop, close: vi.fn(async () => {}) };
+}
 
 function context() {
   return {
@@ -148,7 +166,8 @@ describe("ShellToolAdapter", () => {
   it("rejects cwd escape and refuses execution when no native sandbox exists", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
     directories.push(workspace);
-    const adapter = new ShellToolAdapter([workspace]);
+    const host = windowsHostFixture();
+    const adapter = new ShellToolAdapter([workspace], undefined, host);
     await expect(
       adapter.execute(
         {
@@ -164,9 +183,12 @@ describe("ShellToolAdapter", () => {
         context(),
       ),
     ).rejects.toThrow("SHELL_CWD_OUT_OF_SCOPE");
+    expect(host.start).not.toHaveBeenCalled();
+    await adapter.stopAll();
     if (process.platform !== "darwin" && !codexWindowsSandboxReady()) {
+      const unavailableAdapter = new ShellToolAdapter([workspace]);
       await expect(
-        adapter.execute(
+        unavailableAdapter.execute(
           {
             operation: "shell_execute",
             cwd: workspace,
@@ -184,6 +206,7 @@ describe("ShellToolAdapter", () => {
           ? "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE"
           : "SHELL_OS_SANDBOX_UNAVAILABLE",
       );
+      await unavailableAdapter.stopAll();
     }
   });
 
@@ -334,34 +357,43 @@ describe("ShellToolAdapter", () => {
     await adapter.stopAll();
   }, 30_000);
 
-  it("starts, observes, and stops a long child process", async () => {
-    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
-    directories.push(workspace);
-    const adapter = new ShellToolAdapter([workspace]);
-    const started = await adapter.execute(
-      {
-        operation: "shell_execute",
-        cwd: workspace,
-        command: process.execPath,
-        args: ["-e", "setInterval(() => process.stdout.write('tick\\n'), 50)"],
-        timeoutMs: 10_000,
-        background: true,
-        allowNetwork: false,
-        idempotencyKey: "shell-command-0004",
-      },
-      context(),
-    );
-    const processId = (started.data as { processId: string }).processId;
-    expect(processId).toBeTruthy();
-    await adapter.execute(
-      { operation: "shell_stop", processId, idempotencyKey: "shell-command-0005" },
-      context(),
-    );
-    const status = await adapter.execute(
-      { operation: "shell_status", processId, idempotencyKey: "shell-command-0006" },
-      context(),
-    );
-    expect(status.data).toMatchObject({ state: "stopped" });
-    await adapter.stopAll();
-  });
+  it.runIf(process.platform === "darwin" || process.platform === "win32")(
+    "starts, observes, and stops a long child process",
+    async () => {
+      const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
+      directories.push(workspace);
+      const host = windowsHostFixture();
+      const adapter = new ShellToolAdapter([workspace], undefined, host);
+      const started = await adapter.execute(
+        {
+          operation: "shell_execute",
+          cwd: workspace,
+          command: process.execPath,
+          args: ["-e", "setInterval(() => process.stdout.write('tick\\n'), 50)"],
+          timeoutMs: 10_000,
+          background: true,
+          allowNetwork: false,
+          idempotencyKey: "shell-command-0004",
+        },
+        context(),
+      );
+      const processId = (started.data as { processId: string }).processId;
+      expect(processId).toBeTruthy();
+      await adapter.execute(
+        { operation: "shell_stop", processId, idempotencyKey: "shell-command-0005" },
+        context(),
+      );
+      const status = await adapter.execute(
+        { operation: "shell_status", processId, idempotencyKey: "shell-command-0006" },
+        context(),
+      );
+      expect(status.data).toMatchObject({ state: "stopped" });
+      if (process.platform === "win32") {
+        expect(host.start).toHaveBeenCalledTimes(1);
+        expect(host.stop).toHaveBeenCalledTimes(1);
+        expect(status.data).toMatchObject({ isolation: "codex-windows-restricted-token" });
+      }
+      await adapter.stopAll();
+    },
+  );
 });
