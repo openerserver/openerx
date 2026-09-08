@@ -49,6 +49,26 @@ export function publicIdentityViolations(commit) {
     .map(() => "personal-commit-email");
 }
 
+export function githubPullRequestTestMergeSha(environment, event, checkoutSha, commit) {
+  if (environment.GITHUB_ACTIONS !== "true" || environment.GITHUB_EVENT_NAME !== "pull_request")
+    return null;
+  const ref = /^refs\/pull\/([1-9]\d*)\/merge$/u.exec(environment.GITHUB_REF ?? "");
+  const sha = environment.GITHUB_SHA;
+  if (!ref || !/^[a-f\d]{40}$/u.test(sha ?? "") || sha !== checkoutSha) return null;
+  if (
+    !Number.isSafeInteger(event?.number) ||
+    event.number !== Number(ref[1]) ||
+    event.pull_request?.number !== event.number
+  )
+    return null;
+  const base = event.pull_request?.base?.sha;
+  const head = event.pull_request?.head?.sha;
+  if (!/^[a-f\d]{40}$/u.test(base ?? "") || !/^[a-f\d]{40}$/u.test(head ?? "")) return null;
+  const headers = commit.split("\n\n", 1)[0];
+  const parents = [...headers.matchAll(/^parent ([a-f\d]{40})$/gmu)].map((match) => match[1]);
+  return parents.length === 2 && parents[0] === base && parents[1] === head ? sha : null;
+}
+
 export function publicContentViolations(content) {
   if (content.includes("\0")) return [];
   const checks = [
@@ -113,10 +133,28 @@ function main() {
 
   // Scan every reachable tree, not merely ignored paths in the current checkout.
   const commits = git(["rev-list", "--all"]).toString().trim().split("\n").filter(Boolean);
+  let testMergeSha = null;
+  if (process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_EVENT_NAME === "pull_request") {
+    try {
+      const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+      const checkoutSha = git(["rev-parse", "HEAD"]).toString().trim();
+      testMergeSha = githubPullRequestTestMergeSha(
+        process.env,
+        event,
+        checkoutSha,
+        git(["cat-file", "commit", checkoutSha]).toString(),
+      );
+    } catch {
+      // Missing or invalid runner evidence must leave every identity check enabled.
+    }
+  }
   const blobs = new Map();
   for (const commit of commits) {
-    for (const rule of publicIdentityViolations(git(["cat-file", "commit", commit]).toString())) {
-      failures.add(`history:${commit.slice(0, 12)}: ${rule}`);
+    // GitHub chooses the identity of this temporary integration commit; its tree is still scanned.
+    if (commit !== testMergeSha) {
+      for (const rule of publicIdentityViolations(git(["cat-file", "commit", commit]).toString())) {
+        failures.add(`history:${commit.slice(0, 12)}: ${rule}`);
+      }
     }
     for (const entry of git(["ls-tree", "-r", "-z", commit])
       .toString()
