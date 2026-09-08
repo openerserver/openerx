@@ -3,7 +3,7 @@
 ## 环境
 
 - Git、Node.js 24.3+、npm 11+；CI 使用根目录 `.node-version`。请使用 npm，不混用 pnpm/yarn 锁文件。
-- Windows x64 与 macOS arm64/x64 是打包目标；CI 使用原生架构 runner。Linux 用于无桌面源码检查，不代表 Linux 桌面能力已经验收。
+- Windows x64 与 macOS arm64/x64 是打包目标；CI 使用原生架构 runner。源码检查和发布预检查在 Windows 上执行，暂不运行 Linux CI。
 - macOS 打包需要 Xcode Command Line Tools（辅助程序使用 Swift）。Windows 打包需 PowerShell；安装需要访问 npm registry 和 Electron 下载源。
 - 根目录运行 `npm ci`。安装失败先检查版本、代理、下载源及磁盘空间，不要先删除用户数据或改写锁文件。
 

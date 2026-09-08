@@ -34,7 +34,7 @@ git status --short
 
 ## CI 与正式发行不同
 
-`OpenERX CI` 执行无凭据源码检查和跨平台打包/冒烟。上传产物明确标为 **unsigned**，仅供测试，自动更新关闭；不自动创建 GitHub Release。
+`OpenERX CI` 在 Windows 上执行无凭据源码检查，并保留 Windows x64、macOS arm64/x64 的打包/冒烟。暂不运行 Linux CI；签名发布流程的预检查也使用 Windows，测试、许可审核与发布审批要求不变。上传产物明确标为 **unsigned**，仅供测试，自动更新关闭；不自动创建 GitHub Release。
 
 `npm run archive:package` 将当前平台开发包封装为保留 macOS 符号链接/权限的 `.tar.gz`，同时生成 `SHA256SUMS`。CI 只上传封装后的归档，避免直接上传 `.app` 目录破坏 framework 链接。校验和检测下载完整性，不等于代码签名或可信发布。
 
