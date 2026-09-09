@@ -184,7 +184,7 @@ try {
   });
   const page = await application.firstWindow();
   await page.waitForLoadState("domcontentloaded");
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "设置", exact: true }).click();
   await page.getByLabel("邮箱").fill("remote-e2e@example.com");
   await page.getByRole("button", { name: "发送验证码" }).click();
   await page.getByLabel("六位验证码").fill("123456");
@@ -193,10 +193,15 @@ try {
 
   const mobile = await mobileSession("remote-e2e@example.com");
   await fund(mobile.accessToken);
-  const remoteState = await page.evaluate(
-    async () => await window.openerx.setRemoteEnabled({ enabled: true }),
-  );
+  await page.getByRole("button", { name: "远程连接", exact: true }).click();
+  const remoteToggle = page.getByRole("switch", { name: "允许远程控制这台电脑" });
+  await remoteToggle.click();
+  await page.getByText("已开启", { exact: true }).waitFor();
+  const remoteState = await page.evaluate(async () => await window.openerx.getRemoteState());
   assert.equal(remoteState.enabled, true);
+  assert.equal(remoteState.available, true);
+  await page.getByRole("button", { name: "添加设备", exact: true }).click();
+  await page.getByAltText("远程连接一次性配对二维码").waitFor();
   const challenge = await page.evaluate(
     async () => await window.openerx.createRemotePairingChallenge(),
   );
@@ -248,6 +253,10 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   assert.equal(host?.presence, "online");
+  await page.getByText("在线", { exact: true }).waitFor();
+  if (process.env.OPENERX_E2E_SCREENSHOT_PATH) {
+    await page.screenshot({ path: process.env.OPENERX_E2E_SCREENSHOT_PATH });
+  }
 
   const command = remoteCommand({
     payload: {
@@ -289,11 +298,20 @@ try {
       });
       cursor = envelope.cursor;
     }
-    if (decrypted.some(({ envelope }) => envelope.kind === "message.completed")) break;
+    if (
+      decrypted.some(
+        ({ envelope }) =>
+          envelope.kind === "message.completed" || envelope.kind === "message.failed",
+      )
+    )
+      break;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   assert.ok(decrypted.some(({ envelope }) => envelope.kind === "conversation.updated"));
-  assert.ok(decrypted.some(({ payload }) => String(payload.delta ?? "").includes("Remote E2E")));
+  assert.ok(
+    decrypted.some(({ payload }) => String(payload.delta ?? "").includes("Remote E2E")),
+    JSON.stringify(decrypted.map(({ envelope, payload }) => ({ kind: envelope.kind, payload }))),
+  );
   assert.ok(decrypted.some(({ envelope }) => envelope.kind === "message.completed"));
 
   const replay = await json("/api/v2/remote/commands", mobile.accessToken, {
@@ -321,7 +339,9 @@ try {
     { method: "DELETE" },
   );
   assert.equal(revoked.value.status, "revoked");
-  await page.evaluate(async () => await window.openerx.setRemoteEnabled({ enabled: false }));
+  await remoteToggle.click();
+  await page.getByText("未开启", { exact: true }).waitFor();
+  assert.equal(await page.getByAltText("远程连接一次性配对二维码").count(), 0);
 
   console.log(
     "E2E_REMOTE_OK same-account-pairing-e2ee-start-cursor-replay-single-charge-revoke-disable-key-vault",
