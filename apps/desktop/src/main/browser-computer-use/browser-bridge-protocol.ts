@@ -204,7 +204,14 @@ export const browserBridgeActionResultMessageSchema = z
     binding: browserBridgeTabBindingSchema,
     expectedPageRevision: opaqueReferenceSchema,
     pageRevisionAfter: opaqueReferenceSchema,
-    status: z.enum(["performed", "unsupported", "user_takeover_required"]),
+    status: z.enum([
+      "performed",
+      "unsupported",
+      "user_takeover_required",
+      "stale_observation",
+      "navigation_denied",
+      "element_not_interactable",
+    ]),
   })
   .strict();
 

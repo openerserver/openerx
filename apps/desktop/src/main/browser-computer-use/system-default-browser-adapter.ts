@@ -90,7 +90,7 @@ export interface ConnectedBrowserBridgeDriver extends SystemBrowserSessionDriver
 interface SystemBrowserSession {
   binding: SystemBrowserBinding;
   driver: SystemBrowserSessionDriver;
-  kind: "bridge" | "dedicated_window";
+  kind: "bridge" | "dedicated_window" | "managed";
   surface: BrowserSurfaceState;
   monitor: SystemBrowserUserInputMonitor | null;
   stateEpoch: number;
@@ -158,6 +158,7 @@ export class SystemDefaultBrowserAdapter {
     observations = new UIObservationRegistry(),
     dispatcher = new BrowserActionDispatcher(observations),
     private readonly bridgeDriver: ConnectedBrowserBridgeDriver | null = null,
+    private readonly managedDriver: SystemDefaultBrowserDriver | null = null,
   ) {
     this.#observations = observations;
     this.#dispatcher = dispatcher;
@@ -169,6 +170,8 @@ export class SystemDefaultBrowserAdapter {
   ): Promise<NormalizedToolResult> {
     throwIfAborted(signal);
     const operation = browserComputerUseOperationV2Schema.parse(input);
+    if (operation.action === "contexts")
+      throw new BrowserObservationError("BROWSER_ACTION_NOT_SUPPORTED");
     if (operation.action === "open") return await this.#open(operation, signal);
     if (operation.action === "detach") return this.#detach(operation.sessionId);
 
@@ -176,7 +179,11 @@ export class SystemDefaultBrowserAdapter {
     if (operation.action === "observe") {
       const observation = await this.#recordObservation(session, "final", null, signal);
       return observationResult(
-        session.kind === "bridge" ? "已观察 Browser Bridge 授权标签页" : "已观察系统浏览器专用窗口",
+        session.kind === "bridge"
+          ? "已观察 Browser Bridge 授权标签页"
+          : session.kind === "managed"
+            ? "已观察独立浏览器"
+            : "已观察系统浏览器专用窗口",
         observation,
         false,
       );
@@ -230,7 +237,7 @@ export class SystemDefaultBrowserAdapter {
     }
     const observation = await this.#recordObservation(session, "final", executed.path, signal);
     return observationResult(
-      `${session.kind === "bridge" ? "Browser Bridge" : "系统浏览器"}操作已执行：${operation.action}`,
+      `${session.kind === "bridge" ? "Browser Bridge" : session.kind === "managed" ? "独立浏览器" : "系统浏览器"}操作已执行：${operation.action}`,
       observation,
       true,
       {
@@ -303,27 +310,30 @@ export class SystemDefaultBrowserAdapter {
     operation: Extract<BrowserComputerUseOperationV2, { action: "open" }>,
     signal: AbortSignal,
   ): Promise<NormalizedToolResult> {
-    if (operation.requestedBackend === "managed_chromium") {
-      throw new BrowserObservationError("BROWSER_BACKEND_UNAVAILABLE");
-    }
+    const managed = operation.requestedBackend === "managed_chromium";
+    if (managed && operation.browserContextRef)
+      throw new BrowserObservationError("BROWSER_BACKEND_DOWNGRADE_REJECTED");
+    const driver = managed ? this.managedDriver : this.driver;
+    if (!driver) throw new BrowserObservationError("BROWSER_BACKEND_UNAVAILABLE");
     if (operation.browserContextRef) {
       return await this.#openBridge(operation, signal);
     }
-    const binding = await this.driver.openDedicatedWindow(operation.url, signal);
+    const binding = await driver.openDedicatedWindow(operation.url, signal);
     if (
-      binding.descriptor.backend !== "system_default" ||
-      binding.descriptor.controlPath !== "os_accessibility" ||
-      binding.descriptor.surfaceKind !== "window" ||
-      binding.descriptor.ownership !== "external_openerx"
+      binding.descriptor.backend !== (managed ? "managed_chromium" : "system_default") ||
+      binding.descriptor.controlPath !==
+        (managed ? "managed_chromium_semantic" : "os_accessibility") ||
+      binding.descriptor.surfaceKind !== (managed ? "tab" : "window") ||
+      binding.descriptor.ownership !== (managed ? "openerx_managed" : "external_openerx")
     ) {
-      await this.driver.closeOwnedWindow(binding, signal).catch(() => undefined);
+      await driver.closeOwnedWindow(binding, signal).catch(() => undefined);
       throw new BrowserObservationError("BROWSER_SURFACE_MISMATCH");
     }
     this.#observations.registerSession(binding.descriptor);
     const session: SystemBrowserSession = {
       binding,
-      driver: this.driver,
-      kind: "dedicated_window",
+      driver,
+      kind: managed ? "managed" : "dedicated_window",
       surface: {
         identity: {
           backend: binding.descriptor.backend,
@@ -353,9 +363,14 @@ export class SystemDefaultBrowserAdapter {
       if (session.stateEpoch !== epoch) {
         throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
       }
-      return observationResult("已在系统默认浏览器中打开专用窗口", observation, true, {
-        session: this.#observations.descriptor(binding.descriptor.sessionId),
-      });
+      return observationResult(
+        managed ? "已打开 OpenERX 独立浏览器" : "已在系统默认浏览器中打开专用窗口",
+        observation,
+        true,
+        {
+          session: this.#observations.descriptor(binding.descriptor.sessionId),
+        },
+      );
     } catch (error) {
       if (this.#observations.descriptor(binding.descriptor.sessionId).state === "paused_for_user") {
         return lifecycleResult(
@@ -367,7 +382,7 @@ export class SystemDefaultBrowserAdapter {
       session.monitor?.close();
       this.#sessions.delete(binding.descriptor.sessionId);
       this.#observations.endSession(binding.descriptor.sessionId, "closed");
-      await this.driver.closeOwnedWindow(binding, signal).catch(() => undefined);
+      await driver.closeOwnedWindow(binding, signal).catch(() => undefined);
       throw error;
     }
   }
@@ -477,7 +492,9 @@ export class SystemDefaultBrowserAdapter {
     signal: AbortSignal,
   ): Promise<NormalizedToolResult> {
     if (
-      session.binding.descriptor.ownership !== "external_openerx" ||
+      !(["external_openerx", "openerx_managed"] as string[]).includes(
+        session.binding.descriptor.ownership,
+      ) ||
       !session.binding.descriptor.capabilities.closeOwnedWindow
     ) {
       throw new BrowserObservationError("BROWSER_SCOPE_DENIED");

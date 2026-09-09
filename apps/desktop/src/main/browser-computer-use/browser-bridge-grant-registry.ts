@@ -298,6 +298,23 @@ export class BrowserBridgeGrantRegistry {
     });
   }
 
+  availableAuthorizations(): (BrowserBridgeAuthorization & { url: string })[] {
+    this.#removeExpiredAuthorizations();
+    return [...this.#grants.values()]
+      .filter((grant) => grant.state === "authorized" && grant.connection.active)
+      .map((grant) => ({
+        browserContextRef: grant.browserContextRef,
+        applicationId: grant.nativeSurface.applicationId,
+        origin: grant.authorizedOrigin,
+        url: grant.binding.url,
+        expiresAt: new Date(grant.expiresAtMs).toISOString(),
+      }));
+  }
+
+  get connected(): boolean {
+    return this.#connections.size > 0;
+  }
+
   close(): void {
     for (const connectionId of [...this.#connections.keys()]) this.#disconnect(connectionId);
     this.#connections.clear();
