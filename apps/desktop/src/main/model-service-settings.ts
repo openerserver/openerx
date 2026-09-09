@@ -29,9 +29,7 @@ function matchingProvider(configuration: ByokModelConfiguration | null | undefin
   return (
     byokProviderPresets.find((provider) =>
       provider.models.some(
-        (model) =>
-          model.configuration.baseUrl === configuration.baseUrl.replace(/\/$/u, "") &&
-          model.configuration.modelId === configuration.modelId,
+        (model) => model.configuration.baseUrl === configuration.baseUrl.replace(/\/$/u, ""),
       ),
     ) ?? null
   );
@@ -188,7 +186,12 @@ export class ModelServiceSettingsStore {
     ) {
       throw new Error("BYOK_API_KEY_REQUIRED");
     }
-    const stored = { mode: input.mode, byok, updatedAt: new Date().toISOString() };
+    const stored = {
+      mode: input.mode,
+      byok,
+      providerModels: input.providerModels ?? current.providerModels,
+      updatedAt: new Date().toISOString(),
+    };
     await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
     const temporaryPath = `${this.filePath}.tmp`;
     try {
@@ -216,7 +219,8 @@ export class ModelServiceSettingsStore {
   async execution(modelRef?: string): Promise<AppServiceByokConfiguration | undefined> {
     const state = await this.state();
     if (state.mode !== "byok") return undefined;
-    const requested = modelRef ? resolveByokModelPreset(modelRef) : null;
+    const requested = modelRef ? resolveByokModelPreset(modelRef, state.providerModels) : null;
+    if (modelRef?.includes(".custom-") && !requested) throw new Error("BYOK_MODEL_NOT_FOUND");
     const storedProvider = matchingProvider(state.byok);
     const selectedProvider =
       requested?.provider ??
