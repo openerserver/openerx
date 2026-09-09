@@ -16,6 +16,7 @@ import {
 import { PaymentAdapter } from "@openerx/payment-adapter";
 import { createPlatformAlphaServer } from "@openerx/platform-alpha";
 import { PricingService } from "@openerx/pricing-service";
+import { RemoteControlGateway } from "@openerx/remote-control-gateway";
 import { UsageStore } from "@openerx/token-usage-store";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -44,6 +45,7 @@ const identity = new IdentityService(path.join(dataDirectory, "identity.sqlite")
   },
 });
 const sync = new AccountSyncService(path.join(dataDirectory, "sync.sqlite"));
+const remote = new RemoteControlGateway(path.join(dataDirectory, "remote.sqlite"));
 const usage = new UsageStore(path.join(dataDirectory, "usage.sqlite"));
 const pricing = new PricingService(path.join(dataDirectory, "pricing.sqlite"), {
   catalog: createDeepSeekPriceCatalog(defaultModel),
@@ -114,6 +116,7 @@ const server = createPlatformAlphaServer({
   pricing,
   billing,
   payments,
+  remote,
 });
 
 await new Promise<void>((resolve, reject) => {
@@ -137,6 +140,7 @@ async function shutdown(): Promise<void> {
     server.closeAllConnections();
   });
   identity.close();
+  remote.close();
   sync.close();
   usage.close();
   payments.close();
