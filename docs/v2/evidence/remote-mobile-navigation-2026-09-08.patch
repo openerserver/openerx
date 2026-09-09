@@ -1,0 +1,13 @@
+diff --git a/apps/mobile/App.tsx b/apps/mobile/App.tsx
+index d15f73a..6248dbe 100644
+--- a/apps/mobile/App.tsx
++++ b/apps/mobile/App.tsx
+@@ -236,7 +236,7 @@ function HostsScreen({
+       {hosts.length === 0 ? (
+         <View style={styles.emptyCard}>
+           <Text style={styles.emptyTitle}>还没有 Remote 主机</Text>
+-          <Text style={styles.cardMeta}>先在桌面“设置 → 手机远程控制”开启 Remote。</Text>
++          <Text style={styles.cardMeta}>先在桌面“设置 → 远程连接”开启远程控制。</Text>
+         </View>
+       ) : null}
+       <View style={styles.sectionHeader}>
