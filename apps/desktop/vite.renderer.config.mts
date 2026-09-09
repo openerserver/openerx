@@ -7,6 +7,7 @@ export default defineConfig({
     exclude: ["@openerx/contracts"],
   },
   server: {
+    headers: { "Cache-Control": "no-store" },
     watch: {
       ignored: ["**/out/**"],
     },

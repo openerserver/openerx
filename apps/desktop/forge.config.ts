@@ -154,6 +154,11 @@ const config: ForgeConfig = {
   },
   hooks: {
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
+      cpSync(
+        path.join(desktopDirectory, "browser-extension"),
+        path.join(buildPath, "browser-extension"),
+        { recursive: true },
+      );
       if (["darwin", "mas"].includes(platform)) {
         execFileSync(
           process.execPath,

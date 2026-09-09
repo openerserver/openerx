@@ -26,6 +26,9 @@ import {
   billingTermsAcceptanceSchema,
   billingTermsStateSchema,
   browserComputerUseSessionControlInputSchema,
+  browserConnectionStateSchema,
+  browserExtensionSetupSchema,
+  browserModeSchema,
   browserSessionDescriptorSchema,
   byokConnectionTestResultSchema,
   type ChatCommandEnvelope,
@@ -187,6 +190,18 @@ const bridge: DesktopBridge = {
     );
     return desktopNativePermissionResultSchema.parse(result);
   },
+  getBrowserConnectionState: async () =>
+    browserConnectionStateSchema.parse(
+      await ipcRenderer.invoke(ipcChannels.browserConnectionState),
+    ),
+  updateBrowserMode: async (mode) =>
+    browserConnectionStateSchema.parse(
+      await ipcRenderer.invoke(ipcChannels.browserModeUpdate, browserModeSchema.parse(mode)),
+    ),
+  prepareBrowserExtension: async () =>
+    browserExtensionSetupSchema.parse(
+      await ipcRenderer.invoke(ipcChannels.browserExtensionPrepare),
+    ),
   listBrowserComputerUseSessions: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.browserComputerUseSessions);
     return browserSessionDescriptorSchema.array().parse(result);

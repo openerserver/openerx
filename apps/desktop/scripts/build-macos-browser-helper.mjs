@@ -45,7 +45,7 @@ if (process.platform === "darwin") {
   const output = path.resolve(
     argument(
       "--output",
-      path.join(desktopDirectory, ".vite", "native", "openerx-browser-accessibility"),
+      path.join(desktopDirectory, ".native-build", "openerx-browser-accessibility"),
     ),
   );
   const arch = argument("--arch", process.arch);

@@ -21,7 +21,7 @@ const outputDirectory = path.resolve(
   process.env.OPENERX_BCU_TAKEOVER_OUTPUT ??
     path.join(desktopDirectory, ".vite", "browser-takeover", "evidence"),
 );
-const helperPath = path.join(desktopDirectory, ".vite", "native", "openerx-browser-accessibility");
+const helperPath = path.join(desktopDirectory, ".native-build", "openerx-browser-accessibility");
 const defaultInputTimeoutMs = 120_000;
 
 function inputTimeoutMs(): number {
