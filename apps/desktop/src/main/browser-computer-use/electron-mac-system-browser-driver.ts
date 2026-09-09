@@ -182,7 +182,7 @@ function defaultAccessibilityHelperPath(): string {
   if (app.isPackaged) {
     return path.join(`${appPath}.unpacked`, "native", "openerx-browser-accessibility");
   }
-  return path.join(appPath, ".vite", "native", "openerx-browser-accessibility");
+  return path.join(appPath, ".native-build", "openerx-browser-accessibility");
 }
 
 export class ElectronMacSystemBrowserDriver implements SystemDefaultBrowserDriver {

@@ -194,16 +194,21 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
       const request = operation.request;
       const action = request.action;
       const highImpact = action === "submit" || action === "upload" || action === "download";
-      const readOnly = action === "observe" || action === "detach";
+      const readOnly = action === "contexts" || action === "observe" || action === "detach";
       return {
         capability: "browser",
         risk: highImpact ? "L4" : readOnly ? "L2" : "L3",
         resourceType: action === "open" ? "domain" : "server",
-        resource: action === "open" ? urlResource(request.url) : request.sessionId,
+        resource:
+          action === "contexts"
+            ? "authorized-browser-contexts"
+            : action === "open"
+              ? urlResource(request.url)
+              : request.sessionId,
         actions: [
           action === "open"
             ? "navigate"
-            : action === "observe"
+            : action === "contexts" || action === "observe"
               ? "capture"
               : action === "detach" || action === "close"
                 ? "stop"
@@ -357,7 +362,7 @@ export function hasUncertainExternalSideEffect(operation: ToolOperation): boolea
     case "browser":
       return operation.action !== "screenshot";
     case "browser_computer_use":
-      return operation.request.action !== "observe" && operation.request.action !== "detach";
+      return !["contexts", "observe", "detach"].includes(operation.request.action);
     case "desktop_control":
       return !["list_apps", "observe", "detach"].includes(operation.request.action);
     case "desktop":
@@ -480,7 +485,11 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
       return {
         input: `${operation.request.contractVersion}:${operation.request.action}`,
         target:
-          operation.request.action === "open" ? operation.request.url : operation.request.sessionId,
+          operation.request.action === "contexts"
+            ? "authorized-browser-contexts"
+            : operation.request.action === "open"
+              ? operation.request.url
+              : operation.request.sessionId,
       };
     case "desktop_control":
       return {

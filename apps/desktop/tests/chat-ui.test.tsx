@@ -200,6 +200,30 @@ const snapshot: ConversationSnapshot = {
 
 function createBridge(): DesktopBridge {
   return {
+    getBrowserConnectionState: vi
+      .fn()
+      .mockResolvedValue({
+        mode: "auto",
+        extensionConnected: false,
+        authorizedTabs: [],
+        extensionDirectory: "/tmp/browser-extension",
+        fullCdpEnabled: false,
+      }),
+    updateBrowserMode: vi
+      .fn()
+      .mockImplementation(async (mode) => ({
+        mode,
+        extensionConnected: false,
+        authorizedTabs: [],
+        extensionDirectory: "/tmp/browser-extension",
+        fullCdpEnabled: false,
+      })),
+    prepareBrowserExtension: vi
+      .fn()
+      .mockResolvedValue({
+        pairingCode: "http://127.0.0.1:12345#test",
+        extensionDirectory: "/tmp/browser-extension",
+      }),
     getModelServiceSettings: vi.fn().mockResolvedValue({
       mode: "byok",
       byok: {
@@ -1405,6 +1429,72 @@ describe("M1 chat renderer", () => {
         },
       }),
     );
+  });
+
+  it("adds a provider model and includes it in testing and saving", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.testByokConnection).mockResolvedValue({
+      ok: true,
+      latencyMs: 12,
+      reportedModel: "new-model",
+    });
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "模型" }));
+    await user.selectOptions(await screen.findByLabelText("运行模式"), "byok");
+    const card = within(screen.getByRole("article", { name: "DeepSeek 配置" }));
+    await user.type(card.getByLabelText("新增模型 ID"), "new-model");
+    await user.click(card.getByRole("button", { name: "添加模型" }));
+    expect(card.getByRole("option", { name: "new-model" })).toBeTruthy();
+    await user.type(card.getByLabelText("DeepSeek API Key"), "provider-test-key");
+    await user.click(card.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByText(/连接成功 · 12 ms/)).toBeTruthy();
+    expect(bridge.testByokConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        byok: expect.objectContaining({ modelId: "new-model" }),
+        providerApiKeys: { deepseek: "provider-test-key" },
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "保存全部并启用" }));
+    expect(bridge.updateModelServiceSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerModels: { deepseek: [expect.objectContaining({ modelId: "new-model" })] },
+      }),
+    );
+  });
+
+  it("tests and saves a custom compatible endpoint with its own key", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.testByokConnection).mockResolvedValue({
+      ok: true,
+      latencyMs: 23,
+      reportedModel: "custom-model",
+    });
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "模型" }));
+    await user.selectOptions(await screen.findByLabelText("运行模式"), "byok");
+    await user.click(screen.getByText("自定义 OpenAI-compatible 接口"));
+    await user.clear(screen.getByLabelText("Base URL"));
+    await user.type(screen.getByLabelText("Base URL"), "https://custom.example.com/v1");
+    await user.type(screen.getByLabelText("API Key", { exact: true }), "custom-test-key");
+    await user.clear(screen.getByLabelText("模型 ID"));
+    await user.type(screen.getByLabelText("模型 ID"), "custom-model");
+    const expected = expect.objectContaining({
+      mode: "byok",
+      apiKey: "custom-test-key",
+      byok: expect.objectContaining({
+        baseUrl: "https://custom.example.com/v1",
+        modelId: "custom-model",
+      }),
+    });
+    await user.click(screen.getByRole("button", { name: "测试自定义接口" }));
+    expect(await screen.findByText("连接成功 · 23 ms")).toBeTruthy();
+    expect(bridge.testByokConnection).toHaveBeenCalledWith(expected);
+    await user.click(screen.getByRole("button", { name: "保存自定义接口并启用" }));
+    expect(bridge.updateModelServiceSettings).toHaveBeenCalledWith(expected);
   });
 
   it("previews diagnostics separately from personal data before export", async () => {

@@ -47,7 +47,9 @@ function sensitiveActionDenied(input: BrowserAdapterActionInput): void {
   }
 }
 
-function semanticCommand(input: BrowserAdapterActionInput): BrowserBridgeActionCommand | null {
+export function semanticCommand(
+  input: BrowserAdapterActionInput,
+): BrowserBridgeActionCommand | null {
   if (input.target.kind !== "semantic") return null;
   const sourceNodeId = input.target.sourceNodeId;
   switch (input.operation.action) {
@@ -77,7 +79,9 @@ function semanticCommand(input: BrowserAdapterActionInput): BrowserBridgeActionC
   }
 }
 
-function boundedCommand(input: BrowserAdapterActionInput): BrowserBridgeActionCommand | null {
+export function boundedCommand(
+  input: BrowserAdapterActionInput,
+): BrowserBridgeActionCommand | null {
   switch (input.operation.action) {
     case "type":
       if (input.target.kind !== "semantic") return null;
@@ -265,6 +269,12 @@ export class ConnectedChromeBrowserBridgeDriver implements ConnectedBrowserBridg
     if (response.status === "user_takeover_required") {
       throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
     }
+    if (response.status === "stale_observation")
+      throw new BrowserObservationError("BROWSER_OBSERVATION_MISMATCH");
+    if (response.status === "navigation_denied")
+      throw new BrowserObservationError("BROWSER_NAVIGATION_DENIED");
+    if (response.status === "element_not_interactable")
+      throw new BrowserObservationError("BROWSER_ELEMENT_NOT_INTERACTABLE");
     return response.status;
   }
 

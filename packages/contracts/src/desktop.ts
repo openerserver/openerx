@@ -4,6 +4,9 @@ import type { AutomationBridge } from "./automation";
 import type { BillingBridge } from "./billing";
 import type {
   BrowserComputerUseSessionControlInput,
+  BrowserConnectionState,
+  BrowserExtensionSetup,
+  BrowserMode,
   BrowserSessionDescriptor,
 } from "./browser-computer-use";
 import type { DesktopControlCommand, DesktopControlSession } from "./desktop-control";
@@ -133,6 +136,9 @@ export const ipcChannels = Object.freeze({
   localWebSearchSettingsUpdate: "tool:web-search:settings:update",
   localWebSearchRuntimeReset: "tool:web-search:runtime:reset",
   desktopNativePermissionRequest: "desktop:native-permission:request",
+  browserConnectionState: "browser:connection:state",
+  browserModeUpdate: "browser:mode:update",
+  browserExtensionPrepare: "browser:extension:prepare",
   browserComputerUseSessions: "browser-computer-use:sessions:list",
   desktopControlSessions: "desktop-control:sessions:list",
   desktopControlCommand: "desktop-control:session:command",
@@ -234,6 +240,9 @@ export interface DesktopBridge
   requestDesktopNativePermission(
     input: DesktopNativePermissionRequest,
   ): Promise<DesktopNativePermissionResult>;
+  getBrowserConnectionState(): Promise<BrowserConnectionState>;
+  updateBrowserMode(mode: BrowserMode): Promise<BrowserConnectionState>;
+  prepareBrowserExtension(): Promise<BrowserExtensionSetup>;
   listBrowserComputerUseSessions(): Promise<BrowserSessionDescriptor[]>;
   listDesktopControlSessions?(): Promise<DesktopControlSession[]>;
   controlDesktopSession?(command: DesktopControlCommand): Promise<DesktopControlSession>;

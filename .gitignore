@@ -54,3 +54,6 @@ npm-debug.log*
 /brands/
 /design-qa.md
 /docs/archive/
+
+# Native development helpers must survive Forge clearing .vite.
+/apps/desktop/.native-build/

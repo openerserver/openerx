@@ -1,10 +1,13 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
   BROWSER_COMPUTER_USE_V2_FEATURE_FLAG,
+  type BrowserConnectionState,
+  type BrowserExtensionSetup,
+  type BrowserMode,
   type BrowserSessionDescriptor,
   browserComputerUseV2Enabled,
   DESKTOP_CONTROL_FEATURE_FLAG,
@@ -17,8 +20,13 @@ import {
 } from "@openerx/contracts";
 import { app, BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
 import { desktopBrand } from "../../../../packages/branding/src/index";
+import { routeBrowserOpen } from "./browser-computer-use/browser-routing";
+import { BrowserSettingsStore } from "./browser-computer-use/browser-settings";
+import { ChromeExtensionServer } from "./browser-computer-use/chrome-extension-server";
+import { ConnectedChromeBrowserBridgeDriver } from "./browser-computer-use/connected-browser-bridge-driver";
 import { ElectronMacSystemBrowserDriver } from "./browser-computer-use/electron-mac-system-browser-driver";
 import { ElectronWindowsSystemBrowserDriver } from "./browser-computer-use/electron-windows-system-browser-driver";
+import { ManagedChromiumDriver } from "./browser-computer-use/managed-chromium-driver";
 import type {
   ConnectedBrowserBridgeDriver,
   SystemDefaultBrowserDriver,
@@ -104,6 +112,9 @@ export class ElectronToolCapabilityHost {
   readonly #browserSessions = new Map<string, BrowserSession>();
   readonly #browserComputerUse: SystemDefaultBrowserAdapter;
   readonly #browserComputerUseDriver: SystemDefaultBrowserDriver;
+  readonly #managedBrowser = new ManagedChromiumDriver();
+  readonly #chromeExtension = new ChromeExtensionServer();
+  readonly #browserSettings: BrowserSettingsStore;
   readonly #desktopCaptures = new DesktopCaptureRegistry();
   readonly #oauth: OAuthLoopbackController;
   readonly #desktopLease = new DesktopControlLease();
@@ -116,6 +127,7 @@ export class ElectronToolCapabilityHost {
     browserBridgeDriver: ConnectedBrowserBridgeDriver | null = null,
   ) {
     this.#profileDirectory = profileDirectory;
+    this.#browserSettings = new BrowserSettingsStore(profileDirectory);
     this.#oauth = oauth;
     const helperDirectory = app.isPackaged
       ? path.join(process.resourcesPath, "app.asar.unpacked", "native", "windows-desktop-control")
@@ -141,7 +153,8 @@ export class ElectronToolCapabilityHost {
       this.#browserComputerUseDriver,
       undefined,
       undefined,
-      browserBridgeDriver,
+      browserBridgeDriver ?? new ConnectedChromeBrowserBridgeDriver(this.#chromeExtension.grants),
+      this.#managedBrowser,
     );
   }
 
@@ -182,7 +195,7 @@ export class ElectronToolCapabilityHost {
         operation.operation === "browser"
           ? await this.#browser(operation)
           : operation.operation === "browser_computer_use"
-            ? await this.#browserComputerUse.execute(operation.request, signal)
+            ? await this.#executeBrowser(operation.request, signal)
             : operation.operation === "desktop"
               ? await this.#desktop(operation, signal)
               : (() => {
@@ -212,16 +225,20 @@ export class ElectronToolCapabilityHost {
     const browserV2Enabled = browserComputerUseV2Enabled(
       process.env[BROWSER_COMPUTER_USE_V2_FEATURE_FLAG],
     );
-    const browserAvailable = browserV2Enabled
-      ? (platform === "darwin" &&
-          screenCaptureStatus === "granted" &&
-          accessibilityTrusted &&
-          automationAvailable) ||
-        (platform === "win32" &&
-          automationAvailable &&
-          this.#browserComputerUseDriver instanceof ElectronWindowsSystemBrowserDriver &&
-          (await this.#browserComputerUseDriver.probeAvailability()))
-      : true;
+    const browserAvailable =
+      !browserV2Enabled ||
+      this.#browserSettings.mode === "auto" ||
+      this.#browserSettings.mode === "managed_chromium" ||
+      (this.#browserSettings.mode === "connected_chrome"
+        ? this.#chromeExtension.grants.connected
+        : (platform === "darwin" &&
+            screenCaptureStatus === "granted" &&
+            accessibilityTrusted &&
+            automationAvailable) ||
+          (platform === "win32" &&
+            automationAvailable &&
+            this.#browserComputerUseDriver instanceof ElectronWindowsSystemBrowserDriver &&
+            (await this.#browserComputerUseDriver.probeAvailability())));
     let windowsDesktopReady = false;
     let windowsDesktopReason: string | undefined;
     if (
@@ -247,6 +264,52 @@ export class ElectronToolCapabilityHost {
       windowsDesktopReady,
       windowsDesktopReason,
     });
+  }
+
+  getBrowserConnectionState(): BrowserConnectionState {
+    return {
+      mode: this.#browserSettings.mode,
+      extensionConnected: this.#chromeExtension.grants.connected,
+      authorizedTabs: this.#chromeExtension.grants.availableAuthorizations(),
+      extensionDirectory: path.join(app.getPath("userData"), "browser-extension"),
+      fullCdpEnabled: false,
+    };
+  }
+  updateBrowserMode(mode: BrowserMode): BrowserConnectionState {
+    this.#browserSettings.save(mode);
+    return this.getBrowserConnectionState();
+  }
+  async prepareBrowserExtension(): Promise<BrowserExtensionSetup> {
+    const directory = this.getBrowserConnectionState().extensionDirectory;
+    mkdirSync(directory, { recursive: true });
+    cpSync(path.join(app.getAppPath(), "browser-extension"), directory, { recursive: true });
+    return {
+      pairingCode: await this.#chromeExtension.pairingCode(),
+      extensionDirectory: directory,
+    };
+  }
+  async #executeBrowser(
+    request: Extract<ToolOperation, { operation: "browser_computer_use" }>["request"],
+    signal: AbortSignal,
+  ): Promise<NormalizedToolResult> {
+    if (request.action === "contexts") {
+      const state = this.getBrowserConnectionState();
+      const data = {
+        mode: state.mode,
+        extensionConnected: state.extensionConnected,
+        authorizedTabs: state.authorizedTabs,
+      };
+      return result(`可用浏览器上下文\n${JSON.stringify(data)}`, data);
+    }
+    if (request.action !== "open") return await this.#browserComputerUse.execute(request, signal);
+    return await this.#browserComputerUse.execute(
+      routeBrowserOpen(
+        request,
+        this.#browserSettings.mode,
+        this.#chromeExtension.grants.availableAuthorizations(),
+      ),
+      signal,
+    );
   }
 
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[] {
@@ -290,6 +353,8 @@ export class ElectronToolCapabilityHost {
     for (const browser of this.#browserSessions.values()) browser.window.destroy();
     this.#browserSessions.clear();
     this.#browserComputerUse.close();
+    this.#managedBrowser.close();
+    this.#chromeExtension.close();
     this.#desktopCaptures.clear();
     this.#oauth.close();
   }

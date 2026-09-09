@@ -1,6 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import type {
+  BrowserConnectionState,
+  BrowserExtensionSetup,
+  BrowserMode,
+} from "@openerx/contracts";
 import {
   type AppServiceAuthorization,
   type AppServiceByokConfiguration,
@@ -63,6 +68,9 @@ export interface MainCapabilityHost {
   controlDesktopSession?(command: DesktopControlCommand): Promise<DesktopControlSession>;
   stopDesktopControl?(conversationId?: string): void;
   availability(): Promise<HostToolAvailability>;
+  getBrowserConnectionState?(): BrowserConnectionState;
+  updateBrowserMode?(mode: BrowserMode): BrowserConnectionState;
+  prepareBrowserExtension?(): Promise<BrowserExtensionSetup>;
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[];
   pauseBrowserComputerUseSession(sessionId: string): BrowserSessionDescriptor;
   resumeBrowserComputerUseSession(sessionId: string): Promise<BrowserSessionDescriptor>;
@@ -255,6 +263,24 @@ export class AppServiceSupervisor {
     const host = this.#capabilityHost;
     if (!host) throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
     await host.clearCredential(credentialRef);
+  }
+
+  async getBrowserConnectionState(): Promise<BrowserConnectionState> {
+    await this.start();
+    if (!this.#capabilityHost?.getBrowserConnectionState)
+      throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
+    return this.#capabilityHost.getBrowserConnectionState();
+  }
+  async updateBrowserMode(mode: BrowserMode): Promise<BrowserConnectionState> {
+    await this.start();
+    if (!this.#capabilityHost?.updateBrowserMode) throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
+    return this.#capabilityHost.updateBrowserMode(mode);
+  }
+  async prepareBrowserExtension(): Promise<BrowserExtensionSetup> {
+    await this.start();
+    if (!this.#capabilityHost?.prepareBrowserExtension)
+      throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
+    return await this.#capabilityHost.prepareBrowserExtension();
   }
 
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[] {

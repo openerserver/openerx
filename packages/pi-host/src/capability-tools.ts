@@ -133,6 +133,7 @@ export function createProductCapabilityTools(input: {
   // fail schema validation before it could answer. Add the required root type
   // while preserving the action-specific branches and required fields.
   const browserComputerUseParameters = Type.Union([
+    Type.Object({ action: Type.Literal("contexts") }, { additionalProperties: false }),
     Type.Object(
       {
         action: Type.Literal("open"),
@@ -260,9 +261,9 @@ export function createProductCapabilityTools(input: {
   const browserTool = useBrowserComputerUseV2
     ? defineTool({
         name: "openerx_browser",
-        label: "Use system browser",
+        label: "Use browser",
         description:
-          "Open and control one dedicated window in the machine's default browser. Use fresh semantic elementRef values from every observation; selectors, DOM, scripts, passwords and browser profile data are unavailable.",
+          "Control a browser using the user's configured mode. Call contexts to discover authorized Chrome tabs and their exact URL/browserContextRef; never invent a context reference. Omit browserContextRef for an independent browser. managed_chromium requests always use an isolated ephemeral profile. Use fresh elementRef and observationId from every result. Passwords, browser profile data and raw CDP/scripts are unavailable; ask the user to authorize a new tab after cross-origin navigation.",
         parameters: browserComputerUseParameters,
         execute: async (toolCallId, params) =>
           await invoke(toolCallId, "openerx_browser", {
