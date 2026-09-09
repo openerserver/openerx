@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "OpenERX Browser Bridge",
+  "version": "0.1.0",
+  "description": "Only control the tab you explicitly authorize in OpenERX.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtQNS+SeDwj3WyeQdxTljy3/UftCM4Rdk0jPcURENxMs0Q1puajW6t86mEBVqauiQJAvlOwn8UFwjdjT9eGfUMBjkwnpvhEArN9zZU/5ZrtPublNTg65F7T2++3Fkv9Ljwm0MFtwkrEXXLWM0kUqkGGT6Tk76Uqxp94CIUCpki9I/Pk8RW5AWBdHrPsquH5BG33iafSDpH2fk1ZHI9kp7LoBRbDHZg4rV5u1rjNy5uVKBZ7gHVNG2aeVvRA4FRPlmstFhVtEzGi3ZPFXiQMYOLxpmPpk8HfUmxb5WvexyQk12YbLKA6/4pcvmeBolq867Pkq6I/SI9o8S01OPx8lqCQIDAQAB",
+  "permissions": ["activeTab", "debugger", "storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "OpenERX 浏览器授权"
+  }
+}
