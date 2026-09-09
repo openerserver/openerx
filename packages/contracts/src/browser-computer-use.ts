@@ -108,6 +108,12 @@ const observedOperationBase = {
 export const browserComputerUseOperationV2Schema = z.discriminatedUnion("action", [
   z
     .object({
+      contractVersion: browserComputerUseContractVersionSchema,
+      action: z.literal("contexts"),
+    })
+    .strict(),
+  z
+    .object({
       ...operationBase,
       action: z.literal("open"),
       url: browserHttpUrlSchema,
@@ -494,3 +500,33 @@ export type BrowserComputerUseSessionControlInput = z.infer<
 export type BrowserSemanticElement = z.infer<typeof browserSemanticElementSchema>;
 export type BrowserObservation = z.infer<typeof browserObservationSchema>;
 export type BrowserComputerUseErrorCode = z.infer<typeof browserComputerUseErrorCodeSchema>;
+
+export const browserModeSchema = z.enum([
+  "auto",
+  "connected_chrome",
+  "managed_chromium",
+  "os_accessibility",
+]);
+export type BrowserMode = z.infer<typeof browserModeSchema>;
+export const browserConnectionStateSchema = z
+  .object({
+    mode: browserModeSchema,
+    extensionConnected: z.boolean(),
+    authorizedTabs: z.array(
+      z.object({
+        browserContextRef: browserOpaqueReferenceSchema,
+        applicationId: z.string(),
+        origin: z.string(),
+        url: z.string(),
+        expiresAt: timestampSchema,
+      }),
+    ),
+    extensionDirectory: z.string(),
+    fullCdpEnabled: z.literal(false),
+  })
+  .strict();
+export type BrowserConnectionState = z.infer<typeof browserConnectionStateSchema>;
+export const browserExtensionSetupSchema = z
+  .object({ pairingCode: z.string(), extensionDirectory: z.string() })
+  .strict();
+export type BrowserExtensionSetup = z.infer<typeof browserExtensionSetupSchema>;

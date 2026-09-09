@@ -28,9 +28,31 @@ export const byokModelConfigurationSchema = z
   })
   .strict();
 
+export const providerModelsSchema = z.partialRecord(
+  byokProviderIdSchema,
+  z.array(byokModelConfigurationSchema.omit({ baseUrl: true })).max(100),
+);
+
+export function configuredByokProviders(
+  models: z.infer<typeof providerModelsSchema> = {},
+): ByokProviderPreset[] {
+  return byokProviderPresets.map((provider) => ({
+    ...provider,
+    models: [
+      ...provider.models,
+      ...(models[provider.id] ?? []).map((model) => ({
+        id: `custom-${encodeURIComponent(model.modelId)}`,
+        label: model.displayName,
+        configuration: { ...model, baseUrl: provider.models[0]!.configuration.baseUrl },
+      })),
+    ],
+  }));
+}
+
 export const modelServiceSettingsSchema = z
   .object({
     mode: modelServiceModeSchema,
+    providerModels: providerModelsSchema.optional(),
     byok: byokModelConfigurationSchema.nullable(),
     credentialConfigured: z.boolean(),
     providerCredentials: z.partialRecord(byokProviderIdSchema, z.boolean()).default({}),
@@ -41,6 +63,7 @@ export const modelServiceSettingsSchema = z
 export const modelServiceSettingsUpdateSchema = z
   .object({
     mode: modelServiceModeSchema,
+    providerModels: providerModelsSchema.optional(),
     byok: byokModelConfigurationSchema.nullable(),
     apiKey: z.string().trim().min(1).max(20_000).optional(),
     providerApiKeys: z
@@ -293,11 +316,14 @@ export function byokModelRef(providerId: ByokProviderId, modelId: string): strin
 
 export const defaultByokModelRef = byokModelRef("deepseek", "flash");
 
-export function resolveByokModelPreset(modelRef: string): {
+export function resolveByokModelPreset(
+  modelRef: string,
+  models?: z.infer<typeof providerModelsSchema>,
+): {
   provider: ByokProviderPreset;
   model: ByokModelPreset;
 } | null {
-  for (const provider of byokProviderPresets) {
+  for (const provider of configuredByokProviders(models)) {
     const model = provider.models.find(({ id }) => byokModelRef(provider.id, id) === modelRef);
     if (model) return { provider, model };
   }
@@ -305,7 +331,11 @@ export function resolveByokModelPreset(modelRef: string): {
 }
 
 export function isByokModelRef(modelRef: string): boolean {
-  return modelRef === "platform/byok" || resolveByokModelPreset(modelRef) !== null;
+  return (
+    modelRef === "platform/byok" ||
+    /^platform\/byok\.(deepseek|qwen|kimi|zhipu|doubao|qianfan)\.custom-.+$/u.test(modelRef) ||
+    resolveByokModelPreset(modelRef) !== null
+  );
 }
 
 export function defaultByokModelConfiguration(): ByokModelConfiguration {
