@@ -28,7 +28,9 @@
     "verify:fuses": "node scripts/verify-packaged-fuses.mjs",
     "verify:release-artifacts": "node scripts/verify-release-artifacts.mjs",
     "verify:native-signature": "node scripts/verify-native-signature.mjs",
-    "verify:d3:macos": "OPENERX_REQUIRE_SIGNED_MACOS=1 node scripts/verify-native-signature.mjs"
+    "verify:d3:macos": "OPENERX_REQUIRE_SIGNED_MACOS=1 node scripts/verify-native-signature.mjs",
+    "test:e2e:browser:managed": "vite build --config vite.browser-managed.config.mts --logLevel error && electron .vite/browser-managed",
+    "test:e2e:browser:extension": "vite build --config vite.browser-extension.config.mts --logLevel error && node .vite/browser-extension-e2e/run.mjs"
   },
   "dependencies": {
     "@openerx/app-service": "0.0.0",
