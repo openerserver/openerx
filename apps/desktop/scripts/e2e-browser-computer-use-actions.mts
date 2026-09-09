@@ -21,7 +21,7 @@ const outputDirectory = path.resolve(
   process.env.OPENERX_BCU_ACTIONS_OUTPUT ??
     path.join(desktopDirectory, ".vite", "browser-actions", "evidence"),
 );
-const helperPath = path.join(desktopDirectory, ".vite", "native", "openerx-browser-accessibility");
+const helperPath = path.join(desktopDirectory, ".native-build", "openerx-browser-accessibility");
 
 function observation(result: NormalizedToolResult): Omit<BrowserObservation, "image"> {
   const value = result.data as { observation?: Omit<BrowserObservation, "image"> };
