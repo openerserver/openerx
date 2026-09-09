@@ -38,6 +38,7 @@ import type {
 import {
   type ByokProviderId,
   byokProviderPresets,
+  configuredByokProviders,
   defaultByokModelConfiguration,
   defaultByokModelRef,
   isByokModelRef,
@@ -98,6 +99,7 @@ import remarkGfm from "remark-gfm";
 import { desktopBrand } from "../../../../packages/branding/src/index";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
+import { BrowserSettingsPanel } from "./BrowserSettingsPanel";
 import { DesktopControlBar } from "./DesktopControlBar";
 import {
   ConversationProjectBadge,
@@ -451,6 +453,12 @@ function skillDescription(skill: SkillInstallation): string {
 
 function userFacingError(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (
+    message.includes("safeStorage.decrypt") ||
+    message.includes("OS_CREDENTIAL_STORE_UNAVAILABLE")
+  ) {
+    return "系统凭据库无法读取已保存的 Key。请检查系统钥匙串；更换安装版本后可能需要备份旧凭据并重新保存 Key。";
+  }
   if (message.includes("SKILL_TOO_MANY_FILES")) {
     return "Skill 包含的文件过多（最多 20,000 个），请精简包内资源后重试。";
   }
@@ -3187,6 +3195,7 @@ function trustedBrowserUrl(value: unknown): string | null {
 function browserApplicationLabel(value: unknown): string {
   if (typeof value !== "string") return "系统默认浏览器";
   const applicationId = value.toLocaleLowerCase();
+  if (applicationId === "openerx.managed-chromium") return "OpenERX 独立浏览器";
   if (applicationId.includes("edge")) return "Microsoft Edge";
   if (applicationId.includes("chrome")) return "Google Chrome";
   if (applicationId.includes("firefox")) return "Mozilla Firefox";
@@ -5322,6 +5331,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     mode: "byok",
     byok: defaultByokModelConfiguration(),
   });
+  const [newModelIds, setNewModelIds] = useState<Partial<Record<ByokProviderId, string>>>({});
   const [providerKeys, setProviderKeys] = useState<Partial<Record<ByokProviderId, string>>>({});
   const [testModelIds, setTestModelIds] = useState<Record<ByokProviderId, string>>(() =>
     byokProviderPresets.reduce(
@@ -5338,6 +5348,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     setDraft((current) => ({
       mode: settings.data.mode,
       byok: settings.data.byok ?? current.byok,
+      providerModels: settings.data.providerModels,
     }));
   }, [settings.data]);
   const save = useMutation({
@@ -5407,6 +5418,14 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       }));
     },
   });
+  const customTest = useMutation({
+    mutationFn: () =>
+      window.openerx.testByokConnection({
+        mode: "byok",
+        byok: draft.byok,
+        ...(draft.apiKey?.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+      }),
+  });
   const clearKey = useMutation({
     mutationFn: (providerId?: ByokProviderId) => window.openerx.clearByokApiKey(providerId),
     onSuccess: (value, providerId) => {
@@ -5445,7 +5464,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
         <>
           <fieldset className="model-provider-grid">
             <legend className="visually-hidden">国内模型厂商</legend>
-            {byokProviderPresets.map((provider) => {
+            {configuredByokProviders(draft.providerModels).map((provider) => {
               const selectedModel =
                 provider.models.find(({ id }) => id === testModelIds[provider.id]) ??
                 provider.models[0];
@@ -5461,7 +5480,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
                   <div className="model-provider-heading">
                     <div>
                       <h3>{provider.label}</h3>
-                      <small>{provider.models.length} 个预置模型</small>
+                      <small>{provider.models.length} 个模型</small>
                     </div>
                     <span className={configured ? "is-configured" : undefined}>
                       {configured ? "已配置" : "未配置"}
@@ -5505,6 +5524,61 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
                       </option>
                     ))}
                   </select>
+                  <label htmlFor={`provider-new-model-${provider.id}`}>新增模型 ID</label>
+                  <input
+                    id={`provider-new-model-${provider.id}`}
+                    value={newModelIds[provider.id] ?? ""}
+                    placeholder="填写服务商提供的模型 ID"
+                    onChange={(event) =>
+                      setNewModelIds((current) => ({
+                        ...current,
+                        [provider.id]: event.target.value,
+                      }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    disabled={!newModelIds[provider.id]?.trim()}
+                    onClick={() => {
+                      const modelId = newModelIds[provider.id]?.trim();
+                      if (!modelId) return;
+                      if (
+                        modelId.length > 120 ||
+                        provider.models.some((model) => model.configuration.modelId === modelId)
+                      ) {
+                        setProviderTestFeedback((current) => ({
+                          ...current,
+                          [provider.id]: {
+                            status: "error",
+                            message: "模型 ID 已存在或超过 120 个字符。",
+                          },
+                        }));
+                        return;
+                      }
+                      const template = provider.models[0]!.configuration;
+                      const { baseUrl: _baseUrl, ...configuration } = template;
+                      setDraft((current) => ({
+                        ...current,
+                        providerModels: {
+                          ...current.providerModels,
+                          [provider.id]: [
+                            ...(current.providerModels?.[provider.id] ?? []),
+                            { ...configuration, modelId, displayName: modelId },
+                          ],
+                        },
+                      }));
+                      setTestModelIds((current) => ({
+                        ...current,
+                        [provider.id]: `custom-${encodeURIComponent(modelId)}`,
+                      }));
+                      setNewModelIds((current) => ({ ...current, [provider.id]: "" }));
+                      setNotice(
+                        "模型已添加到草稿；点击“保存全部并启用”后可在任务中选择。参数沿用该服务商首个预置模型。",
+                      );
+                    }}
+                  >
+                    添加模型
+                  </button>
                   {selectedModel ? (
                     <p className="model-provider-meta">
                       {selectedModel.configuration.contextWindow.toLocaleString()} Token 上下文 ·
@@ -5662,6 +5736,36 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
                 />
                 支持推理
               </label>
+              <div className="toolbar-actions">
+                <button
+                  type="button"
+                  onClick={() => customTest.mutate()}
+                  disabled={customTest.isPending || save.isPending}
+                >
+                  {customTest.isPending ? "测试中…" : "测试自定义接口"}
+                </button>
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => save.mutate()}
+                  disabled={save.isPending || customTest.isPending}
+                >
+                  保存自定义接口并启用
+                </button>
+              </div>
+              {customTest.data ? (
+                <p className="inline-success" role="status">
+                  连接成功 · {customTest.data.latencyMs} ms
+                </p>
+              ) : null}
+              {customTest.error ? (
+                <p className="inline-error" role="alert">
+                  {userFacingError(
+                    customTest.error,
+                    "连接失败，请检查接口地址、API Key 和模型 ID。",
+                  )}
+                </p>
+              ) : null}
               {settings.data?.credentialConfigured ? (
                 <div className="toolbar-actions">
                   <button
@@ -6794,7 +6898,7 @@ function AccountSettings({
             <div className="settings-section-panel" id="remote-section" tabIndex={-1}>
               <RemoteSettings
                 key={state?.account?.accountId ?? "signed-out"}
-                accountId={signedIn ? state?.account?.accountId ?? null : null}
+                accountId={signedIn ? (state?.account?.accountId ?? null) : null}
               />
             </div>
           ) : null}
@@ -7792,7 +7896,9 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
               </div>
             </div>
 
-            {selectedRow.capability === "web.search" ? (
+            {selectedRow.capability === "browser" ? (
+              <BrowserSettingsPanel />
+            ) : selectedRow.capability === "web.search" ? (
               <section className="tool-settings-section" aria-label="本地 Web Search">
                 <div className="tool-settings-heading">
                   <div>
