@@ -154,6 +154,22 @@ const config: ForgeConfig = {
     ...signingConfiguration(),
   },
   hooks: {
+    postPackage: async (forgeConfig, { platform, outputPaths }) => {
+      if (!["darwin", "mas"].includes(platform)) return;
+      for (const output of outputPaths) {
+        const appBundle = path.join(output, "openerx.app");
+        // Packager finalizes Info.plist after packageAfterCopy. Refresh the
+        // local ad-hoc seal only after those edits; retain formal signatures.
+        if (!forgeConfig.packagerConfig.osxSign) {
+          execFileSync("codesign", ["--force", "--deep", "--sign", "-", appBundle], {
+            stdio: "inherit",
+          });
+        }
+        execFileSync("codesign", ["--verify", "--deep", "--strict", appBundle], {
+          stdio: "inherit",
+        });
+      }
+    },
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
       if (["darwin", "mas"].includes(platform)) {
         execFileSync(
