@@ -40,7 +40,7 @@ export const releaseArtifactSchema = z
 export const releaseManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
-    product: z.literal("UWA"),
+    product: z.string().trim().min(1).max(80),
     keyId: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u),
     version: releaseVersionSchema,
     channel: releaseChannelSchema,

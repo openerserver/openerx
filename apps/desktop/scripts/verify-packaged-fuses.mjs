@@ -3,18 +3,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FuseState, FuseV1Options, getCurrentFuseWire } from "@electron/fuses";
 
+import { desktopArtifactIdentity } from "./desktop-artifact-identity.mjs";
+
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outRoot = path.join(desktopRoot, "out");
+const outRoot = path.resolve(process.env.OPENERX_RELEASE_OUT_DIR || path.join(desktopRoot, "out"));
+
+const product = desktopArtifactIdentity(desktopRoot);
+const executableName = product.executableName;
 
 function findPackagedExecutables(directory) {
   const targets = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const absolutePath = path.join(directory, entry.name);
-    if (entry.isDirectory() && entry.name.endsWith(".app")) {
+    if (entry.isDirectory() && entry.name === `${product.productName}.app`) {
       targets.push(absolutePath);
     } else if (entry.isDirectory()) {
       targets.push(...findPackagedExecutables(absolutePath));
-    } else if (entry.isFile() && entry.name.toLowerCase() === "uwa.exe") {
+    } else if (entry.isFile() && entry.name.toLowerCase() === `${executableName}.exe`.toLowerCase()) {
       targets.push(absolutePath);
     }
   }

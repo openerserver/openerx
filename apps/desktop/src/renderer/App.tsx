@@ -6589,12 +6589,26 @@ function AccountSettings({
     const requested = requestedSettingsSection(location.search);
     if (requested) setActiveSection(requested);
   }, [location.search]);
+  const settingsFocusFrame = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (settingsFocusFrame.current !== null)
+        window.cancelAnimationFrame(settingsFocusFrame.current);
+    },
+    [],
+  );
   const openSettingsSection = (section: AccountSettingsSection): void => {
+    const previousFocus = document.activeElement;
+    if (settingsFocusFrame.current !== null) window.cancelAnimationFrame(settingsFocusFrame.current);
     setActiveSection(section);
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() =>
-        document.getElementById(`${section}-section`)?.focus({ preventScroll: true }),
-      );
+    settingsFocusFrame.current = window.requestAnimationFrame(() => {
+      settingsFocusFrame.current = window.requestAnimationFrame(() => {
+        settingsFocusFrame.current = null;
+        // Do not steal focus after the user has already started editing a field.
+        if (document.activeElement === previousFocus || document.activeElement === document.body) {
+          document.getElementById(`${section}-section`)?.focus({ preventScroll: true });
+        }
+      });
     });
   };
   const normalizedSettingsSearch = settingsSearch.trim().toLocaleLowerCase();

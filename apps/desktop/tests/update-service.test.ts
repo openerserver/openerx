@@ -96,6 +96,63 @@ describe("DesktopUpdateService", () => {
     expect(native.adapter.quitAndInstall).toHaveBeenCalledOnce();
   });
 
+  it("rejects a correctly signed manifest for a different product", async () => {
+    const release = fixture();
+    const native = updater();
+    const service = new DesktopUpdateService({
+      expectedProduct: "AnotherProduct",
+      configuration: release.configuration,
+      currentVersion: "2.0.0-alpha.0",
+      platform: "darwin",
+      arch: "arm64",
+      cohortId: "device-1",
+      updater: native.adapter,
+      fetch: vi.fn(async () => Response.json(release.envelope)),
+    });
+    expect(await service.check()).toMatchObject({
+      status: "error",
+      reason: "RELEASE_PRODUCT_MISMATCH",
+    });
+    expect(native.adapter.setFeedURL).not.toHaveBeenCalled();
+    expect(native.adapter.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it("cancels an oversized streamed manifest before handing it to the native updater", async () => {
+    const release = fixture();
+    const native = updater();
+    const cancelled = vi.fn();
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.enqueue(new Uint8Array(262_144));
+            },
+            cancel: cancelled,
+          }),
+        ),
+    );
+    const service = new DesktopUpdateService({
+      configuration: release.configuration,
+      currentVersion: "2.0.0-alpha.0",
+      platform: "darwin",
+      arch: "arm64",
+      cohortId: "device-1",
+      updater: native.adapter,
+      fetch: fetcher,
+    });
+    expect(await service.check()).toMatchObject({
+      status: "error",
+      reason: "RELEASE_MANIFEST_TOO_LARGE",
+    });
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledWith(
+      release.configuration.manifestUrl,
+      expect.objectContaining({ redirect: "error", signal: expect.any(AbortSignal) }),
+    );
+    expect(native.adapter.setFeedURL).not.toHaveBeenCalled();
+  });
+
   it("rejects tampered manifests without exposing their URL or signature", async () => {
     const release = fixture();
     release.envelope.payload.version = "2.0.1";

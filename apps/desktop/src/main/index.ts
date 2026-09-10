@@ -228,9 +228,6 @@ if (started) {
   app.quit();
 }
 
-const primaryInstance = app.requestSingleInstanceLock();
-if (!primaryInstance) app.quit();
-
 const e2eProfileDirectory =
   process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_PROFILE_DIR : undefined;
 if (e2eProfileDirectory) {
@@ -239,6 +236,10 @@ if (e2eProfileDirectory) {
   // Keep existing installations on their original profile directory after the product rename.
   app.setPath("userData", path.join(app.getPath("appData"), "OpenerX"));
 }
+
+// Select the profile before Electron derives the single-instance identity.
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 
 function registerIpcHandlers(
   supervisor: AppServiceSupervisor,
@@ -516,29 +517,32 @@ function registerIpcHandlers(
           : (["off"] as const),
       })),
     );
-    const customByokModel = settings.byok && settings.credentialConfigured
-      ? {
-          modelRef: "platform/byok" as const,
-          displayName: settings.byok.displayName,
-          version: "user-configured",
-          capabilities: {
-            textInput: true,
-            imageInput: settings.byok.capabilities.imageInput,
-            fileInput: false,
-            functionCalling: settings.byok.capabilities.functionCalling,
-            structuredOutput: false,
-          },
-          contextWindow: settings.byok.contextWindow,
-          maxOutputTokens: settings.byok.maxOutputTokens,
-          status: settings.credentialConfigured ? ("available" as const) : ("unavailable" as const),
-          priceRef: "byok/user-provider",
-          priceSummary: "由 API 提供商直接计费",
-          free: false,
-          thinkingLevels: settings.byok.capabilities.reasoning
-            ? (["off", "medium", "high"] as const)
-            : (["off"] as const),
-        }
-      : null;
+    const customByokModel =
+      settings.byok && settings.credentialConfigured
+        ? {
+            modelRef: "platform/byok" as const,
+            displayName: settings.byok.displayName,
+            version: "user-configured",
+            capabilities: {
+              textInput: true,
+              imageInput: settings.byok.capabilities.imageInput,
+              fileInput: false,
+              functionCalling: settings.byok.capabilities.functionCalling,
+              structuredOutput: false,
+            },
+            contextWindow: settings.byok.contextWindow,
+            maxOutputTokens: settings.byok.maxOutputTokens,
+            status: settings.credentialConfigured
+              ? ("available" as const)
+              : ("unavailable" as const),
+            priceRef: "byok/user-provider",
+            priceSummary: "由 API 提供商直接计费",
+            free: false,
+            thinkingLevels: settings.byok.capabilities.reasoning
+              ? (["off", "medium", "high"] as const)
+              : (["off"] as const),
+          }
+        : null;
     if (settings.mode === "byok") {
       return customByokModel ? [...presetModels, customByokModel] : presetModels;
     }
@@ -1396,9 +1400,11 @@ app.whenReady().then(async () => {
   const desktopPlatform = process.platform === "darwin" ? "darwin" : "win32";
   const desktopArch = process.arch === "arm64" ? "arm64" : "x64";
   const updates = new DesktopUpdateService({
-    configuration: app.isPackaged && !process.windowsStore
-      ? loadPackagedUpdateConfiguration(app.getAppPath())
-      : developmentUpdateConfiguration(),
+    expectedProduct: "UWA",
+    configuration:
+      app.isPackaged && !process.windowsStore
+        ? loadPackagedUpdateConfiguration(app.getAppPath())
+        : developmentUpdateConfiguration(),
     currentVersion: app.getVersion(),
     platform: desktopPlatform,
     arch: desktopArch,

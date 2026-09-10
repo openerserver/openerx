@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -228,10 +228,12 @@ describe("ToolAppService", () => {
     expect(secondWorkspace.conversationId).toBe(second.receipt.conversationId);
     expect(firstWorkspace.rootPath).not.toBe(secondWorkspace.rootPath);
     expect(firstWorkspace.rootPath).toBe(
-      path.join(defaultWorkspaceDirectory, "conversations", base.conversationId),
+      realpathSync(path.join(defaultWorkspaceDirectory, "conversations", base.conversationId)),
     );
     expect(secondWorkspace.rootPath).toBe(
-      path.join(defaultWorkspaceDirectory, "conversations", second.receipt.conversationId),
+      realpathSync(
+        path.join(defaultWorkspaceDirectory, "conversations", second.receipt.conversationId),
+      ),
     );
     expect(existsSync(firstWorkspace.rootPath)).toBe(true);
     expect(existsSync(secondWorkspace.rootPath)).toBe(true);
