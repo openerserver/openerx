@@ -363,7 +363,7 @@ export class SystemDefaultBrowserAdapter {
         throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
       }
       return observationResult(
-        managed ? "已打开 OpenERX 独立浏览器" : "已在系统默认浏览器中打开专用窗口",
+        managed ? "已打开 UWA 独立浏览器" : "已在系统默认浏览器中打开专用窗口",
         observation,
         true,
         {

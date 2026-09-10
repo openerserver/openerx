@@ -58,7 +58,7 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
       width: 1280,
       height: 820,
       show: this.show,
-      title: "OpenERX 独立浏览器",
+      title: "UWA 独立浏览器",
       webPreferences: {
         partition: `openerx-managed-${sessionId}`,
         sandbox: true,

@@ -86,7 +86,6 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { DesktopControlBar } from "./DesktopControlBar";
 import {
   Navigate,
   NavLink,
@@ -3186,7 +3185,7 @@ function trustedBrowserUrl(value: unknown): string | null {
 function browserApplicationLabel(value: unknown): string {
   if (typeof value !== "string") return "系统默认浏览器";
   const applicationId = value.toLocaleLowerCase();
-  if (applicationId === "openerx.managed-chromium") return "OpenERX 独立浏览器";
+  if (applicationId === "openerx.managed-chromium") return "UWA 独立浏览器";
   if (applicationId.includes("edge")) return "Microsoft Edge";
   if (applicationId.includes("chrome")) return "Google Chrome";
   if (applicationId.includes("firefox")) return "Mozilla Firefox";
@@ -6811,6 +6810,7 @@ function AccountSettings({
         </nav>
         <div
           className="settings-section-content"
+          role="region"
           aria-label={`${accountSettingsSectionLabels[activeSection]}设置`}
         >
           {activeSection === "account" ? (

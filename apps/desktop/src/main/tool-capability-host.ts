@@ -19,7 +19,6 @@ import {
   windowsDesktopControlEnabled,
 } from "@openerx/contracts";
 import { app, BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
-import { desktopBrand } from "../../../../packages/branding/src/index";
 import { routeBrowserOpen } from "./browser-computer-use/browser-routing";
 import { BrowserSettingsStore } from "./browser-computer-use/browser-settings";
 import { ChromeExtensionServer } from "./browser-computer-use/chrome-extension-server";

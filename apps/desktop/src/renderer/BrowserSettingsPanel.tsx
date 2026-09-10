@@ -5,7 +5,7 @@ import { useState } from "react";
 const modes: { value: BrowserMode; label: string }[] = [
   { value: "auto", label: "自动（推荐）" },
   { value: "connected_chrome", label: "已连接的 Chrome" },
-  { value: "managed_chromium", label: "OpenERX 独立浏览器" },
+  { value: "managed_chromium", label: "UWA 独立浏览器" },
   { value: "os_accessibility", label: "系统浏览器 · 辅助功能" },
 ];
 export function BrowserSettingsPanel() {
@@ -89,7 +89,7 @@ export function BrowserSettingsPanel() {
           <ol>
             <li>在 Chrome 地址栏打开 chrome://extensions，开启开发者模式。</li>
             <li>点击「加载已解压的扩展程序」，选择下面的扩展目录。</li>
-            <li>打开目标网页，点击 OpenERX 扩展图标，粘贴配对码并「授权当前标签页」。</li>
+            <li>打开目标网页，点击 UWA 扩展图标，粘贴配对码并「授权当前标签页」。</li>
           </ol>
           <label>
             扩展目录
@@ -123,7 +123,7 @@ export function BrowserSettingsPanel() {
             {copied ? "已复制配对码" : "复制配对码"}
           </button>
           <p>
-            OpenERX
+            UWA
             重启后需要重新配对。标签页首次授权五分钟内可使用；切换标签页或离开当前网站后需重新授权。
           </p>
         </div>

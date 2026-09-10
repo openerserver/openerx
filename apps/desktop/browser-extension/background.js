@@ -8,7 +8,7 @@ const sourcePromise = fetch(chrome.runtime.getURL("page-agent.js")).then((r) => 
 const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function api(route, body) {
-  if (!config) throw new Error("请先填写 OpenERX 设置中的配对码");
+  if (!config) throw new Error("请先填写 UWA 设置中的配对码");
   const response = await fetch(config.base + route, {
     method: body === undefined ? "GET" : "POST",
     mode: "cors",
@@ -23,8 +23,8 @@ async function api(route, body) {
   if (!response.ok)
     throw new Error(
       response.status === 403
-        ? "配对已失效，请从 OpenERX 获取新配对码"
-        : "OpenERX 连接中断，请重新配对",
+        ? "配对已失效，请从 UWA 获取新配对码"
+        : "UWA 连接中断，请重新配对",
     );
   return await response.json();
 }
@@ -252,7 +252,7 @@ async function poll() {
         for (const delivery of deliveries)
           if (delivery.expiresAt > Date.now()) await command(delivery.message);
       } catch (error) {
-        console.error("OpenERX bridge poll:", error.message);
+        console.error("UWA bridge poll:", error.message);
         connectionId = null;
         for (const record of [...tabs.values()]) await release(record);
         await delay(2000);
@@ -327,7 +327,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       return { ok: true };
     }
     if (message.action === "authorize") {
-      if (!connectionId) throw new Error("请先配对 OpenERX");
+      if (!connectionId) throw new Error("请先配对 UWA");
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab || !/^https?:\/\//.test(tab.url)) throw new Error("只能授权 HTTP/HTTPS 网页");
       if (tabs.has(tab.id)) await release(tabs.get(tab.id));
