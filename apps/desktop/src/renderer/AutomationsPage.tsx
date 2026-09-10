@@ -581,7 +581,7 @@ export function AutomationsPage({
                       </label>
                     </div>
                     <p className="settings-note">
-                      高风险操作仍会暂停并等待确认；明确退出 UWA、电脑休眠或未登录时不会执行。
+                      高风险操作仍会暂停并等待确认；明确退出 openerx、电脑休眠或未登录时不会执行。
                     </p>
                   </section>
                   <section className="automation-preview" aria-live="polite">

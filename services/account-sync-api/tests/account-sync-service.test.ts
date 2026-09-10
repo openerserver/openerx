@@ -198,14 +198,7 @@ describe("AccountSyncService", () => {
     expect(
       service.push(
         actor,
-        operation(
-          actor,
-          directoryId,
-          0,
-          directoryPayload,
-          "upsert",
-          "project_directory",
-        ),
+        operation(actor, directoryId, 0, directoryPayload, "upsert", "project_directory"),
       ),
     ).toMatchObject({ status: "committed", revision: 1 });
 

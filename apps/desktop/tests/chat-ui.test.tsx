@@ -35,11 +35,11 @@ const skillInstallation: SkillInstallation = {
   displayName: "结构化报告",
   description: "把输入整理为结构化报告。",
   version: "1.0.0",
-  publisher: "UWA",
+  publisher: "openerx",
   scope: "builtin",
   workspaceId: null,
   sourceKind: "built_in",
-  sourceLabel: "UWA bundled skills",
+  sourceLabel: "openerx bundled skills",
   checksumSha256: "a".repeat(64),
   trust: "bundled",
   enabled: true,
@@ -632,8 +632,8 @@ describe("M1 chat renderer", () => {
 
     expect(await screen.findByText("先搜索并整理资料。")).toBeTruthy();
     expect(screen.getByText("再生成三份交付物。")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "UWA 进度更新 1" })).toBeTruthy();
-    expect(screen.getByRole("region", { name: "UWA 进度更新 2" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "openerx 进度更新 1" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "openerx 进度更新 2" })).toBeTruthy();
     expect(document.querySelectorAll(".assistant-response-part")).toHaveLength(2);
     expect(screen.queryByText("先搜索并整理资料。再生成三份交付物。")).toBeNull();
     cleanup();
@@ -643,7 +643,7 @@ describe("M1 chat renderer", () => {
     const bridge = createBridge();
     renderApp(bridge);
     expect(document.querySelector<HTMLImageElement>(".brand-mark img")?.getAttribute("src")).toBe(
-      "/assets/china-unicom-logo.png",
+      "/assets/openerx-mark.svg",
     );
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("发送消息"), "生成代码块和表格");
@@ -1513,13 +1513,13 @@ describe("M1 chat renderer", () => {
     expect(screen.getByRole("button", { name: "skill" }).getAttribute("aria-current")).toBe("page");
     expect(await screen.findByText("结构化报告")).toBeTruthy();
     expect(screen.getByText("图像工作流")).toBeTruthy();
-    expect(screen.getAllByText(/UWA 内置 Skill/)).toHaveLength(2);
+    expect(screen.getAllByText(/openerx 内置 Skill/)).toHaveLength(2);
     expect(screen.getAllByText(/工具：Skill 脚本执行器/)).toHaveLength(2);
     const skillGrid = screen.getByRole("region", { name: "已安装 Skill" });
     const skillCards = skillGrid.querySelectorAll(".skill-card");
     expect(skillCards).toHaveLength(2);
     await userEvent.setup().click(within(skillCards[0] as HTMLElement).getByText("权限与详情"));
-    expect((skillCards[0]?.querySelector("details") as HTMLDetailsElement).open).toBe(true);
+    expect(skillCards[0]?.querySelector("details")?.open).toBe(true);
     expect(screen.queryByRole("group", { name: "Skill 调用记录" })).toBeNull();
     expect(screen.queryByText("最近调用")).toBeNull();
     expect(managementBridge.listSkillInvocations).not.toHaveBeenCalled();
@@ -2347,7 +2347,7 @@ describe("M1 chat renderer", () => {
     vi.mocked(bridge.listWorkItems).mockResolvedValue([workItem]);
     renderApp(bridge, `/chat/${conversationId}`);
 
-    expect(await screen.findByText("Unicom Work Assistant")).toBeTruthy();
+    expect(await screen.findByText("personal AI workspace")).toBeTruthy();
     const workspace = await screen.findByRole("region", { name: "对话工作区" });
     const rail = await screen.findByRole("complementary", { name: "成果与来源" });
     const activity = workspace.querySelector(".assistant-activity-overview");
@@ -2595,8 +2595,8 @@ describe("M1 chat renderer", () => {
     const action = await screen.findByText("在 Microsoft Edge 中打开了网页");
     const browserActivity = action.closest<HTMLDetailsElement>(".tool-activity-segment");
     if (!browserActivity) throw new Error("Browser activity disclosure missing");
-    const firstUpdate = screen.getByRole("region", { name: "UWA 进度更新 1" });
-    const finalAnswer = screen.getByRole("region", { name: "UWA 最终答复" });
+    const firstUpdate = screen.getByRole("region", { name: "openerx 进度更新 1" });
+    const finalAnswer = screen.getByRole("region", { name: "openerx 最终答复" });
     expect(firstUpdate.contains(browserActivity)).toBe(true);
     expect(finalAnswer.contains(browserActivity)).toBe(false);
     expect(
@@ -3264,7 +3264,7 @@ describe("M1 chat renderer", () => {
         "page",
       ),
     );
-    expect(screen.queryByRole("heading", { name: "你好，我是小联" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "你好，我是 openerx" })).toBeNull();
   });
 
   it("places the companion assistant below automations and opens its workspace mode", async () => {
@@ -3277,7 +3277,7 @@ describe("M1 chat renderer", () => {
     renderApp(bridge, "/assistant");
     const user = userEvent.setup();
 
-    expect(await screen.findByRole("heading", { name: "你好，我是小联" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "你好，我是 openerx" })).toBeTruthy();
     const navigation = screen.getByRole("navigation", { name: "主导航" });
     const navigationLabels = within(navigation)
       .getAllByRole("link")
@@ -3335,7 +3335,7 @@ describe("M1 chat renderer", () => {
 
     expect(await screen.findByText("有 1 个任务正在进行，我会继续替你盯住。")).toBeTruthy();
     expect(
-      within(screen.getByRole("region", { name: "小联状态" })).getByText("处理中"),
+      within(screen.getByRole("region", { name: "openerx 状态" })).getByText("处理中"),
     ).toBeTruthy();
 
     window.localStorage.removeItem("openerx.assistant.lastSeenAt");

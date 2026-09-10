@@ -1,0 +1,25 @@
+{
+  "checkedAt": "2026-09-10T06:25:32.634452+00:00",
+  "baseCommit": "32321af",
+  "version": "2.0.3",
+  "checkV2": "passed",
+  "tests": {
+    "passed": 770,
+    "skipped": 2
+  },
+  "electronBrandIdentity": {
+    "displayName": "openerx",
+    "credentialRoundTrip": "passed",
+    "renderer": true
+  },
+  "package": {
+    "path": "apps/desktop/out/openerx-darwin-arm64/openerx.app",
+    "bundleId": "com.openerx.desktop",
+    "executable": "openerx",
+    "icon": "electron.icns",
+    "asarSha256": "1726f3cd318c896570ddebfa474d8a3625910a85936c3ec0d67c2ec0beb48c85",
+    "signed": false,
+    "published": false
+  },
+  "productionLoginVerified": false
+}

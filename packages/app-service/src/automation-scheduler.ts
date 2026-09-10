@@ -36,15 +36,15 @@ export interface AutomationChatCommandTarget {
 
 export class ChatAutomationDispatcher implements AutomationDispatcher {
   readonly #target: AutomationChatCommandTarget;
-  readonly #executionContext: (modelRef?: string) =>
-    | AutomationExecutionContext
-    | Promise<AutomationExecutionContext>;
+  readonly #executionContext: (
+    modelRef?: string,
+  ) => AutomationExecutionContext | Promise<AutomationExecutionContext>;
 
   constructor(
     target: AutomationChatCommandTarget,
-    executionContext: (modelRef?: string) =>
-      | AutomationExecutionContext
-      | Promise<AutomationExecutionContext> = () => ({}),
+    executionContext: (
+      modelRef?: string,
+    ) => AutomationExecutionContext | Promise<AutomationExecutionContext> = () => ({}),
   ) {
     this.#target = target;
     this.#executionContext = executionContext;

@@ -41,7 +41,7 @@ async function launch() {
     env: {
       ...process.env,
       OPENERX_E2E: "1",
-      OPENERX_E2E_APPLICATION_NAME: "UWA CX110 D3 PRJ11",
+      OPENERX_E2E_APPLICATION_NAME: "openerx CX110 D3 PRJ11",
       OPENERX_E2E_PROFILE_DIR: profileDirectory,
     },
   });

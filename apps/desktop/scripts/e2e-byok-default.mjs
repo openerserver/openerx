@@ -34,12 +34,18 @@ try {
   assert.equal(state.modelService.byok?.baseUrl, "https://api.deepseek.com");
   assert.equal(state.modelService.byok?.modelId, "deepseek-v4-flash");
   assert.equal(state.models.length, 13);
-  assert.equal(state.models.every(({ status }) => status === "unavailable"), true);
+  assert.equal(
+    state.models.every(({ status }) => status === "unavailable"),
+    true,
+  );
   assert.equal(
     state.models.some(({ modelRef }) => modelRef === "platform/byok.deepseek.flash"),
     true,
   );
-  assert.equal(state.models.some(({ modelRef }) => modelRef === "platform/byok.qwen.plus"), true);
+  assert.equal(
+    state.models.some(({ modelRef }) => modelRef === "platform/byok.qwen.plus"),
+    true,
+  );
   assert.equal(state.localSearch.featureEnabled, true);
   assert.equal(state.localSearch.providerId, "direct:baidu-json");
 

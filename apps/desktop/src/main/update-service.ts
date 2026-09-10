@@ -84,7 +84,7 @@ export class DesktopUpdateService {
   constructor(options: DesktopUpdateServiceOptions) {
     this.#configuration = releaseUpdateConfigurationSchema.parse(options.configuration);
     this.#currentVersion = options.currentVersion;
-    this.#expectedProduct = options.expectedProduct ?? "UWA";
+    this.#expectedProduct = options.expectedProduct ?? "openerx";
     this.#platform = options.platform;
     this.#arch = options.arch;
     this.#cohortId = options.cohortId;

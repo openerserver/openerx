@@ -55,9 +55,9 @@ export class PiMemoryExtractor implements MemoryExtractor {
 
   constructor(
     piHost: PiHostClient,
-    executionContext: (modelRef?: string) =>
-      | MemoryExecutionContext
-      | Promise<MemoryExecutionContext>,
+    executionContext: (
+      modelRef?: string,
+    ) => MemoryExecutionContext | Promise<MemoryExecutionContext>,
   ) {
     this.#piHost = piHost;
     this.#executionContext = executionContext;

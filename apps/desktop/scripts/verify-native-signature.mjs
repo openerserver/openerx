@@ -26,7 +26,9 @@ function find(directory) {
     const absolute = path.join(directory, entry.name);
     if (entry.isDirectory() && entry.name.endsWith(".app")) return [absolute];
     if (entry.isDirectory()) return find(absolute);
-    return entry.isFile() && entry.name.toLowerCase() === `${executableName}.exe`.toLowerCase() ? [absolute] : [];
+    return entry.isFile() && entry.name.toLowerCase() === `${executableName}.exe`.toLowerCase()
+      ? [absolute]
+      : [];
   });
 }
 

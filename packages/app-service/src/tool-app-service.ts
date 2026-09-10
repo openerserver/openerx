@@ -91,6 +91,7 @@ import {
   type ToolExecutionContext,
   WorkspaceToolAdapter,
 } from "@openerx/tool-sdk";
+import { defaultWorkspaceDirectory as resolveDefaultWorkspaceDirectory } from "./default-workspace";
 
 class GenerationWebSearchAdapter implements ToolAdapter {
   readonly operations = ["web_search"] as const;
@@ -390,7 +391,7 @@ export class ToolAppService {
     this.#repository = options.repository;
     const preferredDefaultWorkspace =
       options.defaultWorkspaceDirectory ??
-      path.join(path.dirname(options.workspaceDirectory), "UWA Workspace");
+      resolveDefaultWorkspaceDirectory(path.dirname(options.workspaceDirectory));
     let defaultWorkspaceFallback = false;
     try {
       mkdirSync(path.join(preferredDefaultWorkspace, "conversations"), { recursive: true });

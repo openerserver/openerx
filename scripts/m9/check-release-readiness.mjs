@@ -134,7 +134,10 @@ if (mode === "publish") {
   );
   const projectBetaCompleted = new Set(personalProjects.externalBeta?.completedEvidence ?? []);
   for (const evidence of personalProjects.externalBeta?.requiredEvidence ?? []) {
-    assert(projectBetaCompleted.has(evidence), `missing Personal Projects Beta evidence: ${evidence}`);
+    assert(
+      projectBetaCompleted.has(evidence),
+      `missing Personal Projects Beta evidence: ${evidence}`,
+    );
   }
   const projectReleaseCompleted = new Set(
     personalProjects.externalRelease?.completedEvidence ?? [],

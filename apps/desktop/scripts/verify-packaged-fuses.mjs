@@ -19,7 +19,10 @@ function findPackagedExecutables(directory) {
       targets.push(absolutePath);
     } else if (entry.isDirectory()) {
       targets.push(...findPackagedExecutables(absolutePath));
-    } else if (entry.isFile() && entry.name.toLowerCase() === `${executableName}.exe`.toLowerCase()) {
+    } else if (
+      entry.isFile() &&
+      entry.name.toLowerCase() === `${executableName}.exe`.toLowerCase()
+    ) {
       targets.push(absolutePath);
     }
   }
@@ -40,7 +43,7 @@ const expectedStates = new Map([
 
 const targets = findPackagedExecutables(outRoot);
 if (targets.length === 0) {
-  throw new Error(`No packaged UWA executable found under ${outRoot}`);
+  throw new Error(`No packaged openerx executable found under ${outRoot}`);
 }
 
 for (const target of targets) {

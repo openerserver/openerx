@@ -409,7 +409,7 @@ export function createProductCapabilityTools(input: {
       name: "openerx_web_search",
       label: "Search the Web",
       description:
-        "Search current Web information through UWA's ordered local providers (preferred engine, then alternate) with sources. If both providers fail and browser fallback is available, the tool opens the query in the system browser. For multi-query research, follow a plan of distinct evidence angles, avoid duplicate queries, and stop when the collected sources adequately support the answer.",
+        "Search current Web information through openerx's ordered local providers (preferred engine, then alternate) with sources. If both providers fail and browser fallback is available, the tool opens the query in the system browser. For multi-query research, follow a plan of distinct evidence angles, avoid duplicate queries, and stop when the collected sources adequately support the answer.",
       parameters: Type.Object(
         {
           query: Type.String({ minLength: 1, maxLength: 1_000 }),
@@ -441,7 +441,7 @@ export function createProductCapabilityTools(input: {
       name: "openerx_image_generate",
       label: "Generate images",
       description:
-        "Generate one or more images through the authenticated UWA platform image service.",
+        "Generate one or more images through the authenticated openerx platform image service.",
       parameters: Type.Object(
         {
           prompt: Type.String({ minLength: 1, maxLength: 8_000 }),

@@ -183,7 +183,7 @@ function responseFor(context: Context): AssistantMessage {
       return fauxAssistantMessage(
         fauxToolCall(
           "openerx_browser",
-          { action: "type", sessionId, selector: "#name", text: "UWA M5" },
+          { action: "type", sessionId, selector: "#name", text: "openerx M5" },
           { id: "browser-type" },
         ),
         { stopReason: "toolUse" },
@@ -234,7 +234,7 @@ function responseFor(context: Context): AssistantMessage {
       return fauxAssistantMessage(
         fauxToolCall(
           "openerx_desktop",
-          { action: "screenshot", application: "UWA" },
+          { action: "screenshot", application: "openerx" },
           { id: "desktop-screenshot" },
         ),
         { stopReason: "toolUse" },
@@ -247,7 +247,7 @@ function responseFor(context: Context): AssistantMessage {
     return fauxAssistantMessage(
       [
         "```ts",
-        'const client = "UWA";',
+        'const client = "openerx";',
         "```",
         "",
         "| 项目 | 状态 | 版本 |",

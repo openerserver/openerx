@@ -4,32 +4,32 @@
     {
       "installationId": "00000000-0000-4000-8000-000000000701",
       "name": "structured-report",
-      "version": "1.0.1",
-      "checksum": "b55273d0b04b0833e056ce31e090e62a7e7181912fc4d915fa83eefe45b1e331"
+      "version": "1.0.2",
+      "checksum": "803450295464f8ca2b019cc5e9c48a2239fd336bab20b5fdcdc23b37c2b5d7d1"
     },
     {
       "installationId": "00000000-0000-4000-8000-000000000702",
       "name": "documents",
-      "version": "1.0.1",
-      "checksum": "346892dc197d55bec7889193fbc1769988fba933edfe65d04c4c193f44adc424"
+      "version": "1.0.2",
+      "checksum": "1e7ba8a080172b540d34dc4758b519f9b757743696c3f6e8553ec4235cff08b7"
     },
     {
       "installationId": "00000000-0000-4000-8000-000000000703",
       "name": "spreadsheets",
-      "version": "1.0.1",
-      "checksum": "c4bb7412c1187376ac562a9bd35c4d338cb4c07d73f3df3233302c173ea48b0a"
+      "version": "1.0.2",
+      "checksum": "d3acc267c0355b5977daa998d140c3997c0bef684656ee3523b58924ecac8b1e"
     },
     {
       "installationId": "00000000-0000-4000-8000-000000000704",
       "name": "presentations",
-      "version": "1.0.1",
-      "checksum": "860605a2a9a81f68fa56333771c1a0936e23321818853e16157cb90212e59858"
+      "version": "1.0.2",
+      "checksum": "382c8ef870dbd9b7d4a713ea2f65a14e34837515a4979a692e1c9f963b724602"
     },
     {
       "installationId": "00000000-0000-4000-8000-000000000705",
       "name": "pdf",
-      "version": "1.0.1",
-      "checksum": "fa6979a5dcf90de5b0c5a429a9d0573b340c44fa947c6be84df35081d4bf5791"
+      "version": "1.0.2",
+      "checksum": "bd4e8719f7d097920233bc052747f5a1e598e50732bbe11c652e943433ec471c"
     }
   ]
 }

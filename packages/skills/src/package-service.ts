@@ -219,7 +219,7 @@ export class SkillPackageService {
             scope: "builtin",
             workspaceId: null,
             sourceKind: "built_in",
-            sourceLabel: "UWA bundled skills",
+            sourceLabel: "openerx bundled skills",
             trust: "bundled",
             builtIn: true,
           }),

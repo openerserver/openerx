@@ -657,7 +657,7 @@ export function startPiHostProcess(
           model = modelRuntime.getModel(providerId, frame.byok.modelId);
         }
         if (!modelRuntime || !model) {
-          throw new PiModelNotConfiguredError("UWA Platform Model is not configured");
+          throw new PiModelNotConfiguredError("openerx Platform Model is not configured");
         }
         const activeModelRef = frame.platform?.selectedModelRef ?? model.id;
         const sessionManager = await sessionRegistry.sessionManager(

@@ -179,7 +179,7 @@ export class DesktopMcpOAuthProvider implements InteractiveMcpOAuthProvider {
 
   get clientMetadata(): OAuthClientMetadata {
     return {
-      client_name: "UWA Desktop",
+      client_name: "openerx Desktop",
       redirect_uris: [this.redirectUrl],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],

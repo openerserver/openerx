@@ -13,7 +13,7 @@ mkdirSync(outputDirectory, { recursive: true });
 const specs: OfficeArtifactSpec[] = [
   {
     format: "docx",
-    title: "UWA CX-108 决策报告",
+    title: "openerx CX-108 决策报告",
     pages: [
       {
         heading: "执行摘要",
@@ -31,7 +31,7 @@ const specs: OfficeArtifactSpec[] = [
   },
   {
     format: "xlsx",
-    title: "UWA CX-108 验收工作簿",
+    title: "openerx CX-108 验收工作簿",
     sheets: [
       {
         name: "能力明细",
@@ -58,7 +58,7 @@ const specs: OfficeArtifactSpec[] = [
   },
   {
     format: "pptx",
-    title: "UWA CX-108 生产链",
+    title: "openerx CX-108 生产链",
     slides: [
       {
         title: "从 Agent Turn 到真实成果",
@@ -75,7 +75,7 @@ const specs: OfficeArtifactSpec[] = [
   },
   {
     format: "pdf",
-    title: "UWA CX-108 验收记录",
+    title: "openerx CX-108 验收记录",
     pages: [
       {
         heading: "验收范围",

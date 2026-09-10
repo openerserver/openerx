@@ -298,9 +298,7 @@ export function resolveByokModelPreset(modelRef: string): {
   model: ByokModelPreset;
 } | null {
   for (const provider of byokProviderPresets) {
-    const model = provider.models.find(
-      ({ id }) => byokModelRef(provider.id, id) === modelRef,
-    );
+    const model = provider.models.find(({ id }) => byokModelRef(provider.id, id) === modelRef);
     if (model) return { provider, model };
   }
   return null;

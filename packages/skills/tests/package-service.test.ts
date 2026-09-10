@@ -115,11 +115,14 @@ describe("SkillPackageService", () => {
     repository.close();
   });
 
-  it("upgrades pre-rebrand bundled Skills instead of rejecting changed package contents", () => {
+  it.each([
+    ["1.0.0", "OpenerX"],
+    ["1.0.1", "UWA"],
+  ])("upgrades %s bundled Skills without losing rollback", (previousVersion, previousPublisher) => {
     const { root, repository, service } = profile();
     const previousManifest: SkillPackageManifest = {
-      version: "1.0.0",
-      publisher: "OpenerX",
+      version: previousVersion,
+      publisher: previousPublisher,
       tools: ["openerx_structured_data", "openerx_skill_script"],
       mcp_servers: [],
       permissions: [
@@ -140,13 +143,13 @@ describe("SkillPackageService", () => {
       name: "structured-report",
       displayName: "Structured report",
       description: "Create a concise structured report with evidence and next actions.",
-      publisher: "OpenerX",
+      publisher: previousPublisher,
       scope: "builtin",
       workspaceId: null,
       sourceKind: "built_in",
-      sourceLabel: "OpenerX bundled skills",
+      sourceLabel: `${previousPublisher} bundled skills`,
       trust: "bundled",
-      version: "1.0.0",
+      version: previousVersion,
       checksumSha256: "a".repeat(64),
       packagePath: previousPackagePath,
       manifest: previousManifest,
@@ -156,13 +159,13 @@ describe("SkillPackageService", () => {
 
     expect(() => service.seedBuiltIns()).not.toThrow();
     expect(service.get(builtInStructuredReportSkill.installationId)).toMatchObject({
-      version: "1.0.1",
-      publisher: "UWA",
-      sourceLabel: "UWA bundled skills",
+      version: "1.0.2",
+      publisher: "openerx",
+      sourceLabel: "openerx bundled skills",
       packageState: "installed",
     });
     expect(service.get(builtInStructuredReportSkill.installationId).rollbackVersions).toContain(
-      "1.0.0",
+      previousVersion,
     );
     repository.close();
   });

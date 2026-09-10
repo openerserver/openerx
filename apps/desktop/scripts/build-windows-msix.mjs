@@ -81,7 +81,7 @@ export function validateMsixConfiguration(input) {
   const publisher = textValue(input.publisher, "publisher", 8192);
   if (!/^CN=.+/u.test(publisher)) fail("CONFIG_INVALID:publisher");
   const displayName = textValue(input.displayName, "displayName");
-  const executable = textValue(input.executable ?? "UWA.exe", "executable", 128);
+  const executable = textValue(input.executable ?? "openerx.exe", "executable", 128);
   if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]*\.exe$/iu.test(executable)) fail("CONFIG_INVALID:executable");
   const minVersion = versionValue(input.minVersion ?? minimumVersion, "minVersion");
   const maxVersionTested = versionValue(input.maxVersionTested ?? minVersion, "maxVersionTested");
@@ -278,7 +278,7 @@ export function buildWindowsMsix(options, run = execFileSync) {
   if (!existsSync(path.join(source, "resources", "app.asar"))) fail("ELECTRON_PAYLOAD_MISSING");
   const makeappx = findMakeAppx(options.makeappx);
   const logoFile = path.resolve(
-    options.logoFile ?? path.join(desktop, "public", "assets", "uwa-assistant-xiaolian.png"),
+    options.logoFile ?? path.join(desktop, "public", "assets", "openerx-mark.png"),
   );
   pngDimensions(readFileSync(logoFile));
   // Non-recursive mkdir is the exclusive reservation: a concurrent build fails safely.

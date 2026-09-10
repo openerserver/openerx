@@ -49,7 +49,7 @@ function fixture(
   const tools = new ToolRepository(databasePath, {
     ownerProfileId: "profile-a",
   });
-  const defaultWorkspaceDirectory = path.join(directory, "UWA Workspace");
+  const defaultWorkspaceDirectory = path.join(directory, "openerx Workspace");
   const generation = chat.createGeneration({
     text: "打开网页",
     idempotencyKey: "chat-tool-service-0001",

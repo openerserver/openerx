@@ -132,7 +132,7 @@ describe("lightweight local Web Search", () => {
       url: new URL("https://www.baidu.com/s?wd=fixture&tn=json"),
       allowedOrigins: ["https://www.baidu.com"],
       allowedPaths: ["/s"],
-      headers: { accept: "application/json", "user-agent": "UWA-Test/2.0" },
+      headers: { accept: "application/json", "user-agent": "openerx-Test/2.0" },
       acceptedContentTypes: ["application/json"],
       maxResponseBytes: 1_024,
       timeoutMs: 1_000,
@@ -311,7 +311,7 @@ describe("lightweight local Web Search", () => {
     }));
     const provider = new BaiduJsonSearchProvider({
       client: { get },
-      userAgent: "UWA-Test/2.0",
+      userAgent: "openerx-Test/2.0",
       now: () => Date.parse("2026-08-29T00:00:00.000Z"),
     });
     const coordinator = new LocalWebSearchCoordinator([provider]);

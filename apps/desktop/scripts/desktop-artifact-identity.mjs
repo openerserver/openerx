@@ -50,9 +50,7 @@ export function desktopStoreInputs(desktop, env = process.env) {
       if (!path.relative(base, candidate).startsWith("..")) logoFile = candidate;
     }
   }
-  logoFile = path.resolve(
-    logoFile || path.join(desktop, "public", "assets", "uwa-assistant-xiaolian.png"),
-  );
+  logoFile = path.resolve(logoFile || path.join(desktop, "public", "assets", "openerx-mark.png"));
   if (!existsSync(logoFile)) throw new Error("WINDOWS_STORE_ICON_REQUIRED");
   return { ...identity, configurationFile, configuration, logoFile };
 }

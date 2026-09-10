@@ -43,7 +43,10 @@ describe("M8 Personal Beta readiness ledger", () => {
     expect(status.externalBeta.completedEvidence).toEqual([
       "real-deepseek-api-usage-and-server-charge-smoke",
     ]);
-    expect(status.externalBeta.requiredEvidence).toHaveLength(6);
+    expect(status.externalBeta.requiredEvidence).toHaveLength(7);
+    expect(status.externalBeta.requiredEvidence).toContain(
+      "personal-projects-signed-cross-device-directory-reconnect-and-remote",
+    );
     expect(status.performanceBudgets).toMatchObject({
       status: "provisional_local",
       desktopInteractiveMs: 5_000,

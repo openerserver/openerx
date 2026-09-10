@@ -1,7 +1,4 @@
-import {
-  BROWSER_COMPUTER_USE_CONTRACT_VERSION,
-  type PiToolRequestFrame,
-} from "@openerx/contracts";
+import { BROWSER_COMPUTER_USE_CONTRACT_VERSION, type PiToolRequestFrame } from "@openerx/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createProductCapabilityTools } from "../src/capability-tools";
 

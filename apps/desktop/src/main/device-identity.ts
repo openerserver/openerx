@@ -16,7 +16,7 @@ export async function loadOrCreateDeviceDescriptor(
   }
   const descriptor = deviceDescriptorSchema.parse({
     deviceId: randomUUID(),
-    name: hostname().slice(0, 120) || "UWA device",
+    name: hostname().slice(0, 120) || "openerx device",
     platform,
     arch,
   });

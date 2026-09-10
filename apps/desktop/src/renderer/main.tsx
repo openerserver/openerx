@@ -22,8 +22,8 @@ function RendererUnavailable({ crashed = false }: { crashed?: boolean }): React.
   return (
     <main className="bridge-unavailable" role="alert">
       <div>
-        <p className="eyebrow">UWA · Unicom Work Assistant</p>
-        <h1>{crashed ? "界面没有正常启动" : "请从 UWA 桌面应用打开"}</h1>
+        <p className="eyebrow">openerx · personal AI workspace</p>
+        <h1>{crashed ? "界面没有正常启动" : "请从 openerx 桌面应用打开"}</h1>
         <p>
           {crashed
             ? "桌面界面遇到意外错误。你的本机对话数据不会因此被删除。"

@@ -87,7 +87,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { DesktopControlBar } from "./DesktopControlBar";
 import {
   Navigate,
   NavLink,
@@ -100,6 +99,7 @@ import {
 import remarkGfm from "remark-gfm";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
+import { DesktopControlBar } from "./DesktopControlBar";
 import {
   ConversationProjectBadge,
   ConversationProjectMoveDialog,
@@ -407,7 +407,7 @@ function accountStatusLabel(status: string | undefined): string {
 function accountReason(reason: string | null | undefined): string | null {
   if (!reason) return null;
   if (reason === "DEVICE_SESSION_REVOKED") return "此设备的登录已失效，请重新验证邮箱。";
-  if (reason === "AUTHENTICATION_REQUIRED") return "请先登录 UWA。";
+  if (reason === "AUTHENTICATION_REQUIRED") return "请先登录 openerx。";
   return "账户状态发生变化，请重新登录后再试。";
 }
 
@@ -491,7 +491,7 @@ function userFacingError(error: unknown, fallback: string): string {
     return "远程 BYOK 地址必须使用 HTTPS；本机 localhost 可使用 HTTP。";
   }
   if (message.includes("PI_MODEL_NOT_CONFIGURED")) {
-    return "默认模型暂时未就绪，UWA 正在自动恢复；请稍后重试。";
+    return "默认模型暂时未就绪，openerx 正在自动恢复；请稍后重试。";
   }
   if (message.includes("PI_PROVIDER_FAILURE") || message.includes("MODEL_PROVIDER")) {
     return "模型服务暂时没有响应，请检查网络后重试。";
@@ -671,8 +671,7 @@ function ComposerSelect({
   );
   const activeValues = useMemo(() => selectedValues ?? [value], [selectedValues, value]);
   const enabledIndexes = useMemo(
-    () =>
-      flattenedOptions.flatMap((option, index) => (option.disabled ? [] : [index])),
+    () => flattenedOptions.flatMap((option, index) => (option.disabled ? [] : [index])),
     [flattenedOptions],
   );
 
@@ -1442,7 +1441,7 @@ function Composer({
             label={selectedSkill ? skillName(selectedSkill) : "自动 Skill"}
             value={skillInstallationId}
             options={[
-              { value: "", label: "自动 Skill", description: "由 UWA 根据任务自动选择" },
+              { value: "", label: "自动 Skill", description: "由 openerx 根据任务自动选择" },
               ...(skills.data ?? [])
                 .filter(({ enabled, packageState }) => enabled && packageState === "installed")
                 .map((skill) => ({
@@ -1566,7 +1565,7 @@ function NewChat({
       {modelRequiresConfiguration ? (
         <section className="settings-card" aria-label="配置模型 API">
           <h2>先配置模型 API</h2>
-          <p>此安装包默认使用 BYOK，不依赖 UWA 服务器。配置 API Key 后即可开始任务。</p>
+          <p>此安装包默认使用 BYOK，不依赖 openerx 服务器。配置 API Key 后即可开始任务。</p>
           <NavLink className="primary-link" to="/settings/account?section=model">
             前往设置 → 模型
           </NavLink>
@@ -1919,9 +1918,7 @@ function ContextDock({
         <div className="context-dropzone">
           <FolderSimple size={26} weight="regular" />
           <strong>添加仅用于当前对话的目录</strong>
-          <span>
-            项目目录在上方标记为“来自项目”；这里新增的授权不会反向修改项目配置。
-          </span>
+          <span>项目目录在上方标记为“来自项目”；这里新增的授权不会反向修改项目配置。</span>
           <div className="workspace-grant-controls">
             <label>
               <span>访问权限</span>
@@ -2299,304 +2296,304 @@ function FilesAndArtifacts(): React.JSX.Element {
   return (
     <main className={`library-page ${selected ? "preview-is-open" : ""}`}>
       <div className="library-browser-pane">
-      <header className="library-header">
-        <div>
-          <p className="eyebrow">本地优先 · 可同步对象</p>
-          <h1>个人文件与成果</h1>
-          <p>按对话集中查看附件与生成成果；成果按版本保留，不静默覆盖。</p>
-        </div>
-        <div className="library-header-actions">
-          <button
-            type="button"
-            onClick={() => chooseDirectory.mutate()}
-            disabled={chooseDirectory.isPending}
-            title="仅授权读取你选择的目录；之后可撤销原始路径权限"
-          >
-            <FolderSimple size={17} />
-            {chooseDirectory.isPending ? "正在选择…" : "添加文件夹"}
-          </button>
-          <button
-            type="button"
-            className="primary-action"
-            onClick={() => chooseFiles.mutate()}
-            disabled={chooseFiles.isPending}
-          >
-            <Plus size={17} /> {chooseFiles.isPending ? "正在选择…" : "添加文件"}
-          </button>
-        </div>
-      </header>
-      <p className="library-scope-note">
-        同一文件用于多个对话时会分别显示；直接从本页添加的内容会先归入“未关联对话”。
-      </p>
-      <div className="library-toolbar">
-        <label className="library-search" htmlFor="library-search-input">
-          <MagnifyingGlass size={18} aria-hidden="true" />
-          <input
-            id="library-search-input"
-            type="search"
-            aria-label="搜索文件、成果或对话"
-            value={librarySearch}
-            placeholder="搜索文件、成果或对话"
-            onChange={(event) => {
-              setLibrarySearch(event.target.value);
-              setLibraryPage(1);
-            }}
-          />
-          {librarySearch ? (
+        <header className="library-header">
+          <div>
+            <p className="eyebrow">本地优先 · 可同步对象</p>
+            <h1>个人文件与成果</h1>
+            <p>按对话集中查看附件与生成成果；成果按版本保留，不静默覆盖。</p>
+          </div>
+          <div className="library-header-actions">
             <button
               type="button"
-              aria-label="清除资料库搜索"
-              onClick={() => {
-                setLibrarySearch("");
+              onClick={() => chooseDirectory.mutate()}
+              disabled={chooseDirectory.isPending}
+              title="仅授权读取你选择的目录；之后可撤销原始路径权限"
+            >
+              <FolderSimple size={17} />
+              {chooseDirectory.isPending ? "正在选择…" : "添加文件夹"}
+            </button>
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => chooseFiles.mutate()}
+              disabled={chooseFiles.isPending}
+            >
+              <Plus size={17} /> {chooseFiles.isPending ? "正在选择…" : "添加文件"}
+            </button>
+          </div>
+        </header>
+        <p className="library-scope-note">
+          同一文件用于多个对话时会分别显示；直接从本页添加的内容会先归入“未关联对话”。
+        </p>
+        <div className="library-toolbar">
+          <label className="library-search" htmlFor="library-search-input">
+            <MagnifyingGlass size={18} aria-hidden="true" />
+            <input
+              id="library-search-input"
+              type="search"
+              aria-label="搜索文件、成果或对话"
+              value={librarySearch}
+              placeholder="搜索文件、成果或对话"
+              onChange={(event) => {
+                setLibrarySearch(event.target.value);
                 setLibraryPage(1);
               }}
-            >
-              <X size={15} />
-            </button>
-          ) : null}
-        </label>
-        <span aria-live="polite">
-          {normalizedLibrarySearch ? "找到" : "共"} {filteredConversationLibrary.length} 个对话 ·{" "}
-          {filteredLibraryItemCount} 项
-        </span>
-      </div>
-      <div className="library-feedback" aria-live="polite">
-        {fileNotice && !chooseFiles.error && !chooseDirectory.error ? (
-          <p className="inline-success">{fileNotice}</p>
-        ) : null}
-        {files.error ||
-        artifacts.error ||
-        conversations.error ||
-        conversationLibrary.error ||
-        chooseFiles.error ||
-        chooseDirectory.error ? (
-          <p className="inline-error">
-            {userFacingError(
-              files.error ??
-                artifacts.error ??
-                conversations.error ??
-                conversationLibrary.error ??
-                chooseFiles.error ??
-                chooseDirectory.error,
-              "暂时无法读取或添加文件，请重试。",
-            )}
-          </p>
-        ) : null}
-      </div>
-      <section className="library-section" aria-labelledby="conversation-files-title">
-        <div className="library-section-title">
-          <h2 id="conversation-files-title">按对话</h2>
-          <span>
-            {normalizedLibrarySearch
-              ? `${filteredConversationLibrary.length} 个匹配对话`
-              : `${conversationLibrary.data?.length ?? 0} 个对话`}
-          </span>
-        </div>
-        <div className="conversation-library-list">
-          {pagedConversationLibrary.map(
-            ({ conversation, files: groupFiles, artifacts: groupArtifacts }) => (
-              <article
-                className="conversation-library-group"
-                key={conversation.id}
-                aria-labelledby={`library-conversation-${conversation.id}`}
+            />
+            {librarySearch ? (
+              <button
+                type="button"
+                aria-label="清除资料库搜索"
+                onClick={() => {
+                  setLibrarySearch("");
+                  setLibraryPage(1);
+                }}
               >
-                <header>
-                  <div className="conversation-library-title">
-                    <ChatCircle size={19} />
-                    <div>
-                      <NavLink
-                        id={`library-conversation-${conversation.id}`}
-                        to={`/chat/${conversation.id}`}
-                      >
-                        {conversation.title}
-                      </NavLink>
-                      <span>
-                        {conversation.archivedAt ? "已归档 · " : ""}
-                        更新于 {formatUpdatedAt(conversation.updatedAt)}
-                      </span>
-                    </div>
-                  </div>
-                  <span className="conversation-library-count">
-                    {groupFiles.length} 个文件 · {groupArtifacts.length} 个成果
-                  </span>
-                </header>
-                <div className="library-item-list">
-                  {groupFiles.map((file: PersonalFile) => (
-                    <button
-                      type="button"
-                      className={`library-card ${
-                        selected?.kind === "personal_file" && selected.id === file.id
-                          ? "is-selected"
-                          : ""
-                      }`}
-                      aria-pressed={selected?.kind === "personal_file" && selected.id === file.id}
-                      key={`file-${file.id}`}
-                      onClick={() => {
-                        setSelected({ kind: "personal_file", id: file.id });
-                        setPreviewMode("preview");
-                      }}
-                    >
-                      <FileText size={24} />
-                      <strong>{file.displayName}</strong>
-                      <span>
-                        文件 · {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
-                      </span>
-                      <span>
-                        {file.parseStatus === "ready"
-                          ? "引用已就绪"
-                          : (file.parseErrorCode ?? "解析中")}
-                      </span>
-                    </button>
-                  ))}
-                  {groupArtifacts.map((artifact) => (
-                    <button
-                      type="button"
-                      className={`library-card ${
-                        selected?.kind === "artifact" && selected.id === artifact.id
-                          ? "is-selected"
-                          : ""
-                      }`}
-                      aria-pressed={selected?.kind === "artifact" && selected.id === artifact.id}
-                      key={`artifact-${artifact.id}`}
-                      onClick={() => {
-                        setSelected({ kind: "artifact", id: artifact.id });
-                        setPreviewMode("preview");
-                      }}
-                    >
-                      <FolderSimple size={24} />
-                      <strong>{artifact.displayName}</strong>
-                      <span>
-                        成果 · {artifact.format.toUpperCase()} · v{artifact.currentVersion}
-                      </span>
-                      <span>{artifact.versions.length} 个不可变版本</span>
-                    </button>
-                  ))}
-                </div>
-              </article>
-            ),
-          )}
-        </div>
-      </section>
-      {libraryPageCount > 1 ? (
-        <nav className="library-pagination" aria-label="文件列表分页">
-          <button
-            type="button"
-            disabled={visibleLibraryPage === 1}
-            onClick={() => setLibraryPage((page) => Math.max(1, page - 1))}
-          >
-            <ArrowLeft size={15} /> 上一页
-          </button>
-          <span>
-            第 {visibleLibraryPage} / {libraryPageCount} 页
+                <X size={15} />
+              </button>
+            ) : null}
+          </label>
+          <span aria-live="polite">
+            {normalizedLibrarySearch ? "找到" : "共"} {filteredConversationLibrary.length} 个对话 ·{" "}
+            {filteredLibraryItemCount} 项
           </span>
-          <button
-            type="button"
-            disabled={visibleLibraryPage === libraryPageCount}
-            onClick={() => setLibraryPage((page) => Math.min(libraryPageCount, page + 1))}
-          >
-            下一页 <ArrowRight size={15} />
-          </button>
-        </nav>
-      ) : null}
-      {conversationLibrary.isPending ? <p className="muted-copy">正在整理对话文件…</p> : null}
-      {!conversationLibrary.isPending &&
-      filteredUnlinkedFiles.length + filteredUnlinkedArtifacts.length > 0 ? (
-        <section className="library-section" aria-labelledby="unlinked-files-title">
+        </div>
+        <div className="library-feedback" aria-live="polite">
+          {fileNotice && !chooseFiles.error && !chooseDirectory.error ? (
+            <p className="inline-success">{fileNotice}</p>
+          ) : null}
+          {files.error ||
+          artifacts.error ||
+          conversations.error ||
+          conversationLibrary.error ||
+          chooseFiles.error ||
+          chooseDirectory.error ? (
+            <p className="inline-error">
+              {userFacingError(
+                files.error ??
+                  artifacts.error ??
+                  conversations.error ??
+                  conversationLibrary.error ??
+                  chooseFiles.error ??
+                  chooseDirectory.error,
+                "暂时无法读取或添加文件，请重试。",
+              )}
+            </p>
+          ) : null}
+        </div>
+        <section className="library-section" aria-labelledby="conversation-files-title">
           <div className="library-section-title">
-            <h2 id="unlinked-files-title">未关联对话</h2>
-            <span>{filteredUnlinkedFiles.length + filteredUnlinkedArtifacts.length} 项</span>
+            <h2 id="conversation-files-title">按对话</h2>
+            <span>
+              {normalizedLibrarySearch
+                ? `${filteredConversationLibrary.length} 个匹配对话`
+                : `${conversationLibrary.data?.length ?? 0} 个对话`}
+            </span>
           </div>
-          <article className="conversation-library-group conversation-library-unlinked">
-            <header>
-              <div className="conversation-library-title">
-                <FolderSimple size={19} />
-                <div>
-                  <strong>资料库直接添加</strong>
-                  <span>在对话中使用后，会同时显示到对应对话下</span>
-                </div>
-              </div>
-            </header>
-            <div className="library-item-list">
-              {filteredUnlinkedFiles.map((file) => (
-                <button
-                  type="button"
-                  className={`library-card ${
-                    selected?.kind === "personal_file" && selected.id === file.id
-                      ? "is-selected"
-                      : ""
-                  }`}
-                  aria-pressed={selected?.kind === "personal_file" && selected.id === file.id}
-                  key={`unlinked-file-${file.id}`}
-                  onClick={() => {
-                    setSelected({ kind: "personal_file", id: file.id });
-                    setPreviewMode("preview");
-                  }}
+          <div className="conversation-library-list">
+            {pagedConversationLibrary.map(
+              ({ conversation, files: groupFiles, artifacts: groupArtifacts }) => (
+                <article
+                  className="conversation-library-group"
+                  key={conversation.id}
+                  aria-labelledby={`library-conversation-${conversation.id}`}
                 >
-                  <FileText size={24} />
-                  <strong>{file.displayName}</strong>
-                  <span>
-                    文件 · {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
-                  </span>
-                  <span>
-                    {file.parseStatus === "ready"
-                      ? "引用已就绪"
-                      : (file.parseErrorCode ?? "解析中")}
-                  </span>
-                </button>
-              ))}
-              {filteredUnlinkedArtifacts.map((artifact) => (
-                <button
-                  type="button"
-                  className={`library-card ${
-                    selected?.kind === "artifact" && selected.id === artifact.id
-                      ? "is-selected"
-                      : ""
-                  }`}
-                  aria-pressed={selected?.kind === "artifact" && selected.id === artifact.id}
-                  key={`unlinked-artifact-${artifact.id}`}
-                  onClick={() => {
-                    setSelected({ kind: "artifact", id: artifact.id });
-                    setPreviewMode("preview");
-                  }}
-                >
-                  <FolderSimple size={24} />
-                  <strong>{artifact.displayName}</strong>
-                  <span>
-                    成果 · {artifact.format.toUpperCase()} · v{artifact.currentVersion}
-                  </span>
-                  <span>{artifact.versions.length} 个不可变版本</span>
-                </button>
-              ))}
-            </div>
-          </article>
+                  <header>
+                    <div className="conversation-library-title">
+                      <ChatCircle size={19} />
+                      <div>
+                        <NavLink
+                          id={`library-conversation-${conversation.id}`}
+                          to={`/chat/${conversation.id}`}
+                        >
+                          {conversation.title}
+                        </NavLink>
+                        <span>
+                          {conversation.archivedAt ? "已归档 · " : ""}
+                          更新于 {formatUpdatedAt(conversation.updatedAt)}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="conversation-library-count">
+                      {groupFiles.length} 个文件 · {groupArtifacts.length} 个成果
+                    </span>
+                  </header>
+                  <div className="library-item-list">
+                    {groupFiles.map((file: PersonalFile) => (
+                      <button
+                        type="button"
+                        className={`library-card ${
+                          selected?.kind === "personal_file" && selected.id === file.id
+                            ? "is-selected"
+                            : ""
+                        }`}
+                        aria-pressed={selected?.kind === "personal_file" && selected.id === file.id}
+                        key={`file-${file.id}`}
+                        onClick={() => {
+                          setSelected({ kind: "personal_file", id: file.id });
+                          setPreviewMode("preview");
+                        }}
+                      >
+                        <FileText size={24} />
+                        <strong>{file.displayName}</strong>
+                        <span>
+                          文件 · {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
+                        </span>
+                        <span>
+                          {file.parseStatus === "ready"
+                            ? "引用已就绪"
+                            : (file.parseErrorCode ?? "解析中")}
+                        </span>
+                      </button>
+                    ))}
+                    {groupArtifacts.map((artifact) => (
+                      <button
+                        type="button"
+                        className={`library-card ${
+                          selected?.kind === "artifact" && selected.id === artifact.id
+                            ? "is-selected"
+                            : ""
+                        }`}
+                        aria-pressed={selected?.kind === "artifact" && selected.id === artifact.id}
+                        key={`artifact-${artifact.id}`}
+                        onClick={() => {
+                          setSelected({ kind: "artifact", id: artifact.id });
+                          setPreviewMode("preview");
+                        }}
+                      >
+                        <FolderSimple size={24} />
+                        <strong>{artifact.displayName}</strong>
+                        <span>
+                          成果 · {artifact.format.toUpperCase()} · v{artifact.currentVersion}
+                        </span>
+                        <span>{artifact.versions.length} 个不可变版本</span>
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ),
+            )}
+          </div>
         </section>
-      ) : null}
-      {!conversationLibrary.isPending &&
-      normalizedLibrarySearch &&
-      filteredConversationLibrary.length === 0 &&
-      filteredUnlinkedFiles.length === 0 &&
-      filteredUnlinkedArtifacts.length === 0 ? (
-        <div className="empty-state empty-state-compact empty-state-without-action">
-          <MagnifyingGlass size={25} />
-          <div>
-            <strong>没有匹配内容</strong>
-            <p>请尝试文件名、成果格式或对话标题中的其他关键词。</p>
+        {libraryPageCount > 1 ? (
+          <nav className="library-pagination" aria-label="文件列表分页">
+            <button
+              type="button"
+              disabled={visibleLibraryPage === 1}
+              onClick={() => setLibraryPage((page) => Math.max(1, page - 1))}
+            >
+              <ArrowLeft size={15} /> 上一页
+            </button>
+            <span>
+              第 {visibleLibraryPage} / {libraryPageCount} 页
+            </span>
+            <button
+              type="button"
+              disabled={visibleLibraryPage === libraryPageCount}
+              onClick={() => setLibraryPage((page) => Math.min(libraryPageCount, page + 1))}
+            >
+              下一页 <ArrowRight size={15} />
+            </button>
+          </nav>
+        ) : null}
+        {conversationLibrary.isPending ? <p className="muted-copy">正在整理对话文件…</p> : null}
+        {!conversationLibrary.isPending &&
+        filteredUnlinkedFiles.length + filteredUnlinkedArtifacts.length > 0 ? (
+          <section className="library-section" aria-labelledby="unlinked-files-title">
+            <div className="library-section-title">
+              <h2 id="unlinked-files-title">未关联对话</h2>
+              <span>{filteredUnlinkedFiles.length + filteredUnlinkedArtifacts.length} 项</span>
+            </div>
+            <article className="conversation-library-group conversation-library-unlinked">
+              <header>
+                <div className="conversation-library-title">
+                  <FolderSimple size={19} />
+                  <div>
+                    <strong>资料库直接添加</strong>
+                    <span>在对话中使用后，会同时显示到对应对话下</span>
+                  </div>
+                </div>
+              </header>
+              <div className="library-item-list">
+                {filteredUnlinkedFiles.map((file) => (
+                  <button
+                    type="button"
+                    className={`library-card ${
+                      selected?.kind === "personal_file" && selected.id === file.id
+                        ? "is-selected"
+                        : ""
+                    }`}
+                    aria-pressed={selected?.kind === "personal_file" && selected.id === file.id}
+                    key={`unlinked-file-${file.id}`}
+                    onClick={() => {
+                      setSelected({ kind: "personal_file", id: file.id });
+                      setPreviewMode("preview");
+                    }}
+                  >
+                    <FileText size={24} />
+                    <strong>{file.displayName}</strong>
+                    <span>
+                      文件 · {file.format.toUpperCase()} · {formatBytes(file.sizeBytes)}
+                    </span>
+                    <span>
+                      {file.parseStatus === "ready"
+                        ? "引用已就绪"
+                        : (file.parseErrorCode ?? "解析中")}
+                    </span>
+                  </button>
+                ))}
+                {filteredUnlinkedArtifacts.map((artifact) => (
+                  <button
+                    type="button"
+                    className={`library-card ${
+                      selected?.kind === "artifact" && selected.id === artifact.id
+                        ? "is-selected"
+                        : ""
+                    }`}
+                    aria-pressed={selected?.kind === "artifact" && selected.id === artifact.id}
+                    key={`unlinked-artifact-${artifact.id}`}
+                    onClick={() => {
+                      setSelected({ kind: "artifact", id: artifact.id });
+                      setPreviewMode("preview");
+                    }}
+                  >
+                    <FolderSimple size={24} />
+                    <strong>{artifact.displayName}</strong>
+                    <span>
+                      成果 · {artifact.format.toUpperCase()} · v{artifact.currentVersion}
+                    </span>
+                    <span>{artifact.versions.length} 个不可变版本</span>
+                  </button>
+                ))}
+              </div>
+            </article>
+          </section>
+        ) : null}
+        {!conversationLibrary.isPending &&
+        normalizedLibrarySearch &&
+        filteredConversationLibrary.length === 0 &&
+        filteredUnlinkedFiles.length === 0 &&
+        filteredUnlinkedArtifacts.length === 0 ? (
+          <div className="empty-state empty-state-compact empty-state-without-action">
+            <MagnifyingGlass size={25} />
+            <div>
+              <strong>没有匹配内容</strong>
+              <p>请尝试文件名、成果格式或对话标题中的其他关键词。</p>
+            </div>
           </div>
-        </div>
-      ) : null}
-      {!files.isPending &&
-      !artifacts.isPending &&
-      !conversationLibrary.isPending &&
-      totalItemCount === 0 ? (
-        <div className="empty-state empty-state-compact">
-          <FolderSimple size={25} />
-          <div>
-            <strong>还没有文件或成果</strong>
-            <p>添加文件，或在对话中生成报告、表格和其他成果后，就可以按对话查找。</p>
+        ) : null}
+        {!files.isPending &&
+        !artifacts.isPending &&
+        !conversationLibrary.isPending &&
+        totalItemCount === 0 ? (
+          <div className="empty-state empty-state-compact">
+            <FolderSimple size={25} />
+            <div>
+              <strong>还没有文件或成果</strong>
+              <p>添加文件，或在对话中生成报告、表格和其他成果后，就可以按对话查找。</p>
+            </div>
+            <NavLink to="/chat/new">开始一个新任务</NavLink>
           </div>
-          <NavLink to="/chat/new">开始一个新任务</NavLink>
-        </div>
-      ) : null}
+        ) : null}
       </div>
       {selected ? (
         <section className="content-preview" aria-labelledby="content-preview-title">
@@ -2823,7 +2820,7 @@ function MessageCard({
       <div className="message-content">
         {showMessageStatus ? (
           <header className="message-state-header">
-            <strong>{message.role === "user" ? "你" : "UWA"}</strong>
+            <strong>{message.role === "user" ? "你" : "openerx"}</strong>
             <span className={`message-status status-${message.status}`}>
               {messageStatusLabel[message.status]}
             </span>
@@ -2889,7 +2886,9 @@ function MessageCard({
                 onClick={() => setActivitiesOpen((open) => !open)}
               >
                 <span>
-                  <strong>{activityElapsed ? `用时 ${activityElapsed}` : primaryActivity?.title}</strong>
+                  <strong>
+                    {activityElapsed ? `用时 ${activityElapsed}` : primaryActivity?.title}
+                  </strong>
                   {activities.length > 1 ? <small>{activities.length} 次运行</small> : null}
                   <CaretDown size={13} weight="bold" aria-hidden="true" />
                 </span>
@@ -2909,7 +2908,7 @@ function MessageCard({
                         className="assistant-response-part"
                         aria-label={
                           assistantTextParts.length > 1
-                            ? `UWA 进度更新 ${index + 1}`
+                            ? `openerx 进度更新 ${index + 1}`
                             : undefined
                         }
                       >
@@ -2933,7 +2932,7 @@ function MessageCard({
             ) : null}
             {conclusionPart ? (
               <div className="assistant-response assistant-conclusion-response">
-                <section className="assistant-response-part" aria-label="UWA 最终答复">
+                <section className="assistant-response-part" aria-label="openerx 最终答复">
                   {assistantMarkdown(conclusionPart.text)}
                 </section>
               </div>
@@ -3293,9 +3292,7 @@ function BrowserToolCall({
         </details>
       </div>
       {call.errorCode ? (
-        <p className="inline-error">
-          {toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}
-        </p>
+        <p className="inline-error">{toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}</p>
       ) : null}
     </div>
   );
@@ -3319,12 +3316,7 @@ function BrowserToolCall({
         {call.status === "completed" ? null : (
           <small className="browser-activity-state">{toolCallStatusLabel[call.status]}</small>
         )}
-        <CaretDown
-          className="browser-activity-caret"
-          size={13}
-          weight="bold"
-          aria-hidden="true"
-        />
+        <CaretDown className="browser-activity-caret" size={13} weight="bold" aria-hidden="true" />
       </summary>
       {content}
     </details>
@@ -3846,12 +3838,7 @@ function ToolActivity({
               <TerminalWindow size={17} weight="regular" aria-hidden="true" />
             )}
             <span>{detail.isPending ? "正在读取工具调用…" : segmentLabel}</span>
-            <CaretDown
-              className="tool-activity-caret"
-              size={13}
-              weight="bold"
-              aria-hidden="true"
-            />
+            <CaretDown className="tool-activity-caret" size={13} weight="bold" aria-hidden="true" />
           </span>
           {showStatus ? (
             <span className={`tool-state tool-state-${workItem.status}`}>
@@ -3869,12 +3856,7 @@ function ToolActivity({
         <span className="tool-activity-heading">
           <strong>{elapsed ? `用时 ${elapsed}` : workItem.title}</strong>
           {showTitle ? <span className="tool-activity-title">{workItem.title}</span> : null}
-          <CaretDown
-            className="tool-activity-caret"
-            size={13}
-            weight="bold"
-            aria-hidden="true"
-          />
+          <CaretDown className="tool-activity-caret" size={13} weight="bold" aria-hidden="true" />
         </span>
         {showStatus ? (
           <span className={`tool-state tool-state-${workItem.status}`}>
@@ -4522,8 +4504,9 @@ function ChatPage({
   const [following, setFollowing] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
-  const [selectedBrowserPreview, setSelectedBrowserPreview] =
-    useState<BrowserCallPreview | null>(null);
+  const [selectedBrowserPreview, setSelectedBrowserPreview] = useState<BrowserCallPreview | null>(
+    null,
+  );
   const snapshot = useQuery({
     queryKey: chatKeys.conversation(conversationId),
     queryFn: () => window.openerx.getConversation({ conversationId }),
@@ -4830,7 +4813,7 @@ function skillSourceKindLabel(sourceKind: string): string {
 }
 
 function skillSourceLabel(skill: SkillInstallation): string {
-  return skill.sourceKind === "built_in" ? "UWA 内置 Skill" : skill.sourceLabel;
+  return skill.sourceKind === "built_in" ? "openerx 内置 Skill" : skill.sourceLabel;
 }
 
 function skillTrustLabel(trust: SkillInstallation["trust"]): string {
@@ -5220,7 +5203,6 @@ function SkillCenter(): React.JSX.Element {
           onConfirm={() => reset.mutate(resetTarget.id)}
         />
       ) : null}
-
     </section>
   );
 }
@@ -5336,9 +5318,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     ),
   );
   const [providerTestFeedback, setProviderTestFeedback] = useState<
-    Partial<
-      Record<ByokProviderId, { status: "testing" | "success" | "error"; message: string }>
-    >
+    Partial<Record<ByokProviderId, { status: "testing" | "success" | "error"; message: string }>>
   >({});
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
@@ -5481,7 +5461,9 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
                     type="password"
                     autoComplete="off"
                     value={providerKeys[provider.id] ?? ""}
-                    placeholder={configured ? "已安全保存；留空表示不更改" : provider.apiKeyPlaceholder}
+                    placeholder={
+                      configured ? "已安全保存；留空表示不更改" : provider.apiKeyPlaceholder
+                    }
                     onChange={(event) => {
                       setProviderKeys((current) => ({
                         ...current,
@@ -5695,10 +5677,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       {notice ? <p className="inline-success">{notice}</p> : null}
       {settings.error || save.error || clearKey.error ? (
         <p className="inline-error">
-          {userFacingError(
-            settings.error ?? save.error ?? clearKey.error,
-            "模型服务配置失败。",
-          )}
+          {userFacingError(settings.error ?? save.error ?? clearKey.error, "模型服务配置失败。")}
         </p>
       ) : null}
     </section>
@@ -5998,7 +5977,7 @@ function RemoteSettings(): React.JSX.Element {
       ) : null}
       {challenge.data && qrDataUrl ? (
         <div className="remote-pairing-panel">
-          <img src={qrDataUrl} alt="UWA Remote 一次性配对二维码" />
+          <img src={qrDataUrl} alt="openerx Remote 一次性配对二维码" />
           <div>
             <strong>用已登录同一账户的手机扫描</strong>
             <p>二维码不含访问令牌，只含一次性挑战、公钥和到期时间。</p>
@@ -6599,7 +6578,8 @@ function AccountSettings({
   );
   const openSettingsSection = (section: AccountSettingsSection): void => {
     const previousFocus = document.activeElement;
-    if (settingsFocusFrame.current !== null) window.cancelAnimationFrame(settingsFocusFrame.current);
+    if (settingsFocusFrame.current !== null)
+      window.cancelAnimationFrame(settingsFocusFrame.current);
     setActiveSection(section);
     settingsFocusFrame.current = window.requestAnimationFrame(() => {
       settingsFocusFrame.current = window.requestAnimationFrame(() => {
@@ -6824,7 +6804,7 @@ function AccountSettings({
             ) : null}
           </div>
         </nav>
-        <div
+        <section
           className="settings-section-content"
           aria-label={`${accountSettingsSectionLabels[activeSection]}设置`}
         >
@@ -6839,7 +6819,7 @@ function AccountSettings({
                 <span className={`account-status account-${state?.status ?? "unavailable"}`}>
                   {accountStatusLabel(state?.status)}
                 </span>
-                <h2>{state?.account?.displayName ?? "登录 UWA"}</h2>
+                <h2>{state?.account?.displayName ?? "登录 openerx"}</h2>
                 <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
               </div>
               {state?.status !== "signed_in" || !state.session ? (
@@ -7115,7 +7095,7 @@ function AccountSettings({
               </section>
             </>
           ) : null}
-        </div>
+        </section>
       </div>
     </main>
   );
@@ -7778,7 +7758,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       <header className="tool-library-header">
         <div>
           {showTitle ? <h2>工具</h2> : null}
-          <p>添加、设置并管理 UWA 可以使用的工具</p>
+          <p>添加、设置并管理 openerx 可以使用的工具</p>
         </div>
         <button type="button" className="tool-add-button" onClick={() => setAddDialogOpen(true)}>
           <Plus size={18} weight="bold" />
@@ -8082,7 +8062,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 <h3>工具信息</h3>
                 <p>
                   {toolRuntimeReason(selectedReadiness?.reason ?? null) ??
-                    "此工具由 UWA 提供，当前不需要额外设置。"}
+                    "此工具由 openerx 提供，当前不需要额外设置。"}
                 </p>
                 {selectedReadiness?.details?.length ? (
                   <ul>
@@ -8334,11 +8314,11 @@ function Sidebar({
         <div className="brand-row">
           <div className="brand">
             <span className="brand-mark">
-              <img src="/assets/china-unicom-logo.png" alt="中国联通官方标志" />
+              <img src="/assets/openerx-mark.svg" alt="openerx 标志" />
             </span>
             <span className="brand-copy">
-              <strong>UWA</strong>
-              <small>Unicom Work Assistant</small>
+              <strong>openerx</strong>
+              <small>personal AI workspace</small>
             </span>
           </div>
           <button
@@ -8514,10 +8494,7 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(
-        assistantCompanionStorageKey,
-        String(assistantCompanionEnabled),
-      );
+      window.localStorage.setItem(assistantCompanionStorageKey, String(assistantCompanionEnabled));
     } catch {
       // The current session still keeps the companion preference.
     }

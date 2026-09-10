@@ -50,7 +50,7 @@ function fixture() {
   pe.writeUInt32LE(64, 60);
   pe.writeUInt32LE(0x4550, 64);
   pe.writeUInt16LE(0x8664, 68);
-  writeFileSync(path.join(source, "UWA.exe"), pe);
+  writeFileSync(path.join(source, "openerx.exe"), pe);
   writeFileSync(path.join(source, "resources", "app.asar"), "fixture app bytes");
   const makeappx = path.join(root, "makeappx.exe");
   writeFileSync(makeappx, "fixture SDK executable");
@@ -76,8 +76,8 @@ describe("Windows Store MSIX configuration", () => {
     { version: "2.0.1.1" },
     { version: "0.0.1.0" },
     { version: "2.0.65536.0" },
-    { executable: "../UWA.exe" },
-    { executable: "C:\\UWA.exe" },
+    { executable: "../openerx.exe" },
+    { executable: "C:\\openerx.exe" },
     { publisher: "" },
     { name: "app/<inject>" },
     { displayName: "hidden\ntext" },
@@ -117,7 +117,7 @@ describe("MSIX build boundaries and artifact verification", () => {
     const f = fixture();
     const assets = path.join(f.root, "Assets");
     createMsixAssets(
-      fileURLToPath(new URL("../public/assets/uwa-assistant-xiaolian.png", import.meta.url)),
+      fileURLToPath(new URL("../public/assets/openerx-mark.png", import.meta.url)),
       assets,
     );
     for (const [name, size] of Object.entries({
@@ -133,9 +133,9 @@ describe("MSIX build boundaries and artifact verification", () => {
 
   it("rejects the wrong executable architecture before creating output", () => {
     const f = fixture();
-    const pe = readFileSync(path.join(f.source, "UWA.exe"));
+    const pe = readFileSync(path.join(f.source, "openerx.exe"));
     pe.writeUInt16LE(0xaa64, 68);
-    writeFileSync(path.join(f.source, "UWA.exe"), pe);
+    writeFileSync(path.join(f.source, "openerx.exe"), pe);
     expect(() =>
       buildWindowsMsix({
         configuration,
@@ -209,12 +209,12 @@ describe("MSIX build boundaries and artifact verification", () => {
           if (args[0] === "pack") writeFileSync(value("/p"), "fixture package archive");
           else {
             cpSync(path.join(f.output, "stage"), value("/d"), { recursive: true });
-            writeFileSync(path.join(value("/d"), "app", "UWA.exe"), "changed");
+            writeFileSync(path.join(value("/d"), "app", "openerx.exe"), "changed");
           }
           return "SDK fixture output";
         },
       ),
-    ).toThrow("ROUNDTRIP_MISMATCH:app/UWA.exe");
+    ).toThrow("ROUNDTRIP_MISMATCH:app/openerx.exe");
     expect(existsSync(path.join(f.output, "msix-build-report.json"))).toBe(false);
   });
 });
