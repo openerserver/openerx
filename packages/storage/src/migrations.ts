@@ -1536,6 +1536,23 @@ const migrations: readonly Migration[] = [
       CREATE INDEX byok_usage_conversation_idx ON byok_usage_records(owner_profile_id, conversation_id);
     `,
   },
+  {
+    version: 34,
+    checksum: "workspace-output-artifacts-v34-20260911",
+    sql: `
+      CREATE TABLE workspace_artifact_links (
+        owner_profile_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        workspace_root_path TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+        source_revision TEXT NOT NULL,
+        PRIMARY KEY(owner_profile_id, conversation_id, workspace_root_path, relative_path)
+      ) STRICT;
+      CREATE INDEX workspace_artifacts_conversation_idx
+        ON workspace_artifact_links(owner_profile_id, conversation_id);
+    `,
+  },
 ];
 
 export function migrateDatabase(

@@ -1920,57 +1920,71 @@ describe("M1 chat renderer", () => {
     expect(screen.getByText("找到 1 个对话 · 1 项")).toBeTruthy();
   });
 
-  it("shows HTML source and an isolated preview without bridge privileges", async () => {
-    const bridge = createBridge();
-    const personalFileId = crypto.randomUUID();
-    const scopeId = crypto.randomUUID();
-    vi.mocked(bridge.listFiles).mockResolvedValue([
-      {
-        id: personalFileId,
-        ownerProfileId: "local-default",
+  it.each([false, true])(
+    "shows HTML source and an isolated preview (resource URL: %s)",
+    async (resourceUrl) => {
+      cleanup();
+      const bridge = createBridge();
+      const personalFileId = crypto.randomUUID();
+      const scopeId = crypto.randomUUID();
+      vi.mocked(bridge.listFiles).mockResolvedValue([
+        {
+          id: personalFileId,
+          ownerProfileId: "local-default",
+          displayName: "preview.html",
+          format: "html",
+          mediaType: "text/html",
+          sizeBytes: 120,
+          checksumSha256: "a".repeat(64),
+          objectRef: `objects/sha256/aa/${"a".repeat(64)}`,
+          sourceScopeId: scopeId,
+          sourceRelativePath: "preview.html",
+          parseStatus: "ready",
+          parseErrorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          revision: 2,
+        },
+      ]);
+      vi.mocked(bridge.previewFile).mockResolvedValue({
+        objectKind: "personal_file",
+        objectId: personalFileId,
         displayName: "preview.html",
         format: "html",
-        mediaType: "text/html",
-        sizeBytes: 120,
-        checksumSha256: "a".repeat(64),
-        objectRef: `objects/sha256/aa/${"a".repeat(64)}`,
-        sourceScopeId: scopeId,
-        sourceRelativePath: "preview.html",
-        parseStatus: "ready",
-        parseErrorCode: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        revision: 2,
-      },
-    ]);
-    vi.mocked(bridge.previewFile).mockResolvedValue({
-      objectKind: "personal_file",
-      objectId: personalFileId,
-      displayName: "preview.html",
-      format: "html",
-      source: "<h1>isolated</h1><script>window.probe = typeof window.openerx</script>",
-      imageDataUrl: null,
-      renderedSurfaces: [],
-      parsedText: "isolated",
-      citations: [],
-    });
-    renderApp(bridge, "/files");
-    const user = userEvent.setup();
-    const fileButton = await screen.findByRole("button", { name: /preview\.html/ });
-    await user.click(fileButton);
-    const frame = await screen.findByTitle("HTML 隔离预览");
-    const libraryPage = frame.closest(".library-page");
-    const previewPanel = frame.closest(".content-preview");
-    expect(libraryPage?.classList.contains("preview-is-open")).toBe(true);
-    expect(previewPanel?.parentElement).toBe(libraryPage);
-    expect(libraryPage?.querySelector(":scope > .library-browser-pane")).toBeTruthy();
-    expect(fileButton.getAttribute("aria-pressed")).toBe("true");
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
-    expect(frame.getAttribute("srcdoc")).toContain("window.openerx");
-    await user.click(screen.getByRole("button", { name: "源码" }));
-    expect(screen.getByText(/window\.openerx/)).toBeTruthy();
-  });
+        source: "<h1>isolated</h1><script>window.probe = typeof window.openerx</script>",
+        ...(resourceUrl
+          ? { htmlPreviewUrl: `openerx-preview://${"a".repeat(32)}/preview.html` }
+          : {}),
+        imageDataUrl: null,
+        renderedSurfaces: [],
+        parsedText: "isolated",
+        citations: [],
+      });
+      renderApp(bridge, "/files");
+      const user = userEvent.setup();
+      const fileButton = await screen.findByRole("button", { name: /preview\.html/ });
+      await user.click(fileButton);
+      const frame = await screen.findByTitle("HTML 隔离预览");
+      const libraryPage = frame.closest(".library-page");
+      const previewPanel = frame.closest(".content-preview");
+      expect(libraryPage?.classList.contains("preview-is-open")).toBe(true);
+      expect(previewPanel?.parentElement).toBe(libraryPage);
+      expect(libraryPage?.querySelector(":scope > .library-browser-pane")).toBeTruthy();
+      expect(fileButton.getAttribute("aria-pressed")).toBe("true");
+      expect(frame.getAttribute("sandbox")).toBe(
+        resourceUrl ? "allow-scripts allow-same-origin" : "allow-scripts",
+      );
+      if (resourceUrl) {
+        expect(frame.getAttribute("src")).toBe(`openerx-preview://${"a".repeat(32)}/preview.html`);
+        expect(frame.hasAttribute("srcdoc")).toBe(false);
+      } else {
+        expect(frame.getAttribute("srcdoc")).toContain("window.openerx");
+      }
+      await user.click(screen.getByRole("button", { name: "源码" }));
+      expect(screen.getByText(/window\.openerx/)).toBeTruthy();
+      cleanup();
+    },
+  );
 
   it("saves the current immutable artifact version through the native bridge", async () => {
     const bridge = createBridge();

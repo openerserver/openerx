@@ -30,6 +30,8 @@ const formats: Record<string, { format: SupportedFileFormat; mediaType: string }
   ".webp": { format: "webp", mediaType: "image/webp" },
   ".html": { format: "html", mediaType: "text/html" },
   ".htm": { format: "html", mediaType: "text/html" },
+  ".svg": { format: "code", mediaType: "image/svg+xml" },
+  ".mjs": { format: "code", mediaType: "text/javascript" },
 };
 
 const codeExtensions = new Set([

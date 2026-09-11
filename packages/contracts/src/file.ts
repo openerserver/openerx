@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { htmlPreviewBundleSchema, htmlPreviewUrlSchema } from "./html-preview";
 
 const entityIdSchema = z.uuid();
 const timestampSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
@@ -345,6 +346,8 @@ export const contentPreviewSchema = z
     displayName: z.string().min(1),
     format: supportedFileFormatSchema,
     source: z.string().nullable(),
+    htmlBundle: htmlPreviewBundleSchema.optional(),
+    htmlPreviewUrl: htmlPreviewUrlSchema.optional(),
     imageDataUrl: z
       .string()
       .max(45_000_000)

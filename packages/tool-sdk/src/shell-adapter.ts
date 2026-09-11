@@ -13,7 +13,13 @@ import {
   codexWindowsSandboxReady,
   type WindowsSandboxCommandHost,
 } from "./codex-windows-shell-adapter";
+import type { PlatformSandboxWorkspaceChanges } from "./platform-sandbox-engine";
 import { type ToolAdapter, ToolAdapterError, type ToolExecutionContext } from "./types";
+import {
+  captureWorkspaceWriteBaseline,
+  collectWorkspaceWriteChanges,
+  type WorkspaceWriteBaseline,
+} from "./workspace-change-tracker";
 
 const OUTPUT_LIMIT = 2_000_000;
 
@@ -156,6 +162,10 @@ export class ShellToolAdapter implements ToolAdapter {
   readonly #workspaceRoots: string[];
   readonly #processes = new Map<string, ProcessRecord>();
   readonly #windowsAdapter?: CodexWindowsShellToolAdapter;
+  readonly #pendingWrites = new Map<
+    string,
+    { baseline: WorkspaceWriteBaseline; context: ToolExecutionContext }
+  >();
 
   constructor(
     workspaceRoots: readonly string[],
@@ -164,6 +174,10 @@ export class ShellToolAdapter implements ToolAdapter {
       conversationId: string,
     ) => WorkspaceGrant,
     windowsHost?: WindowsSandboxCommandHost,
+    private readonly recordWorkspaceWrites?: (
+      changes: PlatformSandboxWorkspaceChanges,
+      context: ToolExecutionContext,
+    ) => void,
   ) {
     this.#workspaceRoots = workspaceRoots.map((root) => realpathSync(root));
     if (process.platform === "win32" && (windowsHost || codexWindowsSandboxReady())) {
@@ -176,6 +190,74 @@ export class ShellToolAdapter implements ToolAdapter {
   }
 
   async execute(
+    operation: ToolOperation,
+    context: ToolExecutionContext,
+  ): Promise<NormalizedToolResult> {
+    let baseline: WorkspaceWriteBaseline | undefined;
+    if (
+      operation.operation === "shell_execute" &&
+      operation.workspaceGrantId &&
+      context.projection &&
+      this.recordWorkspaceWrites
+    ) {
+      const grant = this.resolveWorkspaceGrant?.(
+        operation.workspaceGrantId,
+        context.projection.conversationId,
+      );
+      if (grant?.access === "read_write") {
+        try {
+          baseline = captureWorkspaceWriteBaseline(
+            [
+              {
+                grantId: grant.id,
+                logicalName: "workspace",
+                rootPath: grant.rootPath,
+                access: grant.access,
+              },
+            ],
+            { excludedDirectories: ["node_modules", ".venv", "venv", "__pycache__", ".cache"] },
+          );
+        } catch {
+          context.update("部分输出文件暂时无法自动收录");
+        }
+      }
+    }
+    let result: NormalizedToolResult | undefined;
+    try {
+      result = await this.#dispatch(operation, context);
+      return result;
+    } finally {
+      const data = result?.data as { processId?: string; state?: string } | undefined;
+      if (baseline) {
+        if (data?.state === "running" && data.processId)
+          this.#pendingWrites.set(data.processId, { baseline, context });
+        else this.#recordWrites(baseline, context);
+      } else if (data?.processId && data.state !== "running") {
+        this.#finishWrites(data.processId);
+      }
+    }
+  }
+
+  #recordWrites(baseline: WorkspaceWriteBaseline, context: ToolExecutionContext): void {
+    try {
+      const changes = collectWorkspaceWriteChanges(baseline);
+      if (changes.materialization.length === 0) return;
+      this.recordWorkspaceWrites?.(changes, context);
+      context.update("已记录工作区文件变更");
+    } catch {
+      // Output discovery must not change a command's actual completion status.
+      context.update("部分输出文件暂时无法自动收录");
+    }
+  }
+
+  #finishWrites(processId: string): void {
+    const pending = this.#pendingWrites.get(processId);
+    if (!pending) return;
+    this.#pendingWrites.delete(processId);
+    this.#recordWrites(pending.baseline, pending.context);
+  }
+
+  async #dispatch(
     operation: ToolOperation,
     context: ToolExecutionContext,
   ): Promise<NormalizedToolResult> {
@@ -308,6 +390,10 @@ export class ShellToolAdapter implements ToolAdapter {
     context.signal.addEventListener("abort", abort, { once: true });
     if (operation.background) {
       void completed
+        .then(
+          () => this.#finishWrites(record.id),
+          () => this.#finishWrites(record.id),
+        )
         .catch(() => undefined)
         .finally(() => context.signal.removeEventListener("abort", abort));
       return {

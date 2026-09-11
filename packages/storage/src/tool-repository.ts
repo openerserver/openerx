@@ -98,6 +98,16 @@ export interface WorkspaceChangeRecord extends WorkspaceChange {
   afterText: string;
 }
 
+export interface WorkspaceOutputCandidate {
+  conversationId: string;
+  workspaceGrantId: string;
+  workspaceRootPath: string;
+  relativePath: string;
+  afterSha256: string | null;
+  sourceRevision: string;
+  updatedAt: string;
+}
+
 export type WorkspaceBindingRole = "primary" | "additional";
 export type WorkspaceBindingSource = "default" | "project" | "user_added";
 
@@ -1701,6 +1711,78 @@ export class ToolRepository {
           )
           .all(this.#ownerProfileId, limit);
     return (rows as SqlRow[]).map((row) => this.#workItem(row));
+  }
+
+  workspaceOutputCandidates(conversationId?: string): WorkspaceOutputCandidate[] {
+    const parameters = conversationId
+      ? [this.#ownerProfileId, conversationId]
+      : [this.#ownerProfileId];
+    const joins = `JOIN execution_runs er ON er.id = wc.run_id
+      JOIN work_items wi ON wi.id = er.work_item_id
+      JOIN conversations c ON c.id = wi.conversation_id
+      JOIN workspace_grants wg ON wg.id = wc.workspace_grant_id`;
+    const filter = `wc.owner_profile_id = ? AND wi.owner_profile_id = wc.owner_profile_id
+      AND c.owner_profile_id = wc.owner_profile_id AND wg.owner_profile_id = wc.owner_profile_id
+      AND c.deleted_at IS NULL
+      ${conversationId ? "AND wi.conversation_id = ?" : ""}`;
+    const rows = this.#database
+      .prepare(
+        `SELECT wc.*, wi.conversation_id, wg.root_path FROM workspace_changes wc
+       ${joins} WHERE ${filter} AND wc.status IN ('applied', 'reverted')`,
+      )
+      .all(...parameters) as SqlRow[];
+    const candidates: WorkspaceOutputCandidate[] = rows.map((row) => ({
+      conversationId: String(row.conversation_id),
+      workspaceGrantId: String(row.workspace_grant_id),
+      workspaceRootPath: String(row.root_path),
+      relativePath: String(row.relative_path),
+      afterSha256: row.status === "applied" ? String(row.after_sha256) : null,
+      sourceRevision: `${row.id}:${row.status}`,
+      updatedAt: String(row.updated_at),
+    }));
+    const sets = this.#database
+      .prepare(
+        `SELECT wc.*, wi.conversation_id, wg.root_path FROM workspace_change_sets wc
+       ${joins} WHERE ${filter} AND wc.status IN ('applied', 'reverted')`,
+      )
+      .all(...parameters) as SqlRow[];
+    for (const row of sets) {
+      const changeSet = this.#workspaceChangeSet(row);
+      for (const entry of changeSet.entries) {
+        if (entry.entryType !== "file") continue;
+        const grant = this.workspaceGrant(entry.workspaceGrantId);
+        const candidate: WorkspaceOutputCandidate = {
+          conversationId: String(row.conversation_id),
+          workspaceGrantId: grant.id,
+          workspaceRootPath: grant.rootPath,
+          relativePath: entry.relativePath,
+          afterSha256: changeSet.status === "applied" ? entry.afterSha256 : null,
+          sourceRevision: `${changeSet.id}:${changeSet.status}`,
+          updatedAt: changeSet.updatedAt,
+        };
+        candidates.push(candidate);
+        if (entry.previousRelativePath) {
+          candidates.push({
+            ...candidate,
+            relativePath: entry.previousRelativePath,
+            afterSha256: null,
+          });
+        }
+      }
+    }
+    const latest = new Map<string, WorkspaceOutputCandidate>();
+    for (const candidate of candidates.sort(
+      (a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt) || b.sourceRevision.localeCompare(a.sourceRevision),
+    )) {
+      const key = JSON.stringify([
+        candidate.conversationId,
+        candidate.workspaceRootPath,
+        candidate.relativePath,
+      ]);
+      if (!latest.has(key)) latest.set(key, candidate);
+    }
+    return [...latest.values()];
   }
 
   artifactRetention(conversationId?: string): ArtifactRetention {

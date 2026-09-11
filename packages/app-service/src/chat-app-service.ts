@@ -28,6 +28,7 @@ import type {
 import type { PiHostClient } from "./pi-host-client";
 import type { SyncCoordinator } from "./sync-coordinator";
 import type { ToolAppService } from "./tool-app-service";
+import { captureWorkspaceArtifacts } from "./workspace-artifacts";
 
 interface RemoteExecutionAuthority {
   pairingId: string;
@@ -336,6 +337,7 @@ export class ChatAppService {
       case "file.preview":
         return this.#requiredFiles().previewFile(request.input.personalFileId, {
           includeModelImages: false,
+          includeHtmlResources: true,
         });
       case "file.scope.revoke":
         return this.#requiredFiles().revokeScope(request.input.scopeId);
@@ -355,6 +357,7 @@ export class ChatAppService {
       case "artifact.preview":
         return this.#requiredFiles().previewArtifact(request.input.artifactId, {
           includeModelImages: false,
+          includeHtmlResources: true,
         });
       case "artifact.export":
         return this.#requiredFiles().exportArtifact(
@@ -980,6 +983,13 @@ export class ChatAppService {
             : "failed",
         frame.errorCode,
       );
+      if (this.#files && this.#tools) {
+        captureWorkspaceArtifacts(
+          this.#requiredToolsRepository(),
+          this.#files,
+          this.#conversationByGeneration.get(frame.generationId),
+        );
+      }
       this.#pruneDisposableArtifacts();
       this.#forgetGeneration(frame.generationId);
       void this.#syncIfAuthorized(authorization);
@@ -1184,11 +1194,19 @@ export class ChatAppService {
   }
 
   #deliverableArtifacts(conversationId?: string): Artifact[] {
+    if (this.#tools && this.#files) {
+      captureWorkspaceArtifacts(this.#requiredToolsRepository(), this.#files, conversationId);
+    }
     const artifacts = this.#requiredFiles().listArtifacts();
     if (!this.#tools) return conversationId ? [] : artifacts;
     const retention = this.#requiredToolsRepository().artifactRetention(conversationId);
     if (conversationId) {
-      const deliverableIds = new Set(retention.deliverableIds);
+      const deliverableIds = new Set([
+        ...retention.deliverableIds,
+        ...this.#requiredFiles()
+          .workspaceArtifactLinks(conversationId)
+          .map(({ artifactId }) => artifactId),
+      ]);
       return artifacts.filter(({ id }) => deliverableIds.has(id));
     }
     const disposableIds = new Set(retention.disposableIds);

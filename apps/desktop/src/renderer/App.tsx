@@ -99,6 +99,7 @@ import {
 } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { AccountAccess } from "./AccountAccess";
+import { ArtifactDirectory } from "./ArtifactDirectory";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
 import { DesktopControlBar } from "./DesktopControlBar";
@@ -2097,9 +2098,10 @@ function ContentPreviewRenderer({
     return (
       <iframe
         title="HTML 隔离预览"
-        sandbox="allow-scripts"
+        sandbox={preview.htmlPreviewUrl ? "allow-scripts allow-same-origin" : "allow-scripts"}
         referrerPolicy="no-referrer"
-        srcDoc={preview.source}
+        src={preview.htmlPreviewUrl}
+        srcDoc={preview.htmlPreviewUrl ? undefined : preview.source}
       />
     );
   }
@@ -4217,6 +4219,9 @@ function ConversationRail({
   onClose: () => void;
 }): React.JSX.Element {
   const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview");
+  const [expandedOutputDirectories, setExpandedOutputDirectories] = useState<ReadonlySet<string>>(
+    () => new Set([""]),
+  );
   const selectedArtifact = artifacts.find(({ id }) => id === selectedArtifactId) ?? null;
   const preview = useQuery({
     queryKey: ["content-preview", "artifact", selectedArtifactId, selectedArtifact?.currentVersion],
@@ -4361,28 +4366,22 @@ function ConversationRail({
           </NavLink>
         </div>
         {artifacts.length > 0 ? (
-          <div className="rail-list">
-            {artifacts.slice(0, 6).map((artifact) => (
-              <button
-                className="rail-item"
-                type="button"
-                key={artifact.id}
-                aria-label={`预览 ${artifact.displayName}`}
-                onClick={() => {
-                  setPreviewMode("preview");
-                  onSelectArtifact(artifact.id);
-                }}
-              >
-                <FolderSimple size={18} weight="regular" />
-                <span>
-                  <strong>{artifact.displayName}</strong>
-                  <small>
-                    {artifact.format.toUpperCase()} · v{artifact.currentVersion}
-                  </small>
-                </span>
-              </button>
-            ))}
-          </div>
+          <ArtifactDirectory
+            artifacts={artifacts}
+            expandedDirectories={expandedOutputDirectories}
+            onToggleDirectory={(path) =>
+              setExpandedOutputDirectories((previous) => {
+                const expanded = new Set(previous);
+                if (expanded.has(path)) expanded.delete(path);
+                else expanded.add(path);
+                return expanded;
+              })
+            }
+            onSelectArtifact={(artifactId) => {
+              setPreviewMode("preview");
+              onSelectArtifact(artifactId);
+            }}
+          />
         ) : (
           <p className="rail-empty">创建的文件、报告和页面会出现在这里。</p>
         )}
@@ -4642,6 +4641,7 @@ function ChatPage({
       </section>
       {railOpen ? (
         <ConversationRail
+          key={conversationId}
           artifacts={artifacts.data ?? []}
           files={conversationFiles.data ?? []}
           workItems={workItems.data ?? []}

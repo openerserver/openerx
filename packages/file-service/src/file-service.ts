@@ -15,11 +15,12 @@ import type {
   SyncConflictResolution,
   SyncOperation,
 } from "@openerx/contracts";
-import type { FileRepository } from "@openerx/storage";
+import type { FileRepository, WorkspaceArtifactLink } from "@openerx/storage";
 import { ContentStore } from "./content-store";
 import { FileServiceError, fileErrorCode } from "./errors";
 import { FileScopeBroker } from "./file-scope-broker";
 import { detectFileFormat } from "./formats";
+import { buildHtmlPreviewBundle, type HtmlResourceSnapshot } from "./html-preview";
 import { compileOfficeArtifact, renderOfficeArtifact } from "./office-artifact";
 import { MultiFormatParser } from "./parser";
 
@@ -136,7 +137,7 @@ export class FileAppService {
 
   previewFile(
     personalFileId: string,
-    options: { includeModelImages?: boolean } = {},
+    options: { includeModelImages?: boolean; includeHtmlResources?: boolean } = {},
   ): ContentPreview {
     const parsed = this.readParsedFile(personalFileId);
     const source = isTextPreviewFormat(parsed.file.format)
@@ -154,6 +155,21 @@ export class FileAppService {
       displayName: parsed.file.displayName,
       format: parsed.file.format,
       source,
+      ...(parsed.file.format === "html" && options.includeHtmlResources
+        ? {
+            htmlBundle: buildHtmlPreviewBundle(
+              { ...parsed.file, relativePath: parsed.file.sourceRelativePath },
+              parsed.file.sourceScopeId
+                ? this.#repository
+                    .listFiles()
+                    .reverse()
+                    .filter((file) => file.sourceScopeId === parsed.file.sourceScopeId)
+                    .map((file) => ({ ...file, relativePath: file.sourceRelativePath }))
+                : [],
+              this.#store,
+            ),
+          }
+        : {}),
       imageDataUrl,
       renderedSurfaces:
         renderOfficeArtifact(this.#store.read(parsed.file.objectRef), parsed.file.format, options)
@@ -236,6 +252,25 @@ export class FileAppService {
     return this.#repository.listArtifacts();
   }
 
+  workspaceArtifactLinks(conversationId?: string): WorkspaceArtifactLink[] {
+    return this.#repository.workspaceArtifactLinks(conversationId);
+  }
+
+  captureWorkspaceArtifact(
+    input: Omit<WorkspaceArtifactLink, "artifactId"> & { bytes: Buffer },
+  ): Artifact {
+    const format = detectFileFormat(input.relativePath);
+    this.#assertSize(input.bytes.byteLength);
+    return this.#repository.captureWorkspaceArtifact({
+      conversationId: input.conversationId,
+      workspaceRootPath: input.workspaceRootPath,
+      relativePath: input.relativePath,
+      sourceRevision: input.sourceRevision,
+      ...format,
+      version: this.#store.putBytes(input.bytes),
+    });
+  }
+
   deleteArtifacts(artifactIds: string[]): number {
     const objectRefs = this.#repository.deleteArtifacts(artifactIds);
     for (const objectRef of objectRefs) {
@@ -248,7 +283,10 @@ export class FileAppService {
     return this.#repository.artifact(id);
   }
 
-  previewArtifact(id: string, options: { includeModelImages?: boolean } = {}): ContentPreview {
+  previewArtifact(
+    id: string,
+    options: { includeModelImages?: boolean; includeHtmlResources?: boolean } = {},
+  ): ContentPreview {
     const artifact = this.#repository.artifact(id);
     const version = artifact.versions.find(({ version }) => version === artifact.currentVersion);
     if (!version) throw new Error("ARTIFACT_VERSION_NOT_FOUND");
@@ -260,17 +298,54 @@ export class FileAppService {
       artifact.format,
       options,
     );
+    const imageMediaType =
+      visionMediaTypeByFormat[artifact.format as keyof typeof visionMediaTypeByFormat];
     return {
       objectKind: "artifact",
       objectId: artifact.id,
       displayName: artifact.displayName,
       format: artifact.format,
       source,
-      imageDataUrl: null,
+      ...(artifact.format === "html" && options.includeHtmlResources
+        ? { htmlBundle: this.#artifactHtmlBundle(artifact) }
+        : {}),
+      imageDataUrl:
+        imageMediaType && version.sizeBytes <= maxVisionImageBytes
+          ? `data:${imageMediaType};base64,${this.#store.read(version.objectRef).toString("base64")}`
+          : null,
       renderedSurfaces: rendered?.renderedSurfaces ?? [],
       parsedText: rendered?.parsedText ?? source ?? "",
       citations: [],
     };
+  }
+
+  #artifactHtmlBundle(artifact: Artifact) {
+    const links = this.#repository.workspaceArtifactLinks();
+    const entryLink = links.find((link) => link.artifactId === artifact.id);
+    const snapshot = (item: Artifact, relativePath: string): HtmlResourceSnapshot => {
+      const version = item.versions.find((version) => version.version === item.currentVersion);
+      if (!version) throw new Error("ARTIFACT_VERSION_NOT_FOUND");
+      return { relativePath, objectRef: version.objectRef, sizeBytes: version.sizeBytes };
+    };
+    return buildHtmlPreviewBundle(
+      snapshot(
+        artifact,
+        entryLink?.relativePath ??
+          (/\.html?$/iu.test(artifact.displayName)
+            ? path.basename(artifact.displayName.replaceAll("\\", "/"))
+            : "index.html"),
+      ),
+      entryLink
+        ? links
+            .filter(
+              (link) =>
+                link.conversationId === entryLink.conversationId &&
+                link.workspaceRootPath === entryLink.workspaceRootPath,
+            )
+            .map((link) => snapshot(this.#repository.artifact(link.artifactId), link.relativePath))
+        : [],
+      this.#store,
+    );
   }
 
   exportArtifact(

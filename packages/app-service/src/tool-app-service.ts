@@ -485,8 +485,27 @@ export class ToolAppService {
       new GenerationImageGenerationAdapter((generationId) =>
         this.#authorizationByGeneration.get(generationId),
       ),
-      new ShellToolAdapter([options.workspaceDirectory], (workspaceGrantId, conversationId) =>
-        options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
+      new ShellToolAdapter(
+        [options.workspaceDirectory],
+        (workspaceGrantId, conversationId) =>
+          options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
+        undefined,
+        (changes, context) => {
+          const workspaceGrantId = changes.materialization[0]?.workspaceGrantId;
+          if (!workspaceGrantId || !context.projection) return;
+          const changeSet = this.#repository.createWorkspaceChangeSet({
+            workspaceGrantId,
+            runId: context.projection.runId,
+            toolCallId: context.toolCallId,
+            baselineRevision: changes.baselineRevision,
+            finalRevision: changes.finalRevision,
+            manifest: changes.manifest,
+            diffs: changes.diffs,
+            entries: changes.materialization,
+            blocked: false,
+          });
+          this.#repository.markWorkspaceChangeSet(changeSet.id, "applied");
+        },
       ),
       ...(this.#brokeredBashV1 && this.#brokeredBashRunnerMode === "fake"
         ? [
@@ -506,7 +525,12 @@ export class ToolAppService {
                 (generationId) => this.#brokeredBashExecutionByGeneration.get(generationId),
                 this.#platformSandboxEngine,
                 options.writeBrokeredBashLogArtifact,
-                (input) => this.#repository.createWorkspaceChangeSet(input),
+                (input) => {
+                  const changeSet = this.#repository.createWorkspaceChangeSet(input);
+                  return input.directWrite
+                    ? this.#repository.markWorkspaceChangeSet(changeSet.id, "applied")
+                    : changeSet;
+                },
                 (generationId) => {
                   const digest =
                     this.#brokeredBashExecutionByGeneration.get(

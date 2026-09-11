@@ -64,6 +64,7 @@ import {
   filePreviewInputSchema,
   fileRevokeScopeInputSchema,
   fileSearchInputSchema,
+  htmlPreviewProtocol,
   ipcChannels,
   localExportResultSchema,
   localWebSearchRuntimeResetInputSchema,
@@ -157,6 +158,7 @@ import {
 import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
 import { initializeAccountSession } from "./development-account-bootstrap";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
+import { HtmlPreviewRegistry } from "./html-preview";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { DesktopLoginStartupService, isBackgroundLoginStartup } from "./login-startup";
 import { memoryNotificationContent } from "./memory-notification";
@@ -219,8 +221,13 @@ function configureApplicationMenu(): void {
 
 const processStartedAt = performance.now();
 const performanceBudgets = new PerformanceBudgetTracker(processStartedAt);
+const htmlPreviews = new HtmlPreviewRegistry();
 
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: htmlPreviewProtocol,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+  },
   {
     scheme: appProtocol,
     privileges: {
@@ -445,6 +452,7 @@ function registerIpcHandlers(
     const parsed = accountVerifyCodeInputSchema.parse(input);
     const state = await accounts.verifyCode(parsed.challengeId, parsed.code);
     if (state.account) {
+      htmlPreviews.clear();
       await supervisor.switchProfile(
         path.join(baseProfileDirectory, "accounts", state.account.accountId),
         state.account.accountId,
@@ -457,6 +465,7 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     await remote.prepareSignOut();
     const state = await accounts.signOut();
+    htmlPreviews.clear();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
   });
@@ -464,6 +473,7 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     await remote.prepareSignOut();
     const state = await accounts.signOutAll();
+    htmlPreviews.clear();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
   });
@@ -473,6 +483,7 @@ function registerIpcHandlers(
     if (parsed.sessionId === accounts.state().session?.sessionId) await remote.prepareSignOut();
     const state = await accounts.revokeDevice(parsed.sessionId);
     if (state.status !== "signed_in") {
+      htmlPreviews.clear();
       await supervisor.switchProfile(baseProfileDirectory, "local-default");
     }
     return state;
@@ -712,7 +723,10 @@ function registerIpcHandlers(
         accounts.state().status === "signed_in"
           ? await accounts.authorization(platformUrl)
           : undefined;
-      return await supervisor.request(request, authorization, 15_000, byok);
+      const result = await supervisor.request(request, authorization, 15_000, byok);
+      return request.command === "artifact.preview" || request.command === "file.preview"
+        ? htmlPreviews.prepare(result)
+        : result;
     });
   };
 
@@ -951,11 +965,14 @@ function registerIpcHandlers(
             "jpeg",
             "gif",
             "webp",
+            "svg",
             "html",
             "htm",
             "ts",
             "tsx",
             "js",
+            "mjs",
+            "css",
             "jsx",
             "py",
             "go",
@@ -1248,7 +1265,7 @@ function registerIpcHandlers(
     );
     const selection = await dialog.showSaveDialog({
       title: "保存成果副本",
-      defaultPath: path.join(app.getPath("documents"), artifact.displayName),
+      defaultPath: path.join(app.getPath("documents"), path.basename(artifact.displayName)),
     });
     if (selection.canceled || !selection.filePath) return null;
     return await supervisor.request(
@@ -1261,6 +1278,7 @@ function registerIpcHandlers(
 }
 
 function registerAppProtocol(): void {
+  protocol.handle(htmlPreviewProtocol, (request) => htmlPreviews.respond(request));
   const rendererRoot = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`);
   protocol.handle(appProtocol, (request) => {
     if (request.method !== "GET") {
