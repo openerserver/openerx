@@ -464,7 +464,7 @@
   margin-top: 14px;
 }
 
-.project-conversation-list > a,
+.project-conversation-list .conversation-list-row > a,
 .project-directory-summary article {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto;
@@ -478,11 +478,12 @@
   text-decoration: none;
 }
 
-.project-conversation-list > a {
+.project-conversation-list .conversation-list-row > a {
   grid-template-columns: 22px minmax(0, 1fr);
+  padding-right: 42px;
 }
 
-.project-conversation-list > a:hover {
+.project-conversation-list .conversation-list-row > a:hover {
   border-color: var(--workspace-border-strong);
   background: var(--workspace-surface-raised);
 }

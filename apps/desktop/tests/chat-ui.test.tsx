@@ -2381,6 +2381,130 @@ describe("M1 chat renderer", () => {
     );
   });
 
+  it("deletes another conversation from history with cancellation, failure recovery and no page change", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const otherId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let conversations = [
+      { ...snapshot.conversation, lastMessagePreview: "当前对话", messageCount: 2 },
+      {
+        ...snapshot.conversation,
+        id: otherId,
+        title: "待删除的历史",
+        lastMessagePreview: "旧资料",
+        messageCount: 1,
+      },
+    ];
+    vi.mocked(bridge.listConversations).mockImplementation(async () => conversations);
+    vi.mocked(bridge.deleteConversation).mockRejectedValueOnce(new Error("Service unavailable"));
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+    const history = await screen.findByRole("region", { name: "对话历史" });
+    const removeButton = await within(history).findByRole("button", {
+      name: "删除对话：待删除的历史",
+    });
+    await user.click(removeButton);
+    let dialog = screen.getByRole("alertdialog", { name: "删除这个对话？" });
+    expect(within(dialog).getByText("“待删除的历史”")).toBeTruthy();
+    expect(bridge.deleteConversation).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(document.activeElement).toBe(removeButton));
+    await user.click(removeButton);
+    dialog = screen.getByRole("alertdialog", { name: "删除这个对话？" });
+    await user.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    expect(await within(dialog).findByRole("alert")).toHaveProperty(
+      "textContent",
+      "删除未完成，请重试。",
+    );
+    expect(within(history).getByRole("link", { name: /待删除的历史/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Markdown 验收" })).toBeTruthy();
+
+    let finishDeletion: (() => void) | undefined;
+    vi.mocked(bridge.deleteConversation).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finishDeletion = resolve;
+      });
+      conversations = conversations.filter(({ id }) => id !== otherId);
+      return { conversationId: otherId, deletedAt: timestamp };
+    });
+    await user.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    expect(within(dialog).getByRole("button", { name: "处理中…" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(within(dialog).getByRole("button", { name: "取消" })).toHaveProperty("disabled", true);
+    await user.click(within(dialog).getByRole("button", { name: "处理中…" }));
+    expect(bridge.deleteConversation).toHaveBeenCalledTimes(2);
+    await act(async () => finishDeletion?.());
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(within(history).queryByRole("link", { name: /待删除的历史/ })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Markdown 验收" })).toBeTruthy();
+    expect(bridge.deleteConversation).toHaveBeenLastCalledWith({
+      conversationId: otherId,
+      forgetSourceMemories: false,
+    });
+  });
+
+  it.each(["sidebar", "overview"] as const)(
+    "deletes project conversations from the %s and refreshes all lists and project counts",
+    async (source) => {
+      cleanup();
+      const bridge = createBridge();
+      let deleted = false;
+      vi.mocked(bridge.listProjects).mockImplementation(async () => [
+        { ...projectSummary, conversationCount: deleted ? 0 : 1 },
+      ]);
+      vi.mocked(bridge.getProject).mockResolvedValue(projectDetail);
+      vi.mocked(bridge.getConversation).mockResolvedValue({
+        ...snapshot,
+        conversation: { ...snapshot.conversation, projectId: personalProjectId },
+      });
+      vi.mocked(bridge.listConversations).mockImplementation(async () =>
+        deleted
+          ? []
+          : [
+              {
+                ...snapshot.conversation,
+                projectId: personalProjectId,
+                lastMessagePreview: "项目资料",
+                messageCount: 2,
+              },
+            ],
+      );
+      vi.mocked(bridge.deleteConversation).mockImplementation(async () => {
+        deleted = true;
+        return { conversationId, deletedAt: timestamp };
+      });
+      renderApp(
+        bridge,
+        source === "sidebar" ? `/chat/${conversationId}` : `/projects/${personalProjectId}`,
+      );
+      const user = userEvent.setup();
+      const list = await screen.findByRole("region", {
+        name: source === "sidebar" ? "客户交付 的对话" : "项目对话",
+      });
+      await user.click(
+        await within(list).findByRole("button", { name: "删除对话：Markdown 验收" }),
+      );
+      const dialog = screen.getByRole("alertdialog", { name: "删除这个对话？" });
+      if (source === "overview") {
+        await user.click(
+          within(dialog).getByRole("checkbox", { name: /同时删除仅来源于此对话的长期记忆/ }),
+        );
+      }
+      await user.click(within(dialog).getByRole("button", { name: "确认删除" }));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(await screen.findByRole("heading", { name: "客户交付" })).toBeTruthy();
+      expect(screen.queryByRole("link", { name: /Markdown 验收/ })).toBeNull();
+      expect(within(screen.getByRole("region", { name: "项目概览" })).getByText("0")).toBeTruthy();
+      expect(await screen.findByRole("heading", { name: "还没有项目对话" })).toBeTruthy();
+      expect(bridge.deleteConversation).toHaveBeenCalledWith({
+        conversationId,
+        forgetSourceMemories: source === "overview",
+      });
+    },
+  );
+
   it("keeps HashRouter section navigation on settings and moves focus to the target", async () => {
     cleanup();
     renderApp(createBridge(), "/settings/account");

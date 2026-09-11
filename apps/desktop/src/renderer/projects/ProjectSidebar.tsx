@@ -11,6 +11,7 @@ import {
 import { type UseQueryResult, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { ConversationDeleteButton } from "../ConversationDeletion";
 import { projectKeys, useProjectList } from "./use-projects";
 
 function operationId(): string {
@@ -157,18 +158,20 @@ export function ProjectSidebar({
                 {expanded ? (
                   <>
                     {projectConversations?.map((conversation) => (
-                      <NavLink
-                        key={conversation.id}
-                        to={`/chat/${conversation.id}`}
-                        className={({ isActive }) =>
-                          `project-sidebar-conversation${isActive ? " active" : ""}`
-                        }
-                        title={conversation.title}
-                      >
-                        <ChatCircle size={14} />
-                        <span>{conversation.title}</span>
-                        {conversation.archivedAt ? <small>已归档</small> : null}
-                      </NavLink>
+                      <div className="conversation-list-row" key={conversation.id}>
+                        <NavLink
+                          to={`/chat/${conversation.id}`}
+                          className={({ isActive }) =>
+                            `project-sidebar-conversation${isActive ? " active" : ""}`
+                          }
+                          title={conversation.title}
+                        >
+                          <ChatCircle size={14} />
+                          <span>{conversation.title}</span>
+                          {conversation.archivedAt ? <small>已归档</small> : null}
+                        </NavLink>
+                        <ConversationDeleteButton conversation={conversation} />
+                      </div>
                     ))}
                     {conversations.isPending ? (
                       <p className="project-sidebar-state" role="status">

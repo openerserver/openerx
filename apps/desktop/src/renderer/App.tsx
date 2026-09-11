@@ -102,6 +102,12 @@ import { AccountAccess } from "./AccountAccess";
 import { ArtifactDirectory } from "./ArtifactDirectory";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
+import { ConfirmDialog } from "./ConfirmDialog";
+import {
+  ConversationDeleteButton,
+  ConversationDeletionProvider,
+  useConversationDeletion,
+} from "./ConversationDeletion";
 import { DesktopControlBar } from "./DesktopControlBar";
 import { PendingToolApproval } from "./PendingToolApproval";
 import {
@@ -824,65 +830,6 @@ function ComposerSelect({
         </div>
       ) : null}
     </div>
-  );
-}
-
-function ConfirmDialog({
-  title,
-  description,
-  confirmLabel,
-  pending = false,
-  children,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  description: string;
-  confirmLabel: string;
-  pending?: boolean;
-  children?: ReactNode;
-  onCancel: () => void;
-  onConfirm: () => void;
-}): React.JSX.Element {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const cancelButtonRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (typeof dialog.showModal === "function") dialog.showModal();
-    else dialog.setAttribute("open", "");
-    window.requestAnimationFrame(() => cancelButtonRef.current?.focus());
-    return () => {
-      if (typeof dialog.close === "function" && dialog.open) dialog.close();
-      else dialog.removeAttribute("open");
-    };
-  }, []);
-  return (
-    <dialog
-      ref={dialogRef}
-      className="confirmation-dialog"
-      role="alertdialog"
-      aria-modal="true"
-      aria-label={title}
-      onCancel={(event) => {
-        event.preventDefault();
-        onCancel();
-      }}
-    >
-      <div>
-        <strong>{title}</strong>
-        <p>{description}</p>
-        {children}
-      </div>
-      <div className="confirmation-dialog-actions">
-        <button ref={cancelButtonRef} type="button" onClick={onCancel}>
-          取消
-        </button>
-        <button type="button" className="danger-action" disabled={pending} onClick={onConfirm}>
-          {pending ? "处理中…" : confirmLabel}
-        </button>
-      </div>
-    </dialog>
   );
 }
 
@@ -3829,14 +3776,12 @@ function ConversationToolbar({
   railOpen: boolean;
   onToggleRail: () => void;
 }): React.JSX.Element {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const conversation = snapshot.conversation;
   const [renaming, setRenaming] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [projectMoveOpen, setProjectMoveOpen] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [forgetSourceMemories, setForgetSourceMemories] = useState(false);
+  const requestConversationDeletion = useConversationDeletion();
   const [nextTitle, setNextTitle] = useState(conversation.title);
   const [selectedBranchId, setSelectedBranchId] = useState(conversation.activeBranchId);
   const [toolbarNotice, setToolbarNotice] = useState<string | null>(null);
@@ -3876,17 +3821,6 @@ function ConversationToolbar({
       );
       await queryClient.invalidateQueries({ queryKey: ["chat", "list"] });
       setToolbarNotice(updated.archivedAt ? "对话已归档。" : "对话已移回活动历史。");
-    },
-  });
-  const remove = useMutation({
-    mutationFn: () =>
-      window.openerx.deleteConversation({
-        conversationId: conversation.id,
-        forgetSourceMemories,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
-      navigate("/chat/new");
     },
   });
   const activate = useMutation({
@@ -4004,8 +3938,7 @@ function ConversationToolbar({
               className="danger-action"
               onClick={() => {
                 setMoreOpen(false);
-                setForgetSourceMemories(false);
-                setConfirmingDelete(true);
+                requestConversationDeletion(conversation, moreButtonRef.current);
               }}
             >
               删除对话…
@@ -4036,31 +3969,6 @@ function ConversationToolbar({
             取消
           </button>
         </form>
-      ) : null}
-      {confirmingDelete ? (
-        <ConfirmDialog
-          title="删除这个对话？"
-          description="删除后将不再出现在历史记录中。此操作无法在应用内撤销。"
-          confirmLabel="确认删除"
-          pending={remove.isPending}
-          onCancel={() => {
-            setConfirmingDelete(false);
-            window.setTimeout(() => moreButtonRef.current?.focus(), 0);
-          }}
-          onConfirm={() => remove.mutate()}
-        >
-          <label className="confirmation-dialog-option">
-            <input
-              type="checkbox"
-              checked={forgetSourceMemories}
-              onChange={(event) => setForgetSourceMemories(event.target.checked)}
-            />
-            <span>
-              同时删除仅来源于此对话的长期记忆
-              <small>其他对话或手动创建的记忆不受影响。</small>
-            </span>
-          </label>
-        </ConfirmDialog>
       ) : null}
       {projectMoveOpen ? (
         <ConversationProjectMoveDialog
@@ -8258,20 +8166,22 @@ function Sidebar({
             </button>
           </div>
           {history.data?.map((conversation: ConversationSummary) => (
-            <NavLink
-              to={`/chat/${conversation.id}`}
-              key={conversation.id}
-              className={({ isActive }) =>
-                `history-item${isActive ? " active history-item-active" : ""}`
-              }
-            >
-              <ChatCircle size={16} weight="regular" />
-              <strong>{conversation.title}</strong>
-              <span>
-                {conversation.archivedAt ? "已归档 · " : ""}
-                {formatUpdatedAt(conversation.updatedAt)} · {conversation.lastMessagePreview}
-              </span>
-            </NavLink>
+            <div className="conversation-list-row" key={conversation.id}>
+              <NavLink
+                to={`/chat/${conversation.id}`}
+                className={({ isActive }) =>
+                  `history-item${isActive ? " active history-item-active" : ""}`
+                }
+              >
+                <ChatCircle size={16} weight="regular" />
+                <strong>{conversation.title}</strong>
+                <span>
+                  {conversation.archivedAt ? "已归档 · " : ""}
+                  {formatUpdatedAt(conversation.updatedAt)} · {conversation.lastMessagePreview}
+                </span>
+              </NavLink>
+              <ConversationDeleteButton conversation={conversation} />
+            </div>
           ))}
           {history.isSuccess && history.data.length === 0 ? (
             <p className="history-empty">
@@ -8304,6 +8214,14 @@ function Sidebar({
 }
 
 export function App(): React.JSX.Element {
+  return (
+    <ConversationDeletionProvider>
+      <AppShell />
+    </ConversationDeletionProvider>
+  );
+}
+
+function AppShell(): React.JSX.Element {
   const [contextOpen, setContextOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);

@@ -200,9 +200,74 @@ try {
   await page.getByText("项目已归档；本机文件没有被删除。", { exact: true }).waitFor();
   await page.getByRole("button", { name: "恢复项目" }).click();
   await page.getByText("项目已恢复。", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "关闭项目设置" }).click();
+
+  await page.getByRole("link", { name: "在 PRJ E2E 交付 中新建对话" }).click();
+  await page.getByLabel("发送消息").fill("用于删除验收的临时对话");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page.locator(".message-assistant[data-message-status='completed']").waitFor();
+  await page.getByRole("link", { name: "打开 PRJ E2E 交付 项目概览" }).click();
+  const projectList = page.getByRole("region", { name: "项目对话" });
+  const deleteTemporary = projectList.getByRole("button", {
+    name: "删除对话：用于删除验收的临时对话",
+  });
+  await deleteTemporary.click();
+  const deleteDialog = page.getByRole("alertdialog", { name: "删除这个对话？" });
+  await deleteDialog.getByText("“用于删除验收的临时对话”", { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await deleteDialog.waitFor({ state: "hidden" });
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute("aria-label") === "删除对话：用于删除验收的临时对话",
+  );
+  assert.equal(
+    await page.evaluate(async () => (await window.openerx.listConversations()).length),
+    2,
+  );
+  await deleteTemporary.click();
+  if (process.env.OPENERX_E2E_SCREENSHOTS_DIR) {
+    await page.screenshot({
+      path: path.join(
+        process.env.OPENERX_E2E_SCREENSHOTS_DIR,
+        "conversation-delete-dialog-e2e.png",
+      ),
+    });
+  }
+  await deleteDialog.getByRole("button", { name: "确认删除", exact: true }).click();
+  await deleteDialog.waitFor({ state: "hidden" });
+  assert.equal(page.url(), projectUrl);
+  assert.equal(await page.getByRole("link", { name: /用于删除验收的临时对话/u }).count(), 0);
+
+  const projectThreads = page.getByRole("region", { name: "PRJ E2E 交付 的对话" });
+  await projectThreads.getByRole("link").first().click();
+  const deleteCurrent = projectThreads.getByRole("button", {
+    name: "删除对话：法国的首都是哪里？",
+  });
+  await deleteCurrent.hover();
+  assert.equal(
+    await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight),
+    true,
+    "Conversation list controls must not add an outer page scrollbar",
+  );
+  if (process.env.OPENERX_E2E_SCREENSHOTS_DIR) {
+    await page.screenshot({
+      path: path.join(process.env.OPENERX_E2E_SCREENSHOTS_DIR, "conversation-list-delete-e2e.png"),
+    });
+  }
+  await deleteCurrent.click();
+  await deleteDialog.getByRole("button", { name: "确认删除", exact: true }).click();
+  await deleteDialog.waitFor({ state: "hidden" });
+  await page.getByRole("heading", { name: "还没有项目对话" }).waitFor();
+  assert.equal(page.url(), projectUrl);
+  assert.equal(await projectThreads.getByRole("link").count(), 0);
+  assert.equal(
+    await page.evaluate(
+      async () => (await window.openerx.listConversations({ includeArchived: true })).length,
+    ),
+    0,
+  );
 
   console.log(
-    "E2E_PROJECTS_OK sidebar-expand-collapse-keyboard-chat-selection-new-chat create-two-directories-primary-switch-project-chat-app-service-crash-full-restart-archive-restore",
+    "E2E_PROJECTS_OK sidebar-expand-collapse-keyboard-chat-selection-new-chat create-two-directories-primary-switch-project-chat-app-service-crash-full-restart-archive-restore list-delete-cancel-focus-overview-current-project-empty",
   );
   await application.close();
   running = undefined;
