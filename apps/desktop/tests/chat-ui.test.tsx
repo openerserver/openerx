@@ -795,6 +795,189 @@ describe("M1 chat renderer", () => {
     );
   });
 
+  it.each(["card", "composer", "failure", "arrival"] as const)(
+    "enables full access during an approval wait via %s",
+    async (entry) => {
+      cleanup();
+      const bridge = createBridge();
+      const workItem: WorkItem = {
+        id: crypto.randomUUID(),
+        ownerProfileId: "local-default",
+        conversationId,
+        messageId: assistantMessageId,
+        title: "等待工具权限",
+        status: "waiting_for_permission",
+        activeRunId: crypto.randomUUID(),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: null,
+        revision: 1,
+      };
+      const runId = workItem.activeRunId;
+      if (!runId) throw new Error("run missing");
+      const permission: PermissionRequest = {
+        id: crypto.randomUUID(),
+        ownerProfileId: "local-default",
+        workItemId: workItem.id,
+        runId,
+        toolCallId: crypto.randomUUID(),
+        capability: "desktop",
+        risk: "L4",
+        resourceType: "application",
+        resource: "Notes",
+        actions: ["high_impact"],
+        reason: "提交桌面操作",
+        payloadDigest: "a".repeat(64),
+        status: "pending",
+        requestedAt: timestamp,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        resolvedAt: null,
+        resolution: null,
+        scopeId: null,
+      };
+      const run: WorkItemDetail["run"] = {
+        id: runId,
+        workItemId: workItem.id,
+        attempt: 1,
+        status: "waiting_for_permission",
+        piPackageVersion: "0.84.4",
+        piHostContractVersion: 2,
+        selectedModelRef: "platform/auto",
+        effectiveModelRef: "platform/standard",
+        branchId,
+        thinkingLevel: "high",
+        fallbackReason: null,
+        initialToolNames: [],
+        availableToolNames: [],
+        skillInstallationIds: [],
+        instructionSources: [],
+        piSessionRef: null,
+        usageRecords: [],
+        cancellationRequestedAt: null,
+        lastPiEventSequence: 1,
+        retryCount: 0,
+        compactionCount: 0,
+        errorCode: null,
+        createdAt: timestamp,
+        startedAt: timestamp,
+        completedAt: null,
+        updatedAt: timestamp,
+      };
+      const detail: WorkItemDetail = {
+        workItem,
+        run,
+        runs: [run],
+        steps: [],
+        toolCalls: [],
+        permissions: [permission],
+        items: [
+          {
+            id: crypto.randomUUID(),
+            runId,
+            sequence: 1,
+            piItemRef: `approval:${permission.id}`,
+            status: "running",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            startedAt: timestamp,
+            completedAt: null,
+            errorCode: null,
+            content: {
+              type: "approval",
+              permissionRequestId: permission.id,
+              toolCallId: permission.toolCallId,
+              capability: permission.capability,
+              risk: permission.risk,
+              resource: permission.resource,
+              reason: permission.reason,
+            },
+          },
+        ],
+      };
+      let arrived = entry !== "arrival";
+      vi.mocked(bridge.listWorkItems).mockImplementation(async () => [
+        { ...workItem, status: arrived ? "waiting_for_permission" : "running" },
+      ]);
+      vi.mocked(bridge.getWorkItem).mockImplementation(async () => structuredClone(detail));
+      vi.mocked(bridge.listPermissionRequests).mockImplementation(async () =>
+        detail.permissions.filter(({ status }) => status === "pending"),
+      );
+      let finish: (() => void) | undefined;
+      vi.mocked(bridge.setToolPermissionMode).mockImplementation(
+        ({ mode }) =>
+          new Promise((resolve, reject) => {
+            finish = () => {
+              if (entry === "failure") {
+                reject(new Error("offline"));
+                return;
+              }
+              detail.permissions[0] = { ...permission, status: "approved", resolution: "once" };
+              resolve({ conversationId, mode, scopeId: crypto.randomUUID() });
+            };
+          }),
+      );
+      renderApp(bridge, `/chat/${conversationId}`);
+      const user = userEvent.setup();
+      if (entry === "arrival") {
+        await screen.findByRole("button", { name: /进行中/u });
+        expect(screen.queryByRole("region", { name: "待处理的工具授权" })).toBeNull();
+        arrived = true;
+        act(() =>
+          vi.mocked(bridge.onChatEvent).mock.calls[0]?.[0]({
+            eventId: crypto.randomUUID(),
+            type: "permission.required",
+            conversationId,
+            messageId: assistantMessageId,
+            sequence: 1,
+            occurredAt: timestamp,
+            payloadVersion: 1,
+            payload: { permission, workItem },
+          }),
+        );
+      }
+      const card = await screen.findByRole("region", { name: "待处理的工具授权" });
+      expect(card.closest("details")).toBeNull();
+      expect(screen.getByRole("button", { name: /进行中/u }).getAttribute("aria-expanded")).toBe(
+        "false",
+      );
+      const modeSelect = await screen.findByLabelText("权限模式");
+      await waitFor(() => expect((modeSelect as HTMLSelectElement).disabled).toBe(false));
+      if (entry === "composer") {
+        await user.selectOptions(modeSelect, "full_access");
+      } else {
+        await user.click(within(card).getByRole("button", { name: "完全访问" }));
+        expect(
+          (within(card).getByRole("button", { name: "正在开启完全访问…" }) as HTMLButtonElement)
+            .disabled,
+        ).toBe(true);
+        expect(
+          (within(card).getByRole("button", { name: "仅本次允许" }) as HTMLButtonElement).disabled,
+        ).toBe(true);
+      }
+      await waitFor(() =>
+        expect(bridge.setToolPermissionMode).toHaveBeenCalledWith({
+          conversationId,
+          mode: "full_access",
+        }),
+      );
+      await act(async () => finish?.());
+      if (entry === "failure") {
+        expect(await within(card).findByText("权限设置失败，请重试。")).toBeTruthy();
+        expect((modeSelect as HTMLSelectElement).value).toBe("ask");
+        expect(
+          (within(card).getByRole("button", { name: "完全访问" }) as HTMLButtonElement).disabled,
+        ).toBe(false);
+      } else {
+        await waitFor(() =>
+          expect(screen.queryByRole("region", { name: "待处理的工具授权" })).toBeNull(),
+        );
+        expect((modeSelect as HTMLSelectElement).value).toBe("full_access");
+      }
+      expect(bridge.sendMessage).not.toHaveBeenCalled();
+      expect(bridge.resolvePermission).not.toHaveBeenCalled();
+    },
+  );
+
   it("opens the model settings section from the model configuration prompt", async () => {
     cleanup();
     const bridge = createBridge();

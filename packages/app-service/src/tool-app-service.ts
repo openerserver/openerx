@@ -23,6 +23,8 @@ import type {
   ThinkingLevel,
   ToolCall,
   ToolOperation,
+  ToolPermissionMode,
+  ToolPermissionModeState,
   ToolRuntimeCapability,
   ToolRuntimeReadiness,
   ToolRuntimeStatus,
@@ -1516,6 +1518,35 @@ export class ToolAppService {
         reason: frame.resultSummary,
       });
     }
+  }
+
+  setPermissionMode(input: {
+    conversationId: string;
+    mode: ToolPermissionMode;
+  }): ToolPermissionModeState {
+    const state = this.#repository.setPermissionMode(input);
+    if (state.mode !== "full_access") return state;
+
+    // Updating the scope alone does not release tools already waiting for approval.
+    for (const [generationId, projection] of this.#projectionByGeneration) {
+      if (
+        projection.workItem.conversationId !== input.conversationId ||
+        this.#abortByGeneration.get(generationId)?.signal.aborted
+      ) {
+        continue;
+      }
+      for (const permission of this.#repository.listPermissionsForRun(projection.run.id)) {
+        if (permission.status !== "pending") {
+          continue;
+        }
+        this.resolvePermission({
+          permissionRequestId: permission.id,
+          decision: "once",
+          payloadDigest: permission.payloadDigest,
+        });
+      }
+    }
+    return state;
   }
 
   resolvePermission(input: {

@@ -186,7 +186,7 @@ export class ChatAppService {
         const mounts = this.#skills?.mounts("default", request.input.skillInstallationId) ?? [];
         const draft = this.#repository.createGeneration(request.input);
         if (request.input.permissionMode) {
-          this.#requiredToolsRepository().setPermissionMode({
+          this.#requiredTools().setPermissionMode({
             conversationId: draft.receipt.conversationId,
             mode: request.input.permissionMode,
           });
@@ -381,7 +381,7 @@ export class ChatAppService {
       case "tool.permissionMode.get":
         return this.#requiredToolsRepository().permissionMode(request.input.conversationId);
       case "tool.permissionMode.set":
-        return this.#requiredToolsRepository().setPermissionMode(request.input);
+        return this.#requiredTools().setPermissionMode(request.input);
       case "tool.scopes.list":
         return this.#requiredToolsRepository().activeScopes();
       case "tool.scope.revoke":

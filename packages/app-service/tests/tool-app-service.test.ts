@@ -30,6 +30,7 @@ const liveMacOSSandbox =
 
 function fixture(
   options: {
+    now?: () => string;
     shellAvailability?: () => HostToolAvailability;
     brokeredBashV1?: boolean;
     brokeredBashRunnerMode?: BrokeredBashRunnerMode;
@@ -48,6 +49,7 @@ function fixture(
   });
   const tools = new ToolRepository(databasePath, {
     ownerProfileId: "profile-a",
+    ...(options.now ? { now: options.now } : {}),
   });
   const defaultWorkspaceDirectory = path.join(directory, "openerx Workspace");
   const generation = chat.createGeneration({
@@ -356,6 +358,95 @@ describe("ToolAppService", () => {
       expect(detail.run.usageRecords).toHaveLength(2);
       expect(detail.run.usageRecords.every(({ runId }) => runId === detail.run.id)).toBe(true);
     }
+    chat.close();
+    await service.close();
+  });
+
+  it("full access releases pending calls only in its conversation and can be revoked", async () => {
+    let permissionTime = Date.now();
+    const { chat, tools, service, host, events, base } = fixture({
+      now: () => new Date(permissionTime).toISOString(),
+    });
+    service.initialize();
+    const other = chat.createGeneration({
+      text: "其他对话",
+      idempotencyKey: "other-full-access-chat",
+    });
+    const otherBase = {
+      ...base,
+      generationId: crypto.randomUUID(),
+      conversationId: other.receipt.conversationId,
+      branchId: other.receipt.branchId,
+      assistantMessageId: other.receipt.assistantMessageId,
+    };
+    for (const target of [base, otherBase]) {
+      service.startGeneration({
+        ...target,
+        selectedModelRef: "platform/auto",
+        thinkingLevel: "high",
+      });
+    }
+    const call = (target: typeof base, suffix: string) =>
+      service.handleRequest({
+        ...target,
+        requestId: crypto.randomUUID(),
+        piToolCallId: `desktop-${suffix}`,
+        toolName: "openerx_desktop",
+        operation: {
+          operation: "desktop",
+          action: "submit",
+          application: "Notes",
+          idempotencyKey: `full-access-submit-${suffix}`,
+        },
+      });
+    const pending = [call(base, "first"), call(base, "second")];
+    const otherPending = call(otherBase, "other");
+    await vi.waitFor(() => expect(tools.listPermissions("pending")).toHaveLength(3));
+    expect(host.execute).not.toHaveBeenCalled();
+    permissionTime += 6 * 60_000;
+    const expiredOther = tools
+      .listPermissions("pending")
+      .find(
+        (permission) =>
+          tools.workItem(permission.workItemId).conversationId === otherBase.conversationId,
+      );
+    if (!expiredOther) throw new Error("other permission missing");
+    expect(() =>
+      service.resolvePermission({
+        permissionRequestId: expiredOther.id,
+        payloadDigest: expiredOther.payloadDigest,
+        decision: "once",
+      }),
+    ).toThrow("PERMISSION_EXPIRED");
+    const state = service.setPermissionMode({
+      conversationId: base.conversationId,
+      mode: "full_access",
+    });
+    expect(state.mode).toBe("full_access");
+    expect(
+      service.setPermissionMode({ conversationId: base.conversationId, mode: "full_access" }),
+    ).toEqual(state);
+    await Promise.all(pending);
+    expect(host.execute).toHaveBeenCalledTimes(2);
+    expect(tools.listPermissions("pending")).toHaveLength(1);
+    expect(tools.permissionMode(otherBase.conversationId).mode).toBe("ask");
+    expect(events.filter(({ type }) => type === "permission.resolved")).toHaveLength(2);
+    await call(base, "later");
+    expect(host.execute).toHaveBeenCalledTimes(3);
+    service.setPermissionMode({ conversationId: base.conversationId, mode: "ask" });
+    const afterRevoke = call(base, "revoked");
+    await vi.waitFor(() => expect(tools.listPermissions("pending")).toHaveLength(2));
+    expect(host.execute).toHaveBeenCalledTimes(3);
+    permissionTime -= 6 * 60_000;
+    for (const permission of tools.listPermissions("pending")) {
+      service.resolvePermission({
+        permissionRequestId: permission.id,
+        payloadDigest: permission.payloadDigest,
+        decision: "once",
+      });
+    }
+    await Promise.all([otherPending, afterRevoke]);
+    expect(host.execute).toHaveBeenCalledTimes(5);
     chat.close();
     await service.close();
   });

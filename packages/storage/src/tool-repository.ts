@@ -618,7 +618,13 @@ export class ToolRepository {
       ) {
         throw new Error("PERMISSION_DECISION_NOT_ALLOWED");
       }
-      if (Date.parse(request.expiresAt) <= Date.parse(this.#now())) {
+      // A current full-access scope authorizes the waiting operation even if its old
+      // per-call prompt expired. The payload digest must still match above.
+      const authorizedByFullAccess =
+        input.decision === "once" &&
+        this.permissionMode(this.workItem(request.workItemId).conversationId).mode ===
+          "full_access";
+      if (Date.parse(request.expiresAt) <= Date.parse(this.#now()) && !authorizedByFullAccess) {
         this.#database
           .prepare(
             "UPDATE permission_requests SET status = 'expired', resolved_at = ? WHERE id = ?",

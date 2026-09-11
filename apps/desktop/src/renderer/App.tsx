@@ -85,7 +85,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Navigate,
@@ -97,9 +97,11 @@ import {
   useParams,
 } from "react-router-dom";
 import remarkGfm from "remark-gfm";
+import { AccountAccess } from "./AccountAccess";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
 import { DesktopControlBar } from "./DesktopControlBar";
+import { PendingToolApproval } from "./PendingToolApproval";
 import {
   ConversationProjectBadge,
   ConversationProjectMoveDialog,
@@ -390,26 +392,6 @@ const messageStatusLabel: Record<Message["status"], string> = {
   stopped: "已停止",
   interrupted: "已中断",
 };
-
-function accountStatusLabel(status: string | undefined): string {
-  switch (status) {
-    case "signed_in":
-      return "已登录";
-    case "reauth_required":
-      return "需要重新登录";
-    case "unavailable":
-      return "暂时不可用";
-    default:
-      return "未登录";
-  }
-}
-
-function accountReason(reason: string | null | undefined): string | null {
-  if (!reason) return null;
-  if (reason === "DEVICE_SESSION_REVOKED") return "此设备的登录已失效，请重新验证邮箱。";
-  if (reason === "AUTHENTICATION_REQUIRED") return "请先登录 openerx。";
-  return "账户状态发生变化，请重新登录后再试。";
-}
 
 function formatUpdatedAt(value: string): string {
   const date = new Date(value);
@@ -976,7 +958,9 @@ function Composer({
   contextOpen = false,
   defaultModelRef = automaticModelRef,
   projectId,
+  formRef,
 }: {
+  formRef?: RefObject<HTMLFormElement | null>;
   conversationId?: string;
   conversationSnapshot?: ConversationSnapshot;
   onOpenContext?: () => void;
@@ -1051,7 +1035,10 @@ function Composer({
     onSuccess: (state) => {
       if (!state || !conversationId) return;
       queryClient.setQueryData(["tools", "permission-mode", conversationId], state);
-      void queryClient.invalidateQueries({ queryKey: ["tools", "scopes"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["tools"],
+        predicate: (query) => query.queryKey[1] !== "permission-mode",
+      });
     },
   });
   const conversation = conversationSnapshot?.conversation;
@@ -1170,6 +1157,7 @@ function Composer({
 
   return (
     <form
+      ref={formRef}
       className="composer"
       onSubmit={(event) => {
         event.preventDefault();
@@ -3393,7 +3381,6 @@ function ToolActivity({
   selectedRunId?: string | null;
   onSelectRun?: (runId: string) => void;
 }): React.JSX.Element {
-  const queryClient = useQueryClient();
   const [localSelectedRunId, setLocalSelectedRunId] = useState(workItem.activeRunId);
   const selectedRunId =
     controlledSelectedRunId === undefined ? localSelectedRunId : controlledSelectedRunId;
@@ -3409,20 +3396,6 @@ function ToolActivity({
         workItemId: workItem.id,
         ...(selectedRunId ? { runId: selectedRunId } : {}),
       }),
-  });
-  const resolve = useMutation({
-    mutationFn: ({
-      permissionRequestId,
-      decision,
-      payloadDigest,
-    }: {
-      permissionRequestId: string;
-      decision: "once" | "session" | "persistent" | "deny";
-      payloadDigest: string;
-    }) => window.openerx.resolvePermission({ permissionRequestId, decision, payloadDigest }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["tools"] });
-    },
   });
   const value: WorkItemDetail | undefined = detail.data;
   const toolCalls = new Map(value?.toolCalls.map((call) => [call.id, call]) ?? []);
@@ -3642,12 +3615,11 @@ function ToolActivity({
           if (content.type === "approval") {
             const permission = permissions.get(content.permissionRequestId);
             if (!permission) return null;
-            const persistentAllowed = ["L1", "L2", "L3"].includes(permission.risk);
             return (
               <section
                 className="run-item-row permission-card"
                 key={item.id}
-                aria-label="工具权限确认"
+                aria-label="工具权限记录"
               >
                 <p className="eyebrow">
                   {permission.risk} 权限请求 · {permission.status}
@@ -3657,51 +3629,7 @@ function ToolActivity({
                   {permission.capability} · {permission.resource}
                 </span>
                 {permission.status === "pending" ? (
-                  <div>
-                    <button
-                      type="button"
-                      className="primary-action"
-                      disabled={resolve.isPending}
-                      onClick={() =>
-                        resolve.mutate({
-                          permissionRequestId: permission.id,
-                          decision: "once",
-                          payloadDigest: permission.payloadDigest,
-                        })
-                      }
-                    >
-                      仅本次允许
-                    </button>
-                    {persistentAllowed ? (
-                      <button
-                        type="button"
-                        disabled={resolve.isPending}
-                        onClick={() =>
-                          resolve.mutate({
-                            permissionRequestId: permission.id,
-                            decision: "session",
-                            payloadDigest: permission.payloadDigest,
-                          })
-                        }
-                      >
-                        在此对话中允许
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="danger-action"
-                      disabled={resolve.isPending}
-                      onClick={() =>
-                        resolve.mutate({
-                          permissionRequestId: permission.id,
-                          decision: "deny",
-                          payloadDigest: permission.payloadDigest,
-                        })
-                      }
-                    >
-                      拒绝
-                    </button>
-                  </div>
+                  <p>等待你的确认，请使用输入框上方的权限卡片。</p>
                 ) : null}
               </section>
             );
@@ -4497,6 +4425,7 @@ function ChatPage({
 }): React.JSX.Element {
   const { conversationId = "" } = useParams();
   const messageListRef = useRef<HTMLElement>(null);
+  const composerRef = useRef<HTMLFormElement>(null);
   const messageListContentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(true);
   const lastMessageListScrollTopRef = useRef(0);
@@ -4676,7 +4605,14 @@ function ChatPage({
             回到最新回复
           </button>
         ) : null}
+        <PendingToolApproval
+          key={conversationId}
+          conversationId={conversationId}
+          workItems={workItems.data ?? []}
+          anchorRef={composerRef}
+        />
         <Composer
+          formRef={composerRef}
           conversationId={conversationId}
           conversationSnapshot={snapshot.data}
           onOpenContext={onToggleContext}
@@ -6557,9 +6493,6 @@ function AccountSettings({
     queryKey: accountKey,
     queryFn: () => window.openerx.getAccountState(),
   });
-  const [email, setEmail] = useState("");
-  const [challengeId, setChallengeId] = useState<string | null>(null);
-  const [code, setCode] = useState("");
   const [activeSection, setActiveSection] = useState<AccountSettingsSection>(
     () => requestedSettingsSection(location.search) ?? "account",
   );
@@ -6653,24 +6586,6 @@ function AccountSettings({
     if (!sync.data?.syncedAt) return;
     void queryClient.invalidateQueries({ queryKey: ["chat"] });
   }, [queryClient, sync.data?.syncedAt]);
-  const requestCode = useMutation({
-    mutationFn: () => window.openerx.requestEmailCode({ email }),
-    onSuccess: (challenge) => setChallengeId(challenge.challengeId),
-  });
-  const verify = useMutation({
-    mutationFn: () => {
-      if (!challengeId) throw new Error("请先获取验证码");
-      return window.openerx.verifyEmailCode({ challengeId, code });
-    },
-    onSuccess: (state) => {
-      queryClient.setQueryData(accountKey, state);
-      setCode("");
-      setChallengeId(null);
-      void queryClient.invalidateQueries({ queryKey: ["account", "devices"] });
-      void queryClient.invalidateQueries({ queryKey: ["sync"] });
-      void queryClient.invalidateQueries({ queryKey: ["usage"] });
-    },
-  });
   const signOut = useMutation({
     mutationFn: () => window.openerx.signOut(),
     onSuccess: async (state) => {
@@ -6809,75 +6724,20 @@ function AccountSettings({
           aria-label={`${accountSettingsSectionLabels[activeSection]}设置`}
         >
           {activeSection === "account" ? (
-            <section
-              className="settings-card settings-account-primary"
-              id="account-section"
-              tabIndex={-1}
-              aria-label="账户状态"
-            >
-              <div>
-                <span className={`account-status account-${state?.status ?? "unavailable"}`}>
-                  {accountStatusLabel(state?.status)}
-                </span>
-                <h2>{state?.account?.displayName ?? "登录 openerx"}</h2>
-                <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
-              </div>
-              {state?.status !== "signed_in" || !state.session ? (
-                <form
-                  className="account-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (challengeId) verify.mutate();
-                    else requestCode.mutate();
-                  }}
-                >
-                  <label htmlFor="account-email">邮箱</label>
-                  <input
-                    id="account-email"
-                    type="email"
-                    value={email}
-                    disabled={Boolean(challengeId)}
-                    onChange={(event) => setEmail(event.target.value)}
-                    required
-                  />
-                  {challengeId ? (
-                    <>
-                      <label htmlFor="account-code">六位验证码</label>
-                      <input
-                        id="account-code"
-                        inputMode="numeric"
-                        pattern="[0-9]{6}"
-                        value={code}
-                        onChange={(event) => setCode(event.target.value)}
-                        required
-                      />
-                    </>
-                  ) : null}
-                  <button
-                    type="submit"
-                    className="primary-action"
-                    disabled={
-                      requestCode.isPending ||
-                      verify.isPending ||
-                      (!challengeId && !email.trim()) ||
-                      (Boolean(challengeId) && !/^\d{6}$/.test(code))
-                    }
-                  >
-                    {challengeId ? "验证并登录" : "发送验证码"}
-                  </button>
-                  {!challengeId && !email.trim() ? (
-                    <p className="field-help">输入邮箱后即可获取六位验证码。</p>
-                  ) : null}
-                  {requestCode.error || verify.error || state?.reason ? (
-                    <p className="inline-error">
-                      {requestCode.error?.message ??
-                        verify.error?.message ??
-                        accountReason(state?.reason)}
-                    </p>
-                  ) : null}
-                </form>
-              ) : null}
-            </section>
+            <AccountAccess
+              state={state}
+              loading={account.isPending}
+              error={account.error}
+              onRetry={() => void account.refetch()}
+              onContinue={onClose}
+              onConfigureModel={() => openSettingsSection("model")}
+              onSignedIn={(next) => {
+                queryClient.setQueryData(accountKey, next);
+                void queryClient.invalidateQueries({ queryKey: ["account", "devices"] });
+                void queryClient.invalidateQueries({ queryKey: ["sync"] });
+                void queryClient.invalidateQueries({ queryKey: ["usage"] });
+              }}
+            />
           ) : null}
           {activeSection === "billing" ? (
             <section
@@ -8406,9 +8266,16 @@ function Sidebar({
       </div>
       <NavLink className="sidebar-account" to="/settings/account">
         <UserCircle size={23} weight="regular" />
-        <strong>{account.data?.account?.displayName ?? "未登录"}</strong>
+        <strong>
+          {account.data?.account?.displayName ??
+            (account.data?.reason === "PLATFORM_ENDPOINT_NOT_CONFIGURED" ? "本机模式" : "未登录")}
+        </strong>
         <span>
-          {account.data?.status === "signed_in" ? account.data.account?.email : "登录以同步数据"}
+          {account.data?.status === "signed_in"
+            ? account.data.account?.email
+            : account.data?.reason === "PLATFORM_ENDPOINT_NOT_CONFIGURED"
+              ? "无需登录即可使用"
+              : "登录以同步数据"}
         </span>
       </NavLink>
     </aside>
