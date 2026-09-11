@@ -1488,8 +1488,14 @@ body,
 .history-heading {
   padding: 12px 8px 5px;
   color: var(--workspace-muted);
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: normal;
+}
+
+.history-list .history-heading > span {
+  color: inherit;
+  font-size: inherit;
 }
 
 .history-heading button {
@@ -1509,11 +1515,15 @@ body,
 
 .history-list a {
   display: grid;
-  grid-template-columns: 17px minmax(0, 1fr);
-  gap: 1px 8px;
-  align-items: start;
-  min-height: 42px;
-  padding: 8px 9px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 9px;
+}
+
+.history-list .conversation-list-row > a.history-item {
+  padding-right: 9px;
 }
 
 .history-list a.history-item-active {
@@ -1534,19 +1544,35 @@ body,
 }
 
 .history-list a > svg {
-  grid-row: 1 / span 2;
-  margin-top: 1px;
-  color: #69736d;
+  color: var(--workspace-muted);
 }
 
 .history-list strong {
-  font-size: 12px;
-  font-weight: 560;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .history-list span {
   color: #6f7871;
   font-size: 10px;
+}
+
+.history-list .history-item-meta {
+  min-width: 28px;
+  color: var(--workspace-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-list .conversation-list-row:hover .history-item-meta,
+.history-list .conversation-list-row:focus-within .history-item-meta {
+  opacity: 0;
+}
+
+@media (hover: none) {
+  .history-list .history-item-meta {
+    visibility: hidden;
+  }
 }
 
 .sync-state {

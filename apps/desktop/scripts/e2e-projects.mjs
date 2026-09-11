@@ -139,15 +139,38 @@ try {
   const projectConversation = sidebarConversations.getByRole("link").first();
   await projectConversation.waitFor();
   assert.equal(await projectConversation.getAttribute("aria-current"), "page");
+  const history = page.getByRole("region", { name: "对话历史" });
+  assert.equal(await history.getByRole("link").count(), 0);
   const conversationUrl = page.url();
   await projectToggle.click();
   assert.equal(page.url(), conversationUrl);
+  assert.equal(await history.getByRole("link").count(), 0);
   await projectToggle.click();
   await page.getByRole("link", { name: "在 PRJ E2E 交付 中新建对话" }).click();
   await page.getByRole("heading", { name: "在这个项目中做什么？" }).waitFor();
   await projectConversation.click();
   await page.getByLabel("对话消息").getByText("巴黎。", { exact: true }).waitFor();
   assert.equal(page.url(), conversationUrl);
+
+  await page.getByRole("button", { name: "更多操作" }).click();
+  await page.getByRole("menuitem", { name: "更改或移出项目…" }).click();
+  await page.getByLabel("目标项目").selectOption("");
+  await page.getByRole("button", { name: "确认更改" }).click();
+  const unassignedConversation = history.getByRole("link", { name: /法国的首都是哪里/u });
+  await unassignedConversation.waitFor();
+  assert.equal(await sidebarConversations.getByRole("link").count(), 0);
+  assert.equal(await unassignedConversation.getAttribute("aria-current"), "page");
+  assert.equal(await unassignedConversation.locator("time").count(), 1);
+  assert.equal(await unassignedConversation.getAttribute("title"), "法国的首都是哪里？");
+  assert.equal((await unassignedConversation.innerText()).includes("巴黎。"), false);
+  assert.ok((await unassignedConversation.boundingBox()).height <= 36);
+  await page.getByRole("button", { name: "更多操作" }).click();
+  await page.getByRole("menuitem", { name: "移动到项目…" }).click();
+  await page.getByLabel("目标项目").selectOption({ label: "PRJ E2E 交付" });
+  await page.getByRole("button", { name: "确认更改" }).click();
+  await projectConversation.waitFor();
+  await unassignedConversation.waitFor({ state: "hidden" });
+  assert.equal(await projectConversation.getAttribute("aria-current"), "page");
   if (process.env.OPENERX_E2E_SCREENSHOTS_DIR) {
     mkdirSync(process.env.OPENERX_E2E_SCREENSHOTS_DIR, { recursive: true });
     await page.screenshot({
@@ -267,7 +290,7 @@ try {
   );
 
   console.log(
-    "E2E_PROJECTS_OK sidebar-expand-collapse-keyboard-chat-selection-new-chat create-two-directories-primary-switch-project-chat-app-service-crash-full-restart-archive-restore list-delete-cancel-focus-overview-current-project-empty",
+    "E2E_PROJECTS_OK sidebar-expand-collapse-keyboard-chat-selection-new-chat exclusive-project-history-groups-move-in-out-compact-rows create-two-directories-primary-switch-project-chat-app-service-crash-full-restart-archive-restore list-delete-cancel-focus-overview-current-project-empty",
   );
   await application.close();
   running = undefined;

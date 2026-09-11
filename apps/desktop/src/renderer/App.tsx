@@ -8084,7 +8084,12 @@ function Sidebar({
     queryKey: accountKey,
     queryFn: () => window.openerx.getAccountState(),
   });
-  const archivedCount = history.data?.filter(({ archivedAt }) => archivedAt !== null).length ?? 0;
+  const unassignedConversations = (history.data ?? []).filter(
+    ({ projectId }) => projectId === null,
+  );
+  const archivedCount = unassignedConversations.filter(
+    ({ archivedAt }) => archivedAt !== null,
+  ).length;
   return (
     <aside
       className="sidebar"
@@ -8147,7 +8152,7 @@ function Sidebar({
         <ProjectSidebar conversations={history} />
         <section className="history-list" aria-label="对话历史">
           <div className="history-heading">
-            <span>{showArchived ? "历史 · 含归档" : "历史 · 活动"}</span>
+            <span>{showArchived ? "对话 · 含归档" : "对话"}</span>
             <button
               type="button"
               aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"}
@@ -8157,32 +8162,45 @@ function Sidebar({
               <SlidersHorizontal size={15} />
             </button>
           </div>
-          {history.data?.map((conversation: ConversationSummary) => (
+          {unassignedConversations.map((conversation: ConversationSummary) => (
             <div className="conversation-list-row" key={conversation.id}>
               <NavLink
                 to={`/chat/${conversation.id}`}
+                title={conversation.title}
                 className={({ isActive }) =>
                   `history-item${isActive ? " active history-item-active" : ""}`
                 }
               >
                 <ChatCircle size={16} weight="regular" />
                 <strong>{conversation.title}</strong>
-                <span>
-                  {conversation.archivedAt ? "已归档 · " : ""}
-                  {formatUpdatedAt(conversation.updatedAt)} · {conversation.lastMessagePreview}
+                <span className="history-item-meta">
+                  {conversation.archivedAt ? (
+                    "已归档"
+                  ) : (
+                    <time dateTime={conversation.updatedAt}>
+                      {formatUpdatedAt(conversation.updatedAt)}
+                    </time>
+                  )}
                 </span>
               </NavLink>
               <ConversationDeleteButton conversation={conversation} />
             </div>
           ))}
-          {history.isSuccess && history.data.length === 0 ? (
+          {history.isSuccess && unassignedConversations.length === 0 ? (
             <p className="history-empty">
-              {showArchived ? "还没有活动或归档对话。" : "还没有活动对话。"}
+              {history.data.length > 0
+                ? "项目对话已收纳到对应项目中。"
+                : showArchived
+                  ? "还没有活动或归档对话。"
+                  : "还没有活动对话。"}
             </p>
           ) : null}
-          {showArchived && history.isSuccess && history.data.length > 0 && archivedCount === 0 ? (
+          {showArchived &&
+          history.isSuccess &&
+          unassignedConversations.length > 0 &&
+          archivedCount === 0 ? (
             <p className="history-mode-note" role="status">
-              已显示归档；目前没有归档对话。
+              目前没有项目外的归档对话。
             </p>
           ) : null}
         </section>
