@@ -90,6 +90,15 @@ try {
   await page.getByRole("button", { name: "创建项目" }).click();
   await page.getByRole("heading", { name: "PRJ E2E 交付" }).waitFor();
   assert.match(page.url(), /#\/projects\/[0-9a-f-]+$/u);
+  const projectUrl = page.url();
+  const projectToggle = page.getByRole("button", { name: "PRJ E2E 交付", exact: true });
+  const sidebarConversations = page.getByRole("region", { name: "PRJ E2E 交付 的对话" });
+  await sidebarConversations.getByText("暂无对话", { exact: true }).waitFor();
+  await projectToggle.click();
+  assert.equal(await projectToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(page.url(), projectUrl);
+  await projectToggle.press("Enter");
+  await sidebarConversations.waitFor();
 
   await application.evaluate(
     ({ dialog }, selectedDirectories) => {
@@ -127,6 +136,24 @@ try {
   await page.locator(".message-assistant[data-message-status='completed']").waitFor();
   await page.getByLabel("对话消息").getByText("巴黎。", { exact: true }).waitFor();
   await page.getByRole("link", { name: "PRJ E2E 交付", exact: true }).waitFor();
+  const projectConversation = sidebarConversations.getByRole("link").first();
+  await projectConversation.waitFor();
+  assert.equal(await projectConversation.getAttribute("aria-current"), "page");
+  const conversationUrl = page.url();
+  await projectToggle.click();
+  assert.equal(page.url(), conversationUrl);
+  await projectToggle.click();
+  await page.getByRole("link", { name: "在 PRJ E2E 交付 中新建对话" }).click();
+  await page.getByRole("heading", { name: "在这个项目中做什么？" }).waitFor();
+  await projectConversation.click();
+  await page.getByLabel("对话消息").getByText("巴黎。", { exact: true }).waitFor();
+  assert.equal(page.url(), conversationUrl);
+  if (process.env.OPENERX_E2E_SCREENSHOTS_DIR) {
+    mkdirSync(process.env.OPENERX_E2E_SCREENSHOTS_DIR, { recursive: true });
+    await page.screenshot({
+      path: path.join(process.env.OPENERX_E2E_SCREENSHOTS_DIR, "project-sidebar-e2e.png"),
+    });
+  }
 
   await page.getByLabel("发送消息").fill("崩溃恢复 2000 字 [PI_TEST_SLOW]");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -157,7 +184,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 750));
   running = await launch();
   ({ application, page } = running);
-  await page.getByRole("link", { name: /PRJ E2E 交付/u }).click();
+  await page.getByRole("link", { name: "打开 PRJ E2E 交付 项目概览" }).click();
   await page.getByRole("button", { name: "项目设置" }).click();
   const rows = page.locator(".project-directory-list article");
   assert.equal(await rows.count(), 2);
@@ -175,7 +202,7 @@ try {
   await page.getByText("项目已恢复。", { exact: true }).waitFor();
 
   console.log(
-    "E2E_PROJECTS_OK create-two-directories-primary-switch-project-chat-app-service-crash-full-restart-archive-restore",
+    "E2E_PROJECTS_OK sidebar-expand-collapse-keyboard-chat-selection-new-chat create-two-directories-primary-switch-project-chat-app-service-crash-full-restart-archive-restore",
   );
   await application.close();
   running = undefined;

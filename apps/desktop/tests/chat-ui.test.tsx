@@ -3777,7 +3777,7 @@ describe("M1 chat renderer", () => {
     renderApp(bridge);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole("link", { name: /客户交付/ }));
+    await user.click(await screen.findByRole("link", { name: "打开 客户交付 项目概览" }));
     expect(await screen.findByRole("heading", { name: "客户交付" })).toBeTruthy();
     expect(screen.getByText("delivery-workspace")).toBeTruthy();
     await user.click(screen.getByRole("link", { name: "在此项目中开始对话" }));
@@ -3794,6 +3794,136 @@ describe("M1 chat renderer", () => {
         }),
       ),
     );
+  });
+
+  it("expands project conversations independently without leaving the current page", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const otherProjectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    vi.mocked(bridge.listProjects).mockResolvedValue([
+      projectSummary,
+      { ...projectSummary, id: otherProjectId, name: "另一个项目", conversationCount: 0 },
+    ]);
+    vi.mocked(bridge.listConversations).mockResolvedValue([
+      {
+        ...snapshot.conversation,
+        projectId: personalProjectId,
+        lastMessagePreview: "交付材料",
+        messageCount: 2,
+      },
+      {
+        ...snapshot.conversation,
+        id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        title: "项目外的对话",
+        lastMessagePreview: "个人笔记",
+        messageCount: 1,
+      },
+    ]);
+    renderApp(bridge);
+    const user = userEvent.setup();
+    const projectToggle = await screen.findByRole("button", { name: "客户交付", expanded: false });
+    expect(screen.queryByRole("region", { name: "客户交付 的对话" })).toBeNull();
+    await user.click(projectToggle);
+    const conversations = screen.getByRole("region", { name: "客户交付 的对话" });
+    expect(await within(conversations).findByRole("link", { name: "Markdown 验收" })).toBeTruthy();
+    expect(within(conversations).queryByRole("link", { name: "项目外的对话" })).toBeNull();
+    expect(bridge.getProject).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText("输入你的需求…")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "另一个项目" }));
+    expect(
+      within(screen.getByRole("region", { name: "另一个项目 的对话" })).getByText("暂无对话"),
+    ).toBeTruthy();
+    projectToggle.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("region", { name: "客户交付 的对话" })).toBeNull();
+    expect(screen.getByRole("region", { name: "另一个项目 的对话" })).toBeTruthy();
+    await user.keyboard(" ");
+    expect(screen.getByRole("region", { name: "客户交付 的对话" })).toBeTruthy();
+  });
+
+  it("reveals the active project conversation and restores its selection when reopened", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listProjects).mockResolvedValue([projectSummary]);
+    vi.mocked(bridge.getProject).mockResolvedValue(projectDetail);
+    vi.mocked(bridge.getConversation).mockResolvedValue({
+      ...snapshot,
+      conversation: { ...snapshot.conversation, projectId: personalProjectId },
+    });
+    vi.mocked(bridge.listConversations).mockResolvedValue([
+      {
+        ...snapshot.conversation,
+        projectId: personalProjectId,
+        lastMessagePreview: "交付材料",
+        messageCount: 2,
+      },
+    ]);
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+    const conversations = await screen.findByRole("region", { name: "客户交付 的对话" });
+    const selected = within(conversations).getByRole("link", { name: "Markdown 验收" });
+    expect(selected.getAttribute("aria-current")).toBe("page");
+    expect(selected.classList).toContain("active");
+    await user.click(screen.getByRole("button", { name: "客户交付", expanded: true }));
+    expect(screen.queryByRole("region", { name: "客户交付 的对话" })).toBeNull();
+
+    await user.click(within(screen.getByRole("navigation", { name: "新对话" })).getByRole("link"));
+    await user.click(
+      within(screen.getByRole("region", { name: "对话历史" })).getByRole("link", {
+        name: /Markdown 验收/,
+      }),
+    );
+    const reopened = await screen.findByRole("region", { name: "客户交付 的对话" });
+    expect(
+      within(reopened).getByRole("link", { name: "Markdown 验收" }).getAttribute("aria-current"),
+    ).toBe("page");
+
+    await user.click(screen.getByRole("link", { name: "在 客户交付 中新建对话" }));
+    expect(await screen.findByRole("heading", { name: "在这个项目中做什么？" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "客户交付", expanded: true })).toBeTruthy();
+    expect(
+      within(reopened).getByRole("link", { name: "Markdown 验收" }).hasAttribute("aria-current"),
+    ).toBe(false);
+    await user.click(within(reopened).getByRole("link", { name: "Markdown 验收" }));
+    expect(await screen.findByRole("region", { name: "对话消息" })).toBeTruthy();
+    expect(
+      within(reopened).getByRole("link", { name: "Markdown 验收" }).getAttribute("aria-current"),
+    ).toBe("page");
+  });
+
+  it("includes archived project conversations only when requested and disables new chats for archived projects", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listProjects).mockImplementation(async ({ includeArchived } = {}) =>
+      includeArchived ? [{ ...projectSummary, archivedAt: timestamp }] : [],
+    );
+    vi.mocked(bridge.listConversations).mockImplementation(async ({ includeArchived } = {}) =>
+      includeArchived
+        ? [
+            {
+              ...snapshot.conversation,
+              projectId: personalProjectId,
+              archivedAt: timestamp,
+              lastMessagePreview: "已归档的交付材料",
+              messageCount: 2,
+            },
+          ]
+        : [],
+    );
+    renderApp(bridge);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "显示归档项目" }));
+    await user.click(await screen.findByRole("button", { name: "客户交付" }));
+    const conversations = screen.getByRole("region", { name: "客户交付 的对话" });
+    expect(within(conversations).getByText("暂无对话")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "在 客户交付 中新建对话" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "显示归档对话" }));
+    expect(
+      await within(conversations).findByRole("link", { name: /Markdown 验收.*已归档/ }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "仅显示活动对话" }));
+    await waitFor(() => expect(within(conversations).queryByRole("link")).toBeNull());
   });
 
   it("archives and restores a project without deleting its local directories", async () => {

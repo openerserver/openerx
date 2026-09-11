@@ -8244,7 +8244,7 @@ function Sidebar({
             <span>设置</span>
           </NavLink>
         </nav>
-        <ProjectSidebar />
+        <ProjectSidebar conversations={history} />
         <section className="history-list" aria-label="对话历史">
           <div className="history-heading">
             <span>{showArchived ? "历史 · 含归档" : "历史 · 活动"}</span>
