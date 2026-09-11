@@ -42,6 +42,7 @@ import {
   BROKERED_BASH_RUNNER_MODE_ENV,
   BROKERED_BASH_V1_FEATURE_FLAG,
   type BrokeredBashRunnerMode,
+  type ByokUsageRecord,
   brokeredBashRunnerMode,
   brokeredBashV1Enabled,
   defaultLocalWebSearchPolicy,
@@ -1412,7 +1413,8 @@ export class ToolAppService {
       this.#repository.upsertRunItem({
         runId: projection.run.id,
         piItemRef: itemRef,
-        status: frame.type === "model.completed" ? "completed" : "running",
+        status:
+          frame.type === "model.completed" ? (frame.errorCode ? "failed" : "completed") : "running",
         content: {
           type: "model",
           modelRef: frame.modelRef ?? projection.run.selectedModelRef,
@@ -1576,6 +1578,18 @@ export class ToolAppService {
       });
     }
     return permission;
+  }
+
+  recordByokUsage(record: ByokUsageRecord): void {
+    const projection =
+      record.operation === "chat"
+        ? this.#projectionByGeneration.get(record.operationId)
+        : undefined;
+    this.#repository.recordByokUsage(record, projection?.run.id);
+  }
+
+  byokUsage(query: { conversationId?: string; messageId?: string }) {
+    return this.#repository.byokUsage(query);
   }
 
   completeGeneration(

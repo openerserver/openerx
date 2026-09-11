@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
+  type ByokUsageRecord,
+  byokUsageQueryResultSchema,
+  byokUsageRecordSchema,
   type CapabilityAction,
   type CapabilityScope,
   capabilityScopeSchema,
@@ -10,6 +13,7 @@ import {
   localWebSearchSettingsSelectionSchema,
   type McpServerConfig,
   mcpServerConfigSchema,
+  modelUsageRecordSchema,
   type NormalizedToolResult,
   normalizedToolResultSchema,
   type PermissionRequest,
@@ -408,6 +412,116 @@ export class ToolRepository {
     return call;
   }
 
+  recordByokUsage(input: ByokUsageRecord, runId?: string): void {
+    const record = byokUsageRecordSchema.parse({ ...input, runId: runId ?? null });
+    this.#transaction(() => {
+      if (record.conversationId !== null) {
+        // A cancellation may report usage after its conversation was soft deleted.
+        // Keep ownership validation; queries continue to hide deleted conversations.
+        const scope = this.#database
+          .prepare("SELECT id FROM conversations WHERE id = ? AND owner_profile_id = ?")
+          .get(record.conversationId, this.#ownerProfileId);
+        if (!scope) throw new Error("BYOK_USAGE_SCOPE_INVALID");
+      }
+      if (record.messageId !== null) {
+        const scope = this.#database
+          .prepare("SELECT id FROM messages WHERE id = ? AND conversation_id = ?")
+          .get(record.messageId, record.conversationId);
+        if (!scope) throw new Error("BYOK_USAGE_SCOPE_INVALID");
+      }
+      const existing = this.#database
+        .prepare("SELECT owner_profile_id, record_json FROM byok_usage_records WHERE usage_id = ?")
+        .get(record.usageId) as { owner_profile_id: string; record_json: string } | undefined;
+      if (existing) {
+        const stored = byokUsageRecordSchema.parse(JSON.parse(existing.record_json));
+        if (
+          existing.owner_profile_id !== this.#ownerProfileId ||
+          JSON.stringify({ ...stored, runId: null }) !== JSON.stringify({ ...record, runId: null })
+        ) {
+          throw new Error("BYOK_USAGE_DEDUPE_CONFLICT");
+        }
+        return;
+      }
+      if (runId) {
+        const run = this.#database
+          .prepare(
+            `SELECT er.usage_records_json FROM execution_runs er JOIN work_items wi ON wi.id = er.work_item_id
+           WHERE er.id = ? AND wi.owner_profile_id = ? AND wi.conversation_id = ? AND wi.message_id = ?`,
+          )
+          .get(runId, this.#ownerProfileId, record.conversationId, record.messageId) as
+          | { usage_records_json: string }
+          | undefined;
+        if (!run) throw new Error("BYOK_USAGE_RUN_INVALID");
+        const records = modelUsageRecordSchema.array().parse(JSON.parse(run.usage_records_json));
+        if (!records.some(({ usageId }) => usageId === record.usageId)) records.push(record);
+        this.#database
+          .prepare(
+            "UPDATE execution_runs SET usage_records_json = ?, effective_model_ref = ? WHERE id = ?",
+          )
+          .run(JSON.stringify(records), record.effectiveModelRef, runId);
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO byok_usage_records (usage_id, owner_profile_id, conversation_id, message_id, operation_id, recorded_at, record_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          record.usageId,
+          this.#ownerProfileId,
+          record.conversationId,
+          record.messageId,
+          record.operationId,
+          record.recordedAt,
+          JSON.stringify(record),
+        );
+    });
+  }
+
+  byokUsage(query: { conversationId?: string; messageId?: string } = {}) {
+    const conditions = [
+      "u.owner_profile_id = ?",
+      "(u.conversation_id IS NULL OR c.deleted_at IS NULL)",
+    ];
+    const args = [this.#ownerProfileId];
+    if (query.conversationId) {
+      conditions.push("u.conversation_id = ?");
+      args.push(query.conversationId);
+    }
+    if (query.messageId) {
+      conditions.push("u.message_id = ?");
+      args.push(query.messageId);
+    }
+    const rows = this.#database
+      .prepare(
+        `SELECT u.record_json FROM byok_usage_records u LEFT JOIN conversations c ON c.id = u.conversation_id
+       WHERE ${conditions.join(" AND ")} ORDER BY u.recorded_at, u.usage_id`,
+      )
+      .all(...args) as { record_json: string }[];
+    const selected = query.messageId
+      ? this.#database
+          .prepare(
+            `SELECT COALESCE(m.selected_model_ref, c.selected_model_ref) AS model_ref FROM messages m JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.id = ? AND c.owner_profile_id = ? AND c.deleted_at IS NULL AND (? IS NULL OR c.id = ?)`,
+          )
+          .get(
+            query.messageId,
+            this.#ownerProfileId,
+            query.conversationId ?? null,
+            query.conversationId ?? null,
+          )
+      : query.conversationId
+        ? this.#database
+            .prepare(
+              "SELECT selected_model_ref AS model_ref FROM conversations WHERE id = ? AND owner_profile_id = ? AND deleted_at IS NULL",
+            )
+            .get(query.conversationId, this.#ownerProfileId)
+        : undefined;
+    return byokUsageQueryResultSchema.parse({
+      selectedModelRef: (selected as { model_ref: string } | undefined)?.model_ref ?? null,
+      records: rows.map((row) => JSON.parse(row.record_json)),
+    });
+  }
+
   completeRun(
     runId: string,
     status: "completed" | "failed" | "interrupted",
@@ -417,9 +531,17 @@ export class ToolRepository {
     const now = this.#now();
     this.#transaction(() => {
       const runRow = this.#database
-        .prepare("SELECT work_item_id FROM execution_runs WHERE id = ?")
-        .get(runId) as { work_item_id: string } | undefined;
+        .prepare("SELECT work_item_id, usage_records_json FROM execution_runs WHERE id = ?")
+        .get(runId) as { work_item_id: string; usage_records_json: string } | undefined;
       if (!runRow) throw new Error("RUN_NOT_FOUND");
+      const combinedUsage = [
+        ...new Map(
+          [
+            ...modelUsageRecordSchema.array().parse(JSON.parse(runRow.usage_records_json)),
+            ...usageRecords,
+          ].map((record) => [record.usageId, record]),
+        ).values(),
+      ];
       if (status === "interrupted") {
         this.#database
           .prepare(
@@ -441,9 +563,9 @@ export class ToolRepository {
         .run(
           storedStatus,
           errorCode ?? null,
-          JSON.stringify(usageRecords),
-          usageRecords.at(-1)?.effectiveModelRef ?? null,
-          usageRecords.at(-1)?.fallbackReason ?? null,
+          JSON.stringify(combinedUsage),
+          combinedUsage.at(-1)?.effectiveModelRef ?? null,
+          combinedUsage.at(-1)?.fallbackReason ?? null,
           now,
           now,
           runId,

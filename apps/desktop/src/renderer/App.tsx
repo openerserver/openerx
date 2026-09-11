@@ -19,6 +19,7 @@ import type {
   Message,
   ModelCatalogEntry,
   ModelServiceSettingsUpdate,
+  ModelUsageRecord,
   PersonalFile,
   RechargeOrder,
   RefundOrder,
@@ -31,7 +32,6 @@ import type {
   ToolPermissionMode,
   ToolRuntimeCapability,
   ToolRuntimeReadiness,
-  UsageRecord,
   WorkItem,
   WorkItemDetail,
 } from "@openerx/contracts";
@@ -41,6 +41,7 @@ import {
   defaultByokModelConfiguration,
   defaultByokModelRef,
   isByokModelRef,
+  modelFailureMessage,
 } from "@openerx/contracts";
 import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/model";
 import {
@@ -432,6 +433,10 @@ function skillDescription(skill: SkillInstallation): string {
 }
 
 function userFacingError(error: unknown, fallback: string): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const modelCode = rawMessage.match(/\bMODEL_[A-Z_]+\b/u)?.[0];
+  const modelMessage = modelCode ? modelFailureMessage(modelCode) : undefined;
+  if (modelMessage) return modelMessage;
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (message.includes("SKILL_TOO_MANY_FILES")) {
     return "Skill 包含的文件过多（最多 20,000 个），请精简包内资源后重试。";
@@ -500,6 +505,8 @@ function userFacingError(error: unknown, fallback: string): string {
 }
 
 function messageFailureLabel(errorCode: string): string {
+  const classified = modelFailureMessage(errorCode);
+  if (classified) return classified;
   if (errorCode === "MODEL_CAPABILITY_UNSUPPORTED") {
     return "当前模型不支持图片输入，请切换到自动或 DeepSeek V4 Flash Vision（实验）后重试。";
   }
@@ -510,7 +517,10 @@ function messageFailureLabel(errorCode: string): string {
     return "默认模型暂时未就绪，请稍后重试。";
   }
   if (errorCode === "PI_PROVIDER_FAILURE") {
-    return "模型服务暂时没有响应，请检查网络后重试。";
+    return "模型调用失败，历史记录未保留具体原因，请检查模型服务状态。";
+  }
+  if (errorCode === "ACCESS_TOKEN_INVALID" || errorCode === "ACCESS_TOKEN_EXPIRED") {
+    return "平台登录会话已失效，请重新登录后再试。";
   }
   if (errorCode === "AUTHENTICATION_REQUIRED") {
     return "此操作需要登录，请先前往账户设置。";
@@ -2740,7 +2750,7 @@ function MessageCard({
     enabled: message.role === "assistant" && !running,
     retry: false,
   });
-  const execution: UsageRecord | undefined = usageRecords.data?.at(-1);
+  const execution: ModelUsageRecord | undefined = usageRecords.data?.at(-1);
   const showMessageStatus = message.status !== "completed";
   const primaryActivity = activities[0];
   const activityElapsed = primaryActivity
@@ -2939,6 +2949,9 @@ function MessageCard({
             <summary>运行详情</summary>
             {usage.data && usage.data.records > 0 ? (
               <div className="usage-line" role="status" aria-label="消息 Token 用量">
+                {"source" in usage.data && usage.data.source === "byok" ? (
+                  <span>自带 API Key · 本地用量记录</span>
+                ) : null}
                 <span>输入 {tokenValue(usage.data.inputTokens)}</span>
                 <span>缓存 {tokenValue(usage.data.cachedInputTokens)}</span>
                 <span>输出 {tokenValue(usage.data.outputTokens)}</span>
@@ -3517,7 +3530,15 @@ function ToolActivity({
       ) : null}
       {(!segment || showsSegmentMetadata) && usageRecords.length > 0 ? (
         <div className="usage-line" role="status" aria-label="执行轮次 Token 用量">
-          <span>{usageRecords.length} 个模型轮次</span>
+          {usageRecords.some((record) => "source" in record && record.source === "byok") ? (
+            <span>自带 API Key · 本地用量记录</span>
+          ) : null}
+          <span>
+            {usageRecords.length}{" "}
+            {usageRecords.some((record) => "source" in record && record.source === "byok")
+              ? "次模型请求"
+              : "个模型轮次"}
+          </span>
           <span>输入 {tokenValue(usageTotal.inputTokens)}</span>
           <span>缓存 {tokenValue(usageTotal.cachedInputTokens)}</span>
           <span>输出 {tokenValue(usageTotal.outputTokens)}</span>

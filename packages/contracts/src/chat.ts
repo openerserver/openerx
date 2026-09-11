@@ -57,7 +57,8 @@ import {
   memorySourcesListInputSchema,
   memoryUpsertInputSchema,
 } from "./memory";
-import { defaultThinkingLevel, thinkingLevelSchema } from "./model";
+import { defaultThinkingLevel, thinkingLevelSchema, usageQueryInputSchema } from "./model";
+import { byokUsageQueryResultSchema } from "./model-usage";
 import {
   type SkillInstallation,
   type SkillInvocation,
@@ -327,6 +328,7 @@ export const chatEventsInputSchema = z
 export const emptyInputSchema = z.object({}).strict();
 
 export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
+  z.object({ command: z.literal("usage.byok.list"), input: usageQueryInputSchema }).strict(),
   z.object({ command: z.literal("sync.now"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("sync.conflicts"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("sync.resolve"), input: syncResolveConflictInputSchema }).strict(),
@@ -582,6 +584,7 @@ export type ChatCommandEnvelope = z.infer<typeof chatCommandEnvelopeSchema>;
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 
 export interface ChatCommandResultMap {
+  "usage.byok.list": z.infer<typeof byokUsageQueryResultSchema>;
   "sync.now": z.infer<typeof syncStatusSchema>;
   "sync.conflicts": SyncConflict[];
   "sync.resolve": z.infer<typeof syncStatusSchema>;
@@ -662,6 +665,9 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
 ): ChatCommandResultMap[C] {
   let parsed: unknown;
   switch (command) {
+    case "usage.byok.list":
+      parsed = byokUsageQueryResultSchema.parse(value);
+      break;
     case "sync.now":
     case "sync.resolve":
       parsed = syncStatusSchema.parse(value);

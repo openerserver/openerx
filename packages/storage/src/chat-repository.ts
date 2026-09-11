@@ -833,6 +833,7 @@ export class ChatRepository {
         )
         .run(now, this.#ownerProfileId, this.#ownerProfileId, this.#ownerProfileId);
       this.#database.exec(`
+        DELETE FROM byok_usage_records;
         DELETE FROM memory_merge_reviews;
         DELETE FROM memory_semantic_cluster_state;
         DELETE FROM memory_consolidation_runs;

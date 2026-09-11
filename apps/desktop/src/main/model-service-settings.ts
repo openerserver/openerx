@@ -9,6 +9,7 @@ import {
   type ByokProviderId,
   byokConnectionTestResultSchema,
   byokProviderPresets,
+  classifyModelError,
   defaultByokModelConfiguration,
   type ModelServiceSettings,
   type ModelServiceSettingsUpdate,
@@ -269,10 +270,34 @@ export class ModelServiceSettingsStore {
       }),
       signal: AbortSignal.timeout(20_000),
       redirect: "error",
+    }).catch((error: unknown) => {
+      throw new Error(classifyModelError(error).code);
     });
-    if (!response.ok) throw new Error(`BYOK_CONNECTION_FAILED:${response.status}`);
-    const body = (await response.json()) as { model?: unknown; choices?: unknown[] };
-    if (!Array.isArray(body.choices)) throw new Error("BYOK_RESPONSE_INVALID");
+    const payload: unknown = await response.json().catch(() => {
+      throw new Error(
+        response.ok
+          ? "MODEL_RESPONSE_INVALID"
+          : classifyModelError("", { httpStatus: response.status }).code,
+      );
+    });
+    const body = (payload && typeof payload === "object" ? payload : {}) as {
+      model?: unknown;
+      choices?: Array<{ message?: { content?: unknown } }>;
+      error?: unknown;
+    };
+    if (!response.ok)
+      throw new Error(
+        classifyModelError(JSON.stringify(body.error ?? {}), { httpStatus: response.status }).code,
+      );
+    if (
+      !Array.isArray(body.choices) ||
+      !body.choices.some(
+        (choice) =>
+          typeof choice?.message?.content === "string" && choice.message.content.trim().length > 0,
+      )
+    ) {
+      throw new Error("MODEL_RESPONSE_INVALID");
+    }
     return byokConnectionTestResultSchema.parse({
       ok: true,
       latencyMs: Math.round(performance.now() - started),

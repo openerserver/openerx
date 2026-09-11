@@ -91,6 +91,8 @@ import {
   modelCatalogEntrySchema,
   modelServiceSettingsSchema,
   modelServiceSettingsUpdateSchema,
+  modelUsageAggregateSchema,
+  modelUsageRecordSchema,
   type ProjectCommandEnvelope,
   type ProjectCommandResultMap,
   parseChatCommandResult,
@@ -135,9 +137,7 @@ import {
   toolPermissionModeGetInputSchema,
   toolPermissionModeSetInputSchema,
   toolScopeRevokeInputSchema,
-  usageAggregateSchema,
   usageQueryInputSchema,
-  usageRecordSchema,
   workItemGetInputSchema,
   workspaceChooseInputSchema,
   workspaceGrantSchema,
@@ -345,14 +345,14 @@ const bridge: DesktopBridge = {
       ipcChannels.usageGet,
       usageQueryInputSchema.parse(input),
     );
-    return usageAggregateSchema.parse(result);
+    return modelUsageAggregateSchema.parse(result);
   },
   getUsageRecords: async (input = {}) => {
     const result: unknown = await ipcRenderer.invoke(
       ipcChannels.usageRecords,
       usageQueryInputSchema.parse(input),
     );
-    return usageRecordSchema.array().parse(result);
+    return modelUsageRecordSchema.array().parse(result);
   },
   getBillingTerms: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.billingTerms);

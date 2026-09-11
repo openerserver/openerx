@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { entityIdSchema, timestampSchema } from "./common";
+import type { ModelUsageAggregate, ModelUsageRecord } from "./model-usage";
 
 export const thinkingLevelValues = [
   "off",
@@ -210,6 +211,6 @@ export const automaticModelRef = "platform/auto" as const;
 
 export interface ModelUsageBridge {
   listModels(): Promise<ModelCatalogEntry[]>;
-  getUsage(input?: z.input<typeof usageQueryInputSchema>): Promise<UsageAggregate>;
-  getUsageRecords(input?: z.input<typeof usageQueryInputSchema>): Promise<UsageRecord[]>;
+  getUsage(input?: z.input<typeof usageQueryInputSchema>): Promise<ModelUsageAggregate>;
+  getUsageRecords(input?: z.input<typeof usageQueryInputSchema>): Promise<ModelUsageRecord[]>;
 }

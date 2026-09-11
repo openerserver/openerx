@@ -504,6 +504,47 @@ function renderApp(bridge: DesktopBridge, initialEntry = "/chat/new"): void {
 }
 
 describe("M1 chat renderer", () => {
+  it.each([
+    ["MODEL_AUTHENTICATION_FAILED", "模型 API Key 无效或已失效，请在模型设置中更新密钥。"],
+    ["MODEL_RATE_LIMITED", "模型请求受到限流，请稍后重试或降低并发。"],
+    ["MODEL_CONTEXT_LIMIT_REACHED", "上下文超过模型限制，请缩短对话或切换到更大上下文的模型。"],
+    ["MODEL_RESPONSE_INVALID", "模型返回的内容或工具调用格式无效，请检查模型兼容性。"],
+  ])("shows the specific recovery action for %s", async (errorCode, label) => {
+    const bridge = createBridge();
+    vi.mocked(bridge.getConversation).mockResolvedValue({
+      ...snapshot,
+      messages: snapshot.messages.map((message) =>
+        message.role === "assistant" ? { ...message, status: "failed", errorCode } : message,
+      ),
+    });
+    renderApp(bridge, `/chat/${conversationId}`);
+    expect(await screen.findByText(label)).toBeTruthy();
+    expect(screen.queryByText("模型服务暂时没有响应，请检查网络后重试。")).toBeNull();
+    cleanup();
+  });
+
+  it("labels local BYOK usage and displays missing token counts explicitly", async () => {
+    const bridge = createBridge();
+    vi.mocked(bridge.getUsage).mockResolvedValue({
+      source: "byok",
+      accountId: null,
+      conversationId,
+      messageId: assistantMessageId,
+      records: 1,
+      inputTokens: { known: 10, unknownRecords: 0 },
+      cachedInputTokens: { known: 5, unknownRecords: 0 },
+      outputTokens: { known: 3, unknownRecords: 0 },
+      reasoningTokens: { known: 0, unknownRecords: 1 },
+      totalTokens: { known: 18, unknownRecords: 0 },
+    });
+    renderApp(bridge, `/chat/${conversationId}`);
+    const usage = await screen.findByRole("status", { name: "消息 Token 用量" });
+    expect(within(usage).getByText("自带 API Key · 本地用量记录")).toBeTruthy();
+    expect(within(usage).getByText("推理 0 + 1 条未知")).toBeTruthy();
+    expect(within(usage).getByText("总计 18")).toBeTruthy();
+    cleanup();
+  });
+
   it("applies model deltas immediately through one Codex-style waterfall response", async () => {
     let resizeCallback: ResizeObserverCallback | undefined;
     const observe = vi.fn();

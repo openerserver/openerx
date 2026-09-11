@@ -79,6 +79,9 @@ export class ChatAppService {
     );
     this.#piHost.onDisconnect?.(() => void this.#tools?.handleHostDisconnect());
     this.#piHost.onActivity((event) => this.#handlePiActivity(event));
+    this.#piHost.onUsage?.((frame) => {
+      if (!this.#closed) this.#tools?.recordByokUsage(frame.usage);
+    });
     this.#sync = sync;
     this.#files = files;
     this.#tools = tools;
@@ -117,6 +120,8 @@ export class ChatAppService {
     byok?: AppServiceByokConfiguration,
   ): Promise<unknown> {
     switch (request.command) {
+      case "usage.byok.list":
+        return this.#tools?.byokUsage(request.input) ?? { selectedModelRef: null, records: [] };
       case "sync.now":
         if (!authorization || !this.#sync) throw new Error("AUTHENTICATION_REQUIRED");
         return await this.#sync.syncOnce(authorization);
@@ -867,6 +872,7 @@ export class ChatAppService {
         branchId: draft.receipt.branchId,
         assistantMessageId: draft.receipt.assistantMessageId,
         thinkingLevel: draft.thinkingLevel,
+        selectedModelRef: draft.selectedModelRef,
         history,
         ...(memorySettings?.memoriesEnabled
           ? { memoryEnabled: true, memories: recalledMemories }

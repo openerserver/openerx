@@ -8,6 +8,7 @@ import {
   accountRevokeDeviceInputSchema,
   accountStateSchema,
   accountVerifyCodeInputSchema,
+  aggregateByokUsage,
   artifactGetInputSchema,
   artifactListInputSchema,
   artifactPreviewInputSchema,
@@ -78,6 +79,7 @@ import {
   memorySettingsUpdateInputSchema,
   memorySourcesListInputSchema,
   memoryUpsertInputSchema,
+  modelFailureMessage,
   modelServiceSettingsUpdateSchema,
   permissionListInputSchema,
   permissionResolveInputSchema,
@@ -159,6 +161,7 @@ import { assertTrustedIpcSender } from "./ipc-security";
 import { DesktopLoginStartupService, isBackgroundLoginStartup } from "./login-startup";
 import { memoryNotificationContent } from "./memory-notification";
 import { ModelServiceSettingsStore } from "./model-service-settings";
+import { localByokUsage } from "./model-usage";
 import { PlatformAccountClient } from "./platform-account-client";
 import { RemoteDesktopController } from "./remote-desktop-controller";
 import {
@@ -574,6 +577,11 @@ function registerIpcHandlers(
   });
   ipcMain.handle(ipcChannels.usageGet, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
+    const query = usageQueryInputSchema.parse(input ?? {});
+    const local = await localByokUsage(query, (await modelSettings.state()).mode, (input) =>
+      supervisor.request({ command: "usage.byok.list", input }),
+    );
+    if (local !== null) return aggregateByokUsage(local, query);
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     return await platformClient.usage(
       await accounts.accessToken(),
@@ -582,6 +590,11 @@ function registerIpcHandlers(
   });
   ipcMain.handle(ipcChannels.usageRecords, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
+    const query = usageQueryInputSchema.parse(input ?? {});
+    const local = await localByokUsage(query, (await modelSettings.state()).mode, (input) =>
+      supervisor.request({ command: "usage.byok.list", input }),
+    );
+    if (local !== null) return local;
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     return usageRecordSchema
       .array()
@@ -1559,6 +1572,13 @@ app.whenReady().then(async () => {
     });
   }
   supervisor.onEvent((event) => {
+    if (
+      event.type === "run.failed" &&
+      event.payload.reason &&
+      modelFailureMessage(event.payload.reason)
+    ) {
+      diagnostics.record({ source: "pi_host", level: "error", code: event.payload.reason });
+    }
     if (event.type === "service.status" && event.payload.status) {
       const status = event.payload.status;
       if (status === "ready") performanceBudgets.markAppServiceReady();

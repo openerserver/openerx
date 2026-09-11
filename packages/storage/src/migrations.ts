@@ -1518,6 +1518,24 @@ const migrations: readonly Migration[] = [
         WHERE project_operation_id IS NOT NULL;
     `,
   },
+  {
+    version: 33,
+    checksum: "local-byok-usage-v33-20260911",
+    sql: `
+      CREATE TABLE byok_usage_records (
+        usage_id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+        message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        record_json TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX byok_usage_profile_idx ON byok_usage_records(owner_profile_id, recorded_at, usage_id);
+      CREATE INDEX byok_usage_message_idx ON byok_usage_records(owner_profile_id, message_id);
+      CREATE INDEX byok_usage_conversation_idx ON byok_usage_records(owner_profile_id, conversation_id);
+    `,
+  },
 ];
 
 export function migrateDatabase(
