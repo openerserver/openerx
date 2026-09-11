@@ -50,6 +50,8 @@ try {
   assert.equal(state.localSearch.providerId, "direct:baidu-json");
 
   await page.getByRole("link", { name: "前往设置 → 模型" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "模型与思考菜单" }).count(), 0);
+  assert.equal(await page.getByLabel("新任务模型", { exact: true }).count(), 0);
   await page.getByLabel("发送消息").fill("未配置 API 时不能发送");
   assert.equal(await page.getByRole("button", { name: "发送", exact: true }).isDisabled(), true);
 
@@ -59,7 +61,40 @@ try {
   await page.getByLabel("DeepSeek API Key").waitFor();
   assert.equal(await page.getByLabel("Base URL").inputValue(), "https://api.deepseek.com");
   assert.equal(await page.getByLabel("模型 ID").inputValue(), "deepseek-v4-flash");
-  console.log("E2E_BYOK_DEFAULT_OK mode=byok local_search=direct:baidu-json server_required=false");
+
+  await page.getByLabel("DeepSeek API Key").fill("synthetic-model-picker-deepseek");
+  await page.getByRole("button", { name: "保存全部并启用" }).click();
+  await page.getByText("模型 API 已保存 · 已配置 1 个厂商，可在任务中直接切换。").waitFor();
+  const configuredModels = await page.evaluate(() => window.openerx.listModels());
+  const availableModels = configuredModels.filter(({ status }) => status === "available");
+  assert.ok(availableModels.length > 0);
+  assert.ok(availableModels.length < configuredModels.length);
+  assert.ok(
+    availableModels.every(({ modelRef }) => modelRef.startsWith("platform/byok.deepseek.")),
+  );
+  await page.getByRole("button", { name: "返回应用", exact: true }).click();
+  await page.getByRole("button", { name: "模型与思考菜单" }).click();
+  const menu = page.getByRole("listbox", { name: "模型与思考", exact: true });
+  for (const model of configuredModels) {
+    assert.equal(
+      await menu
+        .getByRole("option")
+        .filter({ has: page.getByText(model.displayName, { exact: true }) })
+        .count(),
+      model.status === "available" ? 1 : 0,
+    );
+  }
+  assert.deepEqual(
+    await page
+      .getByLabel("新任务模型", { exact: true })
+      .locator("option")
+      .evaluateAll((options) => options.map((option) => option.value)),
+    availableModels.map(({ modelRef }) => modelRef),
+  );
+  await page.keyboard.press("Escape");
+  console.log(
+    "E2E_BYOK_DEFAULT_OK mode=byok local_search=direct:baidu-json server_required=false model-picker=hidden-unconfigured-only-configured-after-save",
+  );
 } finally {
   await application?.close();
   const resolvedProfile = path.resolve(profileDirectory);

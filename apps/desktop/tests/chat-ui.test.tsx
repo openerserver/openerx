@@ -301,7 +301,7 @@ function createBridge(): DesktopBridge {
     setRemoteEnabled: vi.fn(),
     createRemotePairingChallenge: vi.fn(),
     revokeRemotePairing: vi.fn(),
-    listModels: vi.fn().mockResolvedValue([]),
+    listModels: vi.fn().mockResolvedValue([thinkingModel]),
     getUsage: vi.fn(),
     getUsageRecords: vi.fn().mockResolvedValue([]),
     getBillingTerms: vi.fn(),
@@ -1018,6 +1018,122 @@ describe("M1 chat renderer", () => {
       expect(bridge.resolvePermission).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["new", "existing"] as const)(
+    "shows only available models in the %s conversation picker",
+    async (entry) => {
+      cleanup();
+      const bridge = createBridge();
+      vi.mocked(bridge.listModels).mockResolvedValue([
+        {
+          ...thinkingModel,
+          modelRef: "platform/auto",
+          displayName: "未配置的默认模型",
+          status: "unavailable",
+        },
+        thinkingModel,
+        {
+          ...thinkingModel,
+          modelRef: "platform/unconfigured",
+          displayName: "未配置的模型",
+          status: "unavailable",
+        },
+      ]);
+      renderApp(bridge, entry === "new" ? "/chat/new" : `/chat/${conversationId}`);
+      const user = userEvent.setup();
+
+      await user.click(await screen.findByRole("button", { name: "模型与思考菜单" }));
+      const menu = screen.getByRole("listbox", { name: "模型与思考" });
+      expect(within(menu).getByRole("option", { name: /默认推理模型/u })).toBeTruthy();
+      expect(screen.queryByText("未配置的默认模型")).toBeNull();
+      expect(screen.queryByText("未配置的模型")).toBeNull();
+      const nativeSelect = screen.getByLabelText(entry === "new" ? "新任务模型" : "后续消息模型");
+      expect(nativeSelect.querySelectorAll("option")).toHaveLength(1);
+      expect((nativeSelect as HTMLSelectElement).value).toBe(thinkingModel.modelRef);
+      await user.keyboard("{Escape}");
+      await user.type(screen.getByLabelText("发送消息"), "使用已配置模型");
+      await user.click(screen.getByRole("button", { name: "发送" }));
+      expect(bridge.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: entry === "new" ? null : conversationId,
+          ...(entry === "new" ? { modelRef: thinkingModel.modelRef } : {}),
+        }),
+      );
+    },
+  );
+
+  it.each([
+    { entry: "new", catalog: "unconfigured" },
+    { entry: "new", catalog: "empty" },
+    { entry: "existing", catalog: "unconfigured" },
+    { entry: "existing", catalog: "empty" },
+  ] as const)(
+    "hides the $entry model picker for an $catalog catalog",
+    async ({ entry, catalog }) => {
+      cleanup();
+      const bridge = createBridge();
+      vi.mocked(bridge.listModels).mockResolvedValue(
+        catalog === "empty" ? [] : [{ ...thinkingModel, status: "unavailable" }],
+      );
+      renderApp(bridge, entry === "new" ? "/chat/new" : `/chat/${conversationId}`);
+      const user = userEvent.setup();
+
+      expect(await screen.findByRole("link", { name: "前往设置 → 模型" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "模型与思考菜单" })).toBeNull();
+      expect(screen.queryByLabelText(entry === "new" ? "新任务模型" : "后续消息模型")).toBeNull();
+      await user.type(screen.getByLabelText("发送消息"), "未配置时不能发送{Enter}");
+      const send = screen.getByRole<HTMLButtonElement>("button", { name: "发送" });
+      expect(send.disabled).toBe(true);
+      await user.click(send);
+      expect(bridge.sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets an existing conversation replace a model whose configuration is missing", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const replacement = {
+      ...thinkingModel,
+      modelRef: "platform/configured",
+      displayName: "已配置模型",
+    };
+    vi.mocked(bridge.listModels).mockResolvedValue([
+      { ...thinkingModel, status: "unavailable" },
+      replacement,
+    ]);
+    vi.mocked(bridge.selectConversationModel).mockResolvedValue({
+      ...snapshot.conversation,
+      selectedModelRef: replacement.modelRef,
+      revision: snapshot.conversation.revision + 1,
+    });
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+
+    const trigger = await screen.findByRole("button", { name: "模型与思考菜单" });
+    expect(trigger.textContent).toBe("选择模型");
+    expect((screen.getByLabelText("后续消息模型") as HTMLSelectElement).value).toBe("");
+    await user.type(screen.getByLabelText("发送消息"), "切换后继续");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "发送" }).disabled).toBe(true);
+    await user.click(trigger);
+    const menu = screen.getByRole("listbox", { name: "模型与思考" });
+    expect(within(menu).queryByRole("option", { name: /默认推理模型/u })).toBeNull();
+    await user.click(within(menu).getByRole("option", { name: /已配置模型/u }));
+    await waitFor(() =>
+      expect(bridge.selectConversationModel).toHaveBeenCalledWith({
+        conversationId,
+        modelRef: replacement.modelRef,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLButtonElement>("button", { name: "发送" }).disabled).toBe(false),
+    );
+    expect(trigger.textContent).toContain("已配置模型");
+    expect(screen.queryByRole("link", { name: "前往设置 → 模型" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId, text: "切换后继续" }),
+    );
+  });
 
   it("opens the model settings section from the model configuration prompt", async () => {
     cleanup();

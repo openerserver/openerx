@@ -1000,13 +1000,14 @@ function Composer({
     },
   });
   const conversation = conversationSnapshot?.conversation;
+  const availableModels = (models.data ?? []).filter(({ status }) => status === "available");
   const compatibleConversationModels = conversation
-    ? models.data?.filter(
+    ? availableModels.filter(
         ({ modelRef }) =>
           isByokModelRef(modelRef) === isByokModelRef(conversation.selectedModelRef),
       )
-    : undefined;
-  const selectedConversationModel = compatibleConversationModels?.find(
+    : [];
+  const selectedConversationModel = compatibleConversationModels.find(
     ({ modelRef }) => modelRef === conversation?.selectedModelRef,
   );
   const conversationThinkingLevels = selectedConversationModel
@@ -1055,14 +1056,12 @@ function Composer({
     },
   });
   const newConversationModel =
-    models.data?.find(
-      ({ modelRef, status }) => modelRef === newConversationModelRef && status === "available",
-    ) ??
-    models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
-    models.data?.find(({ status }) => status === "available") ??
-    models.data?.[0];
-  const newConversationModelRequiresConfiguration =
-    !conversationId && newConversationModel?.status === "unavailable";
+    availableModels.find(({ modelRef }) => modelRef === newConversationModelRef) ??
+    availableModels.find(({ modelRef }) => modelRef === automaticModelRef) ??
+    availableModels[0];
+  const modelRequiresConfiguration =
+    models.isSuccess && (conversation ? !selectedConversationModel : !newConversationModel);
+  const sendingBlockedByModel = models.isPending || modelRequiresConfiguration;
   const selectedPermissionMode = conversationId
     ? selectPermissionMode.isPending
       ? selectPermissionMode.variables
@@ -1120,7 +1119,7 @@ function Composer({
       onSubmit={(event) => {
         event.preventDefault();
         const text = draft.trim();
-        if (text && !send.isPending && !newConversationModelRequiresConfiguration) {
+        if (text && !send.isPending && !sendingBlockedByModel) {
           send.mutate(text);
         }
       }}
@@ -1151,7 +1150,7 @@ function Composer({
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             const text = draft.trim();
-            if (text && !send.isPending && !newConversationModelRequiresConfiguration) {
+            if (text && !send.isPending && !sendingBlockedByModel) {
               send.mutate(text);
             }
           }
@@ -1195,7 +1194,7 @@ function Composer({
             }
             onChange={(nextValue) => selectPermissionMode.mutate(nextValue as ToolPermissionMode)}
           />
-          {!conversationId ? (
+          {!conversationId && newConversationModel ? (
             <>
               <ComposerSelect
                 className="composer-footer-control composer-model-thinking-select"
@@ -1212,14 +1211,10 @@ function Composer({
                 groups={[
                   {
                     label: "模型",
-                    options: (models.data ?? []).map((model) => ({
+                    options: availableModels.map((model) => ({
                       value: `model:${model.modelRef}`,
                       label: model.displayName,
-                      description:
-                        model.status === "available"
-                          ? `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`
-                          : "当前不可用",
-                      disabled: model.status !== "available",
+                      description: `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`,
                     })),
                   },
                   {
@@ -1246,12 +1241,8 @@ function Composer({
                 disabled={!newConversationModel}
                 onChange={(event) => setNewConversationModelRef(event.target.value)}
               >
-                {(models.data ?? []).map((model) => (
-                  <option
-                    key={model.modelRef}
-                    value={model.modelRef}
-                    disabled={model.status !== "available"}
-                  >
+                {availableModels.map((model) => (
+                  <option key={model.modelRef} value={model.modelRef}>
                     {model.displayName}
                   </option>
                 ))}
@@ -1273,35 +1264,31 @@ function Composer({
               </select>
             </>
           ) : null}
-          {conversation ? (
+          {conversation && compatibleConversationModels.length > 0 ? (
             <>
               <ComposerSelect
                 className="composer-footer-control composer-model-thinking-select"
                 ariaLabel="模型与思考"
                 icon={<Lightning size={15} weight="fill" />}
-                label={`${selectedConversationModel?.displayName ?? "后续消息模型"} · ${thinkingLevelLabels[conversation.thinkingLevel]}`}
+                label={
+                  selectedConversationModel
+                    ? `${selectedConversationModel.displayName} · ${thinkingLevelLabels[conversation.thinkingLevel]}`
+                    : "选择模型"
+                }
                 value={`model:${conversation.selectedModelRef}`}
                 selectedValues={[
                   `model:${conversation.selectedModelRef}`,
                   `thinking:${conversation.thinkingLevel}`,
                 ]}
-                disabled={
-                  selectConversationModel.isPending ||
-                  selectConversationThinking.isPending ||
-                  !selectedConversationModel
-                }
+                disabled={selectConversationModel.isPending || selectConversationThinking.isPending}
                 renderNativeSelect={false}
                 groups={[
                   {
                     label: "模型",
-                    options: (compatibleConversationModels ?? []).map((model) => ({
+                    options: compatibleConversationModels.map((model) => ({
                       value: `model:${model.modelRef}`,
                       label: model.displayName,
-                      description:
-                        model.status === "available"
-                          ? `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`
-                          : "当前不可用",
-                      disabled: model.status !== "available",
+                      description: `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`,
                     })),
                   },
                   {
@@ -1319,6 +1306,7 @@ function Composer({
                       ...conversationThinkingLevels.map((level) => ({
                         value: `thinking:${level}`,
                         label: thinkingLevelLabels[level],
+                        disabled: !selectedConversationModel,
                       })),
                     ],
                   },
@@ -1342,16 +1330,17 @@ function Composer({
                 className="composer-native-select"
                 aria-label="后续消息模型"
                 tabIndex={-1}
-                value={conversation.selectedModelRef}
+                value={selectedConversationModel?.modelRef ?? ""}
                 disabled={selectConversationModel.isPending}
                 onChange={(event) => selectConversationModel.mutate(event.target.value)}
               >
-                {(compatibleConversationModels ?? []).map((model) => (
-                  <option
-                    key={model.modelRef}
-                    value={model.modelRef}
-                    disabled={model.status !== "available"}
-                  >
+                {!selectedConversationModel ? (
+                  <option value="" disabled hidden>
+                    选择模型
+                  </option>
+                ) : null}
+                {compatibleConversationModels.map((model) => (
+                  <option key={model.modelRef} value={model.modelRef}>
                     {model.displayName}
                   </option>
                 ))}
@@ -1415,7 +1404,7 @@ function Composer({
           type="submit"
           className="primary-action"
           aria-label="发送"
-          disabled={!draft.trim() || send.isPending || newConversationModelRequiresConfiguration}
+          disabled={!draft.trim() || send.isPending || sendingBlockedByModel}
         >
           <PaperPlaneTilt size={17} weight="fill" />
           <span>{send.isPending ? "发送中…" : "发送"}</span>
@@ -1423,6 +1412,14 @@ function Composer({
         </button>
       </div>
       <div className="composer-feedback" aria-live="polite">
+        {conversation && modelRequiresConfiguration ? (
+          <p className="inline-error">
+            {compatibleConversationModels.length > 0
+              ? "当前对话的模型不可用，请选择其他模型，或"
+              : "尚无可用模型，请"}
+            <NavLink to="/settings/account?section=model">前往设置 → 模型</NavLink>。
+          </p>
+        ) : null}
         {attachmentNotice && !chooseFiles.error ? (
           <p className="inline-success">{attachmentNotice}</p>
         ) : null}
@@ -1439,7 +1436,7 @@ function Composer({
             )}
           </p>
         ) : null}
-        {newConversationModelRequiresConfiguration ? (
+        {!conversationId && modelRequiresConfiguration ? (
           <p className="inline-error">
             使用前需要配置 OpenAI-compatible API。请前往
             <NavLink to="/settings/account?section=model">设置 → 模型</NavLink>。
@@ -1477,26 +1474,21 @@ function NewChat({
     queryFn: () => window.openerx.listModels(),
     retry: false,
   });
+  const availableModels = (models.data ?? []).filter(({ status }) => status === "available");
   const defaultModel =
-    models.data?.find(
-      ({ modelRef, status }) => modelRef === defaultModelRef && status === "available",
-    ) ??
-    models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
-    models.data?.find(({ status }) => status === "available") ??
-    models.data?.[0];
+    availableModels.find(({ modelRef }) => modelRef === defaultModelRef) ??
+    availableModels.find(({ modelRef }) => modelRef === automaticModelRef) ??
+    availableModels[0];
   const suggestionThinkingLevel = defaultModel
     ? preferredThinkingLevel(modelThinkingLevels(defaultModel))
     : defaultThinkingLevel;
-  const modelRequiresConfiguration = defaultModel?.status === "unavailable";
+  const modelRequiresConfiguration = models.isSuccess && !defaultModel;
   return (
     <main className="new-chat-page">
       <header className="new-chat-topbar">
         <span className="topbar-product">{projectName ? `${projectName} · 新任务` : "新任务"}</span>
         <span className="topbar-state">
-          {defaultModel?.status === "unavailable"
-            ? "需要配置 API"
-            : (defaultModel?.displayName ??
-              (models.isPending ? "正在读取模型配置" : "需要配置 API"))}
+          {defaultModel?.displayName ?? (models.isPending ? "正在读取模型配置" : "需要配置 API")}
         </span>
       </header>
       <section className="welcome" aria-labelledby="welcome-title">
@@ -1516,7 +1508,7 @@ function NewChat({
             前往设置 → 模型
           </NavLink>
         </section>
-      ) : (
+      ) : defaultModel ? (
         <section className="suggestion-grid" aria-label="常用任务建议">
           {suggestions.map((suggestion) => (
             <Suggestion
@@ -1528,7 +1520,7 @@ function NewChat({
             />
           ))}
         </section>
-      )}
+      ) : null}
       <Composer defaultModelRef={defaultModelRef} projectId={projectId} />
     </main>
   );
