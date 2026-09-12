@@ -1,0 +1,65 @@
+.conversation-list-row {
+  position: relative;
+  min-width: 0;
+}
+
+.conversation-delete-notice {
+  position: fixed;
+  top: 0;
+  left: 0;
+}
+
+.history-list .conversation-list-row > a,
+.project-sidebar-conversations .conversation-list-row > a,
+.project-conversation-list .conversation-list-row > a {
+  padding-right: 38px;
+}
+
+.conversation-list-delete {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 6px;
+  color: var(--workspace-muted);
+  background: transparent;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.conversation-list-row:hover .conversation-list-delete,
+.conversation-list-row:focus-within .conversation-list-delete {
+  opacity: 1;
+}
+
+.conversation-list-delete:hover {
+  color: #bb4e48;
+  background: color-mix(in srgb, #bb4e48 12%, var(--workspace-surface));
+}
+
+.conversation-list-delete:focus-visible {
+  outline: 2px solid var(--workspace-accent);
+  outline-offset: -2px;
+}
+
+.confirmation-dialog .confirmation-dialog-target {
+  color: var(--workspace-text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.confirmation-dialog .conversation-delete-error {
+  color: #bb4e48;
+}
+
+@media (hover: none) {
+  .conversation-list-delete {
+    opacity: 1;
+  }
+}

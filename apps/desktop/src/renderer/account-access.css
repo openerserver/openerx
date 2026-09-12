@@ -1,0 +1,235 @@
+/* The account surface is shared independently of any cloud authentication provider. */
+.settings-account-page .settings-section-content > .account-access {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  min-height: calc(100dvh - 132px);
+  padding: 32px 0;
+  color: var(--workspace-text);
+}
+
+.account-access-panel {
+  width: min(100%, 380px);
+  min-width: 0;
+}
+
+.account-access-heading {
+  margin-bottom: 30px;
+  text-align: center;
+}
+
+.account-access-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-bottom: 24px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.account-access-brand img {
+  width: 30px;
+  height: 30px;
+}
+
+.account-access-heading h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.035em;
+}
+
+.account-access-heading p {
+  margin: 12px 0 0;
+  color: var(--workspace-muted);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.account-access-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.account-access-form label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-account-page .settings-section-content .account-access .account-access-form input {
+  width: 100%;
+  height: 50px;
+  padding: 0 14px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 14px;
+  background: var(--workspace-surface);
+  color: var(--workspace-text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.settings-account-page .settings-section-content .account-access input.account-access-code {
+  height: 56px;
+  text-align: center;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.36em;
+}
+
+.account-access-code::placeholder {
+  font-size: 14px;
+  letter-spacing: 0.08em;
+}
+
+.account-access-hint,
+.account-access-local p {
+  margin: 0;
+  color: var(--workspace-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.account-access button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.account-access button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.account-access .account-access-primary,
+.account-access .account-access-continue {
+  width: 100%;
+  min-height: 50px;
+  padding: 12px 16px;
+  border: 1px solid var(--workspace-text);
+  border-radius: 999px;
+  background: var(--workspace-text);
+  color: var(--workspace-surface);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.account-access .account-access-continue {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  background: var(--workspace-surface);
+  color: var(--workspace-text);
+  border-color: var(--workspace-border);
+}
+
+.account-access .account-access-primary:not(:disabled):hover,
+.account-access .account-access-continue:hover {
+  opacity: 0.85;
+}
+
+.account-access .account-access-link {
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--workspace-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.account-access .account-access-link:not(:disabled):hover {
+  color: var(--workspace-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.account-access-secondary {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.account-access-local {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--workspace-border);
+  text-align: center;
+}
+
+.account-access-notice {
+  margin: 0;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--workspace-surface-raised);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.account-access-notice p {
+  margin: 6px 0 0;
+  color: var(--workspace-muted);
+}
+
+.account-access-error {
+  margin: 0;
+  color: var(--color-error, #c14040);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.account-access-summary,
+.account-access-summary span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-access-summary {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.account-access-summary span {
+  color: var(--workspace-muted);
+  font-size: 12px;
+}
+
+.account-access-identity dl > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--workspace-border);
+  font-size: 13px;
+}
+
+.account-access-identity dt {
+  color: var(--workspace-muted);
+}
+
+.account-access-identity dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-account-page .account-access:has(.account-access-identity) {
+  min-height: auto;
+}
+
+.settings-account-page .account-access :is(button, input):focus-visible {
+  outline: 2px solid var(--workspace-text);
+  outline-offset: 3px;
+}
+
+@media (max-width: 720px) {
+  .settings-account-page .settings-section-content > .account-access {
+    min-height: auto;
+    padding: 24px 0;
+  }
+}

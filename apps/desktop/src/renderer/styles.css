@@ -1501,8 +1501,14 @@ body,
 .history-heading {
   padding: 12px 8px 5px;
   color: var(--workspace-muted);
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: normal;
+}
+
+.history-list .history-heading > span {
+  color: inherit;
+  font-size: inherit;
 }
 
 .history-heading button {
@@ -1522,11 +1528,15 @@ body,
 
 .history-list a {
   display: grid;
-  grid-template-columns: 17px minmax(0, 1fr);
-  gap: 1px 8px;
-  align-items: start;
-  min-height: 42px;
-  padding: 8px 9px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 9px;
+}
+
+.history-list .conversation-list-row > a.history-item {
+  padding-right: 9px;
 }
 
 .history-list a.history-item-active {
@@ -1547,19 +1557,35 @@ body,
 }
 
 .history-list a > svg {
-  grid-row: 1 / span 2;
-  margin-top: 1px;
-  color: #69736d;
+  color: var(--workspace-muted);
 }
 
 .history-list strong {
-  font-size: 12px;
-  font-weight: 560;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .history-list span {
   color: #6f7871;
   font-size: 10px;
+}
+
+.history-list .history-item-meta {
+  min-width: 28px;
+  color: var(--workspace-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-list .conversation-list-row:hover .history-item-meta,
+.history-list .conversation-list-row:focus-within .history-item-meta {
+  opacity: 0;
+}
+
+@media (hover: none) {
+  .history-list .history-item-meta {
+    visibility: hidden;
+  }
 }
 
 .sync-state {
@@ -2047,7 +2073,7 @@ h1 {
   background: var(--workspace-accent);
   border-radius: 2px;
   box-shadow: 0 0 12px color-mix(in srgb, var(--workspace-accent) 48%, transparent);
-  animation: stream-tail-pulse 0.9s ease-in-out infinite;
+  animation: stream-tail-blink 1.2s step-end infinite;
 }
 
 .jump-to-latest {
@@ -2073,14 +2099,14 @@ h1 {
   border-color: var(--workspace-accent-strong);
 }
 
-@keyframes stream-tail-pulse {
+@keyframes stream-tail-blink {
   0%,
   100% {
-    opacity: 0.35;
+    opacity: 1;
   }
 
   50% {
-    opacity: 1;
+    opacity: 0;
   }
 }
 
@@ -2096,7 +2122,7 @@ h1 {
 
 @media (prefers-reduced-motion: reduce) {
   .stream-tail {
-    animation: none;
+    animation-duration: 2.4s;
   }
 }
 
@@ -4443,6 +4469,20 @@ h1 {
   color: var(--workspace-text);
 }
 
+.tool-library-name-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.tool-library-name-copy small {
+  color: var(--workspace-warning);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: normal;
+}
+
 .tool-library-row p {
   min-width: 0;
   margin: 0;
@@ -4671,6 +4711,27 @@ h1 {
   margin: 0;
 }
 
+.tool-system-permissions {
+  display: grid;
+  gap: 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.tool-system-permissions li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tool-system-permissions li p {
+  margin: 4px 0 0;
+  color: var(--workspace-muted-strong);
+  font-size: 12px;
+}
+
 .tool-settings-section > p,
 .tool-settings-section > ul {
   color: var(--workspace-muted-strong);
@@ -4696,13 +4757,19 @@ h1 {
 }
 
 .tool-settings-heading button,
-.tool-modal-actions button {
+.tool-modal-actions button,
+.tool-system-permissions button,
+.tool-permission-refresh {
   min-height: 36px;
   padding: 7px 11px;
   color: var(--workspace-text);
   background: var(--workspace-surface-raised);
   border: 1px solid var(--workspace-border-strong);
   border-radius: 7px;
+}
+
+.tool-permission-refresh {
+  justify-self: start;
 }
 
 .tool-search-settings-form {
@@ -9032,6 +9099,23 @@ summary:focus-visible {
 }
 
 /* Shared visual system for every settings subsection. */
+.model-key-recovery {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+  background: var(--workspace-surface-raised);
+}
+
+.model-key-recovery p {
+  margin: 0;
+}
+
+.model-key-recovery button {
+  justify-self: start;
+}
+
 .settings-account-page .settings-section-content {
   gap: 16px;
   scrollbar-gutter: stable;
@@ -10289,4 +10373,130 @@ summary:focus-visible {
   padding-left: 20px;
   margin: 0;
   line-height: 1.7;
+}
+
+/* Pending approvals stay in the top layer above the composer, independent of
+   message scrolling, collapsed tool activity, and preview/drawer stacking. */
+.pending-tool-approval {
+  position: fixed;
+  inset: auto;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--workspace-text);
+  background: var(--workspace-surface);
+  border: 1px solid color-mix(in srgb, var(--workspace-accent) 50%, var(--workspace-border));
+  border-radius: 18px;
+  box-shadow: 0 12px 48px rgb(0 0 0 / 24%);
+  text-align: left;
+}
+
+.pending-tool-approval[popover]:not(:popover-open) {
+  display: none;
+}
+
+.pending-tool-approval::backdrop {
+  background: transparent;
+  pointer-events: none;
+}
+
+.pending-approval-heading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 10px;
+}
+
+.pending-approval-heading > svg {
+  flex: 0 0 auto;
+  color: var(--workspace-accent);
+}
+
+.pending-approval-heading strong {
+  font-size: 15px;
+}
+
+.pending-approval-heading p,
+.pending-approval-scope {
+  margin: 4px 0 0;
+  color: var(--workspace-muted);
+  font-size: 12px;
+}
+
+.pending-approval-details {
+  display: grid;
+  min-height: 0;
+  gap: 8px;
+  padding: 4px 16px 14px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pending-approval-details strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.pending-approval-details span {
+  font-size: 12px;
+}
+
+.pending-approval-details small {
+  color: var(--workspace-muted);
+  font-size: 11px;
+}
+
+.pending-approval-footer {
+  flex: 0 0 auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--workspace-border);
+}
+
+.pending-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pending-approval-actions > button {
+  min-height: 34px;
+  padding: 6px 12px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pending-approval-actions > .primary-action {
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
+  border-color: var(--workspace-accent);
+}
+
+.pending-approval-actions > button:first-child {
+  margin-right: auto;
+}
+
+.pending-approval-scope {
+  margin-top: 8px;
+}
+
+@media (max-height: 380px) {
+  .pending-tool-approval {
+    overflow: auto;
+  }
+
+  .pending-approval-details {
+    flex: 0 0 auto;
+  }
 }
