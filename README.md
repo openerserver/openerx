@@ -1,8 +1,8 @@
-# OpenERX
+# openerx
 
-OpenERX 是一款开源、本地优先的 AI 桌面助手，将 AI 对话、项目文件、工具、Skill 和自动化任务整合在一个工作空间中。
+openerx 是一款开源、本地优先的 AI 桌面助手，将 AI 对话、项目文件、工具、Skill 和自动化任务整合在一个工作空间中。
 
-接入自己的模型 API Key，即可开始对话、处理文件并组织日常工作，无需注册 OpenERX 账号或部署服务器。OpenERX 使用 Electron、React 和 TypeScript 构建，采用 Apache License 2.0 开源。
+接入自己的模型 API Key，即可开始对话、处理文件并组织日常工作，无需注册 openerx 账号或部署服务器。openerx 使用 Electron、React 和 TypeScript 构建，采用 Apache License 2.0 开源。
 
 ## 主要功能
 
@@ -12,6 +12,17 @@ OpenERX 是一款开源、本地优先的 AI 桌面助手，将 AI 对话、项�
 - **记忆管理**：保存和管理可供后续对话参考的长期信息，按需开启或关闭记忆。
 - **自动化任务**：设置定时任务，在桌面应用运行时执行，并查看任务状态与结果。
 - **本地优先**：对话、项目和应用数据主要保存在本机；模型调用及联网工具按需连接相应服务。
+
+### 最近的桌面改进
+
+- 项目可展开所属对话，历史列表排除项目内对话，并支持直接删除对话。
+- 支持 XLS 附件解析，以及在输入框粘贴截图、图片和文件；普通文字照常粘贴。
+- 成果按目录展示，支持文件搜索、多标签预览、来源查看和 HTML 关联资源。
+- 工作目录区分主目录与附加目录；项目继承目录与对话覆盖保持一致。
+- 模型选择隐藏未配置项，错误显示具体原因，自带 API Key 的新调用记录本地 Token 用量。
+- 待审批操作保持可见，系统权限有明确设置入口，无法读取的 Key 可在备份后恢复。
+
+合并范围和验证边界见 [桌面更新验证](docs/DESKTOP_UPDATE_20260912.md)。
 
 ## 快速开始
 
@@ -81,4 +92,4 @@ npm run check:source
 
 ## 许可证
 
-OpenERX 采用 [Apache License 2.0](LICENSE)。版权声明见 [NOTICE](NOTICE)，第三方依赖的许可信息见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+openerx 采用 [Apache License 2.0](LICENSE)。版权声明见 [NOTICE](NOTICE)，第三方依赖的许可信息见 [第三方声明](THIRD_PARTY_NOTICES.md)。
