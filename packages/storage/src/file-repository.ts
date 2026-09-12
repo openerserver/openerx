@@ -47,7 +47,7 @@ export interface PersonalFileDraft {
   sizeBytes: number;
   checksumSha256: string;
   objectRef: string;
-  sourceScopeId: string;
+  sourceScopeId: string | null;
   sourceRelativePath: string;
 }
 
@@ -65,6 +65,14 @@ export interface ArtifactVersionDraft {
   checksumSha256: string;
   objectRef: string;
   sourcePersonalFileId?: string | null;
+}
+
+export interface WorkspaceArtifactLink {
+  conversationId: string;
+  workspaceRootPath: string;
+  relativePath: string;
+  artifactId: string;
+  sourceRevision: string;
 }
 
 export class FileRepository {
@@ -401,6 +409,84 @@ export class FileRepository {
       | undefined;
     if (!row) throw new Error("ATTACHMENT_NOT_FOUND");
     return this.#attachment(row);
+  }
+
+  workspaceArtifactLinks(conversationId?: string): WorkspaceArtifactLink[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM workspace_artifact_links WHERE owner_profile_id = ?
+       ${conversationId ? "AND conversation_id = ?" : ""}`,
+      )
+      .all(
+        ...(conversationId ? [this.#ownerProfileId, conversationId] : [this.#ownerProfileId]),
+      ) as SqlRow[];
+    return rows.map((row) => ({
+      conversationId: String(row.conversation_id),
+      workspaceRootPath: String(row.workspace_root_path),
+      relativePath: String(row.relative_path),
+      artifactId: String(row.artifact_id),
+      sourceRevision: String(row.source_revision),
+    }));
+  }
+
+  captureWorkspaceArtifact(
+    input: Omit<WorkspaceArtifactLink, "artifactId"> & {
+      format: SupportedFileFormat;
+      mediaType: string;
+      version: ArtifactVersionDraft;
+    },
+  ): Artifact {
+    return this.#transaction(() => this.#captureWorkspaceArtifact(input));
+  }
+
+  #captureWorkspaceArtifact(
+    input: Omit<WorkspaceArtifactLink, "artifactId"> & {
+      format: SupportedFileFormat;
+      mediaType: string;
+      version: ArtifactVersionDraft;
+    },
+  ): Artifact {
+    const conversation = this.#database
+      .prepare(
+        "SELECT id FROM conversations WHERE id = ? AND owner_profile_id = ? AND deleted_at IS NULL",
+      )
+      .get(input.conversationId, this.#ownerProfileId);
+    if (!conversation) throw new Error("CONVERSATION_NOT_FOUND");
+    // Reuse the regular artifact transactions and sync outbox. The local link is
+    // provenance for workspace writes, never a fabricated model tool call.
+    const existing = this.workspaceArtifactLinks(input.conversationId).find(
+      (link) =>
+        link.workspaceRootPath === input.workspaceRootPath &&
+        link.relativePath === input.relativePath,
+    );
+    let artifact = existing ? this.artifact(existing.artifactId) : null;
+    if (!artifact) {
+      artifact = this.createArtifact({
+        displayName: input.relativePath,
+        format: input.format,
+        mediaType: input.mediaType,
+        version: input.version,
+      });
+    } else if (artifact.versions.at(-1)?.checksumSha256 !== input.version.checksumSha256) {
+      artifact = this.addArtifactVersion(artifact.id, input.version);
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO workspace_artifact_links
+       (owner_profile_id, conversation_id, workspace_root_path, relative_path, artifact_id, source_revision)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_profile_id, conversation_id, workspace_root_path, relative_path)
+       DO UPDATE SET artifact_id = excluded.artifact_id, source_revision = excluded.source_revision`,
+      )
+      .run(
+        this.#ownerProfileId,
+        input.conversationId,
+        input.workspaceRootPath,
+        input.relativePath,
+        artifact.id,
+        input.sourceRevision,
+      );
+    return artifact;
   }
 
   createArtifact(input: {
@@ -935,6 +1021,7 @@ export class FileRepository {
   }
 
   #transaction<T>(operation: () => T): T {
+    if (this.#database.isTransaction) return operation();
     this.#database.exec("BEGIN IMMEDIATE");
     try {
       const result = operation();
