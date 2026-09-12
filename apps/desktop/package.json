@@ -1,9 +1,9 @@
 {
   "name": "@openerx/desktop",
-  "productName": "OpenERX",
+  "productName": "openerx",
   "version": "2.0.1",
   "private": true,
-  "description": "OpenERX personal AI desktop client",
+  "description": "openerx personal AI desktop client",
   "main": ".vite/build/main.js",
   "scripts": {
     "package:windows-store": "node scripts/package-windows-store.mjs",
@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:e2e:account": "node scripts/e2e-account.mjs",
+    "test:e2e:account-access": "vite build --config vite.platform-alpha-test.config.mts --logLevel error && node scripts/e2e-account-access.mjs",
     "test:e2e:byok-default": "vite build --config vite.pi-host-test.config.mts --logLevel error && node scripts/e2e-byok-default.mjs",
     "test:e2e:browser:actions:macos": "node scripts/build-macos-browser-helper.mjs && vite build --config vite.browser-computer-use-actions.config.mts --logLevel error && electron .vite/browser-actions",
     "test:e2e:browser:tool-center:macos": "npm run package -- --arch=$(node -p process.arch) && node scripts/build-macos-browser-helper.mjs && vite build --config vite.pi-host-test.config.mts --logLevel error && node scripts/e2e-browser-computer-use-tool-center.mjs",
@@ -25,6 +26,7 @@
     "test:e2e:d3:macos": "vite build --config vite.platform-alpha-test.config.mts --logLevel error && node scripts/e2e-macos-lifecycle.mjs",
     "test:e2e": "vite build --config vite.pi-host-test.config.mts && vite build --config vite.platform-alpha-test.config.mts && vite build --config vite.remote-e2e.config.mts && node scripts/e2e-chat.mjs && node scripts/e2e-projects.mjs && node scripts/e2e-account.mjs && node scripts/e2e-tools.mjs && node scripts/e2e-skills.mjs && node scripts/e2e-beta.mjs && node .vite/build/remote-e2e.mjs",
     "test:e2e:projects": "node scripts/e2e-projects.mjs",
+    "test:e2e:attachments": "vite build --config vite.pi-host-test.config.mts --logLevel error && node scripts/e2e-attachments.mjs",
     "verify:fuses": "node scripts/verify-packaged-fuses.mjs",
     "verify:release-artifacts": "node scripts/verify-release-artifacts.mjs",
     "verify:native-signature": "node scripts/verify-native-signature.mjs",
@@ -75,5 +77,6 @@
     "playwright": "1.62.1",
     "vite": "6.4.3"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "executableName": "OpenERX"
 }
