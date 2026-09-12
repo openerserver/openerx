@@ -73,6 +73,10 @@ export class MultiFormatParser {
   async parse(filePath: string, format: SupportedFileFormat): Promise<ParsedFile> {
     if (format === "pdf") return await this.#pdf(filePath);
     if (format === "docx") return this.#docx(filePath);
+    if (format === "xls") {
+      const { parseXls } = await import("./xls-parser");
+      return parseXls(readFileSync(filePath));
+    }
     if (format === "xlsx") return this.#xlsx(filePath);
     if (format === "pptx") return this.#pptx(filePath);
     if (format === "png" || format === "jpeg" || format === "gif" || format === "webp") {
