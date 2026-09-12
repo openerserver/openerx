@@ -40,6 +40,7 @@ interface RootSnapshot {
 export interface WorkspaceWriteBaseline {
   roots: RootSnapshot[];
   revision: string;
+  excludedDirectories?: readonly string[];
 }
 
 function sha256(value: string | Buffer): string {
@@ -169,7 +170,11 @@ function gitStatus(rootPath: string): {
   return { status: dirtyPaths.size === 0 ? "clean" : "dirty", dirtyPaths };
 }
 
-function snapshotRoot(root: PlatformSandboxRoot, textBudget: { used: number }): RootSnapshot {
+function snapshotRoot(
+  root: PlatformSandboxRoot,
+  textBudget: { used: number },
+  excludedDirectories: readonly string[] = [],
+): RootSnapshot {
   const entries = new Map<string, SnapshotEntry>();
   const pending = [root.rootPath];
   while (pending.length > 0) {
@@ -177,6 +182,7 @@ function snapshotRoot(root: PlatformSandboxRoot, textBudget: { used: number }): 
     if (!directory) continue;
     for (const dirent of readdirSync(directory, { withFileTypes: true })) {
       if (dirent.name === ".git") continue;
+      if (dirent.isDirectory() && excludedDirectories.includes(dirent.name)) continue;
       if (entries.size >= MAX_ENTRIES) throw new Error("BROKERED_BASH_WORKSPACE_PREFLIGHT_LIMIT");
       const entryPath = path.join(directory, dirent.name);
       const relativePath = posixRelative(root.rootPath, entryPath);
@@ -201,10 +207,13 @@ function combinedRevision(roots: RootSnapshot[]): string {
 
 export function captureWorkspaceWriteBaseline(
   roots: PlatformSandboxRoot[],
+  options: { excludedDirectories?: readonly string[] } = {},
 ): WorkspaceWriteBaseline {
   const textBudget = { used: 0 };
-  const snapshots = roots.map((root) => snapshotRoot(root, textBudget));
-  return { roots: snapshots, revision: combinedRevision(snapshots) };
+  const snapshots = roots.map((root) =>
+    snapshotRoot(root, textBudget, options.excludedDirectories),
+  );
+  return { roots: snapshots, revision: combinedRevision(snapshots), ...options };
 }
 
 function changed(before: SnapshotEntry, after: SnapshotEntry): boolean {
@@ -238,7 +247,9 @@ export function collectWorkspaceWriteChanges(
   baseline: WorkspaceWriteBaseline,
 ): PlatformSandboxWorkspaceChanges {
   const textBudget = { used: 0 };
-  const finalRoots = baseline.roots.map(({ root }) => snapshotRoot(root, textBudget));
+  const finalRoots = baseline.roots.map(({ root }) =>
+    snapshotRoot(root, textBudget, baseline.excludedDirectories),
+  );
   const manifest: PlatformSandboxWorkspaceChangeEntry[] = [];
   const diffs: PlatformSandboxWorkspaceDiff[] = [];
   const materialization: PlatformSandboxWorkspaceMaterializationEntry[] = [];

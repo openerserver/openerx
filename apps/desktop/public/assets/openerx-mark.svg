@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <title>openerx</title>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#6366f1"/>
+  <path d="M326 149a128 128 0 1 0 37 164" stroke="white" stroke-width="48" stroke-linecap="round"/>
+  <path d="m328 157 68 68m0-68-68 68" stroke="white" stroke-width="32" stroke-linecap="round"/>
+</svg>

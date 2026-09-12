@@ -95,9 +95,16 @@ export class PersonalDataExporter {
   export(destinationPath: string): LocalExportResult {
     const database = openReadOnly(this.#databasePath);
     const exportedAt = this.#now().toISOString();
-    const data = database ? this.#snapshot(database) : this.#emptySnapshot();
-    const objects = database ? this.#objects(database) : [];
-    database?.close();
+    let data: Record<string, SqlRecord[]>;
+    let objects: Array<{ archivePath: string; objectRef: string }>;
+    try {
+      database?.exec("BEGIN");
+      data = database ? this.#snapshot(database) : this.#emptySnapshot();
+      objects = database ? this.#objects(database) : [];
+      database?.exec("COMMIT");
+    } finally {
+      database?.close();
+    }
     const objectEntries: Record<string, Uint8Array> = {};
     const profileRoot = path.dirname(this.#databasePath);
     for (const object of objects) {
@@ -136,9 +143,17 @@ export class PersonalDataExporter {
 
   #snapshot(database: DatabaseSync): Record<string, SqlRecord[]> {
     return {
+      projects: rows(
+        database,
+        "SELECT id,name,instructions,created_at AS createdAt,updated_at AS updatedAt,revision FROM projects ORDER BY created_at,id",
+      ),
+      attachments: rows(
+        database,
+        `SELECT a.id,a.conversation_id AS conversationId,a.message_id AS messageId,a.personal_file_id AS personalFileId FROM attachments a JOIN conversations c ON c.id=a.conversation_id WHERE c.deleted_at IS NULL ORDER BY a.created_at,a.id`,
+      ),
       conversations: rows(
         database,
-        `SELECT id, title, active_branch_id AS activeBranchId,
+        `SELECT id, title, project_id AS projectId, active_branch_id AS activeBranchId,
                 selected_model_ref AS selectedModelRef, created_at AS createdAt,
                 updated_at AS updatedAt, archived_at AS archivedAt, revision
          FROM conversations WHERE deleted_at IS NULL ORDER BY created_at, id`,
@@ -156,8 +171,9 @@ export class PersonalDataExporter {
         `SELECT m.id, m.conversation_id AS conversationId, m.branch_id AS branchId,
                 m.parent_message_id AS parentMessageId, m.role, m.status, m.error_code AS errorCode,
                 m.attempt, m.created_at AS createdAt, m.updated_at AS updatedAt, m.revision,
-                m.position, p.text
-         FROM messages m LEFT JOIN message_parts p ON p.message_id = m.id AND p.position = 1
+                m.position, (SELECT group_concat(text, char(10)||char(10)) FROM
+                   (SELECT text FROM message_parts WHERE message_id=m.id ORDER BY position)) AS text
+         FROM messages m
          WHERE m.conversation_id IN (SELECT id FROM conversations WHERE deleted_at IS NULL)
          ORDER BY m.created_at, m.position, m.id`,
       ),
@@ -293,6 +309,8 @@ export class PersonalDataExporter {
 
   #emptySnapshot(): Record<string, SqlRecord[]> {
     return {
+      projects: [],
+      attachments: [],
       conversations: [],
       branches: [],
       messages: [],

@@ -73,6 +73,38 @@ function setup(persisted: PersistedDeviceCredential | null = null) {
 }
 
 describe("AccountSessionManager", () => {
+  it.each([false, true])(
+    "reports a missing account service without discarding saved credentials (saved=%s)",
+    async (saved) => {
+      const initial = grant();
+      const { vault, clear } = setup(
+        saved
+          ? {
+              version: 1,
+              account: initial.account,
+              session: initial.session,
+              refreshCredential: initial.refreshCredential,
+            }
+          : null,
+      );
+      const manager = new AccountSessionManager({
+        vault,
+        transport: null,
+        device: initial.session.device,
+      });
+      expect(await manager.initialize()).toMatchObject({
+        status: "unavailable",
+        reason: "PLATFORM_ENDPOINT_NOT_CONFIGURED",
+        account: saved ? initial.account : null,
+        session: saved ? initial.session : null,
+      });
+      expect(clear).not.toHaveBeenCalled();
+      await expect(manager.requestCode("local@example.com")).rejects.toThrow(
+        "PLATFORM_ENDPOINT_NOT_CONFIGURED",
+      );
+    },
+  );
+
   it("bootstraps a local development account so the default model is immediately available", async () => {
     const { manager, transport } = setup();
     const state = await initializeAccountSession(manager, {

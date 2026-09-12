@@ -110,7 +110,14 @@ async function generate() {
   const failures = [];
   for (const { key, value, metadata, documents: localDocuments } of local) {
     const name = nameOf(key, value);
-    if (!value.integrity || !value.resolved?.startsWith("https://registry.npmjs.org/"))
+    const officialSheetJs =
+      name === "xlsx" &&
+      value.version === "0.20.3" &&
+      value.resolved === "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz";
+    if (
+      !value.integrity ||
+      (!value.resolved?.startsWith("https://registry.npmjs.org/") && !officialSheetJs)
+    )
       throw new Error(`UNPINNED_DEPENDENCY:${key}`);
     const cachedItem = cached.get(`${name}@${value.version}:${value.integrity}`);
     if (cachedItem && cachedItem.license === value.license) {

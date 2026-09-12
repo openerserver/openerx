@@ -3,7 +3,7 @@
   "version": "2.0.1",
   "private": true,
   "license": "Apache-2.0",
-  "description": "OpenERX open-source personal AI desktop client",
+  "description": "openerx open-source personal AI desktop client",
   "packageManager": "npm@11.3.0",
   "engines": {
     "node": ">=24.3.0",

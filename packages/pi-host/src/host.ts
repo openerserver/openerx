@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
-import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   automaticMemoryExtractionOutputSchema,
+  classifyModelError,
   defaultThinkingLevel,
   memorySemanticClusterOutputSchema,
   type PiActivityEvent,
@@ -28,6 +28,10 @@ import {
 import type { MessagePortMain } from "electron";
 import { desktopBrand } from "../../branding/src/index";
 import { createProductPiSession, ModelRuntime } from "./agent-session";
+import { createByokStream, createRestrictedByokFetch } from "./byok-provider";
+
+export { createRestrictedByokFetch } from "./byok-provider";
+
 import { createProductCapabilityTools } from "./capability-tools";
 import { createProductFileTools } from "./file-tools";
 import { createProductMcpTools } from "./mcp-tools";
@@ -67,28 +71,6 @@ interface PendingFileToolRequest {
   timeout: NodeJS.Timeout;
 }
 
-export function createRestrictedByokFetch(baseUrl: string): typeof globalThis.fetch {
-  const allowed = new URL(baseUrl);
-  const allowedPath = allowed.pathname.replace(/\/$/u, "");
-  return async (input, init) => {
-    const requestUrl = new URL(input instanceof Request ? input.url : input.toString());
-    const pathAllowed =
-      allowedPath === "" ||
-      allowedPath === "/" ||
-      requestUrl.pathname === allowedPath ||
-      requestUrl.pathname.startsWith(`${allowedPath}/`);
-    if (requestUrl.origin !== allowed.origin || !pathAllowed) {
-      throw new Error("BYOK_REQUEST_TARGET_FORBIDDEN");
-    }
-    const response = await fetch(input, { ...init, redirect: "manual" });
-    if (response.status >= 300 && response.status < 400) {
-      await response.body?.cancel();
-      throw new Error("BYOK_REDIRECT_FORBIDDEN");
-    }
-    return response;
-  };
-}
-
 interface PendingCapabilityToolRequest extends PendingFileToolRequest {
   lastProgressSequence: number;
   onProgress?: (frame: PiToolProgressFrame) => void;
@@ -121,6 +103,12 @@ function assistantText(message: AssistantMessage | undefined): string {
     .trim();
 }
 
+function providerFailureCode(message: string | undefined): string {
+  const code = message?.split(":", 1)[0] ?? "";
+  if (/^(?:ACCESS_|ACCOUNT_|DEVICE_)[A-Z0-9_]+$/u.test(code)) return code;
+  return classifyModelError(message ?? "PI_EMPTY_RESPONSE").code;
+}
+
 function errorCode(error: unknown): string {
   if (error instanceof PiModelNotConfiguredError) return "PI_MODEL_NOT_CONFIGURED";
   const message = error instanceof Error ? error.message : "";
@@ -134,7 +122,8 @@ function errorCode(error: unknown): string {
   ) {
     return platformCode;
   }
-  return "PI_HOST_FAILURE";
+  const failure = classifyModelError(error);
+  return failure.code === "MODEL_PROVIDER_FAILURE" ? "PI_HOST_FAILURE" : failure.code;
 }
 
 export function startPiHostProcess(
@@ -343,6 +332,17 @@ export function startPiHostProcess(
         if (frame.byok) {
           const providerId = "openerx-memory-byok";
           const restrictedFetch = createRestrictedByokFetch(frame.byok.baseUrl);
+          const byokStream = createByokStream(
+            {
+              operation: "memory_extraction",
+              operationId: frame.jobId,
+              conversationId: frame.conversationId,
+              messageId: frame.sourceAssistantMessageId,
+              selectedModelRef: frame.selectedModelRef ?? `byok/${frame.byok.modelId}`,
+              onUsage: (usage) => port.postMessage({ kind: "pi.model-usage", usage }),
+            },
+            restrictedFetch,
+          );
           modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
           modelRuntime.registerProvider(providerId, {
             name: "OpenAI-compatible memory extraction",
@@ -350,10 +350,7 @@ export function startPiHostProcess(
             api: "openai-completions",
             authHeader: true,
             streamSimple: (candidateModel, context, streamOptions) =>
-              streamOpenAICompletions(candidateModel as Model<"openai-completions">, context, {
-                ...streamOptions,
-                fetch: restrictedFetch,
-              }),
+              byokStream(candidateModel as Model<"openai-completions">, context, streamOptions),
             models: [
               {
                 id: frame.byok.modelId,
@@ -395,7 +392,11 @@ export function startPiHostProcess(
         await session.waitForIdle();
         const assistant = lastAssistantMessage(session);
         if (!assistant || assistant.stopReason === "error" || assistant.stopReason === "aborted") {
-          throw new Error("MEMORY_EXTRACTION_MODEL_FAILED");
+          throw new Error(
+            classifyModelError(assistant?.errorMessage ?? "PI_EMPTY_RESPONSE", {
+              cancelled: assistant?.stopReason === "aborted",
+            }).code,
+          );
         }
         if (assistant.stopReason === "length") {
           throw new Error("MEMORY_EXTRACTION_OUTPUT_TRUNCATED");
@@ -470,6 +471,17 @@ export function startPiHostProcess(
         if (frame.byok) {
           const providerId = "openerx-memory-cluster-byok";
           const restrictedFetch = createRestrictedByokFetch(frame.byok.baseUrl);
+          const byokStream = createByokStream(
+            {
+              operation: "memory_clustering",
+              operationId: frame.runId,
+              conversationId: null,
+              messageId: null,
+              selectedModelRef: frame.selectedModelRef ?? `byok/${frame.byok.modelId}`,
+              onUsage: (usage) => port.postMessage({ kind: "pi.model-usage", usage }),
+            },
+            restrictedFetch,
+          );
           modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
           modelRuntime.registerProvider(providerId, {
             name: "OpenAI-compatible memory clustering",
@@ -477,10 +489,7 @@ export function startPiHostProcess(
             api: "openai-completions",
             authHeader: true,
             streamSimple: (candidateModel, context, streamOptions) =>
-              streamOpenAICompletions(candidateModel as Model<"openai-completions">, context, {
-                ...streamOptions,
-                fetch: restrictedFetch,
-              }),
+              byokStream(candidateModel as Model<"openai-completions">, context, streamOptions),
             models: [
               {
                 id: frame.byok.modelId,
@@ -521,7 +530,11 @@ export function startPiHostProcess(
         await session.waitForIdle();
         const assistant = lastAssistantMessage(session);
         if (!assistant || assistant.stopReason === "error" || assistant.stopReason === "aborted") {
-          throw new Error("MEMORY_CLUSTER_MODEL_FAILED");
+          throw new Error(
+            classifyModelError(assistant?.errorMessage ?? "PI_EMPTY_RESPONSE", {
+              cancelled: assistant?.stopReason === "aborted",
+            }).code,
+          );
         }
         if (assistant.stopReason === "length") throw new Error("MEMORY_CLUSTER_OUTPUT_TRUNCATED");
         const output = memorySemanticClusterOutputSchema.parse(
@@ -630,6 +643,17 @@ export function startPiHostProcess(
         if (frame.byok) {
           const providerId = "openerx-byok";
           const restrictedFetch = createRestrictedByokFetch(frame.byok.baseUrl);
+          const byokStream = createByokStream(
+            {
+              operation: "chat",
+              operationId: frame.generationId,
+              conversationId: frame.conversationId,
+              messageId: frame.assistantMessageId,
+              selectedModelRef: frame.selectedModelRef ?? `byok/${frame.byok.modelId}`,
+              onUsage: (usage) => port.postMessage({ kind: "pi.model-usage", usage }),
+            },
+            restrictedFetch,
+          );
           modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
           modelRuntime.registerProvider(providerId, {
             name: "OpenAI-compatible BYOK",
@@ -637,10 +661,7 @@ export function startPiHostProcess(
             api: "openai-completions",
             authHeader: true,
             streamSimple: (model, context, streamOptions) =>
-              streamOpenAICompletions(model as Model<"openai-completions">, context, {
-                ...streamOptions,
-                fetch: restrictedFetch,
-              }),
+              byokStream(model as Model<"openai-completions">, context, streamOptions),
             models: [
               {
                 id: frame.byok.modelId,
@@ -662,7 +683,8 @@ export function startPiHostProcess(
             `${desktopBrand.productName} Platform Model is not configured`,
           );
         }
-        const activeModelRef = frame.platform?.selectedModelRef ?? model.id;
+        const activeModelRef =
+          frame.selectedModelRef ?? frame.platform?.selectedModelRef ?? model.id;
         const sessionManager = await sessionRegistry.sessionManager(
           frame.conversationId,
           frame.branchId,
@@ -788,7 +810,17 @@ export function startPiHostProcess(
               type: "model.completed",
               piItemRef: `model:${state.modelRound}`,
               modelRef: activeModelRef,
-              resultSummary: `模型轮次 ${state.modelRound} 已完成`,
+              resultSummary: `模型轮次 ${state.modelRound} 已结束`,
+              ...(event.message.role === "assistant" &&
+              (event.message.stopReason === "error" || event.message.stopReason === "length")
+                ? {
+                    errorCode: classifyModelError(
+                      event.message.stopReason === "length"
+                        ? "MODEL_OUTPUT_LIMIT_REACHED"
+                        : event.message.errorMessage,
+                    ).code,
+                  }
+                : {}),
             });
             return;
           }
@@ -911,7 +943,9 @@ export function startPiHostProcess(
               ...(event.result?.estimatedTokensAfter === undefined
                 ? {}
                 : { tokensAfter: event.result.estimatedTokensAfter }),
-              ...(event.errorMessage ? { errorCode: "PI_COMPACTION_FAILED" } : {}),
+              ...(event.errorMessage
+                ? { errorCode: classifyModelError(event.errorMessage).code }
+                : {}),
             });
             return;
           }
@@ -920,6 +954,7 @@ export function startPiHostProcess(
               type: "run.retrying",
               piItemRef: `retry:${event.attempt}`,
               resultSummary: `attempt ${event.attempt}/${event.maxAttempts}`,
+              errorCode: classifyModelError(event.errorMessage).code,
               attempt: event.attempt,
               maxAttempts: event.maxAttempts,
               delayMs: event.delayMs,
@@ -933,7 +968,7 @@ export function startPiHostProcess(
               attempt: event.attempt,
               maxAttempts: event.attempt,
               delayMs: 0,
-              ...(event.success ? {} : { errorCode: "PI_RETRY_FAILED" }),
+              ...(event.success ? {} : { errorCode: classifyModelError(event.finalError).code }),
             });
           }
         });
@@ -969,7 +1004,7 @@ export function startPiHostProcess(
         } else if (!assistant || assistant.stopReason === "error") {
           emit(frame.generationId, state, {
             type: "failed",
-            errorCode: assistant ? "PI_PROVIDER_FAILURE" : "PI_EMPTY_RESPONSE",
+            errorCode: providerFailureCode(assistant?.errorMessage),
             ...(authoritativeUsageRecords.length > 0
               ? { usageRecords: authoritativeUsageRecords }
               : {}),

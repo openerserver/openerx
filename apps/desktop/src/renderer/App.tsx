@@ -8,6 +8,7 @@ import type {
   ContentPreview,
   ConversationSnapshot,
   ConversationSummary,
+  DesktopNativePermission,
   DeviceSession,
   LocalWebSearchProviderRuntimeState,
   LocalWebSearchSettingsSelection,
@@ -19,6 +20,7 @@ import type {
   Message,
   ModelCatalogEntry,
   ModelServiceSettingsUpdate,
+  ModelUsageRecord,
   PersonalFile,
   RechargeOrder,
   RefundOrder,
@@ -31,7 +33,6 @@ import type {
   ToolPermissionMode,
   ToolRuntimeCapability,
   ToolRuntimeReadiness,
-  UsageRecord,
   WorkItem,
   WorkItemDetail,
 } from "@openerx/contracts";
@@ -42,6 +43,8 @@ import {
   defaultByokModelConfiguration,
   defaultByokModelRef,
   isByokModelRef,
+  maxPastedAttachmentCount,
+  modelFailureMessage,
 } from "@openerx/contracts";
 import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/model";
 import {
@@ -84,7 +87,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Navigate,
@@ -97,10 +100,24 @@ import {
 } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { desktopBrand } from "../../../../packages/branding/src/index";
+import { AccountAccess } from "./AccountAccess";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
 import { BrowserSettingsPanel } from "./BrowserSettingsPanel";
+import { ConfirmDialog } from "./ConfirmDialog";
+import {
+  ConversationDeleteButton,
+  ConversationDeletionProvider,
+  useConversationDeletion,
+} from "./ConversationDeletion";
+import {
+  ConversationResults,
+  type ResultListState,
+  type ResultSelection,
+} from "./ConversationResults";
 import { DesktopControlBar } from "./DesktopControlBar";
+import { PendingToolApproval } from "./PendingToolApproval";
+import { clipboardFiles, pastedAttachmentError, serializePastedFiles } from "./pasted-attachments";
 import {
   ConversationProjectBadge,
   ConversationProjectMoveDialog,
@@ -109,6 +126,8 @@ import {
   useProject,
 } from "./projects";
 import { RemoteSettings } from "./RemoteSettings";
+import { withUiTimeout } from "./ui-timeout";
+import { WorkspaceLocation, WorkspaceSection } from "./WorkspaceContext";
 
 const suggestions = [
   "复盘最近一周 A 股行情：哪些板块最受关注，背后的驱动因素是什么？",
@@ -130,8 +149,6 @@ const assistantCompanionStorageKey = "openerx.assistant.companionEnabled";
 const assistantFeatureStorageKey = "openerx.features.assistantEnabled";
 
 type ThemePreference = "system" | "dark" | "light";
-type WorkspaceAccessChoice = "read_only" | "read_write";
-type WorkspaceExpiryChoice = "never" | "1h" | "24h" | "7d";
 
 const themeOptions = [
   {
@@ -220,19 +237,6 @@ function previousMonth(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function workspaceExpiry(choice: WorkspaceExpiryChoice): string | null {
-  const durations: Record<Exclude<WorkspaceExpiryChoice, "never">, number> = {
-    "1h": 60 * 60_000,
-    "24h": 24 * 60 * 60_000,
-    "7d": 7 * 24 * 60 * 60_000,
-  };
-  return choice === "never" ? null : new Date(Date.now() + durations[choice]).toISOString();
-}
-
-function workspaceExpiryLabel(expiresAt: string | null): string {
-  return expiresAt ? `有效期至 ${new Date(expiresAt).toLocaleString()}` : "长期有效";
-}
-
 const capabilityLabels: Record<keyof ModelCatalogEntry["capabilities"], string> = {
   textInput: "文本输入",
   imageInput: "图片",
@@ -294,7 +298,7 @@ const toolCatalog = [
     namespace: "local",
     capability: "browser",
     name: "浏览器操作",
-    detail: "自动控制独立浏览器打开页面并完成交互",
+    detail: "打开浏览器页面、读取内容并完成交互",
   },
   {
     namespace: "local",
@@ -353,6 +357,19 @@ function toolRuntimeReason(reason: string | null): string | null {
   return toolRuntimeReasonLabels[reason] ?? "运行状态暂不可确认";
 }
 
+const systemPermissionLabels: Record<DesktopNativePermission, string> = {
+  screen_capture: "屏幕录制",
+  accessibility: "辅助功能",
+};
+
+function missingSystemPermissions(readiness?: ToolRuntimeReadiness): DesktopNativePermission[] {
+  if (!readiness || !["browser", "desktop"].includes(readiness.capability)) return [];
+  if (readiness.missingPermissions) return readiness.missingPermissions;
+  if (readiness.reason === "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED") return ["screen_capture"];
+  if (readiness.reason === "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED") return ["accessibility"];
+  return [];
+}
+
 const localWebSearchProviderStatusLabels: Record<
   LocalWebSearchProviderRuntimeState["status"],
   string
@@ -393,26 +410,6 @@ const messageStatusLabel: Record<Message["status"], string> = {
   interrupted: "已中断",
 };
 
-function accountStatusLabel(status: string | undefined): string {
-  switch (status) {
-    case "signed_in":
-      return "已登录";
-    case "reauth_required":
-      return "需要重新登录";
-    case "unavailable":
-      return "暂时不可用";
-    default:
-      return "未登录";
-  }
-}
-
-function accountReason(reason: string | null | undefined): string | null {
-  if (!reason) return null;
-  if (reason === "DEVICE_SESSION_REVOKED") return "此设备的登录已失效，请重新验证邮箱。";
-  if (reason === "AUTHENTICATION_REQUIRED") return `请先登录 ${desktopBrand.productName}。`;
-  return "账户状态发生变化，请重新登录后再试。";
-}
-
 function formatUpdatedAt(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -452,12 +449,28 @@ function skillDescription(skill: SkillInstallation): string {
 }
 
 function userFacingError(error: unknown, fallback: string): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const modelCode = rawMessage.match(/\bMODEL_[A-Z_]+\b/u)?.[0];
+  const modelMessage = modelCode ? modelFailureMessage(modelCode) : undefined;
+  if (modelMessage) return modelMessage;
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (
-    message.includes("safeStorage.decrypt") ||
-    message.includes("OS_CREDENTIAL_STORE_UNAVAILABLE")
+    message.includes("OS_CREDENTIAL_DECRYPT_FAILED") ||
+    message.includes("OS_CREDENTIAL_DATA_INVALID")
   ) {
-    return "系统凭据库无法读取已保存的 Key。请检查系统钥匙串；更换安装版本后可能需要备份旧凭据并重新保存 Key。";
+    return "本机已保存的 Key 记录无法读取。请重新填写需要使用的 Key，再选择“备份旧记录并重新保存”。";
+  }
+  if (
+    message.includes("OS_CREDENTIAL_STORE_UNAVAILABLE") ||
+    message.includes("OS_CREDENTIAL_ENCRYPT_FAILED")
+  ) {
+    return "无法访问系统凭据存储。请解锁钥匙串或允许应用访问后重试，Key 尚未保存。";
+  }
+  if (
+    message.includes("CREDENTIAL_RECOVERY_NOT_REQUIRED") ||
+    message.includes("CREDENTIAL_RECOVERY_CONFLICT")
+  ) {
+    return "Key 记录已发生变化，请重新打开模型设置后再试。旧记录未被替换。";
   }
   if (message.includes("SKILL_TOO_MANY_FILES")) {
     return "Skill 包含的文件过多（最多 20,000 个），请精简包内资源后重试。";
@@ -526,6 +539,8 @@ function userFacingError(error: unknown, fallback: string): string {
 }
 
 function messageFailureLabel(errorCode: string): string {
+  const classified = modelFailureMessage(errorCode);
+  if (classified) return classified;
   if (errorCode === "MODEL_CAPABILITY_UNSUPPORTED") {
     return "当前模型不支持图片输入，请切换到自动或 DeepSeek V4 Flash Vision（实验）后重试。";
   }
@@ -536,28 +551,15 @@ function messageFailureLabel(errorCode: string): string {
     return "默认模型暂时未就绪，请稍后重试。";
   }
   if (errorCode === "PI_PROVIDER_FAILURE") {
-    return "模型服务暂时没有响应，请检查网络后重试。";
+    return "模型调用失败，历史记录未保留具体原因，请检查模型服务状态。";
+  }
+  if (errorCode === "ACCESS_TOKEN_INVALID" || errorCode === "ACCESS_TOKEN_EXPIRED") {
+    return "平台登录会话已失效，请重新登录后再试。";
   }
   if (errorCode === "AUTHENTICATION_REQUIRED") {
     return "此操作需要登录，请先前往账户设置。";
   }
   return "本次生成没有完成，可以重试并保留当前内容。";
-}
-
-function withUiTimeout<T>(promise: Promise<T>, timeoutMs = 8_000): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error("UI_REQUEST_TIMEOUT")), timeoutMs);
-    void promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        window.clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 }
 
 const sendReceiptTimeoutMs = 12_000;
@@ -842,65 +844,6 @@ function ComposerSelect({
   );
 }
 
-function ConfirmDialog({
-  title,
-  description,
-  confirmLabel,
-  pending = false,
-  children,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  description: string;
-  confirmLabel: string;
-  pending?: boolean;
-  children?: ReactNode;
-  onCancel: () => void;
-  onConfirm: () => void;
-}): React.JSX.Element {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const cancelButtonRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (typeof dialog.showModal === "function") dialog.showModal();
-    else dialog.setAttribute("open", "");
-    window.requestAnimationFrame(() => cancelButtonRef.current?.focus());
-    return () => {
-      if (typeof dialog.close === "function" && dialog.open) dialog.close();
-      else dialog.removeAttribute("open");
-    };
-  }, []);
-  return (
-    <dialog
-      ref={dialogRef}
-      className="confirmation-dialog"
-      role="alertdialog"
-      aria-modal="true"
-      aria-label={title}
-      onCancel={(event) => {
-        event.preventDefault();
-        onCancel();
-      }}
-    >
-      <div>
-        <strong>{title}</strong>
-        <p>{description}</p>
-        {children}
-      </div>
-      <div className="confirmation-dialog-actions">
-        <button ref={cancelButtonRef} type="button" onClick={onCancel}>
-          取消
-        </button>
-        <button type="button" className="danger-action" disabled={pending} onClick={onConfirm}>
-          {pending ? "处理中…" : confirmLabel}
-        </button>
-      </div>
-    </dialog>
-  );
-}
-
 function HighlightedText({ text, query }: { text: string; query: string }): React.JSX.Element {
   const normalized = query.trim();
   if (!normalized) return <>{text}</>;
@@ -984,7 +927,9 @@ function Composer({
   contextOpen = false,
   defaultModelRef = automaticModelRef,
   projectId,
+  formRef,
 }: {
+  formRef?: RefObject<HTMLFormElement | null>;
   conversationId?: string;
   conversationSnapshot?: ConversationSnapshot;
   onOpenContext?: () => void;
@@ -1000,6 +945,9 @@ function Composer({
     useState<ToolPermissionMode>("ask");
   const [pendingFiles, setPendingFiles] = useState<PersonalFile[]>([]);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+  const attachmentTarget = `${conversationId ?? "new"}:${projectId ?? ""}`;
+  const attachmentTargetRef = useRef(attachmentTarget);
+  attachmentTargetRef.current = attachmentTarget;
   const previousConversationIdRef = useRef(conversationId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -1030,6 +978,25 @@ function Composer({
       );
     },
   });
+  const pasteFiles = useMutation({
+    mutationFn: async ({ files }: { files: File[]; target: string }) => {
+      if (files.length + pendingFiles.length > maxPastedAttachmentCount) {
+        throw new Error("FILE_TOO_LARGE");
+      }
+      return await window.openerx.importPastedFiles({
+        conversationId: null,
+        files: await serializePastedFiles(files),
+      });
+    },
+    onSuccess: async (files, { target }) => {
+      if (attachmentTargetRef.current === target) {
+        setPendingFiles((current) => [...current, ...files]);
+        setAttachmentNotice(`已粘贴 ${files.length} 个附件，将随本条消息发送。`);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["files"] });
+    },
+  });
+  const isImportingAttachments = chooseFiles.isPending || pasteFiles.isPending;
   const skills = useQuery({
     queryKey: ["skills", "composer"],
     queryFn: () => window.openerx.listSkills(),
@@ -1059,17 +1026,21 @@ function Composer({
     onSuccess: (state) => {
       if (!state || !conversationId) return;
       queryClient.setQueryData(["tools", "permission-mode", conversationId], state);
-      void queryClient.invalidateQueries({ queryKey: ["tools", "scopes"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["tools"],
+        predicate: (query) => query.queryKey[1] !== "permission-mode",
+      });
     },
   });
   const conversation = conversationSnapshot?.conversation;
+  const availableModels = (models.data ?? []).filter(({ status }) => status === "available");
   const compatibleConversationModels = conversation
-    ? models.data?.filter(
+    ? availableModels.filter(
         ({ modelRef }) =>
           isByokModelRef(modelRef) === isByokModelRef(conversation.selectedModelRef),
       )
-    : undefined;
-  const selectedConversationModel = compatibleConversationModels?.find(
+    : [];
+  const selectedConversationModel = compatibleConversationModels.find(
     ({ modelRef }) => modelRef === conversation?.selectedModelRef,
   );
   const conversationThinkingLevels = selectedConversationModel
@@ -1118,14 +1089,12 @@ function Composer({
     },
   });
   const newConversationModel =
-    models.data?.find(
-      ({ modelRef, status }) => modelRef === newConversationModelRef && status === "available",
-    ) ??
-    models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
-    models.data?.find(({ status }) => status === "available") ??
-    models.data?.[0];
-  const newConversationModelRequiresConfiguration =
-    !conversationId && newConversationModel?.status === "unavailable";
+    availableModels.find(({ modelRef }) => modelRef === newConversationModelRef) ??
+    availableModels.find(({ modelRef }) => modelRef === automaticModelRef) ??
+    availableModels[0];
+  const modelRequiresConfiguration =
+    models.isSuccess && (conversation ? !selectedConversationModel : !newConversationModel);
+  const sendingBlockedByModel = models.isPending || modelRequiresConfiguration;
   const selectedPermissionMode = conversationId
     ? selectPermissionMode.isPending
       ? selectPermissionMode.variables
@@ -1178,11 +1147,12 @@ function Composer({
 
   return (
     <form
+      ref={formRef}
       className="composer"
       onSubmit={(event) => {
         event.preventDefault();
         const text = draft.trim();
-        if (text && !send.isPending && !newConversationModelRequiresConfiguration) {
+        if (text && !send.isPending && !sendingBlockedByModel && !isImportingAttachments) {
           send.mutate(text);
         }
       }}
@@ -1209,11 +1179,20 @@ function Composer({
         placeholder="输入你的需求…"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
+        onPaste={(event) => {
+          const files = clipboardFiles(event.clipboardData);
+          if (files.length === 0) return;
+          event.preventDefault();
+          if (isImportingAttachments) return;
+          chooseFiles.reset();
+          setAttachmentNotice(null);
+          pasteFiles.mutate({ files, target: attachmentTarget });
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             const text = draft.trim();
-            if (text && !send.isPending && !newConversationModelRequiresConfiguration) {
+            if (text && !send.isPending && !sendingBlockedByModel && !isImportingAttachments) {
               send.mutate(text);
             }
           }
@@ -1225,8 +1204,12 @@ function Composer({
             type="button"
             className="icon-button"
             aria-label="添加附件"
-            onClick={() => chooseFiles.mutate()}
-            disabled={chooseFiles.isPending}
+            title="添加 PDF、DOCX、XLS / XLSX、CSV / TSV、PPTX、图片、文本或代码文件，也可直接粘贴截图和文件"
+            onClick={() => {
+              pasteFiles.reset();
+              chooseFiles.mutate();
+            }}
+            disabled={isImportingAttachments}
           >
             <Paperclip size={18} weight="regular" />
           </button>
@@ -1257,7 +1240,7 @@ function Composer({
             }
             onChange={(nextValue) => selectPermissionMode.mutate(nextValue as ToolPermissionMode)}
           />
-          {!conversationId ? (
+          {!conversationId && newConversationModel ? (
             <>
               <ComposerSelect
                 className="composer-footer-control composer-model-thinking-select"
@@ -1274,14 +1257,10 @@ function Composer({
                 groups={[
                   {
                     label: "模型",
-                    options: (models.data ?? []).map((model) => ({
+                    options: availableModels.map((model) => ({
                       value: `model:${model.modelRef}`,
                       label: model.displayName,
-                      description:
-                        model.status === "available"
-                          ? `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`
-                          : "当前不可用",
-                      disabled: model.status !== "available",
+                      description: `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`,
                     })),
                   },
                   {
@@ -1308,12 +1287,8 @@ function Composer({
                 disabled={!newConversationModel}
                 onChange={(event) => setNewConversationModelRef(event.target.value)}
               >
-                {(models.data ?? []).map((model) => (
-                  <option
-                    key={model.modelRef}
-                    value={model.modelRef}
-                    disabled={model.status !== "available"}
-                  >
+                {availableModels.map((model) => (
+                  <option key={model.modelRef} value={model.modelRef}>
                     {model.displayName}
                   </option>
                 ))}
@@ -1335,35 +1310,31 @@ function Composer({
               </select>
             </>
           ) : null}
-          {conversation ? (
+          {conversation && compatibleConversationModels.length > 0 ? (
             <>
               <ComposerSelect
                 className="composer-footer-control composer-model-thinking-select"
                 ariaLabel="模型与思考"
                 icon={<Lightning size={15} weight="fill" />}
-                label={`${selectedConversationModel?.displayName ?? "后续消息模型"} · ${thinkingLevelLabels[conversation.thinkingLevel]}`}
+                label={
+                  selectedConversationModel
+                    ? `${selectedConversationModel.displayName} · ${thinkingLevelLabels[conversation.thinkingLevel]}`
+                    : "选择模型"
+                }
                 value={`model:${conversation.selectedModelRef}`}
                 selectedValues={[
                   `model:${conversation.selectedModelRef}`,
                   `thinking:${conversation.thinkingLevel}`,
                 ]}
-                disabled={
-                  selectConversationModel.isPending ||
-                  selectConversationThinking.isPending ||
-                  !selectedConversationModel
-                }
+                disabled={selectConversationModel.isPending || selectConversationThinking.isPending}
                 renderNativeSelect={false}
                 groups={[
                   {
                     label: "模型",
-                    options: (compatibleConversationModels ?? []).map((model) => ({
+                    options: compatibleConversationModels.map((model) => ({
                       value: `model:${model.modelRef}`,
                       label: model.displayName,
-                      description:
-                        model.status === "available"
-                          ? `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`
-                          : "当前不可用",
-                      disabled: model.status !== "available",
+                      description: `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`,
                     })),
                   },
                   {
@@ -1381,6 +1352,7 @@ function Composer({
                       ...conversationThinkingLevels.map((level) => ({
                         value: `thinking:${level}`,
                         label: thinkingLevelLabels[level],
+                        disabled: !selectedConversationModel,
                       })),
                     ],
                   },
@@ -1404,16 +1376,17 @@ function Composer({
                 className="composer-native-select"
                 aria-label="后续消息模型"
                 tabIndex={-1}
-                value={conversation.selectedModelRef}
+                value={selectedConversationModel?.modelRef ?? ""}
                 disabled={selectConversationModel.isPending}
                 onChange={(event) => selectConversationModel.mutate(event.target.value)}
               >
-                {(compatibleConversationModels ?? []).map((model) => (
-                  <option
-                    key={model.modelRef}
-                    value={model.modelRef}
-                    disabled={model.status !== "available"}
-                  >
+                {!selectedConversationModel ? (
+                  <option value="" disabled hidden>
+                    选择模型
+                  </option>
+                ) : null}
+                {compatibleConversationModels.map((model) => (
+                  <option key={model.modelRef} value={model.modelRef}>
                     {model.displayName}
                   </option>
                 ))}
@@ -1481,7 +1454,9 @@ function Composer({
           type="submit"
           className="primary-action"
           aria-label="发送"
-          disabled={!draft.trim() || send.isPending || newConversationModelRequiresConfiguration}
+          disabled={
+            !draft.trim() || send.isPending || sendingBlockedByModel || isImportingAttachments
+          }
         >
           <PaperPlaneTilt size={17} weight="fill" />
           <span>{send.isPending ? "发送中…" : "发送"}</span>
@@ -1489,7 +1464,19 @@ function Composer({
         </button>
       </div>
       <div className="composer-feedback" aria-live="polite">
-        {attachmentNotice && !chooseFiles.error ? (
+        {pasteFiles.isPending ? <p>正在添加剪贴板附件…</p> : null}
+        {pasteFiles.error ? (
+          <p className="inline-error">{pastedAttachmentError(pasteFiles.error)}</p>
+        ) : null}
+        {conversation && modelRequiresConfiguration ? (
+          <p className="inline-error">
+            {compatibleConversationModels.length > 0
+              ? "当前对话的模型不可用，请选择其他模型，或"
+              : "尚无可用模型，请"}
+            <NavLink to="/settings/account?section=model">前往设置 → 模型</NavLink>。
+          </p>
+        ) : null}
+        {attachmentNotice && !chooseFiles.error && !pasteFiles.error ? (
           <p className="inline-success">{attachmentNotice}</p>
         ) : null}
         {send.error ? (
@@ -1505,7 +1492,7 @@ function Composer({
             )}
           </p>
         ) : null}
-        {newConversationModelRequiresConfiguration ? (
+        {!conversationId && modelRequiresConfiguration ? (
           <p className="inline-error">
             使用前需要配置 OpenAI-compatible API。请前往
             <NavLink to="/settings/account?section=model">设置 → 模型</NavLink>。
@@ -1543,26 +1530,21 @@ function NewChat({
     queryFn: () => window.openerx.listModels(),
     retry: false,
   });
+  const availableModels = (models.data ?? []).filter(({ status }) => status === "available");
   const defaultModel =
-    models.data?.find(
-      ({ modelRef, status }) => modelRef === defaultModelRef && status === "available",
-    ) ??
-    models.data?.find(({ modelRef }) => modelRef === automaticModelRef) ??
-    models.data?.find(({ status }) => status === "available") ??
-    models.data?.[0];
+    availableModels.find(({ modelRef }) => modelRef === defaultModelRef) ??
+    availableModels.find(({ modelRef }) => modelRef === automaticModelRef) ??
+    availableModels[0];
   const suggestionThinkingLevel = defaultModel
     ? preferredThinkingLevel(modelThinkingLevels(defaultModel))
     : defaultThinkingLevel;
-  const modelRequiresConfiguration = defaultModel?.status === "unavailable";
+  const modelRequiresConfiguration = models.isSuccess && !defaultModel;
   return (
     <main className="new-chat-page">
       <header className="new-chat-topbar">
         <span className="topbar-product">{projectName ? `${projectName} · 新任务` : "新任务"}</span>
         <span className="topbar-state">
-          {defaultModel?.status === "unavailable"
-            ? "需要配置 API"
-            : (defaultModel?.displayName ??
-              (models.isPending ? "正在读取模型配置" : "需要配置 API"))}
+          {defaultModel?.displayName ?? (models.isPending ? "正在读取模型配置" : "需要配置 API")}
         </span>
       </header>
       <section className="welcome" aria-labelledby="welcome-title">
@@ -1585,7 +1567,7 @@ function NewChat({
             前往设置 → 模型
           </NavLink>
         </section>
-      ) : (
+      ) : defaultModel ? (
         <section className="suggestion-grid" aria-label="常用任务建议">
           {suggestions.map((suggestion) => (
             <Suggestion
@@ -1597,7 +1579,7 @@ function NewChat({
             />
           ))}
         </section>
-      )}
+      ) : null}
       <Composer defaultModelRef={defaultModelRef} projectId={projectId} />
     </main>
   );
@@ -1677,10 +1659,6 @@ function ContextDock({
   const queryClient = useQueryClient();
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [contextNotice, setContextNotice] = useState<string | null>(null);
-  const [workspaceAccess, setWorkspaceAccess] = useState<WorkspaceAccessChoice>("read_write");
-  const [workspaceAllowNetwork, setWorkspaceAllowNetwork] = useState(false);
-  const [workspaceExpiryChoice, setWorkspaceExpiryChoice] =
-    useState<WorkspaceExpiryChoice>("never");
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const chooseFilesButtonRef = useRef<HTMLButtonElement>(null);
   const chooseDirectoryButtonRef = useRef<HTMLButtonElement>(null);
@@ -1696,36 +1674,6 @@ function ContextDock({
     queryFn: () => withUiTimeout(window.openerx.listFiles({ conversationId })),
     enabled: Boolean(conversationId),
     retry: false,
-  });
-  const workspaces = useQuery({
-    queryKey: ["workspaces", conversationId],
-    queryFn: () => withUiTimeout(window.openerx.listWorkspaces({ conversationId })),
-    enabled: Boolean(conversationId),
-    retry: false,
-  });
-  const chooseWorkspace = useMutation({
-    mutationFn: () =>
-      window.openerx.chooseWorkspace({
-        conversationId,
-        access: workspaceAccess,
-        allowNetwork: workspaceAccess === "read_write" && workspaceAllowNetwork,
-        expiresAt: workspaceExpiry(workspaceExpiryChoice),
-      }),
-    onSuccess: async (workspace) => {
-      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-      setContextNotice(
-        workspace
-          ? `已授权工作区 ${workspace.displayName}；${workspace.access === "read_write" ? "读写" : "只读"}、网络${workspace.allowNetwork ? "允许" : "禁止"}、${workspaceExpiryLabel(workspace.expiresAt)}。`
-          : "已取消工作区选择。",
-      );
-    },
-  });
-  const revokeWorkspace = useMutation({
-    mutationFn: (workspaceGrantId: string) => window.openerx.revokeWorkspace({ workspaceGrantId }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-      setContextNotice("已撤销工作区；后续 Turn 不再暴露其工具或项目指令。");
-    },
   });
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles({ conversationId }),
@@ -1778,7 +1726,7 @@ function ContextDock({
       <header className="context-dock-header">
         <div>
           <div className="context-title-row">
-            <h2>当前上下文</h2>
+            <h2>工作区与附件</h2>
             <Info size={15} weight="regular" />
           </div>
           <p>
@@ -1805,41 +1753,43 @@ function ContextDock({
             {contextProject.data?.project.name ?? "正在读取项目…"}
           </NavLink>
           <p className="context-project-source-instructions">
-            {contextProject.data?.project.instructions ||
-              "此项目没有说明；已连接目录仍会在下一轮自动继承。"}
+            {contextProject.data?.project.instructions || "此项目没有额外说明。"}
           </p>
         </section>
       ) : null}
+
+      <WorkspaceSection
+        conversationId={conversationId}
+        projectId={conversation.data?.conversation.projectId ?? null}
+        onClose={onClose}
+      />
 
       <section className="context-files" aria-labelledby="context-files-title">
         <div className="context-section-heading">
           <h3 id="context-files-title">文件</h3>
           <span>{fileList.length}</span>
         </div>
-        <div className="context-dropzone">
-          <FileText size={26} weight="regular" />
-          <strong>添加文件或受控文件夹</strong>
-          <span>支持 PDF、Office、表格、图片、文本、代码与 HTML（单个 ≤50MB）</span>
-          <span>选择文件夹只授权读取所选目录；原始路径权限可随时撤销。</span>
-          <div className="context-picker-actions">
-            <button
-              ref={chooseFilesButtonRef}
-              type="button"
-              onClick={() => chooseFiles.mutate()}
-              disabled={chooseFiles.isPending}
-            >
-              {chooseFiles.isPending ? "正在选择…" : "选择文件"}
-            </button>
-            <button
-              ref={chooseDirectoryButtonRef}
-              type="button"
-              onClick={() => chooseDirectory.mutate()}
-              disabled={chooseDirectory.isPending}
-            >
-              {chooseDirectory.isPending ? "正在选择…" : "选择文件夹"}
-            </button>
-          </div>
+        <div className="context-file-import-actions">
+          <button
+            ref={chooseFilesButtonRef}
+            type="button"
+            onClick={() => chooseFiles.mutate()}
+            disabled={chooseFiles.isPending}
+          >
+            <FileText size={16} aria-hidden="true" />
+            {chooseFiles.isPending ? "正在选择…" : "选择文件"}
+          </button>
+          <button
+            ref={chooseDirectoryButtonRef}
+            type="button"
+            onClick={() => chooseDirectory.mutate()}
+            disabled={chooseDirectory.isPending}
+          >
+            <FolderSimple size={16} aria-hidden="true" />
+            {chooseDirectory.isPending ? "正在选择…" : "导入文件夹"}
+          </button>
         </div>
+        <p className="workspace-help">作为附件加入当前对话，不改变工作目录。</p>
         {contextNotice && !chooseFiles.error && !chooseDirectory.error && !revoke.error ? (
           <p className="inline-success" role="status">
             {contextNotice}
@@ -1864,183 +1814,68 @@ function ContextDock({
             </button>
           </div>
         ) : null}
-        <div className="context-file-list">
-          {fileList.map((file) => {
-            const sourceScopeId = file.sourceScopeId;
-            return (
-              <article className="context-file" key={file.id}>
-                <div className="context-file-icon">
-                  <FileText size={19} weight="regular" />
-                </div>
-                <div className="context-file-copy">
-                  <strong title={file.displayName}>{file.displayName}</strong>
-                  <span>
-                    {formatBytes(file.sizeBytes)} · {file.format.toUpperCase()}
-                  </span>
-                </div>
-                <span
-                  className={`context-file-status status-${file.parseStatus === "ready" ? "ready" : "pending"}`}
-                >
-                  {file.parseStatus === "ready"
-                    ? "已解析"
-                    : file.parseStatus === "failed"
-                      ? file.parseErrorCode
-                      : "待解析"}
-                </span>
-                {sourceScopeId ? (
-                  <button
-                    type="button"
-                    className="icon-button context-file-menu"
-                    aria-label={`撤销 ${file.displayName} 的源文件权限`}
-                    title="撤销源文件权限（受控副本仍保留）"
-                    onClick={() => revoke.mutate(sourceScopeId)}
+        <details className="context-attachment-list" open={fileList.length === 0 || undefined}>
+          <summary>已添加的附件 · {fileList.length}</summary>
+          <div className="context-file-list">
+            {fileList.map((file) => {
+              const sourceScopeId = file.sourceScopeId;
+              return (
+                <article className="context-file" key={file.id}>
+                  <div className="context-file-icon">
+                    <FileText size={19} weight="regular" />
+                  </div>
+                  <div className="context-file-copy">
+                    <strong title={file.displayName}>{file.displayName}</strong>
+                    <span>
+                      {formatBytes(file.sizeBytes)} · {file.format.toUpperCase()}
+                    </span>
+                  </div>
+                  <span
+                    className={`context-file-status status-${file.parseStatus === "ready" ? "ready" : "pending"}`}
                   >
-                    <X size={16} weight="bold" />
-                  </button>
-                ) : (
-                  <span className="context-file-cloud-copy">云端副本</span>
-                )}
-              </article>
-            );
-          })}
-          {files.isPending ? <p className="muted-copy">正在读取文件…</p> : null}
-          {files.error ? (
-            <div className="context-inline-state">
-              <p className="inline-error">
-                {userFacingError(files.error, "暂时无法读取当前对话的文件。")}
+                    {file.parseStatus === "ready"
+                      ? "已解析"
+                      : file.parseStatus === "failed"
+                        ? file.parseErrorCode
+                        : "待解析"}
+                  </span>
+                  {sourceScopeId ? (
+                    <button
+                      type="button"
+                      className="icon-button context-file-menu"
+                      aria-label={`撤销 ${file.displayName} 的源文件权限`}
+                      title="撤销源文件权限（受控副本仍保留）"
+                      onClick={() => revoke.mutate(sourceScopeId)}
+                    >
+                      <X size={16} weight="bold" />
+                    </button>
+                  ) : (
+                    <span className="context-file-cloud-copy">云端副本</span>
+                  )}
+                </article>
+              );
+            })}
+            {files.isPending ? <p className="muted-copy">正在读取文件…</p> : null}
+            {files.error ? (
+              <div className="context-inline-state">
+                <p className="inline-error">
+                  {userFacingError(files.error, "暂时无法读取当前对话的文件。")}
+                </p>
+                <button type="button" onClick={() => void files.refetch()}>
+                  重试
+                </button>
+              </div>
+            ) : null}
+            {!files.isPending && !files.error && fileList.length === 0 ? (
+              <p className="muted-copy">还没有添加文件。上方选择的内容只会用于当前对话。</p>
+            ) : null}
+            {revoke.error ? (
+              <p className="inline-error" role="alert">
+                {userFacingError(revoke.error, "暂时无法撤销原始路径权限，请重试。")}
               </p>
-              <button type="button" onClick={() => void files.refetch()}>
-                重试
-              </button>
-            </div>
-          ) : null}
-          {!files.isPending && !files.error && fileList.length === 0 ? (
-            <p className="muted-copy">还没有添加文件。上方选择的内容只会用于当前对话。</p>
-          ) : null}
-          {revoke.error ? (
-            <p className="inline-error" role="alert">
-              {userFacingError(revoke.error, "暂时无法撤销原始路径权限，请重试。")}
-            </p>
-          ) : null}
-        </div>
-      </section>
-
-      <section className="context-files" aria-labelledby="context-workspaces-title">
-        <div className="context-section-heading">
-          <h3 id="context-workspaces-title">工作区目录</h3>
-          <span>{workspaces.data?.length ?? 0}</span>
-        </div>
-        <div className="context-dropzone">
-          <FolderSimple size={26} weight="regular" />
-          <strong>添加仅用于当前对话的目录</strong>
-          <span>项目目录在上方标记为“来自项目”；这里新增的授权不会反向修改项目配置。</span>
-          <div className="workspace-grant-controls">
-            <label>
-              <span>访问权限</span>
-              <select
-                value={workspaceAccess}
-                onChange={(event) => {
-                  const access = event.target.value as WorkspaceAccessChoice;
-                  setWorkspaceAccess(access);
-                  if (access === "read_only") setWorkspaceAllowNetwork(false);
-                }}
-              >
-                <option value="read_write">读写</option>
-                <option value="read_only">只读</option>
-              </select>
-            </label>
-            <label>
-              <span>有效期</span>
-              <select
-                value={workspaceExpiryChoice}
-                onChange={(event) =>
-                  setWorkspaceExpiryChoice(event.target.value as WorkspaceExpiryChoice)
-                }
-              >
-                <option value="never">长期有效</option>
-                <option value="1h">1 小时</option>
-                <option value="24h">24 小时</option>
-                <option value="7d">7 天</option>
-              </select>
-            </label>
-            <label className="workspace-network-choice">
-              <input
-                type="checkbox"
-                checked={workspaceAllowNetwork}
-                disabled={workspaceAccess === "read_only"}
-                onChange={(event) => setWorkspaceAllowNetwork(event.target.checked)}
-              />
-              <span>允许 Shell 网络</span>
-            </label>
+            ) : null}
           </div>
-          <div className="context-picker-actions">
-            <button
-              type="button"
-              onClick={() => chooseWorkspace.mutate()}
-              disabled={chooseWorkspace.isPending}
-            >
-              {chooseWorkspace.isPending ? "正在选择…" : "授权工作区"}
-            </button>
-          </div>
-        </div>
-        <div className="context-file-list">
-          {workspaces.data?.map((workspace) => {
-            const sourceLabel =
-              workspace.bindingSource === "project"
-                ? "来自项目"
-                : workspace.bindingSource === "default"
-                  ? "默认工作区"
-                  : "仅此对话";
-            const roleLabel =
-              workspace.bindingRole === "primary"
-                ? "主目录"
-                : workspace.bindingRole === "additional"
-                  ? "附加目录"
-                  : "目录";
-            return (
-              <article className="context-file" key={workspace.id}>
-                <div className="context-file-icon">
-                  <FolderSimple size={19} weight="regular" />
-                </div>
-                <div className="context-file-copy">
-                  <strong title={workspace.rootPath}>{workspace.displayName}</strong>
-                  <span>
-                    {sourceLabel} · {roleLabel} ·{" "}
-                    {workspace.access === "read_write" ? "读写" : "只读"} · 网络
-                    {workspace.allowNetwork ? "允许" : "禁止"} ·{" "}
-                    {workspaceExpiryLabel(workspace.expiresAt)} · {workspace.rootPath}
-                  </span>
-                </div>
-                {workspace.bindingSource === "default" ? (
-                  <span className="context-file-cloud-copy">自动管理</span>
-                ) : workspace.bindingSource === "project" ? (
-                  <span className="context-file-cloud-copy">来自项目</span>
-                ) : (
-                  <button
-                    type="button"
-                    className="icon-button context-file-menu"
-                    aria-label={`撤销 ${workspace.displayName} 工作区`}
-                    onClick={() => revokeWorkspace.mutate(workspace.id)}
-                  >
-                    <X size={16} weight="bold" />
-                  </button>
-                )}
-              </article>
-            );
-          })}
-          {workspaces.isPending ? <p className="muted-copy">正在读取工作区…</p> : null}
-          {!workspaces.isPending && (workspaces.data?.length ?? 0) === 0 ? (
-            <p className="muted-copy">尚未授权项目目录。</p>
-          ) : null}
-          {workspaces.error || chooseWorkspace.error || revokeWorkspace.error ? (
-            <p className="inline-error" role="alert">
-              {userFacingError(
-                workspaces.error ?? chooseWorkspace.error ?? revokeWorkspace.error,
-                "暂时无法更新工作区授权，请重试。",
-              )}
-            </p>
-          ) : null}
-        </div>
+        </details>
       </section>
 
       <footer className="context-dock-footer">
@@ -2114,9 +1949,10 @@ function ContentPreviewRenderer({
     return (
       <iframe
         title="HTML 隔离预览"
-        sandbox="allow-scripts"
+        sandbox={preview.htmlPreviewUrl ? "allow-scripts allow-same-origin" : "allow-scripts"}
         referrerPolicy="no-referrer"
-        srcDoc={preview.source}
+        src={preview.htmlPreviewUrl}
+        srcDoc={preview.htmlPreviewUrl ? undefined : preview.source}
       />
     );
   }
@@ -2767,7 +2603,7 @@ function MessageCard({
     enabled: message.role === "assistant" && !running,
     retry: false,
   });
-  const execution: UsageRecord | undefined = usageRecords.data?.at(-1);
+  const execution: ModelUsageRecord | undefined = usageRecords.data?.at(-1);
   const showMessageStatus = message.status !== "completed";
   const primaryActivity = activities[0];
   const activityElapsed = primaryActivity
@@ -2969,6 +2805,9 @@ function MessageCard({
             <summary>运行详情</summary>
             {usage.data && usage.data.records > 0 ? (
               <div className="usage-line" role="status" aria-label="消息 Token 用量">
+                {"source" in usage.data && usage.data.source === "byok" ? (
+                  <span>自带 API Key · 本地用量记录</span>
+                ) : null}
                 <span>输入 {tokenValue(usage.data.inputTokens)}</span>
                 <span>缓存 {tokenValue(usage.data.cachedInputTokens)}</span>
                 <span>输出 {tokenValue(usage.data.outputTokens)}</span>
@@ -3412,7 +3251,6 @@ function ToolActivity({
   selectedRunId?: string | null;
   onSelectRun?: (runId: string) => void;
 }): React.JSX.Element {
-  const queryClient = useQueryClient();
   const [localSelectedRunId, setLocalSelectedRunId] = useState(workItem.activeRunId);
   const selectedRunId =
     controlledSelectedRunId === undefined ? localSelectedRunId : controlledSelectedRunId;
@@ -3428,20 +3266,6 @@ function ToolActivity({
         workItemId: workItem.id,
         ...(selectedRunId ? { runId: selectedRunId } : {}),
       }),
-  });
-  const resolve = useMutation({
-    mutationFn: ({
-      permissionRequestId,
-      decision,
-      payloadDigest,
-    }: {
-      permissionRequestId: string;
-      decision: "once" | "session" | "persistent" | "deny";
-      payloadDigest: string;
-    }) => window.openerx.resolvePermission({ permissionRequestId, decision, payloadDigest }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["tools"] });
-    },
   });
   const value: WorkItemDetail | undefined = detail.data;
   const toolCalls = new Map(value?.toolCalls.map((call) => [call.id, call]) ?? []);
@@ -3563,7 +3387,15 @@ function ToolActivity({
       ) : null}
       {(!segment || showsSegmentMetadata) && usageRecords.length > 0 ? (
         <div className="usage-line" role="status" aria-label="执行轮次 Token 用量">
-          <span>{usageRecords.length} 个模型轮次</span>
+          {usageRecords.some((record) => "source" in record && record.source === "byok") ? (
+            <span>自带 API Key · 本地用量记录</span>
+          ) : null}
+          <span>
+            {usageRecords.length}{" "}
+            {usageRecords.some((record) => "source" in record && record.source === "byok")
+              ? "次模型请求"
+              : "个模型轮次"}
+          </span>
           <span>输入 {tokenValue(usageTotal.inputTokens)}</span>
           <span>缓存 {tokenValue(usageTotal.cachedInputTokens)}</span>
           <span>输出 {tokenValue(usageTotal.outputTokens)}</span>
@@ -3661,12 +3493,11 @@ function ToolActivity({
           if (content.type === "approval") {
             const permission = permissions.get(content.permissionRequestId);
             if (!permission) return null;
-            const persistentAllowed = ["L1", "L2", "L3"].includes(permission.risk);
             return (
               <section
                 className="run-item-row permission-card"
                 key={item.id}
-                aria-label="工具权限确认"
+                aria-label="工具权限记录"
               >
                 <p className="eyebrow">
                   {permission.risk} 权限请求 · {permission.status}
@@ -3676,51 +3507,7 @@ function ToolActivity({
                   {permission.capability} · {permission.resource}
                 </span>
                 {permission.status === "pending" ? (
-                  <div>
-                    <button
-                      type="button"
-                      className="primary-action"
-                      disabled={resolve.isPending}
-                      onClick={() =>
-                        resolve.mutate({
-                          permissionRequestId: permission.id,
-                          decision: "once",
-                          payloadDigest: permission.payloadDigest,
-                        })
-                      }
-                    >
-                      仅本次允许
-                    </button>
-                    {persistentAllowed ? (
-                      <button
-                        type="button"
-                        disabled={resolve.isPending}
-                        onClick={() =>
-                          resolve.mutate({
-                            permissionRequestId: permission.id,
-                            decision: "session",
-                            payloadDigest: permission.payloadDigest,
-                          })
-                        }
-                      >
-                        在此对话中允许
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="danger-action"
-                      disabled={resolve.isPending}
-                      onClick={() =>
-                        resolve.mutate({
-                          permissionRequestId: permission.id,
-                          decision: "deny",
-                          payloadDigest: permission.payloadDigest,
-                        })
-                      }
-                    >
-                      拒绝
-                    </button>
-                  </div>
+                  <p>等待你的确认，请使用输入框上方的权限卡片。</p>
                 ) : null}
               </section>
             );
@@ -3892,19 +3679,19 @@ function ConversationToolbar({
   snapshot,
   railOpen,
   onToggleRail,
+  onOpenWorkspace,
 }: {
   snapshot: ConversationSnapshot;
   railOpen: boolean;
   onToggleRail: () => void;
+  onOpenWorkspace: () => void;
 }): React.JSX.Element {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const conversation = snapshot.conversation;
   const [renaming, setRenaming] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [projectMoveOpen, setProjectMoveOpen] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [forgetSourceMemories, setForgetSourceMemories] = useState(false);
+  const requestConversationDeletion = useConversationDeletion();
   const [nextTitle, setNextTitle] = useState(conversation.title);
   const [selectedBranchId, setSelectedBranchId] = useState(conversation.activeBranchId);
   const [toolbarNotice, setToolbarNotice] = useState<string | null>(null);
@@ -3946,17 +3733,6 @@ function ConversationToolbar({
       setToolbarNotice(updated.archivedAt ? "对话已归档。" : "对话已移回活动历史。");
     },
   });
-  const remove = useMutation({
-    mutationFn: () =>
-      window.openerx.deleteConversation({
-        conversationId: conversation.id,
-        forgetSourceMemories,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["chat"] });
-      navigate("/chat/new");
-    },
-  });
   const activate = useMutation({
     mutationFn: (branchId: string) =>
       window.openerx.activateBranch({ conversationId: conversation.id, branchId }),
@@ -3978,7 +3754,10 @@ function ConversationToolbar({
     <header className="conversation-toolbar">
       <div className="conversation-heading">
         <h1>{conversation.title}</h1>
-        <ConversationProjectBadge projectId={conversation.projectId} />
+        <div className="conversation-heading-context">
+          <ConversationProjectBadge projectId={conversation.projectId} />
+          <WorkspaceLocation conversationId={conversation.id} onOpen={onOpenWorkspace} />
+        </div>
       </div>
       <div className="toolbar-actions">
         <button
@@ -4072,8 +3851,7 @@ function ConversationToolbar({
               className="danger-action"
               onClick={() => {
                 setMoreOpen(false);
-                setForgetSourceMemories(false);
-                setConfirmingDelete(true);
+                requestConversationDeletion(conversation, moreButtonRef.current);
               }}
             >
               删除对话…
@@ -4104,31 +3882,6 @@ function ConversationToolbar({
             取消
           </button>
         </form>
-      ) : null}
-      {confirmingDelete ? (
-        <ConfirmDialog
-          title="删除这个对话？"
-          description="删除后将不再出现在历史记录中。此操作无法在应用内撤销。"
-          confirmLabel="确认删除"
-          pending={remove.isPending}
-          onCancel={() => {
-            setConfirmingDelete(false);
-            window.setTimeout(() => moreButtonRef.current?.focus(), 0);
-          }}
-          onConfirm={() => remove.mutate()}
-        >
-          <label className="confirmation-dialog-option">
-            <input
-              type="checkbox"
-              checked={forgetSourceMemories}
-              onChange={(event) => setForgetSourceMemories(event.target.checked)}
-            />
-            <span>
-              同时删除仅来源于此对话的长期记忆
-              <small>其他对话或手动创建的记忆不受影响。</small>
-            </span>
-          </label>
-        </ConfirmDialog>
       ) : null}
       {projectMoveOpen ? (
         <ConversationProjectMoveDialog
@@ -4268,48 +4021,34 @@ function ConversationRail({
   files,
   workItems,
   selectedBrowserPreview,
-  selectedArtifactId,
-  onSelectArtifact,
+  selectedResult,
+  onSelectResult,
   onBackFromBrowserPreview,
-  onBackToOverview,
   onAddSource,
   onClose,
+  listState,
+  onReload,
 }: {
   artifacts: Artifact[];
   files: PersonalFile[];
   workItems: WorkItem[];
   selectedBrowserPreview: BrowserCallPreview | null;
-  selectedArtifactId: string | null;
-  onSelectArtifact: (artifactId: string) => void;
+  selectedResult: ResultSelection | null;
+  onSelectResult: (selection: ResultSelection | null) => void;
   onBackFromBrowserPreview: () => void;
-  onBackToOverview: () => void;
   onAddSource: () => void;
   onClose: () => void;
+  listState: ResultListState;
+  onReload: () => void;
 }): React.JSX.Element {
-  const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview");
-  const selectedArtifact = artifacts.find(({ id }) => id === selectedArtifactId) ?? null;
-  const preview = useQuery({
-    queryKey: ["content-preview", "artifact", selectedArtifactId, selectedArtifact?.currentVersion],
-    queryFn: () => {
-      if (!selectedArtifactId) throw new Error("No artifact selected");
-      return window.openerx.previewArtifact({ artifactId: selectedArtifactId });
-    },
-    enabled: selectedArtifactId !== null,
-    retry: false,
-  });
-  const saveArtifact = useMutation({
-    mutationFn: async (artifactId: string) => await window.openerx.saveArtifact({ artifactId }),
-  });
   useEffect(() => {
-    if (!selectedArtifactId && !selectedBrowserPreview) return;
+    if (!selectedBrowserPreview) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      if (selectedBrowserPreview) onBackFromBrowserPreview();
-      else onBackToOverview();
+      if (event.key === "Escape" && !event.defaultPrevented) onBackFromBrowserPreview();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onBackFromBrowserPreview, onBackToOverview, selectedArtifactId, selectedBrowserPreview]);
+  }, [selectedBrowserPreview, onBackFromBrowserPreview]);
 
   if (selectedBrowserPreview) {
     return (
@@ -4321,189 +4060,30 @@ function ConversationRail({
     );
   }
 
-  if (selectedArtifactId) {
-    return (
-      <aside className="conversation-rail conversation-rail-preview" aria-label="成果预览">
-        <header className="conversation-rail-header artifact-preview-header">
-          <button
-            type="button"
-            className="artifact-preview-back"
-            aria-label="返回输出内容"
-            onClick={onBackToOverview}
-          >
-            <ArrowLeft size={17} weight="regular" />
-          </button>
-          <div>
-            <strong>
-              {selectedArtifact?.displayName ?? preview.data?.displayName ?? "正在加载…"}
-            </strong>
-            <span>
-              {selectedArtifact
-                ? `${selectedArtifact.format.toUpperCase()} · v${selectedArtifact.currentVersion}`
-                : "受控成果预览"}
-            </span>
-          </div>
-          <button type="button" className="icon-button" aria-label="隐藏成果预览" onClick={onClose}>
-            <X size={17} weight="regular" />
-          </button>
-        </header>
-        <div className="artifact-preview-toolbar">
-          {preview.data && preview.data.source !== null ? (
-            <fieldset className="artifact-preview-modes" aria-label="预览模式">
-              <button
-                type="button"
-                className={previewMode === "preview" ? "is-active" : ""}
-                aria-pressed={previewMode === "preview"}
-                onClick={() => setPreviewMode("preview")}
-              >
-                预览
-              </button>
-              <button
-                type="button"
-                className={previewMode === "source" ? "is-active" : ""}
-                aria-pressed={previewMode === "source"}
-                onClick={() => setPreviewMode("source")}
-              >
-                源码
-              </button>
-            </fieldset>
-          ) : (
-            <span />
-          )}
-          <button
-            type="button"
-            disabled={!selectedArtifact || saveArtifact.isPending}
-            onClick={() => selectedArtifact && saveArtifact.mutate(selectedArtifact.id)}
-          >
-            <DownloadSimple size={15} />
-            {saveArtifact.isPending ? "保存中…" : "下载 / 另存"}
-          </button>
-        </div>
-        <section className="artifact-preview-body" aria-live="polite">
-          {preview.error ? (
-            <div className="artifact-preview-state">
-              <p className="inline-error">
-                {userFacingError(preview.error, "暂时无法预览成果，请重试。")}
-              </p>
-              <button type="button" onClick={() => void preview.refetch()}>
-                重试
-              </button>
-            </div>
-          ) : preview.data ? (
-            <ContentPreviewRenderer
-              preview={preview.data}
-              previewMode={previewMode}
-              ariaLabel={`${preview.data.displayName} 视觉预览`}
-            />
-          ) : (
-            <div className="artifact-preview-state">正在准备预览…</div>
-          )}
-          {saveArtifact.error ? (
-            <p className="inline-error">
-              {userFacingError(saveArtifact.error, "成果保存失败，请重试。")}
-            </p>
-          ) : null}
-          {saveArtifact.data ? (
-            <p className="inline-success">已保存 {saveArtifact.data.fileName}</p>
-          ) : null}
-        </section>
-      </aside>
-    );
-  }
-
   return (
-    <aside className="conversation-rail" aria-label="成果与来源">
-      <header className="conversation-rail-header">
-        <div>
-          <strong>成果与来源</strong>
-          <span>与回复并排查看</span>
-        </div>
-        <button type="button" className="icon-button" aria-label="隐藏成果与来源" onClick={onClose}>
-          <X size={17} weight="regular" />
-        </button>
-      </header>
-
-      <section className="rail-section" aria-labelledby="rail-outputs-title">
-        <div className="rail-section-heading">
-          <h2 id="rail-outputs-title">输出内容</h2>
-          <NavLink to="/files" aria-label="查看全部成果" title="查看全部成果">
-            <Plus size={17} weight="regular" />
-          </NavLink>
-        </div>
-        {artifacts.length > 0 ? (
-          <div className="rail-list">
-            {artifacts.slice(0, 6).map((artifact) => (
-              <button
-                className="rail-item"
-                type="button"
-                key={artifact.id}
-                aria-label={`预览 ${artifact.displayName}`}
-                onClick={() => {
-                  setPreviewMode("preview");
-                  onSelectArtifact(artifact.id);
-                }}
-              >
-                <FolderSimple size={18} weight="regular" />
-                <span>
-                  <strong>{artifact.displayName}</strong>
-                  <small>
-                    {artifact.format.toUpperCase()} · v{artifact.currentVersion}
-                  </small>
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="rail-empty">创建的文件、报告和页面会出现在这里。</p>
-        )}
-      </section>
-
-      <section className="rail-section" aria-labelledby="rail-sources-title">
-        <div className="rail-section-heading">
-          <h2 id="rail-sources-title">来源</h2>
-          <button type="button" aria-label="添加来源" title="添加来源" onClick={onAddSource}>
-            <Plus size={17} weight="regular" />
-          </button>
-        </div>
-        {files.length > 0 ? (
-          <div className="rail-list">
-            {files.map((file) => (
-              <button className="rail-item" type="button" key={file.id} onClick={onAddSource}>
-                <FileText size={18} weight="regular" />
-                <span>
-                  <strong>{file.displayName}</strong>
-                  <small>{file.parseStatus === "ready" ? "已解析" : "处理中"}</small>
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <button type="button" className="rail-empty rail-empty-action" onClick={onAddSource}>
-            添加文件、工作区或其他上下文来源。
-          </button>
-        )}
-      </section>
-
-      <section className="rail-section rail-runs" aria-labelledby="rail-runs-title">
-        <div className="rail-section-heading">
-          <h2 id="rail-runs-title">本次运行</h2>
-          <span>{workItems.length}</span>
-        </div>
-        {workItems.slice(-4).map((workItem) => (
-          <div className="rail-run" key={workItem.id}>
-            <TerminalWindow size={17} weight="regular" />
-            <span>
-              <strong>{workItem.title}</strong>
-              <small>
-                {elapsedTime(workItem.createdAt, workItem.completedAt)
-                  ? `用时 ${elapsedTime(workItem.createdAt, workItem.completedAt)}`
-                  : workItemStatusLabel[workItem.status]}
-              </small>
-            </span>
-          </div>
-        ))}
-      </section>
-    </aside>
+    <ConversationResults
+      artifacts={artifacts}
+      files={files}
+      workItems={workItems}
+      selected={selectedResult}
+      onSelect={onSelectResult}
+      onAddSource={onAddSource}
+      onClose={onClose}
+      listState={listState}
+      onReload={onReload}
+      errorMessage={userFacingError}
+      runDescription={(item) => {
+        const duration = elapsedTime(item.createdAt, item.completedAt);
+        return `${workItemStatusLabel[item.status]}${duration ? ` · 用时 ${duration}` : ""}`;
+      }}
+      renderPreview={(preview, previewMode) => (
+        <ContentPreviewRenderer
+          preview={preview}
+          previewMode={previewMode}
+          ariaLabel={`${preview.displayName} 视觉预览`}
+        />
+      )}
+    />
   );
 }
 
@@ -4516,13 +4096,14 @@ function ChatPage({
 }): React.JSX.Element {
   const { conversationId = "" } = useParams();
   const messageListRef = useRef<HTMLElement>(null);
+  const composerRef = useRef<HTMLFormElement>(null);
   const messageListContentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(true);
   const lastMessageListScrollTopRef = useRef(0);
   const previousConversationIdRef = useRef(conversationId);
   const [following, setFollowing] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [selectedResult, setSelectedResult] = useState<ResultSelection | null>(null);
   const [selectedBrowserPreview, setSelectedBrowserPreview] = useState<BrowserCallPreview | null>(
     null,
   );
@@ -4553,7 +4134,7 @@ function ChatPage({
     followingRef.current = true;
     lastMessageListScrollTopRef.current = 0;
     setFollowing(true);
-    setSelectedArtifactId(null);
+    setSelectedResult(null);
     setSelectedBrowserPreview(null);
   }, [conversationId]);
   useEffect(() => {
@@ -4622,13 +4203,14 @@ function ChatPage({
   const filesById = new Map((conversationFiles.data ?? []).map((file) => [file.id, file] as const));
   return (
     <main
-      className={`conversation-workspace ${railOpen ? "rail-is-open" : ""} ${selectedArtifactId ? "artifact-preview-is-open" : ""} ${selectedBrowserPreview ? "browser-preview-is-open" : ""}`}
+      className={`conversation-workspace ${railOpen ? "rail-is-open" : ""} ${selectedResult ? "artifact-preview-is-open" : ""} ${selectedBrowserPreview ? "browser-preview-is-open" : ""}`}
     >
       <section className="conversation-page" aria-label="对话工作区">
         <ConversationToolbar
           snapshot={snapshot.data}
           railOpen={railOpen}
           onToggleRail={() => setRailOpen((open) => !open)}
+          onOpenWorkspace={onToggleContext}
         />
         <section
           ref={messageListRef}
@@ -4658,7 +4240,7 @@ function ChatPage({
                     filesById={filesById}
                     activities={message.role === "assistant" ? activities : []}
                     onOpenBrowserPreview={(preview) => {
-                      setSelectedArtifactId(null);
+                      setSelectedResult(null);
                       setSelectedBrowserPreview(preview);
                       setRailOpen(true);
                     }}
@@ -4669,7 +4251,7 @@ function ChatPage({
                           key={workItem.id}
                           workItem={workItem}
                           onOpenBrowserPreview={(preview) => {
-                            setSelectedArtifactId(null);
+                            setSelectedResult(null);
                             setSelectedBrowserPreview(preview);
                             setRailOpen(true);
                           }}
@@ -4695,7 +4277,14 @@ function ChatPage({
             回到最新回复
           </button>
         ) : null}
+        <PendingToolApproval
+          key={conversationId}
+          conversationId={conversationId}
+          workItems={workItems.data ?? []}
+          anchorRef={composerRef}
+        />
         <Composer
+          formRef={composerRef}
           conversationId={conversationId}
           conversationSnapshot={snapshot.data}
           onOpenContext={onToggleContext}
@@ -4704,20 +4293,30 @@ function ChatPage({
       </section>
       {railOpen ? (
         <ConversationRail
+          key={conversationId}
           artifacts={artifacts.data ?? []}
           files={conversationFiles.data ?? []}
           workItems={workItems.data ?? []}
+          listState={{
+            files: { loading: artifacts.isPending, error: artifacts.error },
+            sources: { loading: conversationFiles.isPending, error: conversationFiles.error },
+            activity: { loading: workItems.isPending, error: workItems.error },
+          }}
+          onReload={() => {
+            void artifacts.refetch();
+            void conversationFiles.refetch();
+            void workItems.refetch();
+          }}
           selectedBrowserPreview={selectedBrowserPreview}
-          selectedArtifactId={selectedArtifactId}
-          onSelectArtifact={(artifactId) => {
+          selectedResult={selectedResult}
+          onSelectResult={(selection) => {
             setSelectedBrowserPreview(null);
-            setSelectedArtifactId(artifactId);
+            setSelectedResult(selection);
           }}
           onBackFromBrowserPreview={() => setSelectedBrowserPreview(null)}
-          onBackToOverview={() => setSelectedArtifactId(null)}
           onAddSource={onToggleContext}
           onClose={() => {
-            setSelectedArtifactId(null);
+            setSelectedResult(null);
             setSelectedBrowserPreview(null);
             setRailOpen(false);
           }}
@@ -5352,7 +4951,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     }));
   }, [settings.data]);
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: (recoverUnreadableCredentials: boolean) => {
       const providerApiKeys = Object.fromEntries(
         Object.entries(providerKeys)
           .map(([providerId, apiKey]) => [providerId, apiKey?.trim()] as const)
@@ -5361,18 +4960,22 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       return window.openerx.updateModelServiceSettings({
         ...draft,
         ...(Object.keys(providerApiKeys).length > 0 ? { providerApiKeys } : {}),
+        ...(recoverUnreadableCredentials ? { recoverUnreadableCredentials: true as const } : {}),
       });
     },
-    onSuccess: async (value) => {
+    onMutate: () => setNotice(null),
+    onSuccess: async (value, recovered) => {
       queryClient.setQueryData(["model-service", "settings"], value);
       await queryClient.invalidateQueries({ queryKey: ["models", "catalog"] });
       setDraft((current) => ({ ...current, apiKey: undefined }));
       setProviderKeys({});
       const configuredProviders = Object.values(value.providerCredentials).filter(Boolean).length;
       setNotice(
-        value.mode === "byok"
-          ? `模型 API 已保存 · 已配置 ${configuredProviders} 个厂商，可在任务中直接切换。`
-          : "已切换到托管服务模式。",
+        recovered
+          ? "旧 Key 记录已备份，重新填写的 Key 已安全保存。其他需要使用的厂商 Key 请重新填写。"
+          : value.mode === "byok"
+            ? `模型 API 已保存 · 已配置 ${configuredProviders} 个厂商，可在任务中直接切换。`
+            : "已切换到托管服务模式。",
       );
     },
   });
@@ -5440,6 +5043,12 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     },
   });
   const byok = draft.byok;
+  const credentialIssue = settings.data?.credentialIssue;
+  const unreadableCredentials =
+    credentialIssue === "unreadable" ||
+    /OS_CREDENTIAL_DECRYPT_FAILED|OS_CREDENTIAL_DATA_INVALID/.test(save.error?.message ?? "");
+  const hasNewKey =
+    Boolean(draft.apiKey?.trim()) || Object.values(providerKeys).some((key) => key?.trim());
   const patchByok = (patch: Partial<NonNullable<ModelServiceSettingsUpdate["byok"]>>): void => {
     if (byok) setDraft({ ...draft, byok: { ...byok, ...patch } });
   };
@@ -5451,6 +5060,18 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
           <p>各厂商地址和模型均已预置。可同时保存多个 Key，请求从本机直连对应厂商。</p>
         </div>
       </div>
+      {credentialIssue ? (
+        <p className="inline-error" role="alert">
+          {userFacingError(
+            new Error(
+              credentialIssue === "unreadable"
+                ? "OS_CREDENTIAL_DECRYPT_FAILED"
+                : "OS_CREDENTIAL_STORE_UNAVAILABLE",
+            ),
+            "无法读取本机 Key 记录。",
+          )}
+        </p>
+      ) : null}
       <label htmlFor="model-service-mode">运行模式</label>
       <select
         id="model-service-mode"
@@ -5640,12 +5261,27 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
             <button
               type="button"
               className="primary-action"
-              onClick={() => save.mutate()}
-              disabled={save.isPending}
+              onClick={() => save.mutate(false)}
+              disabled={save.isPending || unreadableCredentials}
             >
               保存全部并启用
             </button>
           </div>
+          {unreadableCredentials ? (
+            <section className="model-key-recovery" aria-label="恢复本机 Key 存储">
+              <p>
+                恢复时会保留旧记录的加密备份，只保存本次重新填写的 Key。其他厂商的 Key
+                需要重新填写；项目、聊天和文件保持不变。
+              </p>
+              <button
+                type="button"
+                disabled={save.isPending || !hasNewKey}
+                onClick={() => save.mutate(true)}
+              >
+                {save.isPending ? "正在备份并保存…" : "备份旧记录并重新保存"}
+              </button>
+            </section>
+          ) : null}
           <details className="settings-disclosure model-custom-provider">
             <summary>
               自定义 OpenAI-compatible 接口
@@ -5747,7 +5383,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
                 <button
                   type="button"
                   className="primary-action"
-                  onClick={() => save.mutate()}
+                  onClick={() => save.mutate(false)}
                   disabled={save.isPending || customTest.isPending}
                 >
                   保存自定义接口并启用
@@ -5784,7 +5420,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
         <button
           type="button"
           className="primary-action"
-          onClick={() => save.mutate()}
+          onClick={() => save.mutate(false)}
           disabled={save.isPending}
         >
           保存模式
@@ -6566,9 +6202,6 @@ function AccountSettings({
     queryKey: accountKey,
     queryFn: () => window.openerx.getAccountState(),
   });
-  const [email, setEmail] = useState("");
-  const [challengeId, setChallengeId] = useState<string | null>(null);
-  const [code, setCode] = useState("");
   const [activeSection, setActiveSection] = useState<AccountSettingsSection>(
     () => requestedSettingsSection(location.search) ?? "account",
   );
@@ -6580,9 +6213,10 @@ function AccountSettings({
   const openSettingsSection = (section: AccountSettingsSection): void => {
     setActiveSection(section);
     window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() =>
-        document.getElementById(`${section}-section`)?.focus({ preventScroll: true }),
-      );
+      window.requestAnimationFrame(() => {
+        const target = document.getElementById(`${section}-section`);
+        if (!target?.contains(document.activeElement)) target?.focus({ preventScroll: true });
+      });
     });
   };
   const normalizedSettingsSearch = settingsSearch.trim().toLocaleLowerCase();
@@ -6647,24 +6281,6 @@ function AccountSettings({
     if (!sync.data?.syncedAt) return;
     void queryClient.invalidateQueries({ queryKey: ["chat"] });
   }, [queryClient, sync.data?.syncedAt]);
-  const requestCode = useMutation({
-    mutationFn: () => window.openerx.requestEmailCode({ email }),
-    onSuccess: (challenge) => setChallengeId(challenge.challengeId),
-  });
-  const verify = useMutation({
-    mutationFn: () => {
-      if (!challengeId) throw new Error("请先获取验证码");
-      return window.openerx.verifyEmailCode({ challengeId, code });
-    },
-    onSuccess: (state) => {
-      queryClient.setQueryData(accountKey, state);
-      setCode("");
-      setChallengeId(null);
-      void queryClient.invalidateQueries({ queryKey: ["account", "devices"] });
-      void queryClient.invalidateQueries({ queryKey: ["sync"] });
-      void queryClient.invalidateQueries({ queryKey: ["usage"] });
-    },
-  });
   const signOut = useMutation({
     mutationFn: () => window.openerx.signOut(),
     onSuccess: async (state) => {
@@ -6805,75 +6421,20 @@ function AccountSettings({
           aria-label={`${accountSettingsSectionLabels[activeSection]}设置`}
         >
           {activeSection === "account" ? (
-            <section
-              className="settings-card settings-account-primary"
-              id="account-section"
-              tabIndex={-1}
-              aria-label="账户状态"
-            >
-              <div>
-                <span className={`account-status account-${state?.status ?? "unavailable"}`}>
-                  {accountStatusLabel(state?.status)}
-                </span>
-                <h2>{state?.account?.displayName ?? `登录 ${desktopBrand.productName}`}</h2>
-                <p>{state?.account?.email ?? "使用一次性邮箱验证码建立此设备会话。"}</p>
-              </div>
-              {state?.status !== "signed_in" || !state.session ? (
-                <form
-                  className="account-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (challengeId) verify.mutate();
-                    else requestCode.mutate();
-                  }}
-                >
-                  <label htmlFor="account-email">邮箱</label>
-                  <input
-                    id="account-email"
-                    type="email"
-                    value={email}
-                    disabled={Boolean(challengeId)}
-                    onChange={(event) => setEmail(event.target.value)}
-                    required
-                  />
-                  {challengeId ? (
-                    <>
-                      <label htmlFor="account-code">六位验证码</label>
-                      <input
-                        id="account-code"
-                        inputMode="numeric"
-                        pattern="[0-9]{6}"
-                        value={code}
-                        onChange={(event) => setCode(event.target.value)}
-                        required
-                      />
-                    </>
-                  ) : null}
-                  <button
-                    type="submit"
-                    className="primary-action"
-                    disabled={
-                      requestCode.isPending ||
-                      verify.isPending ||
-                      (!challengeId && !email.trim()) ||
-                      (Boolean(challengeId) && !/^\d{6}$/.test(code))
-                    }
-                  >
-                    {challengeId ? "验证并登录" : "发送验证码"}
-                  </button>
-                  {!challengeId && !email.trim() ? (
-                    <p className="field-help">输入邮箱后即可获取六位验证码。</p>
-                  ) : null}
-                  {requestCode.error || verify.error || state?.reason ? (
-                    <p className="inline-error">
-                      {requestCode.error?.message ??
-                        verify.error?.message ??
-                        accountReason(state?.reason)}
-                    </p>
-                  ) : null}
-                </form>
-              ) : null}
-            </section>
+            <AccountAccess
+              state={state}
+              loading={account.isPending}
+              error={account.error}
+              onRetry={() => void account.refetch()}
+              onContinue={onClose}
+              onConfigureModel={() => openSettingsSection("model")}
+              onSignedIn={(next) => {
+                queryClient.setQueryData(accountKey, next);
+                void queryClient.invalidateQueries({ queryKey: ["account", "devices"] });
+                void queryClient.invalidateQueries({ queryKey: ["sync"] });
+                void queryClient.invalidateQueries({ queryKey: ["usage"] });
+              }}
+            />
           ) : null}
           {activeSection === "billing" ? (
             <section
@@ -7480,6 +7041,7 @@ type ToolCenterRow = {
   id: string;
   name: string;
   detail: string;
+  permissionSummary?: string;
   source: string;
   category: Exclude<ToolCenterCategory, "all">;
   capability: ToolRuntimeCapability;
@@ -7516,6 +7078,13 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
     queryKey: ["tools", "runtime-readiness"],
     queryFn: () => window.openerx.listToolRuntimeReadiness(),
   });
+  useEffect(() => {
+    const refreshPermissions = () => {
+      void queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
+    };
+    window.addEventListener("focus", refreshPermissions);
+    return () => window.removeEventListener("focus", refreshPermissions);
+  }, [queryClient]);
   const localWebSearchSettings = useQuery({
     queryKey: ["tools", "local-web-search", "settings"],
     queryFn: () => window.openerx.getLocalWebSearchSettings(),
@@ -7570,7 +7139,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
         state.status === "granted"
           ? "系统权限已生效。"
           : state.settingsOpened
-            ? "系统设置已打开；授权后请返回并刷新工具状态。"
+            ? "系统设置已打开；授权后返回即可重新检测。如系统要求，请重启 openerx。"
             : "当前系统无法请求该权限。",
       );
     },
@@ -7666,15 +7235,20 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       .map<ToolCenterRow>((tool) => {
         const readiness = readinessByCapability.get(tool.capability);
         const status = readiness?.status;
+        const missingPermissions = missingSystemPermissions(readiness);
         return {
           id: `capability:${tool.capability}`,
           name: tool.name,
           detail: tool.detail,
+          permissionSummary: missingPermissions.length
+            ? `缺少系统权限：${missingPermissions.map((permission) => systemPermissionLabels[permission]).join("、")}`
+            : undefined,
           source: sourceFor(tool.capability),
           category: categoryFor(tool.capability),
           capability: tool.capability,
-          status:
-            status === "available"
+          status: missingPermissions.length
+            ? "待系统授权"
+            : status === "available"
               ? "已启用"
               : status === "degraded"
                 ? "部分可用"
@@ -7685,8 +7259,9 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                     : runtimeReadiness.isFetching
                       ? "检测中"
                       : "状态未知",
-          statusTone:
-            status === "available"
+          statusTone: missingPermissions.length
+            ? "warning"
+            : status === "available"
               ? "enabled"
               : status === "degraded" || status === "authorization_required"
                 ? "warning"
@@ -7728,12 +7303,89 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
   const selectedReadiness = selectedRow
     ? readinessByCapability.get(selectedRow.capability)
     : undefined;
+  const selectedMissingPermissions = missingSystemPermissions(selectedReadiness);
   const selectedMcp = selectedRow?.mcpServerId
     ? mcpServers.data?.find((server) => server.id === selectedRow.mcpServerId)
     : undefined;
   const selectedAuthorization = selectedMcp
     ? mcpAuthorization.data?.find(({ serverId }) => serverId === selectedMcp.id)
     : undefined;
+
+  const nativeToolSettings = selectedRow ? (
+    <section className="tool-settings-section">
+      <h3>{selectedMissingPermissions.length ? "系统权限" : "工具信息"}</h3>
+      <p>
+        {selectedMissingPermissions.length
+          ? "请在系统设置中允许以下权限。授权后返回即可重新检测。"
+          : (toolRuntimeReason(selectedReadiness?.reason ?? null) ??
+            `此工具由 ${desktopBrand.productName} 提供，当前不需要额外设置。`)}
+      </p>
+      {selectedMissingPermissions.length ? (
+        <ul className="tool-system-permissions" aria-label="缺少的系统权限">
+          {selectedMissingPermissions.map((permission) => (
+            <li key={permission}>
+              <div>
+                <strong>{systemPermissionLabels[permission]}</strong>
+                <p>
+                  {permission === "screen_capture"
+                    ? "用于读取屏幕和窗口内容。"
+                    : "用于点击、输入和操作应用窗口。"}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={requestNativePermission.isPending}
+                onClick={() => requestNativePermission.mutate(permission)}
+              >
+                打开{systemPermissionLabels[permission]}设置
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {selectedReadiness?.details?.length ? (
+        <ul>
+          {selectedReadiness.details.map((detail) => (
+            <li key={detail}>{detail}</li>
+          ))}
+        </ul>
+      ) : null}
+      {selectedRow.capability === "mcp" ? (
+        <button
+          type="button"
+          className="primary-action"
+          onClick={() => {
+            setSelectedToolId(null);
+            setAddDialogOpen(true);
+          }}
+        >
+          添加 MCP 工具
+        </button>
+      ) : null}
+      {["browser", "desktop"].includes(selectedRow.capability) ? (
+        <button
+          type="button"
+          className="tool-permission-refresh"
+          disabled={runtimeReadiness.isFetching}
+          onClick={() => {
+            setNativePermissionNotice(null);
+            void runtimeReadiness.refetch();
+          }}
+        >
+          {runtimeReadiness.isFetching ? "正在检测…" : "重新检测权限"}
+        </button>
+      ) : null}
+      {nativePermissionNotice ? <p role="status">{nativePermissionNotice}</p> : null}
+      {requestNativePermission.error || runtimeReadiness.error ? (
+        <p className="inline-error" role="alert">
+          {userFacingError(
+            requestNativePermission.error ?? runtimeReadiness.error,
+            "无法读取或打开系统权限设置，请稍后重试。",
+          )}
+        </p>
+      ) : null}
+    </section>
+  ) : null;
 
   const categories: Array<{ id: ToolCenterCategory; label: string }> = [
     { id: "all", label: "全部" },
@@ -7821,7 +7473,10 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 <span className="tool-library-icon" aria-hidden="true">
                   {renderToolIcon(row.capability)}
                 </span>
-                <strong>{row.name}</strong>
+                <span className="tool-library-name-copy">
+                  <strong>{row.name}</strong>
+                  {row.permissionSummary ? <small>{row.permissionSummary}</small> : null}
+                </span>
               </div>
               <p>{row.detail}</p>
               <span className="tool-library-source">{row.source}</span>
@@ -7841,7 +7496,11 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
               <button
                 type="button"
                 className="tool-row-settings"
-                onClick={() => setSelectedToolId(row.id)}
+                onClick={() => {
+                  setNativePermissionNotice(null);
+                  requestNativePermission.reset();
+                  setSelectedToolId(row.id);
+                }}
               >
                 <GearSix size={17} />
                 设置
@@ -7897,7 +7556,10 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
             </div>
 
             {selectedRow.capability === "browser" ? (
-              <BrowserSettingsPanel />
+              <>
+                <BrowserSettingsPanel />
+                {nativeToolSettings}
+              </>
             ) : selectedRow.capability === "web.search" ? (
               <section className="tool-settings-section" aria-label="本地 Web Search">
                 <div className="tool-settings-heading">
@@ -8063,53 +7725,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 ) : null}
               </section>
             ) : (
-              <section className="tool-settings-section">
-                <h3>工具信息</h3>
-                <p>
-                  {toolRuntimeReason(selectedReadiness?.reason ?? null) ??
-                    `此工具由 ${desktopBrand.productName} 提供，当前不需要额外设置。`}
-                </p>
-                {selectedReadiness?.details?.length ? (
-                  <ul>
-                    {selectedReadiness.details.map((detail) => (
-                      <li key={detail}>{detail}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                {selectedRow.capability === "mcp" ? (
-                  <button
-                    type="button"
-                    className="primary-action"
-                    onClick={() => {
-                      setSelectedToolId(null);
-                      setAddDialogOpen(true);
-                    }}
-                  >
-                    添加 MCP 工具
-                  </button>
-                ) : null}
-                {selectedRow.capability === "desktop" &&
-                selectedReadiness?.reason === "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED" ? (
-                  <button
-                    type="button"
-                    disabled={requestNativePermission.isPending}
-                    onClick={() => requestNativePermission.mutate("screen_capture")}
-                  >
-                    打开屏幕录制设置
-                  </button>
-                ) : null}
-                {selectedRow.capability === "desktop" &&
-                selectedReadiness?.reason === "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED" ? (
-                  <button
-                    type="button"
-                    disabled={requestNativePermission.isPending}
-                    onClick={() => requestNativePermission.mutate("accessibility")}
-                  >
-                    请求辅助功能权限
-                  </button>
-                ) : null}
-                {nativePermissionNotice ? <p role="status">{nativePermissionNotice}</p> : null}
-              </section>
+              nativeToolSettings
             )}
           </section>
         </div>
@@ -8308,7 +7924,12 @@ function Sidebar({
     queryKey: accountKey,
     queryFn: () => window.openerx.getAccountState(),
   });
-  const archivedCount = history.data?.filter(({ archivedAt }) => archivedAt !== null).length ?? 0;
+  const unassignedConversations = (history.data ?? []).filter(
+    ({ projectId }) => projectId === null,
+  );
+  const archivedCount = unassignedConversations.filter(
+    ({ archivedAt }) => archivedAt !== null,
+  ).length;
   return (
     <aside
       className="sidebar"
@@ -8374,10 +7995,10 @@ function Sidebar({
             <span>设置</span>
           </NavLink>
         </nav>
-        <ProjectSidebar />
+        <ProjectSidebar conversations={history} />
         <section className="history-list" aria-label="对话历史">
           <div className="history-heading">
-            <span>{showArchived ? "历史 · 含归档" : "历史 · 活动"}</span>
+            <span>{showArchived ? "对话 · 含归档" : "对话"}</span>
             <button
               type="button"
               aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"}
@@ -8387,39 +8008,61 @@ function Sidebar({
               <SlidersHorizontal size={15} />
             </button>
           </div>
-          {history.data?.map((conversation: ConversationSummary) => (
-            <NavLink
-              to={`/chat/${conversation.id}`}
-              key={conversation.id}
-              className={({ isActive }) =>
-                `history-item${isActive ? " active history-item-active" : ""}`
-              }
-            >
-              <ChatCircle size={16} weight="regular" />
-              <strong>{conversation.title}</strong>
-              <span>
-                {conversation.archivedAt ? "已归档 · " : ""}
-                {formatUpdatedAt(conversation.updatedAt)} · {conversation.lastMessagePreview}
-              </span>
-            </NavLink>
+          {unassignedConversations.map((conversation: ConversationSummary) => (
+            <div className="conversation-list-row" key={conversation.id}>
+              <NavLink
+                to={`/chat/${conversation.id}`}
+                title={conversation.title}
+                className={({ isActive }) =>
+                  `history-item${isActive ? " active history-item-active" : ""}`
+                }
+              >
+                <ChatCircle size={16} weight="regular" />
+                <strong>{conversation.title}</strong>
+                <span className="history-item-meta">
+                  {conversation.archivedAt ? (
+                    "已归档"
+                  ) : (
+                    <time dateTime={conversation.updatedAt}>
+                      {formatUpdatedAt(conversation.updatedAt)}
+                    </time>
+                  )}
+                </span>
+              </NavLink>
+              <ConversationDeleteButton conversation={conversation} />
+            </div>
           ))}
-          {history.isSuccess && history.data.length === 0 ? (
+          {history.isSuccess && unassignedConversations.length === 0 ? (
             <p className="history-empty">
-              {showArchived ? "还没有活动或归档对话。" : "还没有活动对话。"}
+              {history.data.length > 0
+                ? "项目对话已收纳到对应项目中。"
+                : showArchived
+                  ? "还没有活动或归档对话。"
+                  : "还没有活动对话。"}
             </p>
           ) : null}
-          {showArchived && history.isSuccess && history.data.length > 0 && archivedCount === 0 ? (
+          {showArchived &&
+          history.isSuccess &&
+          unassignedConversations.length > 0 &&
+          archivedCount === 0 ? (
             <p className="history-mode-note" role="status">
-              已显示归档；目前没有归档对话。
+              目前没有项目外的归档对话。
             </p>
           ) : null}
         </section>
       </div>
       <NavLink className="sidebar-account" to="/settings/account">
         <UserCircle size={23} weight="regular" />
-        <strong>{account.data?.account?.displayName ?? "未登录"}</strong>
+        <strong>
+          {account.data?.account?.displayName ??
+            (account.data?.reason === "PLATFORM_ENDPOINT_NOT_CONFIGURED" ? "本机模式" : "未登录")}
+        </strong>
         <span>
-          {account.data?.status === "signed_in" ? account.data.account?.email : "登录以同步数据"}
+          {account.data?.status === "signed_in"
+            ? account.data.account?.email
+            : account.data?.reason === "PLATFORM_ENDPOINT_NOT_CONFIGURED"
+              ? "无需登录即可使用"
+              : "登录以同步数据"}
         </span>
       </NavLink>
     </aside>
@@ -8427,6 +8070,14 @@ function Sidebar({
 }
 
 export function App(): React.JSX.Element {
+  return (
+    <ConversationDeletionProvider>
+      <AppShell />
+    </ConversationDeletionProvider>
+  );
+}
+
+function AppShell(): React.JSX.Element {
   const [contextOpen, setContextOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);

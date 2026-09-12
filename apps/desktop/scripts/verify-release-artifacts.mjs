@@ -3,8 +3,10 @@ import { accessSync, constants, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractFile, listPackage } from "@electron/asar";
+import { desktopArtifactIdentity } from "./desktop-artifact-identity.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const product = desktopArtifactIdentity(desktopRoot);
 const repositoryRoot = path.resolve(desktopRoot, "../..");
 const outRoot = process.env.OPENERX_PACKAGE_OUT_DIR
   ? path.resolve(process.env.OPENERX_PACKAGE_OUT_DIR)
@@ -25,7 +27,7 @@ function find(directory, name) {
 
 const target = process.env.OPENERX_RELEASE_TARGET ?? `${process.platform}-${process.arch}`;
 const packages = find(outRoot, "app.asar").filter((archive) =>
-  archive.includes(`${path.sep}OpenERX-${target}${path.sep}`),
+  archive.includes(`${path.sep}${product.productName}-${target}${path.sep}`),
 );
 if (packages.length === 0) throw new Error("RELEASE_ASAR_NOT_FOUND");
 

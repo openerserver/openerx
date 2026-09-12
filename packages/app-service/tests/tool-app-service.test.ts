@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -10,8 +10,14 @@ import {
   type LocalWebSearchPolicy,
   type PiActivityEvent,
   type PiToolRequestFrame,
+  toolRuntimeReadinessSchema,
 } from "@openerx/contracts";
-import { ChatRepository, ToolRepository } from "@openerx/storage";
+import {
+  ChatRepository,
+  ProjectRepository,
+  type ProjectWorkspaceBindingInput,
+  ToolRepository,
+} from "@openerx/storage";
 import {
   type BrokeredBashLogArtifactWriter,
   type LocalSearchProvider,
@@ -30,6 +36,7 @@ const liveMacOSSandbox =
 
 function fixture(
   options: {
+    now?: () => string;
     shellAvailability?: () => HostToolAvailability;
     brokeredBashV1?: boolean;
     brokeredBashRunnerMode?: BrokeredBashRunnerMode;
@@ -48,6 +55,7 @@ function fixture(
   });
   const tools = new ToolRepository(databasePath, {
     ownerProfileId: "profile-a",
+    ...(options.now ? { now: options.now } : {}),
   });
   const defaultWorkspaceDirectory = path.join(directory, "OpenERX Workspace");
   const generation = chat.createGeneration({
@@ -56,10 +64,12 @@ function fixture(
   });
   const events: ChatEvent[] = [];
   const host = {
-    availability: vi.fn(async () => ({
-      availableToolNames: ["openerx_browser", "openerx_desktop"],
-      unavailableReasons: {},
-    })),
+    availability: vi.fn(
+      async (): Promise<HostToolAvailability> => ({
+        availableToolNames: ["openerx_browser", "openerx_desktop"],
+        unavailableReasons: {},
+      }),
+    ),
     execute: vi.fn(async () => ({
       summary: "host operation completed",
       content: [{ type: "text" as const, text: "host operation completed" }],
@@ -121,6 +131,44 @@ function fixture(
     directory,
     defaultWorkspaceDirectory,
   };
+}
+
+function projectDirectoryFixture(
+  directory: string,
+  sourceWorkspaceGrantId: string,
+): ProjectWorkspaceBindingInput[] {
+  const projects = new ProjectRepository(path.join(directory, "openerx.sqlite"), {
+    ownerProfileId: "profile-a",
+    deviceId: crypto.randomUUID(),
+  });
+  try {
+    const project = projects.createProject({
+      operationId: crypto.randomUUID(),
+      name: "Workspace fixture",
+      instructions: "",
+    });
+    const state = projects.addDirectory({
+      operationId: crypto.randomUUID(),
+      projectId: project.id,
+      expectedProjectRevision: 1,
+      workspaceGrantId: sourceWorkspaceGrantId,
+      displayName: "project-root",
+      desiredAccess: "read_write",
+    });
+    if (!state.binding) throw new Error("Expected project directory binding");
+    return [
+      {
+        projectDirectoryBindingId: state.binding.id,
+        sourceWorkspaceGrantId,
+        sourceRevision: state.binding.revision,
+        displayName: "project-root",
+        role: "primary",
+        desiredAccess: "read_write",
+      },
+    ];
+  } finally {
+    projects.close();
+  }
 }
 
 function platformEngine(available = true) {
@@ -228,10 +276,12 @@ describe("ToolAppService", () => {
     expect(secondWorkspace.conversationId).toBe(second.receipt.conversationId);
     expect(firstWorkspace.rootPath).not.toBe(secondWorkspace.rootPath);
     expect(firstWorkspace.rootPath).toBe(
-      path.join(defaultWorkspaceDirectory, "conversations", base.conversationId),
+      realpathSync(path.join(defaultWorkspaceDirectory, "conversations", base.conversationId)),
     );
     expect(secondWorkspace.rootPath).toBe(
-      path.join(defaultWorkspaceDirectory, "conversations", second.receipt.conversationId),
+      realpathSync(
+        path.join(defaultWorkspaceDirectory, "conversations", second.receipt.conversationId),
+      ),
     );
     expect(existsSync(firstWorkspace.rootPath)).toBe(true);
     expect(existsSync(secondWorkspace.rootPath)).toBe(true);
@@ -271,6 +321,213 @@ describe("ToolAppService", () => {
       }),
     ]);
     expect(service.listWorkspaces(base.conversationId).map(({ id }) => id)).toEqual([selected.id]);
+    chat.close();
+    await service.close();
+  });
+
+  it("adds a reference directory without moving the current working directory", async () => {
+    const { chat, tools, service, base, directory } = fixture();
+    const primary = service.ensureConversationWorkspace(base.conversationId);
+    const additional = service.grantWorkspace({
+      conversationId: base.conversationId,
+      rootPath: directory,
+      access: "read_only",
+      allowNetwork: false,
+      expiresAt: null,
+      role: "additional",
+    });
+    expect(tools.primaryWorkspaceGrant(base.conversationId)?.id).toBe(primary.id);
+    expect(tools.workspaceGrant(primary.id).revokedAt).toBeNull();
+    expect(service.listWorkspaces(base.conversationId)).toMatchObject([
+      { id: primary.id, bindingRole: "primary" },
+      { id: additional.id, bindingRole: "additional", access: "read_only" },
+    ]);
+    chat.close();
+    await service.close();
+  });
+
+  it("reuses a directory and retires its old authorization when permissions change", async () => {
+    const { chat, tools, service, base, directory } = fixture();
+    const input = {
+      conversationId: base.conversationId,
+      rootPath: directory,
+      access: "read_write" as const,
+      allowNetwork: true,
+      expiresAt: null,
+    };
+    const first = service.grantWorkspace(input);
+    const replay = service.grantWorkspace({ ...input, role: "additional" });
+    expect(replay.id).toBe(first.id);
+    expect(replay.bindingRole).toBe("primary");
+    const limited = service.grantWorkspace({
+      ...input,
+      access: "read_only",
+      allowNetwork: false,
+      role: "additional",
+    });
+    expect(limited.id).not.toBe(first.id);
+    expect(limited).toMatchObject({
+      bindingRole: "primary",
+      access: "read_only",
+      allowNetwork: false,
+    });
+    expect(service.listWorkspaces(base.conversationId)).toEqual([limited]);
+    expect(tools.workspaceGrant(first.id).revokedAt).not.toBeNull();
+    expect(tools.activeScopes().filter(({ resource }) => resource === first.id)).toEqual([]);
+    expect(tools.activeScopes().filter(({ resource }) => resource === limited.id)).toMatchObject([
+      { capability: "workspace", actions: ["read", "search"] },
+    ]);
+    chat.close();
+    await service.close();
+  });
+
+  it("shows one effective directory for legacy overlapping grants without combining permissions", async () => {
+    const { chat, tools, service, base, directory } = fixture();
+    const source = service.grantWorkspace({
+      conversationId: null,
+      rootPath: directory,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+      projectOperationId: crypto.randomUUID(),
+    });
+    const projectDirectories = projectDirectoryFixture(directory, source.id);
+    service.reconcileProjectWorkspaces({
+      conversationId: base.conversationId,
+      directories: projectDirectories,
+    });
+    const inherited = tools.primaryWorkspaceGrant(base.conversationId);
+    if (!inherited) throw new Error("Expected inherited primary directory");
+    // Older clients stored an independent authorization for the same path.
+    const selected = tools.grantWorkspace({
+      conversationId: base.conversationId,
+      rootPath: source.rootPath,
+      displayName: "selected-root",
+      access: "read_only",
+      allowNetwork: false,
+      expiresAt: null,
+      binding: { source: "user_added", role: "primary" },
+    });
+    expect(tools.listWorkspaceGrants(base.conversationId)).toHaveLength(3);
+    expect(service.listWorkspaces(base.conversationId)).toEqual([selected]);
+    const execution = service.reconcileProjectWorkspaces({
+      conversationId: base.conversationId,
+      directories: projectDirectories,
+    });
+    expect(execution).toEqual({
+      activeExecutionGrantId: selected.id,
+      additionalExecutionGrantIds: [],
+    });
+    expect(tools.primaryWorkspaceGrant(base.conversationId)?.id).toBe(selected.id);
+    const prepared = await service.prepareGeneration({
+      conversationId: base.conversationId,
+      prompt: "读取资料",
+      hasFiles: false,
+      skillInstallationIds: [],
+      authenticated: false,
+      ...execution,
+    });
+    expect(prepared.workspaceGrants).toEqual([selected]);
+    expect(tools.workspaceGrant(source.id).revokedAt).toBeNull();
+    expect(tools.workspaceGrant(inherited.id).revokedAt).toBeNull();
+    // Removing a local override restores the project directory without deleting files.
+    service.revokeWorkspace(selected.id);
+    service.reconcileProjectWorkspaces({
+      conversationId: base.conversationId,
+      directories: projectDirectories,
+    });
+    expect(service.listWorkspaces(base.conversationId)).toMatchObject([
+      { id: inherited.id, bindingSource: "project", bindingRole: "primary" },
+    ]);
+    expect(existsSync(directory)).toBe(true);
+    chat.close();
+    await service.close();
+  });
+
+  it("keeps a project directory primary when reselected through Add with narrower access", async () => {
+    const { chat, tools, service, base, directory } = fixture();
+    const source = service.grantWorkspace({
+      conversationId: null,
+      rootPath: directory,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+      projectOperationId: crypto.randomUUID(),
+    });
+    const projectDirectories = projectDirectoryFixture(directory, source.id);
+    service.reconcileProjectWorkspaces({
+      conversationId: base.conversationId,
+      directories: projectDirectories,
+    });
+    const selected = service.grantWorkspace({
+      conversationId: base.conversationId,
+      rootPath: directory,
+      access: "read_only",
+      allowNetwork: false,
+      expiresAt: null,
+      role: "additional",
+    });
+    service.reconcileProjectWorkspaces({
+      conversationId: base.conversationId,
+      directories: projectDirectories,
+    });
+    expect(tools.primaryWorkspaceGrant(base.conversationId)?.id).toBe(selected.id);
+    expect(service.listWorkspaces(base.conversationId)).toMatchObject([
+      { id: selected.id, access: "read_only", allowNetwork: false },
+    ]);
+    chat.close();
+    await service.close();
+  });
+
+  it("switches to an existing directory with unchanged permissions and rejects foreign grants", async () => {
+    const { chat, service, base, directory } = fixture();
+    const initial = service.ensureConversationWorkspace(base.conversationId);
+    const additional = service.grantWorkspace({
+      conversationId: base.conversationId,
+      rootPath: directory,
+      access: "read_only",
+      allowNetwork: false,
+      expiresAt: null,
+      role: "additional",
+    });
+    const selected = service.setPrimaryWorkspace({
+      conversationId: base.conversationId,
+      workspaceGrantId: additional.id,
+    });
+    expect(selected).toMatchObject({
+      id: additional.id,
+      access: "read_only",
+      allowNetwork: false,
+      bindingRole: "primary",
+    });
+    expect(service.listWorkspaces(base.conversationId).map(({ id }) => id)).toEqual([selected.id]);
+    expect(existsSync(initial.rootPath)).toBe(true);
+    expect(() =>
+      service.setPrimaryWorkspace({
+        conversationId: crypto.randomUUID(),
+        workspaceGrantId: additional.id,
+      }),
+    ).toThrow("WORKSPACE_GRANT_CONVERSATION_MISMATCH");
+    const global = service.grantWorkspace({
+      conversationId: null,
+      rootPath: directory,
+      access: "read_only",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    expect(() =>
+      service.setPrimaryWorkspace({
+        conversationId: base.conversationId,
+        workspaceGrantId: global.id,
+      }),
+    ).toThrow("WORKSPACE_BINDING_CONVERSATION_REQUIRED");
+    service.revokeWorkspace(selected.id);
+    expect(() =>
+      service.setPrimaryWorkspace({
+        conversationId: base.conversationId,
+        workspaceGrantId: selected.id,
+      }),
+    ).toThrow("WORKSPACE_GRANT_INACTIVE");
     chat.close();
     await service.close();
   });
@@ -354,6 +611,95 @@ describe("ToolAppService", () => {
       expect(detail.run.usageRecords).toHaveLength(2);
       expect(detail.run.usageRecords.every(({ runId }) => runId === detail.run.id)).toBe(true);
     }
+    chat.close();
+    await service.close();
+  });
+
+  it("full access releases pending calls only in its conversation and can be revoked", async () => {
+    let permissionTime = Date.now();
+    const { chat, tools, service, host, events, base } = fixture({
+      now: () => new Date(permissionTime).toISOString(),
+    });
+    service.initialize();
+    const other = chat.createGeneration({
+      text: "其他对话",
+      idempotencyKey: "other-full-access-chat",
+    });
+    const otherBase = {
+      ...base,
+      generationId: crypto.randomUUID(),
+      conversationId: other.receipt.conversationId,
+      branchId: other.receipt.branchId,
+      assistantMessageId: other.receipt.assistantMessageId,
+    };
+    for (const target of [base, otherBase]) {
+      service.startGeneration({
+        ...target,
+        selectedModelRef: "platform/auto",
+        thinkingLevel: "high",
+      });
+    }
+    const call = (target: typeof base, suffix: string) =>
+      service.handleRequest({
+        ...target,
+        requestId: crypto.randomUUID(),
+        piToolCallId: `desktop-${suffix}`,
+        toolName: "openerx_desktop",
+        operation: {
+          operation: "desktop",
+          action: "submit",
+          application: "Notes",
+          idempotencyKey: `full-access-submit-${suffix}`,
+        },
+      });
+    const pending = [call(base, "first"), call(base, "second")];
+    const otherPending = call(otherBase, "other");
+    await vi.waitFor(() => expect(tools.listPermissions("pending")).toHaveLength(3));
+    expect(host.execute).not.toHaveBeenCalled();
+    permissionTime += 6 * 60_000;
+    const expiredOther = tools
+      .listPermissions("pending")
+      .find(
+        (permission) =>
+          tools.workItem(permission.workItemId).conversationId === otherBase.conversationId,
+      );
+    if (!expiredOther) throw new Error("other permission missing");
+    expect(() =>
+      service.resolvePermission({
+        permissionRequestId: expiredOther.id,
+        payloadDigest: expiredOther.payloadDigest,
+        decision: "once",
+      }),
+    ).toThrow("PERMISSION_EXPIRED");
+    const state = service.setPermissionMode({
+      conversationId: base.conversationId,
+      mode: "full_access",
+    });
+    expect(state.mode).toBe("full_access");
+    expect(
+      service.setPermissionMode({ conversationId: base.conversationId, mode: "full_access" }),
+    ).toEqual(state);
+    await Promise.all(pending);
+    expect(host.execute).toHaveBeenCalledTimes(2);
+    expect(tools.listPermissions("pending")).toHaveLength(1);
+    expect(tools.permissionMode(otherBase.conversationId).mode).toBe("ask");
+    expect(events.filter(({ type }) => type === "permission.resolved")).toHaveLength(2);
+    await call(base, "later");
+    expect(host.execute).toHaveBeenCalledTimes(3);
+    service.setPermissionMode({ conversationId: base.conversationId, mode: "ask" });
+    const afterRevoke = call(base, "revoked");
+    await vi.waitFor(() => expect(tools.listPermissions("pending")).toHaveLength(2));
+    expect(host.execute).toHaveBeenCalledTimes(3);
+    permissionTime -= 6 * 60_000;
+    for (const permission of tools.listPermissions("pending")) {
+      service.resolvePermission({
+        permissionRequestId: permission.id,
+        payloadDigest: permission.payloadDigest,
+        decision: "once",
+      });
+    }
+    await Promise.all([otherPending, afterRevoke]);
+    expect(host.execute).toHaveBeenCalledTimes(5);
     chat.close();
     await service.close();
   });
@@ -656,6 +1002,52 @@ describe("ToolAppService", () => {
     });
     chat.close();
     await service.close();
+  });
+
+  it("preserves both missing system permissions through readiness and clears them after authorization", async () => {
+    const { chat, service, host } = fixture();
+    try {
+      host.availability.mockResolvedValue({
+        availableToolNames: [],
+        unavailableReasons: {
+          openerx_browser: "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED",
+          openerx_desktop: "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED",
+        },
+        missingPermissions: {
+          openerx_browser: ["screen_capture", "accessibility"],
+          openerx_desktop: ["screen_capture", "accessibility"],
+        },
+      });
+      const pending = toolRuntimeReadinessSchema.array().parse(
+        await service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        }),
+      );
+      for (const capability of ["browser", "desktop"]) {
+        expect(pending.find((entry) => entry.capability === capability)).toMatchObject({
+          status: "authorization_required",
+          missingPermissions: ["screen_capture", "accessibility"],
+          availableToolNames: [],
+        });
+      }
+      host.availability.mockResolvedValue({
+        availableToolNames: ["openerx_browser", "openerx_desktop"],
+        unavailableReasons: {},
+      });
+      const ready = await service.listRuntimeReadiness({
+        authenticated: false,
+        platformConfigured: false,
+      });
+      for (const capability of ["browser", "desktop"]) {
+        const entry = ready.find((entry) => entry.capability === capability);
+        expect(entry?.status).toBe("available");
+        expect(entry?.missingPermissions).toBeUndefined();
+      }
+    } finally {
+      chat.close();
+      await service.close();
+    }
   });
 
   it("freezes and executes local Web Search without account authentication", async () => {

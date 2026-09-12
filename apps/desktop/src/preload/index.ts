@@ -69,6 +69,7 @@ import {
   entityIdSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
+  fileImportDataInputSchema,
   fileListInputSchema,
   filePreviewInputSchema,
   fileRevokeScopeInputSchema,
@@ -94,6 +95,8 @@ import {
   modelCatalogEntrySchema,
   modelServiceSettingsSchema,
   modelServiceSettingsUpdateSchema,
+  modelUsageAggregateSchema,
+  modelUsageRecordSchema,
   type ProjectCommandEnvelope,
   type ProjectCommandResultMap,
   parseChatCommandResult,
@@ -138,14 +141,13 @@ import {
   toolPermissionModeGetInputSchema,
   toolPermissionModeSetInputSchema,
   toolScopeRevokeInputSchema,
-  usageAggregateSchema,
   usageQueryInputSchema,
-  usageRecordSchema,
   workItemGetInputSchema,
   workspaceChooseInputSchema,
   workspaceGrantSchema,
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
+  workspaceSetPrimaryInputSchema,
 } from "@openerx/contracts";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -360,14 +362,14 @@ const bridge: DesktopBridge = {
       ipcChannels.usageGet,
       usageQueryInputSchema.parse(input),
     );
-    return usageAggregateSchema.parse(result);
+    return modelUsageAggregateSchema.parse(result);
   },
   getUsageRecords: async (input = {}) => {
     const result: unknown = await ipcRenderer.invoke(
       ipcChannels.usageRecords,
       usageQueryInputSchema.parse(input),
     );
-    return usageRecordSchema.array().parse(result);
+    return modelUsageRecordSchema.array().parse(result);
   },
   getBillingTerms: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.billingTerms);
@@ -622,6 +624,12 @@ const bridge: DesktopBridge = {
   },
   chooseFiles: async (input = {}) =>
     invokeChat(ipcChannels.fileChoose, "file.import", fileChooseInputSchema.parse(input)),
+  importPastedFiles: async (input) =>
+    invokeChat(
+      ipcChannels.fileImportData,
+      "file.importData",
+      fileImportDataInputSchema.parse(input),
+    ),
   chooseDirectory: async (input = {}) =>
     invokeChat(ipcChannels.directoryChoose, "file.import", fileChooseInputSchema.parse(input)),
   chooseWorkspace: async (input) => {
@@ -638,6 +646,12 @@ const bridge: DesktopBridge = {
       ipcChannels.workspaceRevoke,
       "workspace.revoke",
       workspaceRevokeInputSchema.parse(input),
+    ),
+  setPrimaryWorkspace: async (input) =>
+    invokeChat(
+      ipcChannels.workspaceSetPrimary,
+      "workspace.setPrimary",
+      workspaceSetPrimaryInputSchema.parse(input),
     ),
   listProjects: async (input = {}) =>
     invokeProject(ipcChannels.projectList, "project.list", projectListInputSchema.parse(input)),

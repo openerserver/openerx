@@ -6,6 +6,7 @@ import {
   type PiMemoryClusterResultFrame,
   type PiMemoryExtractFrame,
   type PiMemoryExtractResultFrame,
+  type PiModelUsageFrame,
   type PiPromptFrame,
   type PiSessionControlFrame,
   type PiToolCancelFrame,
@@ -16,6 +17,7 @@ import {
   piHostReadyFrameSchema,
   piMemoryClusterResultFrameSchema,
   piMemoryExtractResultFrameSchema,
+  piModelUsageFrameSchema,
   piSessionControlResultFrameSchema,
   piToolCancelFrameSchema,
   piToolRequestFrameSchema,
@@ -23,6 +25,7 @@ import {
 import type { MessagePortMain } from "electron";
 
 export interface PiHostClient {
+  onUsage?(listener: (frame: PiModelUsageFrame) => void): () => void;
   prompt(frame: PiPromptFrame): Promise<void>;
   extractMemories?(frame: PiMemoryExtractFrame): Promise<PiMemoryExtractResultFrame>;
   clusterMemories?(frame: PiMemoryClusterFrame): Promise<PiMemoryClusterResultFrame>;
@@ -42,6 +45,7 @@ export interface PiHostClient {
 }
 
 export class MessagePortPiHostClient implements PiHostClient {
+  readonly #usageListeners = new Set<(frame: PiModelUsageFrame) => void>();
   readonly #port: MessagePortMain;
   readonly #listeners = new Set<(frame: PiHostEventFrame) => void>();
   readonly #fileToolListeners = new Set<(frame: PiFileToolRequestFrame) => Promise<unknown>>();
@@ -170,6 +174,11 @@ export class MessagePortPiHostClient implements PiHostClient {
     return () => this.#listeners.delete(listener);
   }
 
+  onUsage(listener: (frame: PiModelUsageFrame) => void): () => void {
+    this.#usageListeners.add(listener);
+    return () => this.#usageListeners.delete(listener);
+  }
+
   onFileToolRequest(listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void {
     this.#fileToolListeners.add(listener);
     return () => this.#fileToolListeners.delete(listener);
@@ -205,6 +214,11 @@ export class MessagePortPiHostClient implements PiHostClient {
   }
 
   #handleMessage(data: unknown): void {
+    const usage = piModelUsageFrameSchema.safeParse(data);
+    if (usage.success) {
+      for (const listener of this.#usageListeners) listener(usage.data);
+      return;
+    }
     const cluster = piMemoryClusterResultFrameSchema.safeParse(data);
     if (cluster.success) {
       const pending = this.#pendingMemoryClusters.get(cluster.data.requestId);

@@ -10,7 +10,8 @@ import type {
   SelectableLocalWebSearchProviderId,
 } from "./local-web-search";
 import { memoryConflictKeySchema, memoryKindSchema } from "./memory";
-import { thinkingLevelSchema, usageRecordSchema } from "./model";
+import { thinkingLevelSchema, toolSystemPermissionSchema } from "./model";
+import { modelUsageRecordSchema } from "./model-usage";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
 export const toolRiskSchema = z.enum(["L0", "L1", "L2", "L3", "L4", "L5"]);
@@ -63,6 +64,7 @@ export const toolRuntimeReadinessSchema = z
     reason: z.string().min(1).max(500).nullable(),
     availableToolNames: z.array(z.string().min(1).max(200)).max(2_000),
     details: z.array(z.string().min(1).max(200)).max(20).optional(),
+    missingPermissions: z.array(toolSystemPermissionSchema).max(2).optional(),
     checkedAt: timestampSchema,
   })
   .strict();
@@ -183,7 +185,7 @@ export const executionRunSchema = z
     skillInstallationIds: z.array(entityIdSchema).max(500),
     instructionSources: z.array(workspaceInstructionSourceSchema).max(500),
     piSessionRef: z.string().min(1).nullable(),
-    usageRecords: z.array(usageRecordSchema),
+    usageRecords: z.array(modelUsageRecordSchema),
     cancellationRequestedAt: timestampSchema.nullable(),
     lastPiEventSequence: z.number().int().nonnegative(),
     retryCount: z.number().int().nonnegative(),

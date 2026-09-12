@@ -60,7 +60,7 @@ const tasks = [
     id: "pre_patch_validation",
     command: "git diff --check --no-index fixture.js fixture.js",
     marker: "",
-    legacyMarker: "could not open '/dev/null'",
+    legacyMarker: /(?:could not open '\/dev\/null'|open \/dev\/null or dup failed)/u,
     legacyExitCode: 128,
     exitCode: 0,
   },
@@ -153,7 +153,7 @@ describe("PBASH-007 deterministic Golden A/B", () => {
         );
         expect(result.exitCode, `${task.id}: brokered exit\n${result.output}`).toBe(task.exitCode);
         if ("legacyMarker" in task) {
-          expect(legacyOutput, `${task.id}: explained legacy gap`).toContain(task.legacyMarker);
+          expect(legacyOutput, `${task.id}: explained legacy gap`).toMatch(task.legacyMarker);
         }
         if (task.marker) {
           expect(legacyOutput, `${task.id}: legacy marker`).toContain(task.marker);

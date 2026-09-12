@@ -139,16 +139,16 @@ export class AccountSessionManager {
 
   async initialize(): Promise<AccountState> {
     const persisted = await this.#vault.load();
-    if (!persisted) return this.state();
     if (!this.#transport) {
       this.#state = accountStateSchema.parse({
         status: "unavailable",
-        account: persisted.account,
-        session: persisted.session,
+        account: persisted?.account ?? null,
+        session: persisted?.session ?? null,
         reason: "PLATFORM_ENDPOINT_NOT_CONFIGURED",
       });
       return this.state();
     }
+    if (!persisted) return this.state();
     try {
       const grant = await this.#transport.refresh(
         persisted.session.sessionId,

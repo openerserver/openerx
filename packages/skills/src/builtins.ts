@@ -3,7 +3,7 @@ import { desktopBrand } from "../../branding/src/index";
 // Bundled Skill contents include brand-specific metadata. Keep the release version
 // distinct per brand so open-source and enterprise builds can safely use an
 // existing profile without violating immutable Skill version checks.
-const builtInSkillVersion = `1.0.2-${desktopBrand.id}`;
+const builtInSkillVersion = `1.0.3-${desktopBrand.id}`;
 
 export const builtInStructuredReportSkill = {
   installationId: "00000000-0000-4000-8000-000000000701",

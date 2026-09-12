@@ -1,0 +1,297 @@
+.conversation-heading-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.conversation-directory-badge {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 260px;
+  padding: 5px 9px;
+  color: var(--workspace-muted-strong);
+  background: transparent;
+  border: 1px solid var(--workspace-border);
+  border-radius: 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.conversation-directory-badge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-context {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--workspace-border);
+}
+
+.workspace-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.workspace-section-heading h3,
+.workspace-section-heading h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workspace-section-heading h3 span {
+  margin-left: 5px;
+  color: var(--workspace-muted);
+  font-weight: 400;
+}
+
+.workspace-section-heading button,
+.workspace-row-actions button,
+.workspace-row-actions a,
+.workspace-feedback button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 4px 6px;
+  color: var(--workspace-muted-strong);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font-size: 11px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.workspace-context button:hover,
+.workspace-row-actions a:hover,
+.conversation-directory-badge:hover {
+  background: var(--workspace-surface-raised);
+  color: var(--workspace-text);
+}
+
+.workspace-context :is(button, summary, select, a):focus-visible,
+.conversation-directory-badge:focus-visible {
+  outline: 2px solid var(--workspace-accent-strong);
+  outline-offset: 2px;
+}
+
+.workspace-context button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.workspace-directory-row {
+  min-width: 0;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 9px;
+}
+
+.workspace-directory-row.is-primary {
+  background: var(--workspace-surface);
+}
+
+.workspace-directory-heading {
+  display: grid;
+  grid-template-columns: 21px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-directory-heading strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-directory-heading > svg {
+  color: var(--workspace-muted-strong);
+}
+
+.workspace-source-tag {
+  color: var(--workspace-muted);
+  font-size: 10px;
+}
+
+.workspace-directory-path {
+  margin: 7px 0 10px;
+  overflow-wrap: anywhere;
+  color: var(--workspace-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  user-select: text;
+}
+
+.workspace-directory-details > summary,
+.workspace-picker-advanced > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  color: var(--workspace-muted-strong);
+  font-size: 10px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.workspace-directory-details > summary::-webkit-details-marker,
+.workspace-picker-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-directory-details > summary > span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workspace-directory-details[open] > summary svg,
+.workspace-picker-advanced[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.workspace-directory-details dl {
+  display: grid;
+  gap: 7px;
+  margin: 8px 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--workspace-border);
+  font-size: 11px;
+}
+
+.workspace-directory-details dl > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.workspace-directory-details dt {
+  color: var(--workspace-muted);
+}
+
+.workspace-directory-details dd {
+  margin: 0;
+}
+
+.workspace-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.workspace-help {
+  margin: 8px 0 0;
+  color: var(--workspace-muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.workspace-additional-heading {
+  margin: 18px 0 4px;
+}
+
+.workspace-picker {
+  margin-top: 14px;
+  padding: 14px;
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border);
+  border-radius: 9px;
+}
+
+.workspace-access-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  font-size: 11px;
+}
+
+.workspace-access-field select {
+  min-width: 120px;
+  min-height: 30px;
+  padding: 4px 7px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+}
+
+.workspace-network-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 11px;
+}
+
+.workspace-context .workspace-choose-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 34px;
+  margin-top: 12px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workspace-feedback {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.workspace-feedback p {
+  margin: 0;
+}
+
+.workspace-feedback[role="alert"] {
+  color: #a13d37;
+}
+
+.context-file-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.context-file-import-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+  color: var(--workspace-muted-strong);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.context-attachment-list > summary {
+  margin: 12px 0 4px;
+  padding: 6px 0;
+  color: var(--workspace-muted-strong);
+  font-size: 11px;
+  cursor: pointer;
+}

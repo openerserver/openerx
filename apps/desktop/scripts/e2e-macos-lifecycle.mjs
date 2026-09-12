@@ -13,15 +13,17 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
+import { desktopArtifactIdentity } from "./desktop-artifact-identity.mjs";
 
 if (process.platform !== "darwin") throw new Error("D3_MACOS_RUNNER_REQUIRED");
 
 const desktopDirectory = path.resolve(import.meta.dirname, "..");
+const product = desktopArtifactIdentity(desktopDirectory);
 const sourceApp = path.join(
   desktopDirectory,
   "out",
-  `OpenERX-darwin-${process.arch}`,
-  "OpenERX.app",
+  `${product.productName}-darwin-${process.arch}`,
+  `${product.productName}.app`,
 );
 const platformEntry = path.join(desktopDirectory, ".vite", "build", "platform-alpha-test.mjs");
 const identity = process.env.OPENERX_MAC_SIGN_IDENTITY?.trim();
@@ -32,7 +34,7 @@ if (!existsSync(platformEntry)) throw new Error("D3_PLATFORM_FIXTURE_NOT_BUILT")
 const root = mkdtempSync(path.join(tmpdir(), "openerx-cx110-d3-"));
 const keychainApplicationName = `OpenERX CX110 D3 ${path.basename(root).split("-").at(-1)}`;
 const candidates = path.join(root, "candidates");
-const installedApp = path.join(root, "Applications", "OpenERX.app");
+const installedApp = path.join(root, "Applications", `${product.productName}.app`);
 const profileDirectory = path.join(root, "profile");
 const entitlements = path.join(desktopDirectory, "resources", "entitlements.mac.plist");
 const textEditToken = `cx110d3${path.basename(root).split("-").at(-1)?.toLowerCase()}`;
@@ -100,8 +102,8 @@ function candidate(label, version) {
 }
 
 function install(appPath) {
-  const stage = path.join(root, "Applications", ".OpenERX.next.app");
-  const previous = path.join(root, "Applications", ".OpenERX.previous.app");
+  const stage = path.join(root, "Applications", `.${product.productName}.next.app`);
+  const previous = path.join(root, "Applications", `.${product.productName}.previous.app`);
   rmSync(stage, { recursive: true, force: true });
   rmSync(previous, { recursive: true, force: true });
   ditto(appPath, stage);
@@ -221,7 +223,7 @@ async function launch() {
   const devToolsActivePort = path.join(profileDirectory, "DevToolsActivePort");
   rmSync(devToolsActivePort, { force: true });
   const child = spawn(
-    path.join(installedApp, "Contents", "MacOS", "OpenERX"),
+    path.join(installedApp, "Contents", "MacOS", product.executableName),
     ["--remote-debugging-port=0"],
     {
       cwd: path.dirname(installedApp),

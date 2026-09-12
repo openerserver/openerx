@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
+  type ByokUsageRecord,
+  byokUsageQueryResultSchema,
+  byokUsageRecordSchema,
   type CapabilityAction,
   type CapabilityScope,
   capabilityScopeSchema,
@@ -10,6 +13,7 @@ import {
   localWebSearchSettingsSelectionSchema,
   type McpServerConfig,
   mcpServerConfigSchema,
+  modelUsageRecordSchema,
   type NormalizedToolResult,
   normalizedToolResultSchema,
   type PermissionRequest,
@@ -92,6 +96,16 @@ export interface SideEffectAttempt {
 export interface WorkspaceChangeRecord extends WorkspaceChange {
   beforeText: string | null;
   afterText: string;
+}
+
+export interface WorkspaceOutputCandidate {
+  conversationId: string;
+  workspaceGrantId: string;
+  workspaceRootPath: string;
+  relativePath: string;
+  afterSha256: string | null;
+  sourceRevision: string;
+  updatedAt: string;
 }
 
 export type WorkspaceBindingRole = "primary" | "additional";
@@ -408,6 +422,116 @@ export class ToolRepository {
     return call;
   }
 
+  recordByokUsage(input: ByokUsageRecord, runId?: string): void {
+    const record = byokUsageRecordSchema.parse({ ...input, runId: runId ?? null });
+    this.#transaction(() => {
+      if (record.conversationId !== null) {
+        // A cancellation may report usage after its conversation was soft deleted.
+        // Keep ownership validation; queries continue to hide deleted conversations.
+        const scope = this.#database
+          .prepare("SELECT id FROM conversations WHERE id = ? AND owner_profile_id = ?")
+          .get(record.conversationId, this.#ownerProfileId);
+        if (!scope) throw new Error("BYOK_USAGE_SCOPE_INVALID");
+      }
+      if (record.messageId !== null) {
+        const scope = this.#database
+          .prepare("SELECT id FROM messages WHERE id = ? AND conversation_id = ?")
+          .get(record.messageId, record.conversationId);
+        if (!scope) throw new Error("BYOK_USAGE_SCOPE_INVALID");
+      }
+      const existing = this.#database
+        .prepare("SELECT owner_profile_id, record_json FROM byok_usage_records WHERE usage_id = ?")
+        .get(record.usageId) as { owner_profile_id: string; record_json: string } | undefined;
+      if (existing) {
+        const stored = byokUsageRecordSchema.parse(JSON.parse(existing.record_json));
+        if (
+          existing.owner_profile_id !== this.#ownerProfileId ||
+          JSON.stringify({ ...stored, runId: null }) !== JSON.stringify({ ...record, runId: null })
+        ) {
+          throw new Error("BYOK_USAGE_DEDUPE_CONFLICT");
+        }
+        return;
+      }
+      if (runId) {
+        const run = this.#database
+          .prepare(
+            `SELECT er.usage_records_json FROM execution_runs er JOIN work_items wi ON wi.id = er.work_item_id
+           WHERE er.id = ? AND wi.owner_profile_id = ? AND wi.conversation_id = ? AND wi.message_id = ?`,
+          )
+          .get(runId, this.#ownerProfileId, record.conversationId, record.messageId) as
+          | { usage_records_json: string }
+          | undefined;
+        if (!run) throw new Error("BYOK_USAGE_RUN_INVALID");
+        const records = modelUsageRecordSchema.array().parse(JSON.parse(run.usage_records_json));
+        if (!records.some(({ usageId }) => usageId === record.usageId)) records.push(record);
+        this.#database
+          .prepare(
+            "UPDATE execution_runs SET usage_records_json = ?, effective_model_ref = ? WHERE id = ?",
+          )
+          .run(JSON.stringify(records), record.effectiveModelRef, runId);
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO byok_usage_records (usage_id, owner_profile_id, conversation_id, message_id, operation_id, recorded_at, record_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          record.usageId,
+          this.#ownerProfileId,
+          record.conversationId,
+          record.messageId,
+          record.operationId,
+          record.recordedAt,
+          JSON.stringify(record),
+        );
+    });
+  }
+
+  byokUsage(query: { conversationId?: string; messageId?: string } = {}) {
+    const conditions = [
+      "u.owner_profile_id = ?",
+      "(u.conversation_id IS NULL OR c.deleted_at IS NULL)",
+    ];
+    const args = [this.#ownerProfileId];
+    if (query.conversationId) {
+      conditions.push("u.conversation_id = ?");
+      args.push(query.conversationId);
+    }
+    if (query.messageId) {
+      conditions.push("u.message_id = ?");
+      args.push(query.messageId);
+    }
+    const rows = this.#database
+      .prepare(
+        `SELECT u.record_json FROM byok_usage_records u LEFT JOIN conversations c ON c.id = u.conversation_id
+       WHERE ${conditions.join(" AND ")} ORDER BY u.recorded_at, u.usage_id`,
+      )
+      .all(...args) as { record_json: string }[];
+    const selected = query.messageId
+      ? this.#database
+          .prepare(
+            `SELECT COALESCE(m.selected_model_ref, c.selected_model_ref) AS model_ref FROM messages m JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.id = ? AND c.owner_profile_id = ? AND c.deleted_at IS NULL AND (? IS NULL OR c.id = ?)`,
+          )
+          .get(
+            query.messageId,
+            this.#ownerProfileId,
+            query.conversationId ?? null,
+            query.conversationId ?? null,
+          )
+      : query.conversationId
+        ? this.#database
+            .prepare(
+              "SELECT selected_model_ref AS model_ref FROM conversations WHERE id = ? AND owner_profile_id = ? AND deleted_at IS NULL",
+            )
+            .get(query.conversationId, this.#ownerProfileId)
+        : undefined;
+    return byokUsageQueryResultSchema.parse({
+      selectedModelRef: (selected as { model_ref: string } | undefined)?.model_ref ?? null,
+      records: rows.map((row) => JSON.parse(row.record_json)),
+    });
+  }
+
   completeRun(
     runId: string,
     status: "completed" | "failed" | "interrupted",
@@ -417,9 +541,17 @@ export class ToolRepository {
     const now = this.#now();
     this.#transaction(() => {
       const runRow = this.#database
-        .prepare("SELECT work_item_id FROM execution_runs WHERE id = ?")
-        .get(runId) as { work_item_id: string } | undefined;
+        .prepare("SELECT work_item_id, usage_records_json FROM execution_runs WHERE id = ?")
+        .get(runId) as { work_item_id: string; usage_records_json: string } | undefined;
       if (!runRow) throw new Error("RUN_NOT_FOUND");
+      const combinedUsage = [
+        ...new Map(
+          [
+            ...modelUsageRecordSchema.array().parse(JSON.parse(runRow.usage_records_json)),
+            ...usageRecords,
+          ].map((record) => [record.usageId, record]),
+        ).values(),
+      ];
       if (status === "interrupted") {
         this.#database
           .prepare(
@@ -441,9 +573,9 @@ export class ToolRepository {
         .run(
           storedStatus,
           errorCode ?? null,
-          JSON.stringify(usageRecords),
-          usageRecords.at(-1)?.effectiveModelRef ?? null,
-          usageRecords.at(-1)?.fallbackReason ?? null,
+          JSON.stringify(combinedUsage),
+          combinedUsage.at(-1)?.effectiveModelRef ?? null,
+          combinedUsage.at(-1)?.fallbackReason ?? null,
           now,
           now,
           runId,
@@ -618,7 +750,13 @@ export class ToolRepository {
       ) {
         throw new Error("PERMISSION_DECISION_NOT_ALLOWED");
       }
-      if (Date.parse(request.expiresAt) <= Date.parse(this.#now())) {
+      // A current full-access scope authorizes the waiting operation even if its old
+      // per-call prompt expired. The payload digest must still match above.
+      const authorizedByFullAccess =
+        input.decision === "once" &&
+        this.permissionMode(this.workItem(request.workItemId).conversationId).mode ===
+          "full_access";
+      if (Date.parse(request.expiresAt) <= Date.parse(this.#now()) && !authorizedByFullAccess) {
         this.#database
           .prepare(
             "UPDATE permission_requests SET status = 'expired', resolved_at = ? WHERE id = ?",
@@ -841,6 +979,42 @@ export class ToolRepository {
           return grant;
         }
       }
+      const connected =
+        input.conversationId && input.binding?.source === "user_added"
+          ? this.listWorkspaceGrants(input.conversationId).filter(
+              (grant) =>
+                grant.conversationId === input.conversationId && grant.rootPath === input.rootPath,
+            )
+          : [];
+      const duplicates = connected.filter(
+        (grant) => grant.bindingSource === "user_added" || !grant.bindingSource,
+      );
+      const reusable = duplicates.find(
+        (grant) =>
+          grant.access === input.access &&
+          grant.allowNetwork === input.allowNetwork &&
+          grant.expiresAt === input.expiresAt,
+      );
+      // Re-selecting a connected directory must not create another authorization.
+      // Keep its primary role when it is selected through Add directory.
+      const binding = input.binding && {
+        ...input.binding,
+        role: connected.some((grant) => grant.bindingRole === "primary")
+          ? ("primary" as const)
+          : input.binding.role,
+      };
+      if (reusable && input.conversationId && binding) {
+        this.#bindWorkspace({
+          workspaceGrantId: reusable.id,
+          conversationId: input.conversationId,
+          ...binding,
+          createdAt: this.#now(),
+        });
+        for (const duplicate of duplicates) {
+          if (duplicate.id !== reusable.id) this.#revokeWorkspaceGrant(duplicate.id);
+        }
+        return this.workspaceGrant(reusable.id);
+      }
       const id = this.#idFactory();
       const createdAt = this.#now();
       this.#database
@@ -884,14 +1058,15 @@ export class ToolRepository {
           expiresAt: input.expiresAt,
         });
       }
-      if (input.conversationId && input.binding) {
+      if (input.conversationId && binding) {
         this.#bindWorkspace({
           workspaceGrantId: id,
           conversationId: input.conversationId,
-          ...input.binding,
+          ...binding,
           createdAt,
         });
       }
+      for (const duplicate of duplicates) this.#revokeWorkspaceGrant(duplicate.id);
       return this.workspaceGrant(id);
     });
   }
@@ -946,6 +1121,8 @@ export class ToolRepository {
     conversationId: string;
     directories: ProjectWorkspaceBindingInput[];
   }): WorkspaceGrant[] {
+    const hasConversationPrimary =
+      this.primaryWorkspaceGrant(input.conversationId)?.bindingSource === "user_added";
     if (input.directories.filter(({ role }) => role === "primary").length > 1) {
       throw new Error("PROJECT_PRIMARY_DIRECTORY_REQUIRED");
     }
@@ -987,12 +1164,14 @@ export class ToolRepository {
 
     const grants: WorkspaceGrant[] = [];
     for (const directory of input.directories) {
+      const role =
+        hasConversationPrimary && directory.role === "primary" ? "additional" : directory.role;
       const existing = reusable.get(directory.projectDirectoryBindingId);
       if (existing) {
         this.bindWorkspace({
           workspaceGrantId: String(existing.workspace_grant_id),
           conversationId: input.conversationId,
-          role: directory.role,
+          role,
           source: "project",
           projectDirectoryBindingId: directory.projectDirectoryBindingId,
           sourceRevision: directory.sourceRevision,
@@ -1018,7 +1197,7 @@ export class ToolRepository {
           allowNetwork: false,
           expiresAt: source.expiresAt,
           binding: {
-            role: directory.role,
+            role,
             source: "project",
             projectDirectoryBindingId: directory.projectDirectoryBindingId,
             sourceRevision: directory.sourceRevision,
@@ -1089,6 +1268,27 @@ export class ToolRepository {
     return (rows as SqlRow[]).map((row) => this.#workspaceGrant(row));
   }
 
+  effectiveWorkspaceGrants(conversationId: string): WorkspaceGrant[] {
+    const available = this.listWorkspaceGrants(conversationId).filter(
+      (grant) => grant.conversationId !== null || !this.isProjectSourceWorkspaceGrant(grant.id),
+    );
+    const local = available.filter((grant) => grant.conversationId === conversationId);
+    const rank = (grant: WorkspaceGrant): number =>
+      grant.bindingRole === "primary" ? 0 : grant.bindingSource === "user_added" ? 1 : 2;
+    const ordered = (local.length > 0 ? local : available).sort(
+      (left, right) =>
+        rank(left) - rank(right) ||
+        right.createdAt.localeCompare(left.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+    const paths = new Set<string>();
+    return ordered.filter((grant) => {
+      if (paths.has(grant.rootPath)) return false;
+      paths.add(grant.rootPath);
+      return true;
+    });
+  }
+
   isProjectSourceWorkspaceGrant(workspaceGrantId: string): boolean {
     const row = this.#database
       .prepare(
@@ -1135,24 +1335,26 @@ export class ToolRepository {
   }
 
   revokeWorkspaceGrant(id: string): WorkspaceGrant {
-    return this.#transaction(() => {
-      const now = this.#now();
-      const result = this.#database
-        .prepare(
-          `UPDATE workspace_grants SET revoked_at = COALESCE(revoked_at, ?)
+    return this.#transaction(() => this.#revokeWorkspaceGrant(id));
+  }
+
+  #revokeWorkspaceGrant(id: string): WorkspaceGrant {
+    const now = this.#now();
+    const result = this.#database
+      .prepare(
+        `UPDATE workspace_grants SET revoked_at = COALESCE(revoked_at, ?)
            WHERE id = ? AND owner_profile_id = ?`,
-        )
-        .run(now, id, this.#ownerProfileId);
-      if (result.changes !== 1) throw new Error("WORKSPACE_GRANT_NOT_FOUND");
-      this.#database
-        .prepare(
-          `UPDATE capability_scopes SET revoked_at = COALESCE(revoked_at, ?)
+      )
+      .run(now, id, this.#ownerProfileId);
+    if (result.changes !== 1) throw new Error("WORKSPACE_GRANT_NOT_FOUND");
+    this.#database
+      .prepare(
+        `UPDATE capability_scopes SET revoked_at = COALESCE(revoked_at, ?)
            WHERE owner_profile_id = ? AND resource_type = 'workspace' AND resource = ?`,
-        )
-        .run(now, this.#ownerProfileId, id);
-      this.#database.prepare("DELETE FROM workspace_bindings WHERE workspace_grant_id = ?").run(id);
-      return this.workspaceGrant(id);
-    });
+      )
+      .run(now, this.#ownerProfileId, id);
+    this.#database.prepare("DELETE FROM workspace_bindings WHERE workspace_grant_id = ?").run(id);
+    return this.workspaceGrant(id);
   }
 
   createWorkspaceChange(input: {
@@ -1573,6 +1775,78 @@ export class ToolRepository {
           )
           .all(this.#ownerProfileId, limit);
     return (rows as SqlRow[]).map((row) => this.#workItem(row));
+  }
+
+  workspaceOutputCandidates(conversationId?: string): WorkspaceOutputCandidate[] {
+    const parameters = conversationId
+      ? [this.#ownerProfileId, conversationId]
+      : [this.#ownerProfileId];
+    const joins = `JOIN execution_runs er ON er.id = wc.run_id
+      JOIN work_items wi ON wi.id = er.work_item_id
+      JOIN conversations c ON c.id = wi.conversation_id
+      JOIN workspace_grants wg ON wg.id = wc.workspace_grant_id`;
+    const filter = `wc.owner_profile_id = ? AND wi.owner_profile_id = wc.owner_profile_id
+      AND c.owner_profile_id = wc.owner_profile_id AND wg.owner_profile_id = wc.owner_profile_id
+      AND c.deleted_at IS NULL
+      ${conversationId ? "AND wi.conversation_id = ?" : ""}`;
+    const rows = this.#database
+      .prepare(
+        `SELECT wc.*, wi.conversation_id, wg.root_path FROM workspace_changes wc
+       ${joins} WHERE ${filter} AND wc.status IN ('applied', 'reverted')`,
+      )
+      .all(...parameters) as SqlRow[];
+    const candidates: WorkspaceOutputCandidate[] = rows.map((row) => ({
+      conversationId: String(row.conversation_id),
+      workspaceGrantId: String(row.workspace_grant_id),
+      workspaceRootPath: String(row.root_path),
+      relativePath: String(row.relative_path),
+      afterSha256: row.status === "applied" ? String(row.after_sha256) : null,
+      sourceRevision: `${row.id}:${row.status}`,
+      updatedAt: String(row.updated_at),
+    }));
+    const sets = this.#database
+      .prepare(
+        `SELECT wc.*, wi.conversation_id, wg.root_path FROM workspace_change_sets wc
+       ${joins} WHERE ${filter} AND wc.status IN ('applied', 'reverted')`,
+      )
+      .all(...parameters) as SqlRow[];
+    for (const row of sets) {
+      const changeSet = this.#workspaceChangeSet(row);
+      for (const entry of changeSet.entries) {
+        if (entry.entryType !== "file") continue;
+        const grant = this.workspaceGrant(entry.workspaceGrantId);
+        const candidate: WorkspaceOutputCandidate = {
+          conversationId: String(row.conversation_id),
+          workspaceGrantId: grant.id,
+          workspaceRootPath: grant.rootPath,
+          relativePath: entry.relativePath,
+          afterSha256: changeSet.status === "applied" ? entry.afterSha256 : null,
+          sourceRevision: `${changeSet.id}:${changeSet.status}`,
+          updatedAt: changeSet.updatedAt,
+        };
+        candidates.push(candidate);
+        if (entry.previousRelativePath) {
+          candidates.push({
+            ...candidate,
+            relativePath: entry.previousRelativePath,
+            afterSha256: null,
+          });
+        }
+      }
+    }
+    const latest = new Map<string, WorkspaceOutputCandidate>();
+    for (const candidate of candidates.sort(
+      (a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt) || b.sourceRevision.localeCompare(a.sourceRevision),
+    )) {
+      const key = JSON.stringify([
+        candidate.conversationId,
+        candidate.workspaceRootPath,
+        candidate.relativePath,
+      ]);
+      if (!latest.has(key)) latest.set(key, candidate);
+    }
+    return [...latest.values()];
   }
 
   artifactRetention(conversationId?: string): ArtifactRetention {

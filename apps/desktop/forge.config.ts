@@ -159,6 +159,21 @@ const config: ForgeConfig = {
     ...signingConfiguration(),
   },
   hooks: {
+    postPackage: async (forgeConfig, { platform, outputPaths }) => {
+      if (!["darwin", "mas"].includes(platform)) return;
+      for (const output of outputPaths) {
+        const appBundle = path.join(output, `${desktopBrand.productName}.app`);
+        // Seal only after Packager has finalized Info.plist; preserve formal signatures.
+        if (!forgeConfig.packagerConfig.osxSign) {
+          execFileSync("codesign", ["--force", "--deep", "--sign", "-", appBundle], {
+            stdio: "inherit",
+          });
+        }
+        execFileSync("codesign", ["--verify", "--deep", "--strict", appBundle], {
+          stdio: "inherit",
+        });
+      }
+    },
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
       cpSync(
         path.join(desktopDirectory, "browser-extension"),

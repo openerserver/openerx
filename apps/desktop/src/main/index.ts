@@ -7,6 +7,7 @@ import {
   accountRevokeDeviceInputSchema,
   accountStateSchema,
   accountVerifyCodeInputSchema,
+  aggregateByokUsage,
   artifactGetInputSchema,
   artifactListInputSchema,
   artifactPreviewInputSchema,
@@ -61,10 +62,12 @@ import {
   emptyInputSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
+  fileImportDataInputSchema,
   fileListInputSchema,
   filePreviewInputSchema,
   fileRevokeScopeInputSchema,
   fileSearchInputSchema,
+  htmlPreviewProtocol,
   ipcChannels,
   localExportResultSchema,
   localWebSearchRuntimeResetInputSchema,
@@ -80,6 +83,7 @@ import {
   memorySettingsUpdateInputSchema,
   memorySourcesListInputSchema,
   memoryUpsertInputSchema,
+  modelFailureMessage,
   modelServiceSettingsUpdateSchema,
   permissionListInputSchema,
   permissionResolveInputSchema,
@@ -109,6 +113,7 @@ import {
   skillResetPermissionsInputSchema,
   skillRollbackInputSchema,
   skillUninstallInputSchema,
+  supportedFileExtensions,
   syncResolveConflictInputSchema,
   toolListInputSchema,
   toolPermissionModeGetInputSchema,
@@ -120,6 +125,7 @@ import {
   workspaceChooseInputSchema,
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
+  workspaceSetPrimaryInputSchema,
 } from "@openerx/contracts";
 import {
   DiagnosticsService,
@@ -158,10 +164,12 @@ import {
 import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
 import { initializeAccountSession } from "./development-account-bootstrap";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
+import { HtmlPreviewRegistry } from "./html-preview";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { DesktopLoginStartupService, isBackgroundLoginStartup } from "./login-startup";
 import { memoryNotificationContent } from "./memory-notification";
 import { ModelServiceSettingsStore } from "./model-service-settings";
+import { localByokUsage } from "./model-usage";
 import { PlatformAccountClient } from "./platform-account-client";
 import { RemoteDesktopController } from "./remote-desktop-controller";
 import {
@@ -187,7 +195,9 @@ const e2eApplicationName =
 if (e2eApplicationName && !/^[A-Za-z0-9 ._-]{1,96}$/u.test(e2eApplicationName)) {
   throw new Error("OPENERX_E2E_APPLICATION_NAME_INVALID");
 }
-app.name = e2eApplicationName || desktopBrand.productName;
+// Preserve the existing open-source OS credential identity across display-name updates.
+app.name =
+  e2eApplicationName || (desktopBrand.id === "openerx" ? "OpenERX" : desktopBrand.productName);
 
 function configureApplicationMenu(): void {
   Menu.setApplicationMenu(
@@ -216,8 +226,13 @@ function configureApplicationMenu(): void {
 
 const processStartedAt = performance.now();
 const performanceBudgets = new PerformanceBudgetTracker(processStartedAt);
+const htmlPreviews = new HtmlPreviewRegistry();
 
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: htmlPreviewProtocol,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+  },
   {
     scheme: appProtocol,
     privileges: {
@@ -232,9 +247,6 @@ if (started) {
   app.quit();
 }
 
-const primaryInstance = app.requestSingleInstanceLock();
-if (!primaryInstance) app.quit();
-
 const e2eProfileDirectory =
   process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_PROFILE_DIR : undefined;
 if (e2eProfileDirectory) {
@@ -243,6 +255,10 @@ if (e2eProfileDirectory) {
   // Keep existing installations on their original profile directory after the product rename.
   app.setPath("userData", path.join(app.getPath("appData"), "OpenerX"));
 }
+
+// Profile selection must precede single-instance locking.
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 
 function registerIpcHandlers(
   supervisor: AppServiceSupervisor,
@@ -455,6 +471,7 @@ function registerIpcHandlers(
     const parsed = accountVerifyCodeInputSchema.parse(input);
     const state = await accounts.verifyCode(parsed.challengeId, parsed.code);
     if (state.account) {
+      htmlPreviews.clear();
       await supervisor.switchProfile(
         path.join(baseProfileDirectory, "accounts", state.account.accountId),
         state.account.accountId,
@@ -467,6 +484,7 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     await remote.prepareSignOut();
     const state = await accounts.signOut();
+    htmlPreviews.clear();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
   });
@@ -474,6 +492,7 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     await remote.prepareSignOut();
     const state = await accounts.signOutAll();
+    htmlPreviews.clear();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
   });
@@ -483,6 +502,7 @@ function registerIpcHandlers(
     if (parsed.sessionId === accounts.state().session?.sessionId) await remote.prepareSignOut();
     const state = await accounts.revokeDevice(parsed.sessionId);
     if (state.status !== "signed_in") {
+      htmlPreviews.clear();
       await supervisor.switchProfile(baseProfileDirectory, "local-default");
     }
     return state;
@@ -587,6 +607,11 @@ function registerIpcHandlers(
   });
   ipcMain.handle(ipcChannels.usageGet, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
+    const query = usageQueryInputSchema.parse(input ?? {});
+    const local = await localByokUsage(query, (await modelSettings.state()).mode, (input) =>
+      supervisor.request({ command: "usage.byok.list", input }),
+    );
+    if (local !== null) return aggregateByokUsage(local, query);
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     return await platformClient.usage(
       await accounts.accessToken(),
@@ -595,6 +620,11 @@ function registerIpcHandlers(
   });
   ipcMain.handle(ipcChannels.usageRecords, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
+    const query = usageQueryInputSchema.parse(input ?? {});
+    const local = await localByokUsage(query, (await modelSettings.state()).mode, (input) =>
+      supervisor.request({ command: "usage.byok.list", input }),
+    );
+    if (local !== null) return local;
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     return usageRecordSchema
       .array()
@@ -712,7 +742,10 @@ function registerIpcHandlers(
         accounts.state().status === "signed_in"
           ? await accounts.authorization(platformUrl)
           : undefined;
-      return await supervisor.request(request, authorization, 15_000, byok);
+      const result = await supervisor.request(request, authorization, 15_000, byok);
+      return request.command === "artifact.preview" || request.command === "file.preview"
+        ? htmlPreviews.prepare(result)
+        : result;
     });
   };
 
@@ -935,32 +968,7 @@ function registerIpcHandlers(
       filters: [
         {
           name: "支持的文件",
-          extensions: [
-            "pdf",
-            "docx",
-            "xlsx",
-            "csv",
-            "pptx",
-            "txt",
-            "md",
-            "json",
-            "yaml",
-            "yml",
-            "png",
-            "jpg",
-            "jpeg",
-            "gif",
-            "webp",
-            "html",
-            "htm",
-            "ts",
-            "tsx",
-            "js",
-            "jsx",
-            "py",
-            "go",
-            "rs",
-          ],
+          extensions: supportedFileExtensions,
         },
       ],
     });
@@ -969,6 +977,15 @@ function registerIpcHandlers(
       chatCommandEnvelopeSchema.parse({
         command: "file.import",
         input: { localPaths: selection.filePaths, conversationId: parsed.conversationId },
+      }),
+    );
+  });
+  ipcMain.handle(ipcChannels.fileImportData, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "file.importData",
+        input: fileImportDataInputSchema.parse(input),
       }),
     );
   });
@@ -991,7 +1008,7 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     const parsed = workspaceChooseInputSchema.parse(input ?? {});
     const selection = await dialog.showOpenDialog({
-      title: "授权项目工作区",
+      title: parsed.role === "additional" ? "添加附加目录" : "选择工作目录",
       properties: ["openDirectory"],
       message: `${desktopBrand.productName} 只能在你明确授权的目录内读取或修改文件`,
     });
@@ -1044,6 +1061,11 @@ function registerIpcHandlers(
   );
   registerChatHandler(ipcChannels.workspaceList, "workspace.list", workspaceListInputSchema);
   registerChatHandler(ipcChannels.workspaceRevoke, "workspace.revoke", workspaceRevokeInputSchema);
+  registerChatHandler(
+    ipcChannels.workspaceSetPrimary,
+    "workspace.setPrimary",
+    workspaceSetPrimaryInputSchema,
+  );
   registerChatHandler(ipcChannels.fileList, "file.list", fileListInputSchema);
   registerChatHandler(ipcChannels.fileSearch, "file.search", fileSearchInputSchema);
   registerChatHandler(ipcChannels.filePreview, "file.preview", filePreviewInputSchema);
@@ -1248,7 +1270,7 @@ function registerIpcHandlers(
     );
     const selection = await dialog.showSaveDialog({
       title: "保存成果副本",
-      defaultPath: path.join(app.getPath("documents"), artifact.displayName),
+      defaultPath: path.join(app.getPath("documents"), path.basename(artifact.displayName)),
     });
     if (selection.canceled || !selection.filePath) return null;
     return await supervisor.request(
@@ -1261,6 +1283,7 @@ function registerIpcHandlers(
 }
 
 function registerAppProtocol(): void {
+  protocol.handle(htmlPreviewProtocol, (request) => htmlPreviews.respond(request));
   const rendererRoot = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`);
   protocol.handle(appProtocol, (request) => {
     if (request.method !== "GET") {
@@ -1392,6 +1415,7 @@ app.on("second-instance", () => {
 });
 
 app.whenReady().then(async () => {
+  app.setName(e2eApplicationName || desktopBrand.productName);
   if (!primaryInstance) return;
   configureApplicationMenu();
   const profileDirectory = app.getPath("userData");
@@ -1415,6 +1439,7 @@ app.whenReady().then(async () => {
         ? loadPackagedUpdateConfiguration(app.getAppPath())
         : developmentUpdateConfiguration(),
     currentVersion: app.getVersion(),
+    expectedProduct: desktopBrand.productName,
     platform: desktopPlatform,
     arch: desktopArch,
     cohortId: device.deviceId,
@@ -1563,6 +1588,13 @@ app.whenReady().then(async () => {
     });
   }
   supervisor.onEvent((event) => {
+    if (
+      event.type === "run.failed" &&
+      event.payload.reason &&
+      modelFailureMessage(event.payload.reason)
+    ) {
+      diagnostics.record({ source: "pi_host", level: "error", code: event.payload.reason });
+    }
     if (event.type === "service.status" && event.payload.status) {
       const status = event.payload.status;
       if (status === "ready") performanceBudgets.markAppServiceReady();

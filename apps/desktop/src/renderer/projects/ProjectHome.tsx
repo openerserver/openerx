@@ -3,6 +3,7 @@ import { ChatCircle, FolderSimple, GearSix, Plus, WarningCircle } from "@phospho
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { NavLink, useParams } from "react-router-dom";
+import { ConversationDeleteButton } from "../ConversationDeletion";
 import { ProjectSettings } from "./ProjectSettings";
 import { useProject } from "./use-projects";
 
@@ -110,16 +111,19 @@ export function ProjectHome(): React.JSX.Element {
         </div>
         <div className="project-conversation-list">
           {conversations.data?.map((conversation: ConversationSummary) => (
-            <NavLink key={conversation.id} to={`/chat/${conversation.id}`}>
-              <ChatCircle size={18} />
-              <span className="project-list-copy">
-                <strong>{conversation.title}</strong>
-                <small className="project-list-meta">
-                  {conversation.archivedAt ? "已归档 · " : ""}
-                  {updatedLabel(conversation.updatedAt)} · {conversation.lastMessagePreview}
-                </small>
-              </span>
-            </NavLink>
+            <div className="conversation-list-row" key={conversation.id}>
+              <NavLink to={`/chat/${conversation.id}`}>
+                <ChatCircle size={18} />
+                <span className="project-list-copy">
+                  <strong>{conversation.title}</strong>
+                  <small className="project-list-meta">
+                    {conversation.archivedAt ? "已归档 · " : ""}
+                    {updatedLabel(conversation.updatedAt)} · {conversation.lastMessagePreview}
+                  </small>
+                </span>
+              </NavLink>
+              <ConversationDeleteButton conversation={conversation} />
+            </div>
           ))}
           {conversations.isSuccess && conversations.data.length === 0 ? (
             <div className="project-empty-state">

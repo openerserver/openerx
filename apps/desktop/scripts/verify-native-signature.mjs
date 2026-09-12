@@ -2,9 +2,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { desktopArtifactIdentity } from "./desktop-artifact-identity.mjs";
 import { verifyWindowsFile } from "./windows-signing.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const product = desktopArtifactIdentity(desktopRoot);
 const outRoot = process.env.OPENERX_PACKAGE_OUT_DIR
   ? path.resolve(process.env.OPENERX_PACKAGE_OUT_DIR)
   : path.join(desktopRoot, "out");
@@ -32,7 +34,9 @@ function find(directory) {
 }
 
 const targets = find(outRoot).filter(
-  (target) => !selectedTarget || target.includes(`${path.sep}OpenERX-${selectedTarget}${path.sep}`),
+  (target) =>
+    !selectedTarget ||
+    target.includes(`${path.sep}${product.productName}-${selectedTarget}${path.sep}`),
 );
 if (targets.length === 0) throw new Error("RELEASE_NATIVE_TARGET_NOT_FOUND");
 
