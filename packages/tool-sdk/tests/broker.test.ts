@@ -333,6 +333,47 @@ describe("CapabilityBroker", () => {
     repository.close();
   });
 
+  it("does not lose an approval resolved synchronously by the permission listener", async () => {
+    const { chat, repository, projection } = fixture();
+    const execute = vi.fn(async () => ({
+      summary: "done",
+      content: [],
+      data: {},
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: false,
+      durationMs: 1,
+    }));
+    const broker = new CapabilityBroker(repository, [{ operations: ["desktop"], execute }]);
+    await expect(
+      broker.executeAwaitingPermission(
+        projection,
+        {
+          operation: "desktop",
+          action: "submit",
+          application: "Notes",
+          idempotencyKey: "synchronous-full-access-approval",
+        },
+        undefined,
+        undefined,
+        (permission) => {
+          repository.setPermissionMode({
+            conversationId: projection.conversationId,
+            mode: "full_access",
+          });
+          broker.resolvePermission({
+            permissionRequestId: permission.id,
+            payloadDigest: permission.payloadDigest,
+            decision: "once",
+          });
+        },
+      ),
+    ).resolves.toMatchObject({ summary: "done" });
+    expect(execute).toHaveBeenCalledTimes(1);
+    chat.close();
+    repository.close();
+  });
+
   it("grants revocable full access to one conversation and bypasses later per-call approvals", async () => {
     const { chat, repository, projection } = fixture();
     const execute = vi.fn(async () => ({
