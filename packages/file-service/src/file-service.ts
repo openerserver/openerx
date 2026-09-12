@@ -4,6 +4,7 @@ import type {
   Artifact,
   Attachment,
   ContentPreview,
+  FileImportDataInput,
   FileScope,
   FileSearchResult,
   OfficeArtifactWriteInput,
@@ -15,6 +16,7 @@ import type {
   SyncConflictResolution,
   SyncOperation,
 } from "@openerx/contracts";
+import { fileImportDataInputSchema, maxPastedAttachmentBytes } from "@openerx/contracts";
 import type { FileRepository, WorkspaceArtifactLink } from "@openerx/storage";
 import { ContentStore } from "./content-store";
 import { FileServiceError, fileErrorCode } from "./errors";
@@ -66,6 +68,40 @@ export class FileAppService {
         imported.push(file);
         if (conversationId) this.#repository.attach(conversationId, file.id);
       }
+    }
+    return imported;
+  }
+
+  async importData(input: FileImportDataInput): Promise<PersonalFile[]> {
+    const { files, conversationId } = fileImportDataInputSchema.parse(input);
+    // Validate the complete batch before storing anything, including unsupported extensions.
+    const drafts = files.map(({ displayName, bytesBase64 }) => {
+      const detected = detectFileFormat(displayName);
+      const bytes = decodeBase64(bytesBase64);
+      this.#assertSize(bytes.byteLength);
+      return { displayName, bytes, ...detected };
+    });
+    if (
+      drafts.reduce((total, { bytes }) => total + bytes.byteLength, 0) > maxPastedAttachmentBytes
+    ) {
+      throw new FileServiceError("FILE_TOO_LARGE");
+    }
+    const imported: PersonalFile[] = [];
+    for (const { displayName, bytes, format, mediaType } of drafts) {
+      const stored = this.#store.putBytes(bytes);
+      const file = this.#repository.upsertPersonalFile({
+        displayName,
+        format,
+        mediaType,
+        sizeBytes: bytes.byteLength,
+        checksumSha256: stored.checksumSha256,
+        objectRef: stored.objectRef,
+        sourceScopeId: null,
+        sourceRelativePath: displayName,
+      });
+      const parsed = await this.#parseImportedFile(file, stored.absolutePath);
+      if (conversationId) this.attach(conversationId, parsed.id);
+      imported.push(parsed);
     }
     return imported;
   }
@@ -473,9 +509,13 @@ export class FileAppService {
       sourceScopeId: scopeId,
       sourceRelativePath,
     });
+    return await this.#parseImportedFile(file, stored.absolutePath);
+  }
+
+  async #parseImportedFile(file: PersonalFile, absolutePath: string): Promise<PersonalFile> {
     if (file.parseStatus !== "pending") return file;
     try {
-      const parsed = await this.#parser.parse(stored.absolutePath, format);
+      const parsed = await this.#parser.parse(absolutePath, file.format);
       return this.#repository.completeParse(file.id, parsed);
     } catch (error) {
       return this.#repository.failParse(file.id, fileErrorCode(error));

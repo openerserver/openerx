@@ -17,7 +17,7 @@ import type {
   WorkItemDetail,
 } from "@openerx/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -381,6 +381,7 @@ function createBridge(): DesktopBridge {
     activateBranch: vi.fn(),
     getChatEvents: vi.fn().mockResolvedValue([]),
     chooseFiles: vi.fn().mockResolvedValue([]),
+    importPastedFiles: vi.fn().mockResolvedValue([]),
     chooseDirectory: vi.fn().mockResolvedValue([]),
     chooseWorkspace: vi.fn().mockResolvedValue(null),
     listWorkspaces: vi.fn().mockResolvedValue([]),
@@ -1201,6 +1202,118 @@ describe("M1 chat renderer", () => {
         personalFileIds: [personalFileId],
       }),
     );
+  });
+
+  it("pastes clipboard files as pending attachments while preserving the draft", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const id = crypto.randomUUID();
+    const file: PersonalFile = {
+      id,
+      ownerProfileId: "local-default",
+      displayName: "销售.xls",
+      format: "xls",
+      mediaType: "application/vnd.ms-excel",
+      sizeBytes: 4,
+      checksumSha256: "a".repeat(64),
+      objectRef: `objects/sha256/aa/${"a".repeat(64)}`,
+      sourceScopeId: null,
+      sourceRelativePath: "销售.xls",
+      parseStatus: "ready",
+      parseErrorCode: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    };
+    vi.mocked(bridge.importPastedFiles).mockResolvedValue([file]);
+    renderApp(bridge);
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("发送消息");
+    await user.type(input, "分析这张表");
+    fireEvent.paste(input, { clipboardData: { files: [new File(["data"], "销售.xls")] } });
+    expect(await screen.findByText("已粘贴 1 个附件，将随本条消息发送。")).toBeTruthy();
+    expect((input as HTMLTextAreaElement).value).toBe("分析这张表");
+    expect(bridge.importPastedFiles).toHaveBeenCalledWith({
+      conversationId: null,
+      files: [{ displayName: "销售.xls", bytesBase64: "ZGF0YQ==" }],
+    });
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(bridge.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "分析这张表", personalFileIds: [id] }),
+    );
+  });
+
+  it("keeps ordinary text and copied table cells as editable text", async () => {
+    cleanup();
+    const bridge = createBridge();
+    renderApp(bridge);
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("发送消息");
+    await user.click(input);
+    await user.paste("商品\t金额\n女装\t58.50");
+    expect((input as HTMLTextAreaElement).value).toBe("商品\t金额\n女装\t58.50");
+    expect(bridge.importPastedFiles).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("待发送附件")).toBeNull();
+  });
+
+  it("rejects unsupported or oversized pasted files without losing the draft", async () => {
+    cleanup();
+    const bridge = createBridge();
+    renderApp(bridge);
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("发送消息");
+    await user.type(input, "保留我的问题");
+    fireEvent.paste(input, { clipboardData: { files: [new File(["zip"], "archive.zip")] } });
+    expect(await screen.findByText(/粘贴的文件类型暂不支持/)).toBeTruthy();
+    const oversized = new File(["image"], "large.png", { type: "image/png" });
+    Object.defineProperty(oversized, "size", { value: 50 * 1024 * 1024 + 1 });
+    fireEvent.paste(input, { clipboardData: { files: [oversized] } });
+    expect(await screen.findByText(/每次粘贴的附件总大小不能超过 50 MB/)).toBeTruthy();
+    expect(bridge.importPastedFiles).not.toHaveBeenCalled();
+    expect((input as HTMLTextAreaElement).value).toBe("保留我的问题");
+  });
+
+  it("blocks send during paste import and does not add finished imports to another conversation", async () => {
+    cleanup();
+    const bridge = createBridge();
+    let resolveImport: (files: PersonalFile[]) => void = () => {};
+    vi.mocked(bridge.importPastedFiles).mockReturnValue(
+      new Promise((resolve) => {
+        resolveImport = resolve;
+      }),
+    );
+    renderApp(bridge, `/chat/${conversationId}`);
+    const user = userEvent.setup();
+    const input = await screen.findByLabelText("发送消息");
+    await user.type(input, "稍后发送");
+    fireEvent.paste(input, { clipboardData: { files: [new File(["note"], "note.txt")] } });
+    await waitFor(() => expect(bridge.importPastedFiles).toHaveBeenCalled());
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.keyboard("{Enter}");
+    expect(bridge.sendMessage).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("link", { name: "新对话" }));
+    await act(async () =>
+      resolveImport([
+        {
+          id: crypto.randomUUID(),
+          ownerProfileId: "local-default",
+          displayName: "note.txt",
+          format: "text",
+          mediaType: "text/plain",
+          sizeBytes: 4,
+          checksumSha256: "b".repeat(64),
+          objectRef: `objects/sha256/bb/${"b".repeat(64)}`,
+          sourceScopeId: null,
+          sourceRelativePath: "note.txt",
+          parseStatus: "ready",
+          parseErrorCode: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          revision: 1,
+        },
+      ]),
+    );
+    expect(screen.queryByLabelText("待发送附件")).toBeNull();
   });
 
   it("keeps an existing-chat image pending until send and supports removing it", async () => {

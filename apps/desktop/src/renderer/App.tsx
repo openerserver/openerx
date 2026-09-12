@@ -42,6 +42,7 @@ import {
   defaultByokModelConfiguration,
   defaultByokModelRef,
   isByokModelRef,
+  maxPastedAttachmentCount,
   modelFailureMessage,
 } from "@openerx/contracts";
 import { automaticModelRef, defaultThinkingLevel } from "@openerx/contracts/model";
@@ -115,6 +116,7 @@ import {
 } from "./ConversationResults";
 import { DesktopControlBar } from "./DesktopControlBar";
 import { PendingToolApproval } from "./PendingToolApproval";
+import { clipboardFiles, pastedAttachmentError, serializePastedFiles } from "./pasted-attachments";
 import {
   ConversationProjectBadge,
   ConversationProjectMoveDialog,
@@ -941,6 +943,9 @@ function Composer({
     useState<ToolPermissionMode>("ask");
   const [pendingFiles, setPendingFiles] = useState<PersonalFile[]>([]);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+  const attachmentTarget = `${conversationId ?? "new"}:${projectId ?? ""}`;
+  const attachmentTargetRef = useRef(attachmentTarget);
+  attachmentTargetRef.current = attachmentTarget;
   const previousConversationIdRef = useRef(conversationId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -971,6 +976,25 @@ function Composer({
       );
     },
   });
+  const pasteFiles = useMutation({
+    mutationFn: async ({ files }: { files: File[]; target: string }) => {
+      if (files.length + pendingFiles.length > maxPastedAttachmentCount) {
+        throw new Error("FILE_TOO_LARGE");
+      }
+      return await window.openerx.importPastedFiles({
+        conversationId: null,
+        files: await serializePastedFiles(files),
+      });
+    },
+    onSuccess: async (files, { target }) => {
+      if (attachmentTargetRef.current === target) {
+        setPendingFiles((current) => [...current, ...files]);
+        setAttachmentNotice(`已粘贴 ${files.length} 个附件，将随本条消息发送。`);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["files"] });
+    },
+  });
+  const isImportingAttachments = chooseFiles.isPending || pasteFiles.isPending;
   const skills = useQuery({
     queryKey: ["skills", "composer"],
     queryFn: () => window.openerx.listSkills(),
@@ -1126,7 +1150,7 @@ function Composer({
       onSubmit={(event) => {
         event.preventDefault();
         const text = draft.trim();
-        if (text && !send.isPending && !sendingBlockedByModel) {
+        if (text && !send.isPending && !sendingBlockedByModel && !isImportingAttachments) {
           send.mutate(text);
         }
       }}
@@ -1153,11 +1177,20 @@ function Composer({
         placeholder="输入你的需求…"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
+        onPaste={(event) => {
+          const files = clipboardFiles(event.clipboardData);
+          if (files.length === 0) return;
+          event.preventDefault();
+          if (isImportingAttachments) return;
+          chooseFiles.reset();
+          setAttachmentNotice(null);
+          pasteFiles.mutate({ files, target: attachmentTarget });
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             const text = draft.trim();
-            if (text && !send.isPending && !sendingBlockedByModel) {
+            if (text && !send.isPending && !sendingBlockedByModel && !isImportingAttachments) {
               send.mutate(text);
             }
           }
@@ -1169,9 +1202,12 @@ function Composer({
             type="button"
             className="icon-button"
             aria-label="添加附件"
-            title="添加 PDF、DOCX、XLS / XLSX、CSV / TSV、PPTX、图片、文本或代码文件"
-            onClick={() => chooseFiles.mutate()}
-            disabled={chooseFiles.isPending}
+            title="添加 PDF、DOCX、XLS / XLSX、CSV / TSV、PPTX、图片、文本或代码文件，也可直接粘贴截图和文件"
+            onClick={() => {
+              pasteFiles.reset();
+              chooseFiles.mutate();
+            }}
+            disabled={isImportingAttachments}
           >
             <Paperclip size={18} weight="regular" />
           </button>
@@ -1412,7 +1448,9 @@ function Composer({
           type="submit"
           className="primary-action"
           aria-label="发送"
-          disabled={!draft.trim() || send.isPending || sendingBlockedByModel}
+          disabled={
+            !draft.trim() || send.isPending || sendingBlockedByModel || isImportingAttachments
+          }
         >
           <PaperPlaneTilt size={17} weight="fill" />
           <span>{send.isPending ? "发送中…" : "发送"}</span>
@@ -1420,6 +1458,10 @@ function Composer({
         </button>
       </div>
       <div className="composer-feedback" aria-live="polite">
+        {pasteFiles.isPending ? <p>正在添加剪贴板附件…</p> : null}
+        {pasteFiles.error ? (
+          <p className="inline-error">{pastedAttachmentError(pasteFiles.error)}</p>
+        ) : null}
         {conversation && modelRequiresConfiguration ? (
           <p className="inline-error">
             {compatibleConversationModels.length > 0
@@ -1428,7 +1470,7 @@ function Composer({
             <NavLink to="/settings/account?section=model">前往设置 → 模型</NavLink>。
           </p>
         ) : null}
-        {attachmentNotice && !chooseFiles.error ? (
+        {attachmentNotice && !chooseFiles.error && !pasteFiles.error ? (
           <p className="inline-success">{attachmentNotice}</p>
         ) : null}
         {send.error ? (

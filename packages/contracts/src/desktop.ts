@@ -96,6 +96,7 @@ export const ipcChannels = Object.freeze({
   automationRunEvent: "automation:run:event",
   automationNavigate: "automation:navigate",
   fileChoose: "file:choose",
+  fileImportData: "file:import-data",
   directoryChoose: "file:directory:choose",
   workspaceChoose: "workspace:choose",
   workspaceList: "workspace:list",

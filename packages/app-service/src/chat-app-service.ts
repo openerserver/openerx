@@ -330,6 +330,8 @@ export class ChatAppService {
           request.input.localPaths,
           request.input.conversationId,
         );
+      case "file.importData":
+        return await this.#requiredFiles().importData(request.input);
       case "file.list":
         return this.#requiredFiles().listFiles(request.input.conversationId);
       case "file.search":

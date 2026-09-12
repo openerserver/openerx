@@ -376,6 +376,40 @@ export const fileImportPrivilegedInputSchema = z
     conversationId: entityIdSchema.nullable().optional(),
   })
   .strict();
+export const maxPastedAttachmentBytes = 50 * 1024 * 1024;
+export const maxPastedAttachmentCount = 100;
+const maxPastedBase64Length = Math.ceil(maxPastedAttachmentBytes / 3) * 4;
+export const pastedFileInputSchema = z
+  .object({
+    displayName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(240)
+      .refine(
+        (name) =>
+          !/[\\/]/u.test(name) &&
+          Array.from(name).every((char) => char.charCodeAt(0) >= 32) &&
+          name !== "." &&
+          name !== "..",
+        "Expected a file name without a path",
+      ),
+    bytesBase64: z.string().max(maxPastedBase64Length),
+  })
+  .strict();
+export const fileImportDataInputSchema = z
+  .object({
+    files: z.array(pastedFileInputSchema).min(1).max(maxPastedAttachmentCount),
+    conversationId: entityIdSchema.nullable().optional(),
+  })
+  .strict()
+  .refine(
+    // Each separately encoded file may add its own base64 padding.
+    ({ files }) =>
+      files.reduce((total, file) => total + file.bytesBase64.length, 0) <=
+      maxPastedBase64Length + (files.length - 1) * 4,
+    "FILE_TOO_LARGE",
+  );
 export const fileListInputSchema = z
   .object({ conversationId: entityIdSchema.nullable().optional() })
   .strict();
@@ -452,6 +486,8 @@ export type FileScope = z.infer<typeof fileScopeSchema>;
 export type SourceLocator = z.infer<typeof sourceLocatorSchema>;
 export type FileCitation = z.infer<typeof fileCitationSchema>;
 export type PersonalFile = z.infer<typeof personalFileSchema>;
+export type PastedFileInput = z.infer<typeof pastedFileInputSchema>;
+export type FileImportDataInput = z.infer<typeof fileImportDataInputSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
 export type ArtifactVersion = z.infer<typeof artifactVersionSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
@@ -472,6 +508,7 @@ export type OfficeArtifactWriteInput = z.infer<typeof officeArtifactWriteInputSc
 export type RenderedSurface = z.infer<typeof renderedSurfaceSchema>;
 
 export interface FileBridge {
+  importPastedFiles(input: FileImportDataInput): Promise<PersonalFile[]>;
   chooseFiles(input?: z.input<typeof fileChooseInputSchema>): Promise<PersonalFile[]>;
   chooseDirectory(input?: z.input<typeof fileChooseInputSchema>): Promise<PersonalFile[]>;
   listFiles(input?: z.input<typeof fileListInputSchema>): Promise<PersonalFile[]>;

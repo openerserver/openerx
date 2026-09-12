@@ -60,6 +60,7 @@ import {
   emptyInputSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
+  fileImportDataInputSchema,
   fileListInputSchema,
   filePreviewInputSchema,
   fileRevokeScopeInputSchema,
@@ -960,6 +961,15 @@ function registerIpcHandlers(
       chatCommandEnvelopeSchema.parse({
         command: "file.import",
         input: { localPaths: selection.filePaths, conversationId: parsed.conversationId },
+      }),
+    );
+  });
+  ipcMain.handle(ipcChannels.fileImportData, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "file.importData",
+        input: fileImportDataInputSchema.parse(input),
       }),
     );
   });

@@ -47,7 +47,7 @@ export interface PersonalFileDraft {
   sizeBytes: number;
   checksumSha256: string;
   objectRef: string;
-  sourceScopeId: string;
+  sourceScopeId: string | null;
   sourceRelativePath: string;
 }
 

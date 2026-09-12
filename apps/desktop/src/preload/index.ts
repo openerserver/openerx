@@ -66,6 +66,7 @@ import {
   entityIdSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
+  fileImportDataInputSchema,
   fileListInputSchema,
   filePreviewInputSchema,
   fileRevokeScopeInputSchema,
@@ -608,6 +609,12 @@ const bridge: DesktopBridge = {
   },
   chooseFiles: async (input = {}) =>
     invokeChat(ipcChannels.fileChoose, "file.import", fileChooseInputSchema.parse(input)),
+  importPastedFiles: async (input) =>
+    invokeChat(
+      ipcChannels.fileImportData,
+      "file.importData",
+      fileImportDataInputSchema.parse(input),
+    ),
   chooseDirectory: async (input = {}) =>
     invokeChat(ipcChannels.directoryChoose, "file.import", fileChooseInputSchema.parse(input)),
   chooseWorkspace: async (input) => {

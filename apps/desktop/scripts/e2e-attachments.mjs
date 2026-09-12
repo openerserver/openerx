@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { _electron as electron } from "playwright";
 
 const desktopDirectory = path.resolve(import.meta.dirname, "..");
@@ -60,6 +61,51 @@ async function launch() {
   );
   await page.reload({ waitUntil: "domcontentloaded" });
   return { application, page };
+}
+
+async function snapshotClipboard(application) {
+  await application.evaluate(async ({ clipboard, ClipboardItem }) => {
+    const originals = [];
+    for (const item of await clipboard.read()) {
+      if (item.types.length === 0) continue;
+      const entries = await Promise.all(
+        item.types.map(async (type) => [type, await item.getType(type)]),
+      );
+      originals.push(new ClipboardItem(Object.fromEntries(entries)));
+    }
+    globalThis.__attachmentClipboardSnapshot = originals;
+  });
+}
+
+async function writeTestClipboard(application, type, value, base64 = false) {
+  await application.evaluate(
+    async ({ clipboard, ClipboardItem }, input) => {
+      await clipboard.write([
+        new ClipboardItem({
+          [input.type]: input.base64 ? new Blob([Buffer.from(input.value, "base64")]) : input.value,
+          "web application/x.openerx-attachment-e2e": "attachment-test",
+        }),
+      ]);
+    },
+    { type, value, base64 },
+  );
+}
+
+async function restoreClipboard(application) {
+  await application.evaluate(async ({ clipboard }) => {
+    // Preserve newer user clipboard content if it changed while the test was running.
+    if (
+      globalThis.__attachmentClipboardSnapshot &&
+      (await clipboard.has("web application/x.openerx-attachment-e2e"))
+    ) {
+      if (globalThis.__attachmentClipboardSnapshot.length > 0) {
+        await clipboard.write(globalThis.__attachmentClipboardSnapshot);
+      } else {
+        clipboard.clear();
+      }
+    }
+    delete globalThis.__attachmentClipboardSnapshot;
+  });
 }
 
 let running;
@@ -123,6 +169,57 @@ try {
   );
   assert.match(preview.parsedText, /D2: =B2\*C2 → 58.50/);
   assert.equal(preview.citations.length, 2);
+  await snapshotClipboard(application);
+  const input = page.getByLabel("发送消息");
+  const pasteShortcut = process.platform === "darwin" ? "Meta+V" : "Control+V";
+  await input.fill("保留草稿：");
+  await writeTestClipboard(application, "text/plain", "商品\t金额\n女装\t58.50");
+  await input.press(pasteShortcut);
+  assert.equal(await input.inputValue(), "保留草稿：商品\t金额\n女装\t58.50");
+  assert.equal(await page.locator(".attachment-card-composer").count(), 3);
+  await writeTestClipboard(
+    application,
+    "image/png",
+    readFileSync(path.join(desktopDirectory, "public/assets/openerx-mark.png")).toString("base64"),
+    true,
+  );
+  await input.press(pasteShortcut);
+  const pastedImage = page.locator(".attachment-card-composer.attachment-card-image");
+  await pastedImage.locator("img").waitFor();
+  assert.equal(await input.inputValue(), "保留草稿：商品\t金额\n女装\t58.50");
+  assert.equal(await page.locator(".attachment-card-composer").count(), 4);
+  if (process.env.OPENERX_E2E_SCREENSHOTS_DIR) {
+    mkdirSync(process.env.OPENERX_E2E_SCREENSHOTS_DIR, { recursive: true });
+    await page.screenshot({
+      path: path.join(process.env.OPENERX_E2E_SCREENSHOTS_DIR, "clipboard-image-composer.png"),
+    });
+  }
+  await pastedImage.getByRole("button").click();
+  let sentXls = xls;
+  let sentPreview = preview;
+  if (process.platform === "darwin") {
+    await page.getByRole("button", { name: "移除附件 销售报表.XLS", exact: true }).click();
+    await writeTestClipboard(
+      application,
+      'electron application/osclipboard;format="public.file-url"',
+      pathToFileURL(xlsPath).href,
+    );
+    await input.press(pasteShortcut);
+    await page
+      .locator(".attachment-card-composer")
+      .getByText("销售报表.XLS", { exact: true })
+      .waitFor();
+    const pastedFiles = await page.evaluate(() => window.openerx.listFiles());
+    sentXls = pastedFiles.find((file) => file.format === "xls" && file.sourceScopeId === null);
+    assert.ok(sentXls, "A copied XLS must be imported from clipboard File bytes");
+    sentPreview = await page.evaluate(
+      (personalFileId) => window.openerx.previewFile({ personalFileId }),
+      sentXls.id,
+    );
+    assert.equal(sentPreview.parsedText, preview.parsedText);
+    assert.equal(await page.locator(".attachment-card-composer").count(), 3);
+  }
+  await restoreClipboard(application);
   if (process.env.OPENERX_E2E_SCREENSHOTS_DIR) {
     mkdirSync(process.env.OPENERX_E2E_SCREENSHOTS_DIR, { recursive: true });
     await page.screenshot({
@@ -143,6 +240,7 @@ try {
     conversationId,
   );
   assert.equal(attached.length, 3);
+  assert.ok(attached.some(({ id }) => id === sentXls.id));
   await application.close();
   running = null;
   rmSync(xlsPath);
@@ -155,12 +253,12 @@ try {
   assert.equal(await page.locator(".attachment-card-message").count(), 3);
   const restored = await page.evaluate(
     (personalFileId) => window.openerx.previewFile({ personalFileId }),
-    xls.id,
+    sentXls.id,
   );
-  assert.equal(restored.parsedText, preview.parsedText);
-  assert.deepEqual(restored.citations, preview.citations);
+  assert.equal(restored.parsedText, sentPreview.parsedText);
+  assert.deepEqual(restored.citations, sentPreview.citations);
   console.log(
-    "E2E_ATTACHMENTS_OK: picker, cancel, mixed XLS/TSV/SQL import, parsed preview, Pi file read, message attachments, restart persistence",
+    "E2E_ATTACHMENTS_OK: picker, cancel, mixed XLS/TSV/SQL import, native clipboard text and image, copied XLS on macOS, parsed preview, Pi file read, message attachments, restart persistence",
   );
 } catch (error) {
   if (running)
@@ -173,6 +271,7 @@ try {
     );
   throw error;
 } finally {
+  if (running) await restoreClipboard(running.application);
   await running?.application.close();
   rmSync(profileDirectory, { recursive: true, force: true });
 }

@@ -17,6 +17,7 @@ import {
   type FileScope,
   type FileSearchResult,
   fileAttachInputSchema,
+  fileImportDataInputSchema,
   fileImportPrivilegedInputSchema,
   fileListInputSchema,
   filePreviewInputSchema,
@@ -394,6 +395,7 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     .strict(),
   z.object({ command: z.literal("chat.events"), input: chatEventsInputSchema }).strict(),
   z.object({ command: z.literal("file.import"), input: fileImportPrivilegedInputSchema }).strict(),
+  z.object({ command: z.literal("file.importData"), input: fileImportDataInputSchema }).strict(),
   z.object({ command: z.literal("file.list"), input: fileListInputSchema }).strict(),
   z.object({ command: z.literal("file.search"), input: fileSearchInputSchema }).strict(),
   z.object({ command: z.literal("file.preview"), input: filePreviewInputSchema }).strict(),
@@ -619,6 +621,7 @@ export interface ChatCommandResultMap {
   "chat.activateBranch": ConversationSnapshot;
   "chat.events": ChatEvent[];
   "file.import": PersonalFile[];
+  "file.importData": PersonalFile[];
   "file.list": PersonalFile[];
   "file.search": FileSearchResult[];
   "file.preview": ContentPreview;
@@ -741,6 +744,7 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       parsed = z.array(chatEventSchema).parse(value);
       break;
     case "file.import":
+    case "file.importData":
     case "file.list":
       parsed = z.array(personalFileSchema).parse(value);
       break;
