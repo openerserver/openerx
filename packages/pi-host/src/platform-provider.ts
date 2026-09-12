@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   automaticModelRef,
+  classifyModelError,
   type ModelCatalogEntry,
   type ModelGatewayRequestDto,
   type ModelGatewayResponse,
@@ -117,8 +118,7 @@ export class HttpPlatformModelTransport implements PlatformModelTransport {
       signal,
     });
     if (!response.ok) {
-      const body = (await response.json()) as { error?: { code?: string } };
-      throw new Error(body.error?.code ?? `PLATFORM_HTTP_${response.status}`);
+      throw await this.#responseError(response);
     }
     if (!response.body) throw new Error("MODEL_STREAM_BODY_MISSING");
     yield* readModelStream(response.body);
@@ -132,9 +132,31 @@ export class HttpPlatformModelTransport implements PlatformModelTransport {
         "content-type": "application/json",
       },
     });
-    const body = (await response.json()) as { error?: { code?: string } };
-    if (!response.ok) throw new Error(body.error?.code ?? `PLATFORM_HTTP_${response.status}`);
-    return body;
+    if (!response.ok) throw await this.#responseError(response);
+    try {
+      return await response.json();
+    } catch {
+      throw new Error("MODEL_RESPONSE_INVALID");
+    }
+  }
+
+  async #responseError(response: Response): Promise<Error> {
+    const payload: unknown = await response.json().catch(() => ({}));
+    const body = (payload && typeof payload === "object" ? payload : {}) as {
+      error?: { code?: unknown; message?: unknown };
+    };
+    const code =
+      typeof body.error?.code === "string" ? body.error.code : `PLATFORM_HTTP_${response.status}`;
+    const failure = classifyModelError(
+      `${code}:${typeof body.error?.message === "string" ? body.error.message : ""}`,
+      { httpStatus: response.status },
+    );
+    // Keep a safe cause and HTTP status through Pi's string error boundary.
+    // Pi recognizes insufficient_quota as a limit that should not be retried.
+    const message = /^(?:ACCESS_|ACCOUNT_|DEVICE_)/u.test(code)
+      ? code
+      : `${failure.code}:HTTP ${response.status}${failure.category === "quota" ? ":insufficient_quota" : ""}`;
+    return Object.assign(new Error(message), { status: response.status });
   }
 }
 
