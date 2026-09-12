@@ -6,17 +6,25 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
+import { desktopArtifactIdentity } from "./desktop-artifact-identity.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
+const product = desktopArtifactIdentity(desktop);
 const output = process.env.OPENERX_PACKAGE_OUT_DIR
   ? path.resolve(process.env.OPENERX_PACKAGE_OUT_DIR)
   : path.join(desktop, "out");
 const target = `${process.platform}-${process.arch}`;
-const packageDirectory = path.join(output, `OpenERX-${target}`);
+const packageDirectory = path.join(output, `${product.productName}-${target}`);
 const executable =
   process.platform === "win32"
-    ? path.join(packageDirectory, "OpenERX.exe")
-    : path.join(packageDirectory, "OpenERX.app", "Contents", "MacOS", "OpenERX");
+    ? path.join(packageDirectory, `${product.executableName}.exe`)
+    : path.join(
+        packageDirectory,
+        `${product.productName}.app`,
+        "Contents",
+        "MacOS",
+        product.executableName,
+      );
 if (!["win32", "darwin"].includes(process.platform))
   throw new Error("PACKAGED_SMOKE_HOST_UNSUPPORTED");
 if (process.env.OPENERX_BRAND_MANIFEST?.trim())
