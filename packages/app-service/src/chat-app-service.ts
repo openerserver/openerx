@@ -28,6 +28,7 @@ import type {
 import type { PiHostClient } from "./pi-host-client";
 import type { SyncCoordinator } from "./sync-coordinator";
 import type { ToolAppService } from "./tool-app-service";
+import { captureWorkspaceArtifacts } from "./workspace-artifacts";
 
 interface RemoteExecutionAuthority {
   pairingId: string;
@@ -79,6 +80,9 @@ export class ChatAppService {
     );
     this.#piHost.onDisconnect?.(() => void this.#tools?.handleHostDisconnect());
     this.#piHost.onActivity((event) => this.#handlePiActivity(event));
+    this.#piHost.onUsage?.((frame) => {
+      if (!this.#closed) this.#tools?.recordByokUsage(frame.usage);
+    });
     this.#sync = sync;
     this.#files = files;
     this.#tools = tools;
@@ -117,6 +121,8 @@ export class ChatAppService {
     byok?: AppServiceByokConfiguration,
   ): Promise<unknown> {
     switch (request.command) {
+      case "usage.byok.list":
+        return this.#tools?.byokUsage(request.input) ?? { selectedModelRef: null, records: [] };
       case "sync.now":
         if (!authorization || !this.#sync) throw new Error("AUTHENTICATION_REQUIRED");
         return await this.#sync.syncOnce(authorization);
@@ -186,7 +192,7 @@ export class ChatAppService {
         const mounts = this.#skills?.mounts("default", request.input.skillInstallationId) ?? [];
         const draft = this.#repository.createGeneration(request.input);
         if (request.input.permissionMode) {
-          this.#requiredToolsRepository().setPermissionMode({
+          this.#requiredTools().setPermissionMode({
             conversationId: draft.receipt.conversationId,
             mode: request.input.permissionMode,
           });
@@ -324,6 +330,8 @@ export class ChatAppService {
           request.input.localPaths,
           request.input.conversationId,
         );
+      case "file.importData":
+        return await this.#requiredFiles().importData(request.input);
       case "file.list":
         return this.#requiredFiles().listFiles(request.input.conversationId);
       case "file.search":
@@ -331,6 +339,7 @@ export class ChatAppService {
       case "file.preview":
         return this.#requiredFiles().previewFile(request.input.personalFileId, {
           includeModelImages: false,
+          includeHtmlResources: true,
         });
       case "file.scope.revoke":
         return this.#requiredFiles().revokeScope(request.input.scopeId);
@@ -350,6 +359,7 @@ export class ChatAppService {
       case "artifact.preview":
         return this.#requiredFiles().previewArtifact(request.input.artifactId, {
           includeModelImages: false,
+          includeHtmlResources: true,
         });
       case "artifact.export":
         return this.#requiredFiles().exportArtifact(
@@ -381,7 +391,7 @@ export class ChatAppService {
       case "tool.permissionMode.get":
         return this.#requiredToolsRepository().permissionMode(request.input.conversationId);
       case "tool.permissionMode.set":
-        return this.#requiredToolsRepository().setPermissionMode(request.input);
+        return this.#requiredTools().setPermissionMode(request.input);
       case "tool.scopes.list":
         return this.#requiredToolsRepository().activeScopes();
       case "tool.scope.revoke":
@@ -389,9 +399,22 @@ export class ChatAppService {
       case "workspace.grant":
         return this.#requiredTools().grantWorkspace(request.input);
       case "workspace.list":
+        if (
+          request.input.conversationId &&
+          this.#projects &&
+          ![...this.#conversationByGeneration.values()].includes(request.input.conversationId)
+        ) {
+          this.#requiredTools().reconcileProjectWorkspaces({
+            conversationId: request.input.conversationId,
+            directories:
+              this.#projects.generationContext(request.input.conversationId)?.directories ?? [],
+          });
+        }
         return this.#requiredTools().listWorkspaces(request.input.conversationId);
       case "workspace.revoke":
         return this.#requiredTools().revokeWorkspace(request.input.workspaceGrantId);
+      case "workspace.setPrimary":
+        return this.#requiredTools().setPrimaryWorkspace(request.input);
       case "mcp.servers.list":
         return this.#requiredToolsRepository().listMcpServers();
       case "mcp.servers.authorization":
@@ -867,6 +890,7 @@ export class ChatAppService {
         branchId: draft.receipt.branchId,
         assistantMessageId: draft.receipt.assistantMessageId,
         thinkingLevel: draft.thinkingLevel,
+        selectedModelRef: draft.selectedModelRef,
         history,
         ...(memorySettings?.memoriesEnabled
           ? { memoryEnabled: true, memories: recalledMemories }
@@ -974,6 +998,13 @@ export class ChatAppService {
             : "failed",
         frame.errorCode,
       );
+      if (this.#files && this.#tools) {
+        captureWorkspaceArtifacts(
+          this.#requiredToolsRepository(),
+          this.#files,
+          this.#conversationByGeneration.get(frame.generationId),
+        );
+      }
       this.#pruneDisposableArtifacts();
       this.#forgetGeneration(frame.generationId);
       void this.#syncIfAuthorized(authorization);
@@ -1178,11 +1209,19 @@ export class ChatAppService {
   }
 
   #deliverableArtifacts(conversationId?: string): Artifact[] {
+    if (this.#tools && this.#files) {
+      captureWorkspaceArtifacts(this.#requiredToolsRepository(), this.#files, conversationId);
+    }
     const artifacts = this.#requiredFiles().listArtifacts();
     if (!this.#tools) return conversationId ? [] : artifacts;
     const retention = this.#requiredToolsRepository().artifactRetention(conversationId);
     if (conversationId) {
-      const deliverableIds = new Set(retention.deliverableIds);
+      const deliverableIds = new Set([
+        ...retention.deliverableIds,
+        ...this.#requiredFiles()
+          .workspaceArtifactLinks(conversationId)
+          .map(({ artifactId }) => artifactId),
+      ]);
       return artifacts.filter(({ id }) => deliverableIds.has(id));
     }
     const disposableIds = new Set(retention.disposableIds);
