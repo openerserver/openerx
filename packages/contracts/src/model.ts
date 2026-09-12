@@ -32,10 +32,13 @@ export const modelCapabilitiesSchema = z
   })
   .strict();
 
+export const toolSystemPermissionSchema = z.enum(["screen_capture", "accessibility"]);
+
 export const hostToolAvailabilitySchema = z
   .object({
     availableToolNames: z.array(z.string().min(1).max(200)).max(2_000),
     unavailableReasons: z.record(z.string(), z.string().min(1).max(1_000)),
+    missingPermissions: z.record(z.string(), z.array(toolSystemPermissionSchema).max(2)).optional(),
   })
   .strict();
 

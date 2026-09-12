@@ -385,6 +385,7 @@ function createBridge(): DesktopBridge {
     chooseWorkspace: vi.fn().mockResolvedValue(null),
     listWorkspaces: vi.fn().mockResolvedValue([]),
     revokeWorkspace: vi.fn(),
+    setPrimaryWorkspace: vi.fn(),
     listProjects: vi.fn().mockResolvedValue([]),
     getProject: vi.fn(),
     createProject: vi.fn(),
@@ -1748,6 +1749,42 @@ describe("M1 chat renderer", () => {
     );
   });
 
+  it("requires an explicit backup action before replacing unreadable model keys", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const current = await bridge.getModelServiceSettings();
+    vi.mocked(bridge.getModelServiceSettings).mockResolvedValue({
+      ...current,
+      credentialIssue: "unreadable",
+    });
+    vi.mocked(bridge.updateModelServiceSettings).mockResolvedValue({
+      ...current,
+      credentialIssue: null,
+      providerCredentials: { deepseek: true },
+    });
+    renderApp(bridge, "/settings/account?section=model");
+    const user = userEvent.setup();
+    const recovery = await screen.findByRole("button", { name: "备份旧记录并重新保存" });
+    expect((recovery as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "保存全部并启用" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(bridge.updateModelServiceSettings).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("DeepSeek API Key"), "synthetic-replacement-key");
+    await user.click(recovery);
+    await waitFor(() =>
+      expect(bridge.updateModelServiceSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recoverUnreadableCredentials: true,
+          providerApiKeys: { deepseek: "synthetic-replacement-key" },
+        }),
+      ),
+    );
+    expect(await screen.findByText(/旧 Key 记录已备份/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "备份旧记录并重新保存" })).toBeNull();
+    expect(screen.getByLabelText("DeepSeek API Key")).toHaveProperty("value", "");
+  });
+
   it("previews diagnostics separately from personal data before export", async () => {
     cleanup();
     const bridge = createBridge();
@@ -2715,6 +2752,8 @@ describe("M1 chat renderer", () => {
       id: "66666666-6666-4666-8666-666666666666",
       ownerProfileId: "local-default",
       conversationId,
+      bindingRole: "additional",
+      bindingSource: "user_added",
       displayName: "fixture-project",
       rootPath: "/fixture/project",
       access: input.access ?? "read_write",
@@ -2728,9 +2767,15 @@ describe("M1 chat renderer", () => {
 
     await user.click(await screen.findByRole("button", { name: "切换上下文" }));
     const dialog = await screen.findByRole("dialog", { name: "当前上下文" });
-    await user.selectOptions(within(dialog).getByLabelText("有效期"), "24h");
+    await user.click(within(dialog).getByRole("button", { name: "添加" }));
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole("region", { name: "添加附加目录" }),
+    );
+    expect(within(dialog).getByLabelText("有效期").closest("details")?.open).toBe(false);
+    await user.click(within(dialog).getByText("更多权限设置"));
+    await user.selectOptions(within(dialog).getByLabelText("有效期"), "24");
     await user.click(within(dialog).getByLabelText("允许 Shell 网络"));
-    await user.click(within(dialog).getByRole("button", { name: "授权工作区" }));
+    await user.click(within(dialog).getByRole("button", { name: "选择本机文件夹" }));
 
     expect(bridge.chooseWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2738,9 +2783,10 @@ describe("M1 chat renderer", () => {
         access: "read_write",
         allowNetwork: true,
         expiresAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+        role: "additional",
       }),
     );
-    expect(await within(dialog).findByText(/已授权工作区 fixture-project/u)).toBeTruthy();
+    expect(await within(dialog).findByText(/已连接附加目录 fixture-project/u)).toBeTruthy();
   });
 
   it("announces copy, archive and branch-creating regeneration results", async () => {
@@ -2867,7 +2913,9 @@ describe("M1 chat renderer", () => {
     expect(composer.contains(screen.getByLabelText("后续消息模型"))).toBe(true);
     expect(composer.contains(screen.getByLabelText("后续消息思考强度"))).toBe(true);
     expect(within(rail).getByRole("heading", { name: "输出内容" })).toBeTruthy();
+    await userEvent.setup().click(within(rail).getByRole("tab", { name: /^来源/ }));
     expect(within(rail).getByRole("heading", { name: "来源" })).toBeTruthy();
+    await userEvent.setup().click(within(rail).getByRole("tab", { name: /^活动/ }));
     expect(within(rail).getByRole("heading", { name: "本次运行" })).toBeTruthy();
   });
 
@@ -3451,7 +3499,7 @@ describe("M1 chat renderer", () => {
     if (!browserRow || !shellRow || !desktopRow) throw new Error("tool row missing");
     expect(await within(browserRow).findByText("已启用")).toBeTruthy();
     expect(await within(shellRow).findByText("未配置")).toBeTruthy();
-    expect(await within(desktopRow).findByText("部分可用")).toBeTruthy();
+    expect(await within(desktopRow).findByText("待系统授权")).toBeTruthy();
 
     await user.click(within(shellRow).getByRole("button", { name: "设置" }));
     expect(await screen.findByText("需先授权一个可写工作区")).toBeTruthy();
@@ -3460,15 +3508,84 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "关闭工具设置" }));
 
     await user.click(within(desktopRow).getByRole("button", { name: "设置" }));
-    expect(await screen.findByText("需在系统设置中允许辅助功能")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "请求辅助功能权限" }));
+    expect(await screen.findByRole("list", { name: "缺少的系统权限" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "打开辅助功能设置" }));
     await waitFor(() =>
       expect(bridge.requestDesktopNativePermission).toHaveBeenCalledWith({
         permission: "accessibility",
       }),
     );
-    expect(await screen.findByText("系统设置已打开；授权后请返回并刷新工具状态。")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "系统设置已打开；授权后返回即可重新检测。如系统要求，请重启 openerx。",
+      ),
+    ).toBeTruthy();
   });
+
+  it.each(["browser", "desktop"] as const)(
+    "guides both missing permissions for %s and rechecks on return and manually",
+    async (capability) => {
+      cleanup();
+      const bridge = createBridge();
+      const pending = {
+        capability,
+        status: "authorization_required" as const,
+        reason: "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED",
+        availableToolNames: [],
+        missingPermissions: ["screen_capture", "accessibility"] as (
+          | "screen_capture"
+          | "accessibility"
+        )[],
+        checkedAt: timestamp,
+      };
+      vi.mocked(bridge.listToolRuntimeReadiness).mockResolvedValue([pending]);
+      renderApp(bridge, "/settings/account?section=tools");
+      const user = userEvent.setup();
+      const name = capability === "browser" ? "浏览器操作" : "桌面控制";
+      const row = (await screen.findByText(name)).closest("article");
+      if (!row) throw new Error("tool row missing");
+      expect(await within(row).findByText("待系统授权")).toBeTruthy();
+      expect(within(row).getByText("缺少系统权限：屏幕录制、辅助功能")).toBeTruthy();
+      await user.click(within(row).getByRole("button", { name: "设置" }));
+      const dialog = await screen.findByRole("dialog", { name });
+      expect(bridge.requestDesktopNativePermission).not.toHaveBeenCalled();
+      await user.click(within(dialog).getByRole("button", { name: "打开屏幕录制设置" }));
+      expect(bridge.requestDesktopNativePermission).toHaveBeenLastCalledWith({
+        permission: "screen_capture",
+      });
+      await user.click(within(dialog).getByRole("button", { name: "打开辅助功能设置" }));
+      expect(bridge.requestDesktopNativePermission).toHaveBeenLastCalledWith({
+        permission: "accessibility",
+      });
+
+      vi.mocked(bridge.listToolRuntimeReadiness).mockResolvedValue([
+        {
+          ...pending,
+          reason: "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
+          missingPermissions: ["accessibility"],
+        },
+      ]);
+      window.dispatchEvent(new Event("focus"));
+      await waitFor(() =>
+        expect(within(dialog).queryByRole("button", { name: "打开屏幕录制设置" })).toBeNull(),
+      );
+      expect(within(dialog).getByRole("button", { name: "打开辅助功能设置" })).toBeTruthy();
+      expect(within(dialog).getByText("待系统授权")).toBeTruthy();
+
+      vi.mocked(bridge.listToolRuntimeReadiness).mockResolvedValue([
+        {
+          ...pending,
+          status: "available",
+          reason: null,
+          missingPermissions: [],
+          availableToolNames: [`openerx_${capability}`],
+        },
+      ]);
+      await user.click(within(dialog).getByRole("button", { name: "重新检测权限" }));
+      expect(await within(dialog).findByText("已启用")).toBeTruthy();
+      expect(within(dialog).queryByRole("list", { name: "缺少的系统权限" })).toBeNull();
+    },
+  );
 
   it("keeps local Web Search Provider choice and runtime reset in the trusted tool center", async () => {
     cleanup();
@@ -4349,9 +4466,43 @@ describe("M1 chat renderer", () => {
 
     expect(await screen.findByRole("region", { name: "项目上下文来源" })).toBeTruthy();
     expect(screen.getByText("优先使用中文，并在提交前运行测试。")).toBeTruthy();
-    expect(screen.getByText(/^来自项目 · 主目录 · 读写 ·/)).toBeTruthy();
-    expect(screen.getByText(/^仅此对话 · 附加目录 · 只读 ·/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "撤销 delivery-workspace 工作区" })).toBeNull();
-    expect(screen.getByRole("button", { name: "撤销 private-notes 工作区" })).toBeTruthy();
+    const directorySection = screen.getByRole("region", { name: "当前工作目录" });
+    const rows = within(directorySection).getAllByRole("article");
+    expect(rows).toHaveLength(2);
+    const [projectRow, privateRow] = rows;
+    if (!projectRow || !privateRow)
+      throw new Error("Expected primary and additional directory rows");
+    expect(within(projectRow).getByText("来自项目")).toBeTruthy();
+    expect(within(privateRow).getByText("本对话设置")).toBeTruthy();
+    expect(within(projectRow).queryByRole("button", { name: "移除本对话设置" })).toBeNull();
+    await user.click(within(projectRow).getByText("权限与操作"));
+    expect(within(projectRow).getByRole("link", { name: "管理项目目录" })).toBeTruthy();
+    await user.click(within(privateRow).getByText("权限与操作"));
+    expect(within(privateRow).getByRole("button", { name: "移除附加目录" })).toBeTruthy();
+    expect(within(privateRow).getByRole("button", { name: "设为工作目录" })).toBeTruthy();
+    const [projectGrant, privateGrant] = await bridge.listWorkspaces({ conversationId });
+    if (!projectGrant || !privateGrant)
+      throw new Error("Expected project and local directory grants");
+    const selected = {
+      ...privateGrant,
+      bindingRole: "primary" as const,
+    };
+    vi.mocked(bridge.setPrimaryWorkspace).mockResolvedValue(selected);
+    vi.mocked(bridge.listWorkspaces).mockResolvedValue([
+      selected,
+      { ...projectGrant, bindingRole: "additional" },
+    ]);
+    await user.click(within(privateRow).getByRole("button", { name: "设为工作目录" }));
+    expect(bridge.setPrimaryWorkspace).toHaveBeenCalledWith({
+      conversationId,
+      workspaceGrantId: selected.id,
+    });
+    expect(await within(directorySection).findByText(/工作目录已设为 private-notes/u)).toBeTruthy();
+    await user.click(
+      within(screen.getByRole("dialog", { name: "当前上下文" })).getByRole("button", {
+        name: "关闭上下文",
+      }),
+    );
+    expect(await screen.findByRole("button", { name: "工作目录 private-notes" })).toBeTruthy();
   });
 });

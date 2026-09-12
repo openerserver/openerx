@@ -2060,7 +2060,7 @@ h1 {
   background: var(--workspace-accent);
   border-radius: 2px;
   box-shadow: 0 0 12px color-mix(in srgb, var(--workspace-accent) 48%, transparent);
-  animation: stream-tail-pulse 0.9s ease-in-out infinite;
+  animation: stream-tail-blink 1.2s step-end infinite;
 }
 
 .jump-to-latest {
@@ -2086,14 +2086,14 @@ h1 {
   border-color: var(--workspace-accent-strong);
 }
 
-@keyframes stream-tail-pulse {
+@keyframes stream-tail-blink {
   0%,
   100% {
-    opacity: 0.35;
+    opacity: 1;
   }
 
   50% {
-    opacity: 1;
+    opacity: 0;
   }
 }
 
@@ -2109,7 +2109,7 @@ h1 {
 
 @media (prefers-reduced-motion: reduce) {
   .stream-tail {
-    animation: none;
+    animation-duration: 2.4s;
   }
 }
 
@@ -4456,6 +4456,20 @@ h1 {
   color: var(--workspace-text);
 }
 
+.tool-library-name-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.tool-library-name-copy small {
+  color: var(--workspace-warning);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: normal;
+}
+
 .tool-library-row p {
   min-width: 0;
   margin: 0;
@@ -4684,6 +4698,27 @@ h1 {
   margin: 0;
 }
 
+.tool-system-permissions {
+  display: grid;
+  gap: 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.tool-system-permissions li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tool-system-permissions li p {
+  margin: 4px 0 0;
+  color: var(--workspace-muted-strong);
+  font-size: 12px;
+}
+
 .tool-settings-section > p,
 .tool-settings-section > ul {
   color: var(--workspace-muted-strong);
@@ -4709,13 +4744,19 @@ h1 {
 }
 
 .tool-settings-heading button,
-.tool-modal-actions button {
+.tool-modal-actions button,
+.tool-system-permissions button,
+.tool-permission-refresh {
   min-height: 36px;
   padding: 7px 11px;
   color: var(--workspace-text);
   background: var(--workspace-surface-raised);
   border: 1px solid var(--workspace-border-strong);
   border-radius: 7px;
+}
+
+.tool-permission-refresh {
+  justify-self: start;
 }
 
 .tool-search-settings-form {
@@ -9045,6 +9086,23 @@ summary:focus-visible {
 }
 
 /* Shared visual system for every settings subsection. */
+.model-key-recovery {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+  background: var(--workspace-surface-raised);
+}
+
+.model-key-recovery p {
+  margin: 0;
+}
+
+.model-key-recovery button {
+  justify-self: start;
+}
+
 .settings-account-page .settings-section-content {
   gap: 16px;
   scrollbar-gutter: stable;

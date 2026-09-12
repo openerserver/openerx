@@ -10,7 +10,7 @@ import type {
   SelectableLocalWebSearchProviderId,
 } from "./local-web-search";
 import { memoryConflictKeySchema, memoryKindSchema } from "./memory";
-import { thinkingLevelSchema } from "./model";
+import { thinkingLevelSchema, toolSystemPermissionSchema } from "./model";
 import { modelUsageRecordSchema } from "./model-usage";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
@@ -64,6 +64,7 @@ export const toolRuntimeReadinessSchema = z
     reason: z.string().min(1).max(500).nullable(),
     availableToolNames: z.array(z.string().min(1).max(200)).max(2_000),
     details: z.array(z.string().min(1).max(200)).max(20).optional(),
+    missingPermissions: z.array(toolSystemPermissionSchema).max(2).optional(),
     checkedAt: timestampSchema,
   })
   .strict();

@@ -116,6 +116,7 @@ import {
   workspaceGrantSchema,
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
+  workspaceSetPrimaryInputSchema,
 } from "./workspace";
 
 export { entityIdSchema, timestampSchema } from "./common";
@@ -454,6 +455,9 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     .strict(),
   z.object({ command: z.literal("workspace.list"), input: workspaceListInputSchema }).strict(),
   z.object({ command: z.literal("workspace.revoke"), input: workspaceRevokeInputSchema }).strict(),
+  z
+    .object({ command: z.literal("workspace.setPrimary"), input: workspaceSetPrimaryInputSchema })
+    .strict(),
   z.object({ command: z.literal("mcp.servers.list"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("mcp.servers.authorization"), input: emptyInputSchema }).strict(),
   z
@@ -641,6 +645,7 @@ export interface ChatCommandResultMap {
   "workspace.grant": WorkspaceGrant;
   "workspace.list": WorkspaceGrant[];
   "workspace.revoke": WorkspaceGrant;
+  "workspace.setPrimary": WorkspaceGrant;
   "mcp.servers.list": z.infer<typeof mcpServerConfigSchema>[];
   "mcp.servers.authorization": z.infer<typeof mcpServerAuthorizationStateSchema>[];
   "mcp.server.authorize": z.infer<typeof mcpServerAuthorizationStateSchema>;
@@ -795,6 +800,7 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "workspace.grant":
     case "workspace.revoke":
+    case "workspace.setPrimary":
       parsed = workspaceGrantSchema.parse(value);
       break;
     case "workspace.list":

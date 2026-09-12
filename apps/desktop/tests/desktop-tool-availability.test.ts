@@ -47,6 +47,7 @@ describe("desktopHostToolAvailability", () => {
       unavailableReasons: {
         "openerx_desktop:interact": "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
       },
+      missingPermissions: { openerx_desktop: ["accessibility"] },
     });
   });
 
@@ -64,6 +65,7 @@ describe("desktopHostToolAvailability", () => {
       unavailableReasons: {
         openerx_desktop: "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED",
       },
+      missingPermissions: { openerx_desktop: ["screen_capture"] },
     });
   });
 
@@ -83,6 +85,36 @@ describe("desktopHostToolAvailability", () => {
       },
     });
   });
+
+  it.each([
+    [
+      "denied",
+      false,
+      ["screen_capture", "accessibility"],
+      "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED",
+    ],
+    ["not-determined", true, ["screen_capture"], "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED"],
+    ["granted", false, ["accessibility"], "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED"],
+    ["unknown", true, [], "DESKTOP_SCREEN_CAPTURE_STATUS_UNKNOWN"],
+  ] as const)(
+    "reports all missing macOS permissions for browser and desktop (%s, %s)",
+    (screenCaptureStatus, accessibilityTrusted, missing, reason) => {
+      const result = desktopHostToolAvailability({
+        platform: "darwin",
+        browserAvailable: false,
+        screenCaptureStatus,
+        accessibilityTrusted,
+        automationAvailable: true,
+      });
+      expect(result.availableToolNames).not.toContain("openerx_browser");
+      expect(result.unavailableReasons.openerx_browser).toBe(reason);
+      expect(result.missingPermissions?.openerx_browser ?? []).toEqual(missing);
+      expect(result.missingPermissions?.openerx_desktop ?? []).toEqual(missing);
+      expect(result.availableToolNames.includes("openerx_desktop")).toBe(
+        screenCaptureStatus === "granted",
+      );
+    },
+  );
 
   it("does not advertise Windows Desktop until native target-bounded control exists", () => {
     expect(

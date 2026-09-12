@@ -34,6 +34,7 @@ export const modelServiceSettingsSchema = z
     byok: byokModelConfigurationSchema.nullable(),
     credentialConfigured: z.boolean(),
     providerCredentials: z.partialRecord(byokProviderIdSchema, z.boolean()).default({}),
+    credentialIssue: z.enum(["unavailable", "unreadable"]).nullable().optional(),
     updatedAt: z.iso.datetime().nullable(),
   })
   .strict();
@@ -46,6 +47,7 @@ export const modelServiceSettingsUpdateSchema = z
     providerApiKeys: z
       .partialRecord(byokProviderIdSchema, z.string().trim().min(1).max(20_000))
       .optional(),
+    recoverUnreadableCredentials: z.literal(true).optional(),
   })
   .strict()
   .superRefine((value, context) => {

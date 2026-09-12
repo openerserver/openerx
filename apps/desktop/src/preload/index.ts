@@ -143,6 +143,7 @@ import {
   workspaceGrantSchema,
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
+  workspaceSetPrimaryInputSchema,
 } from "@openerx/contracts";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -623,6 +624,12 @@ const bridge: DesktopBridge = {
       ipcChannels.workspaceRevoke,
       "workspace.revoke",
       workspaceRevokeInputSchema.parse(input),
+    ),
+  setPrimaryWorkspace: async (input) =>
+    invokeChat(
+      ipcChannels.workspaceSetPrimary,
+      "workspace.setPrimary",
+      workspaceSetPrimaryInputSchema.parse(input),
     ),
   listProjects: async (input = {}) =>
     invokeProject(ipcChannels.projectList, "project.list", projectListInputSchema.parse(input)),

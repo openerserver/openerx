@@ -448,6 +448,89 @@ describe("ProjectAppService", () => {
     replayedProjects.close();
   });
 
+  it("loads the project working directory before the next turn and keeps a local selection", async () => {
+    const file = databasePath();
+    const root = path.join(path.dirname(file), "project-root");
+    const reference = path.join(path.dirname(file), "reference-root");
+    mkdirSync(root);
+    mkdirSync(reference);
+    const projects = new ProjectRepository(file, { ownerProfileId, deviceId, now: () => now });
+    const tools = directoryAuthorizer(file);
+    const source = tools.service.grantWorkspace({
+      conversationId: null,
+      rootPath: root,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+      projectOperationId: crypto.randomUUID(),
+    });
+    const project = projects.createProject({
+      operationId: crypto.randomUUID(),
+      name: "Directory test",
+      instructions: "",
+    });
+    projects.addDirectory({
+      operationId: crypto.randomUUID(),
+      projectId: project.id,
+      expectedProjectRevision: 1,
+      workspaceGrantId: source.id,
+      displayName: "project-root",
+      desiredAccess: "read_write",
+    });
+    const repository = new ChatRepository(file, { ownerProfileId, now: () => now });
+    const history = repository.createGeneration({
+      projectId: project.id,
+      text: "Existing task",
+      idempotencyKey: "workspace-list-before-generation",
+    });
+    repository.appendPiEvent(history.receipt.assistantMessageId, {
+      eventId: crypto.randomUUID(),
+      sequence: 1,
+      occurredAt: now,
+      type: "completed",
+    });
+    const conversationId = history.receipt.conversationId;
+    const pi = new CapturingPiHostClient();
+    const chat = new ChatAppService(
+      repository,
+      pi,
+      null,
+      null,
+      tools.service,
+      null,
+      null,
+      null,
+      projects,
+    );
+    const visible = await chat.handle({ command: "workspace.list", input: { conversationId } });
+    expect(visible).toMatchObject([
+      { rootPath: realpathSync(root), bindingRole: "primary", bindingSource: "project" },
+    ]);
+    expect(visible).toHaveLength(1);
+    expect(pi.prompts).toHaveLength(0);
+    const additional = tools.service.grantWorkspace({
+      conversationId,
+      rootPath: reference,
+      access: "read_only",
+      allowNetwork: false,
+      expiresAt: null,
+      role: "additional",
+    });
+    await chat.handle({
+      command: "workspace.setPrimary",
+      input: { conversationId, workspaceGrantId: additional.id },
+    });
+    expect(
+      await chat.handle({ command: "workspace.list", input: { conversationId } }),
+    ).toMatchObject([
+      { id: additional.id, bindingRole: "primary", access: "read_only", allowNetwork: false },
+      { rootPath: realpathSync(root), bindingRole: "additional", bindingSource: "project" },
+    ]);
+    chat.close();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    projects.close();
+  });
+
   it("freezes project instructions and primary/additional grants into each Generation", async () => {
     const file = databasePath();
     const primaryRoot = path.join(path.dirname(file), "primary-root");
@@ -532,6 +615,14 @@ describe("ProjectAppService", () => {
     expect(projectPrompt?.workspace?.grants).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: primary.binding?.workspaceGrantId })]),
     );
+    const reconcile = vi.spyOn(tools.service, "reconcileProjectWorkspaces");
+    const visibleDuringTurn = await chat.handle({
+      command: "workspace.list",
+      input: { conversationId: receipt.conversationId },
+    });
+    expect(visibleDuringTurn).toHaveLength(2);
+    expect(reconcile).not.toHaveBeenCalled();
+    reconcile.mockRestore();
     const bindings = tools.repository.listWorkspaceBindings(receipt.conversationId);
     const primaryBinding = bindings.find(({ role }) => role === "primary");
     const additionalBindings = bindings.filter(({ role }) => role === "additional");

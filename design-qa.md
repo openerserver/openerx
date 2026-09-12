@@ -1,251 +1,34 @@
-# Design QA — File Preview Side Panel
+# 成果与来源面板视觉检查 · 2026-09-11
 
-## Comparison target
+Source visual truth: `/var/folders/1v/0886jgvs7hg9chd3jqlcnxfm0000gn/T/codex-clipboard-a7946b84-514d-4045-b7af-1a72edd8d446.png`，以及相同原生窗口捕获的检查点 `before.png`。目标是按用户要求重设计既有面板，文件分类、密度和标签布局的差异是有意调整。
 
-- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-99a3daae-5450-4fda-98ae-98ec61462ea3.png`
-- Browser-rendered implementation: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\qa-side-preview-desktop.png`
-- Combined comparison evidence: `C:\Users\alexe\Documents\ChatGPT\openerx\.codex-temp\qa-side-preview-comparison.png`
-- State: files library with `README.md` selected and Markdown preview open on the right.
-- Reference pixels: 1842 × 1222, including Windows/Electron chrome at approximately 1.5× device density. The app content corresponds to roughly 1228 CSS px wide.
-- Implementation pixels: 1226 × 758, normalized to the Electron content area's CSS size at 1× for comparison.
-- Desktop CSS viewport: 1226 × 758.
-- Narrow-window CSS viewport: 906 × 700.
+Implementation screenshots: `/Users/wanglei/Downloads/phones-cloud/openerx-checkpoints/results-panel-20260911-181804/` 中的 `live-files.png`、`after-preview-compact.png`、`after-source-preview.png`、`after-wide-fixed.png`。
 
-## QA inventory and interaction coverage
+Viewport: 桌面默认窗口配置 1240 × 820；CUA 输出的基线和实现截图均为 1162 × 768。使用同一窗口与捕获通道直接比较，没有额外拉伸；没有测量浏览器 CSS viewport 或设备像素比，因此不声称逐 CSS 像素复刻。
 
-- Selecting a file opens a preview beside the library: passed with normal click input.
-- The preview is the library's right-hand sibling rather than a child below the list: passed by DOM structure and visible layout.
-- Library and preview have independent vertical scrolling: passed; the library pane had `scrollHeight 1115 / clientHeight 758`, while the preview body scrolled independently.
-- Selected file state is visible through `.library-card.is-selected` and `aria-pressed="true"`: passed.
-- Preview/source mode switch: passed in both directions.
-- Close restores the unsplit library width and removes the panel: passed.
-- Narrow window keeps the preview anchored to the right as an overlay, with no horizontal document overflow: passed at 906 × 700.
-- Console and renderer page errors: none observed after reload and the complete interaction flow.
+State: 浅色主题、同一外贸网站对话；文件概览、两个成果标签、来源 README 标签和加宽阅读。预览副本缺少本机凭据，所以截图中的模型提示与原窗口不同；正式安装后的模型读取仍需系统钥匙串授权。
 
-## Full-view comparison evidence
+## 对照与修复
 
-The combined comparison shows the original files view on the left and the implementation after selection on the right. The established UWA sidebar, typography, color tokens, cards, spacing language, and content hierarchy remain consistent. The intentional change is that the library contracts into the left work area while a full-height preview panel occupies the right edge.
+- Full-view comparison: 已把 `before.png` 与 `after-files.png`、`before.png` 与 `live-files.png` 放在同次图像输入中比较，确认面板密度、独立滚动区域、固定导航及对话相邻关系。
+- [P2，已修复] 第一版预览标题层级冗余。证据 `after-html-preview.png` → `after-preview-compact.png`；移除预览状态的重复标题行，保留分类和文件标签，内容区向上扩展。
+- [P2，已修复] 加宽状态对话网格撑开并被面板覆盖。证据 `after-wide.png` → `after-wide-fixed.png`，两张已放在同次图像输入中比较；限制加宽上限，设置对话内部单列 `minmax(0, 1fr)`。修复后标题省略、工作目录入口、输入框与发送区域均可见。
+- Focused comparison: 右侧窄面板和预览工具栏在 1162 × 768 原始截图中可直接辨认，已逐项检查文件行、版本号、标签边界、关闭控件和来源徽标；没有裁切后放大来补造细节。
 
-## Required fidelity surfaces
+## 必检项目
 
-- Fonts and typography: existing UWA font stack, weights, sizes, line heights, wrapping, and hierarchy are preserved. Preview Markdown uses the existing application renderer and remains legible at both tested widths.
-- Spacing and layout rhythm: the full-height panel aligns to the content area's top and bottom; its left divider creates a clear split. The list and preview each fit the viewport without document-level scrolling.
-- Colors and visual tokens: existing workspace surface, border, accent, muted text, and active-state tokens are reused. No new off-system colors or gradients were introduced.
-- Image quality and asset fidelity: no new image assets were required. Existing Phosphor icons and rendered document surfaces are retained.
-- Copy and content: all existing library and preview labels are unchanged. The selected Markdown content renders through the existing preview path.
+- 字体：沿用应用字体；面板 11–13px 的功能层级、文件名单行省略、来源状态和版本次级显示。正文预览沿用原 Markdown / HTML 渲染器。
+- 间距：32px 文件行、紧凑目录缩进、固定工具栏、独立内容滚动；默认与加宽状态无已知面板控件裁切。
+- 颜色：沿用 `--workspace-*` 主题变量，激活下划线和悬停态延续现有中性色；键盘焦点使用现有强调色。
+- 图像与图标：沿用 Phosphor 和既有内容，没有为界面生成位图或替换用户网页资产；HTML 成果的相对资源正常显示。
+- 文案：文件 / 来源 / 活动、文件路径、版本、解析状态、全部成果、管理来源均对应真实数据或操作，不把运行实现细节放进界面。
 
-## Focused-region evidence
+## 验证范围和待完成项
 
-A separate crop was not needed: the original-resolution implementation screenshot keeps the entire right panel, header controls, Markdown typography, divider, and both scrollbars readable in one view. Numeric bounds additionally confirm the right-hand relationship: library pane `x 258 / width 561.45`, preview `x 819.45 / width 406.55`, with both at height 758.
+96 项相关组件和聊天回归通过；原生交互覆盖搜索、文档与 HTML、多标签、来源、关闭及面板宽度。检查了启动诊断中的 `service.ready`，没有将其等同于开发者控制台检查。Windows、深色主题及所有窄窗断点未做视觉验证。
 
-## Comparison history
-
-### Iteration 1
-
-- Earlier finding [P2]: at the split width, the two library add buttons were compressed and their Chinese labels wrapped vertically.
-- Fix: the library header switches to a stacked layout while the preview is open, and its action buttons use `white-space: nowrap`.
-- Post-fix evidence: `qa-side-preview-desktop.png` shows both buttons on one readable row with no clipping or vertical label wrapping.
-
-## Findings
-
-No actionable P0, P1, or P2 differences remain. The narrower library column and stacked header controls are intentional consequences of the requested right-side preview.
-
-## Follow-up polish
-
-No blocking polish items. A future optional enhancement could add a draggable divider if user-controlled preview width becomes desirable.
-
-## Final result
-
-final result: passed
-
----
-
-# Design QA — Composer Model + Thinking Selector
-
-## Comparison target
-
-- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-ae28e30f-36f0-4c84-a052-12a6ee06d1ce.png`
-- Implementation screenshot path: live Windows capture `screenshot://screenshot-0` from the running UWA Electron window (ephemeral capture reference).
-- Viewport: UWA desktop window at 1229 × 815 logical pixels, density 1×.
-- Source pixels: 1904 × 1066, including Windows/Codex chrome.
-- Implementation pixels: 1229 × 815, including Windows/UWA chrome.
-- Density normalization: compared by desktop CSS size and the composer region rather than raw full-window pixel scale.
-- State: existing conversation, composer visible; closed combined trigger and open grouped-menu states both inspected.
-
-## Full-view comparison evidence
-
-The UWA composer now follows the Codex reference hierarchy: one compact model control sits in the bottom action row and displays both the active model and thinking strength. Permission remains a separate safety control, while Skill and context remain separate task controls. The rest of the UWA workspace and composer layout are unchanged.
-
-## Focused-region evidence
-
-The composer region was inspected at readable size in both states. The closed trigger reads `DeepSeek V4 Flash · 标准` with a lightning icon and caret. The open popup contains separate `模型` and `思考强度` groups, a divider between them, descriptions for model capability/context, and independent checkmarks for the selected model and selected thinking level.
-
-## Required fidelity surfaces
-
-- Fonts and typography: existing UWA font stack and text weights are preserved; the combined value remains on one line without truncating at the tested desktop width.
-- Spacing and layout rhythm: two adjacent controls became one 220–300 px control; the menu opens upward with consistent 9/12 px option spacing and does not collide with the window edge.
-- Colors and visual tokens: existing workspace surface, border, accent, muted text, and selected-state tokens are reused; no off-system palette or gradient was introduced.
-- Image quality and asset fidelity: no raster assets were required. The lightning, caret, and check icons use the existing Phosphor icon library.
-- Copy and content: the trigger combines the real model display name and localized thinking label; the popup retains model capabilities, context size, availability, and every supported thinking level.
-
-## Interaction coverage
-
-- One trigger exposes model and thinking choices: passed.
-- Existing conversations keep separate model/thinking persistence calls: passed.
-- New conversations can choose both values before sending: passed.
-- Native semantic selects remain available to existing automation/accessibility paths: passed.
-- Arrow-key navigation, Home/End, Escape, outside-click closing, selected, disabled, hover, and focus states remain supported by the shared menu component.
-- Targeted renderer tests: 3 passed.
-- Desktop TypeScript check: passed.
-
-## Comparison history
-
-### Iteration 1
-
-- Earlier finding [P2]: the combined label inherited the old 116 px label limit and visually truncated the model name before the thinking value.
-- Fix: increased the combined control to 220–300 px and its label allowance to 220 px.
-- Post-fix evidence: the running UWA window shows the full `DeepSeek V4 Flash · 标准` label and the action row remains on one line.
-
-### Iteration 2
-
-- Earlier finding [P3]: the footer still presented permission, model, Skill, and context as a row of bordered fields, making the action area visually heavier than the Codex reference.
-- Fix: converted those controls to quiet, borderless text actions; moved the combined model/thinking entry to the right; preserved an orange warning treatment for full-access mode; and removed the redundant keyboard hint from the conversation footer.
-- Post-fix evidence: the same menu, focus ring, hover surface, selected states, and permission warning remain available without permanent pill borders.
-
-## Findings
-
-No actionable P0, P1, or P2 differences remain for the requested model/thinking merge. The composer footer now follows the Codex reference's quieter hierarchy while retaining UWA's red accent inside the opened menu.
-
-## Follow-up polish
-
-P3: on very narrow windows, the combined label will ellipsize before wrapping so the send action remains reachable.
-
-## Final result
-
-final result: passed
-
----
-
-# Browser activity display design QA
-
-- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-b9cd91d9-e2c2-4c0e-a209-6f8b14fb9490.png`
-- Implementation screenshot: unavailable; the local computer-use surface does not expose native Electron windows.
-- Viewport: source image 1918 × 1081 px; desktop density unknown. Intended UWA comparison viewport matches the current desktop window.
-- State: elapsed-time group visible; individual browser activity collapsed by default, then expanded to reveal actions.
-
-## Full-view comparison evidence
-
-The Codex reference image was opened at original resolution. The UWA development build launched successfully, but its native Electron window was not exposed to the available capture surface, so a valid same-state implementation screenshot could not be produced.
-
-## Focused-region comparison evidence
-
-The reference activity region shows a low-emphasis icon, one concise past-tense action line, no card border, and details disclosed only on demand. The implementation adopts that hierarchy in the browser activity component, but visual spacing and typography could not be judged from a rendered capture.
-
-## Findings
-
-- [P2] Rendered fidelity cannot be visually confirmed.
-  - Location: browser activity row and elapsed-time disclosure.
-  - Evidence: the source is available, but the native implementation screenshot is missing.
-  - Impact: exact icon alignment, line height, spacing, and token contrast remain unverified.
-  - Fix: capture the UWA Electron window at the same desktop scale and compare the collapsed and expanded states against the source.
-
-## Required fidelity surfaces
-
-- Fonts and typography: source inspected; implementation capture blocked.
-- Spacing and layout rhythm: source inspected; implementation capture blocked.
-- Colors and visual tokens: source uses subdued neutral activity text; implementation uses existing UWA muted tokens, pending visual confirmation.
-- Image quality and asset fidelity: no new raster assets; the existing Phosphor icon system is retained.
-- Copy and content: browser actions use concise past-tense Chinese activity summaries.
-
-## Primary interactions tested
-
-- Expand the elapsed-time group.
-- Expand a collapsed browser activity row.
-- Open the browser image preview.
-- Return from the image preview to outputs and sources.
-
-Browser console inspection was unavailable because the native renderer could not be attached through the approved computer-use surface.
-
-## Comparison history
-
-- Initial implementation used a bordered status card with always-visible actions.
-- Current iteration removes the card treatment, hides completed-state chrome, uses a compact icon/action disclosure row, and moves controls into the expanded state.
-- Post-fix visual evidence remains blocked by native-window capture availability.
-
-## Implementation checklist
-
-- [x] Match Codex's compact activity hierarchy.
-- [x] Keep completed browser calls collapsed by default.
-- [x] Preserve screenshot preview and technical details behind disclosure.
-- [x] Cover the interaction with automated UI tests.
-- [ ] Capture and compare the native Electron window.
+当前没有未解决的面板视觉 P0/P1/P2；完整桌面交接还等待用户完成 macOS 钥匙串授权并复核模型入口。系统限制禁止 CUA 操作 SecurityAgent，未绕过该限制。
 
 final result: blocked
 
----
-
-# Per-response tool activity design QA
-
-- Source visual truth: `C:\Users\alexe\AppData\Local\Temp\codex-clipboard-721b2c13-0a22-42fa-b3f2-b9bdcdd8c5dc.png`
-- Implementation screenshot: unavailable; the local capture surface does not expose the native UWA Electron window.
-- Viewport: source image 1918 × 1081 px; intended UWA comparison viewport is the current desktop window.
-- State: the elapsed-time disclosure controls only intermediate updates and their tool activity; the final conclusion remains visible in both collapsed and expanded states. After the process opens, each interleaved tool activity remains independently collapsed until selected.
-
-## Full-view comparison evidence
-
-The Codex reference was inspected at original resolution. Its defining hierarchy is chronological and nested: the elapsed-time row owns the process timeline, while each related tool activity appears as a compact disclosure between assistant updates. The final conclusion is a separate, persistent result below that disclosure. The running UWA development build accepted the renderer and stylesheet changes through hot reload without a renderer crash, but a same-state native screenshot could not be captured.
-
-## Focused-region comparison evidence
-
-The implementation now uses persisted model-round markers as structural boundaries. The elapsed-time control mounts only the intermediate assistant timeline on expansion; the last completed text part renders as an always-visible final-answer region outside that timeline. Each process round presents one independently collapsed activity summary. Expanding that summary reveals typed input, results, browser actions, and technical details without adding a second browser disclosure layer.
-
-## Findings
-
-- [P2] Rendered fidelity cannot be visually confirmed.
-  - Location: multi-part assistant response timeline.
-  - Evidence: source screenshot is available, but the native implementation screenshot is missing.
-  - Impact: final line spacing, divider weight, and vertical-rail alignment remain unverified.
-  - Fix: capture the current UWA window with at least two assistant updates and one intervening browser/tool call, then compare it with the source.
-
-## Required fidelity surfaces
-
-- Fonts and typography: existing UWA message typography is preserved; tool rows use the existing compact muted treatment.
-- Spacing and layout rhythm: calls are inserted with a 6 px top gap under their associated response part; the overview has a 14 px separation from the response body.
-- Colors and visual tokens: existing workspace text, muted, border, accent, and raised-surface tokens are reused.
-- Image quality and asset fidelity: no new image assets were introduced; existing Phosphor icons remain in use.
-- Copy and content: elapsed time remains visible; raw model and reasoning rows are omitted from the active chronological view so the visible sequence emphasizes user-readable updates and actions.
-
-## Primary interactions tested
-
-- Confirm the assistant response timeline is hidden before the elapsed-time disclosure is opened.
-- Confirm the final conclusion remains visible before and after toggling the elapsed-time disclosure.
-- Expand the elapsed-time disclosure and reveal the intermediate process timeline.
-- Place a browser call beneath the first of two assistant updates.
-- Keep the next assistant update after that browser call in DOM order.
-- Confirm each response-level tool activity is collapsed after the timeline opens.
-- Expand a browser activity once and open its screenshot preview.
-- Select a historical run without exposing raw reasoning.
-
-## Comparison history
-
-- Earlier finding [P2]: the implementation opened the elapsed-time disclosure by default while the Codex reference presents the compact collapsed state first.
-- Fix: initialize the disclosure as collapsed and retain the same per-response placement after the user expands it.
-- Post-fix evidence: automated interaction coverage confirms the browser action is absent initially and appears only after opening the elapsed-time disclosure; native pixel comparison remains blocked by capture availability.
-- Earlier finding [P1]: collapsing the elapsed-time row hid only tool activity while leaving assistant updates visible, and expanding it exposed tool details immediately.
-- Fix: move the complete response timeline under the elapsed-time disclosure, then add an independent collapsed disclosure around each response-level activity group.
-- Post-fix evidence: automated coverage verifies that the response timeline is initially absent, appears after the elapsed-time row is selected, and leaves the browser activity closed until its own summary is selected.
-- Earlier finding [P1]: the elapsed-time disclosure also contained the final conclusion, so collapsing process history removed the answer the user needed to read.
-- Fix: split the last completed assistant text part into a persistent final-answer region; keep intermediate updates and their tool calls under the elapsed-time disclosure, and keep diagnostics and response actions with the visible conclusion.
-- Post-fix evidence: automated coverage verifies that the intermediate update is absent while collapsed and visible while expanded, while the final conclusion and response actions remain present in both states. Native pixel comparison remains blocked by capture availability.
-
-## Implementation checklist
-
-- [x] Distribute active run events by persisted model round.
-- [x] Let the elapsed-time row control only intermediate response updates.
-- [x] Keep the final conclusion and its response actions outside that disclosure.
-- [x] Keep each response-level tool activity independently collapsed.
-- [x] Preserve browser preview and historical run selection.
-- [x] Pass all 64 renderer interaction tests and desktop TypeScript validation.
-- [ ] Capture and compare the native Electron window.
-
-final result: blocked
+Implementation checklist: 完成系统授权后复核原有模型入口，更新运行记录和最终检查结果。

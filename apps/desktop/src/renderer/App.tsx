@@ -8,6 +8,7 @@ import type {
   ContentPreview,
   ConversationSnapshot,
   ConversationSummary,
+  DesktopNativePermission,
   DeviceSession,
   LocalWebSearchProviderRuntimeState,
   LocalWebSearchSettingsSelection,
@@ -99,7 +100,6 @@ import {
 } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { AccountAccess } from "./AccountAccess";
-import { ArtifactDirectory } from "./ArtifactDirectory";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -108,6 +108,11 @@ import {
   ConversationDeletionProvider,
   useConversationDeletion,
 } from "./ConversationDeletion";
+import {
+  ConversationResults,
+  type ResultListState,
+  type ResultSelection,
+} from "./ConversationResults";
 import { DesktopControlBar } from "./DesktopControlBar";
 import { PendingToolApproval } from "./PendingToolApproval";
 import {
@@ -117,6 +122,8 @@ import {
   ProjectSidebar,
   useProject,
 } from "./projects";
+import { withUiTimeout } from "./ui-timeout";
+import { WorkspaceLocation, WorkspaceSection } from "./WorkspaceContext";
 
 const suggestions = [
   "复盘最近一周 A 股行情：哪些板块最受关注，背后的驱动因素是什么？",
@@ -138,8 +145,6 @@ const assistantCompanionStorageKey = "openerx.assistant.companionEnabled";
 const assistantFeatureStorageKey = "openerx.features.assistantEnabled";
 
 type ThemePreference = "system" | "dark" | "light";
-type WorkspaceAccessChoice = "read_only" | "read_write";
-type WorkspaceExpiryChoice = "never" | "1h" | "24h" | "7d";
 
 const themeOptions = [
   {
@@ -228,19 +233,6 @@ function previousMonth(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function workspaceExpiry(choice: WorkspaceExpiryChoice): string | null {
-  const durations: Record<Exclude<WorkspaceExpiryChoice, "never">, number> = {
-    "1h": 60 * 60_000,
-    "24h": 24 * 60 * 60_000,
-    "7d": 7 * 24 * 60 * 60_000,
-  };
-  return choice === "never" ? null : new Date(Date.now() + durations[choice]).toISOString();
-}
-
-function workspaceExpiryLabel(expiresAt: string | null): string {
-  return expiresAt ? `有效期至 ${new Date(expiresAt).toLocaleString()}` : "长期有效";
-}
-
 const capabilityLabels: Record<keyof ModelCatalogEntry["capabilities"], string> = {
   textInput: "文本输入",
   imageInput: "图片",
@@ -302,7 +294,7 @@ const toolCatalog = [
     namespace: "local",
     capability: "browser",
     name: "浏览器操作",
-    detail: "自动控制独立浏览器打开页面并完成交互",
+    detail: "打开浏览器页面、读取内容并完成交互",
   },
   {
     namespace: "local",
@@ -359,6 +351,19 @@ const toolRuntimeReasonLabels: Record<string, string> = {
 function toolRuntimeReason(reason: string | null): string | null {
   if (!reason) return null;
   return toolRuntimeReasonLabels[reason] ?? "运行状态暂不可确认";
+}
+
+const systemPermissionLabels: Record<DesktopNativePermission, string> = {
+  screen_capture: "屏幕录制",
+  accessibility: "辅助功能",
+};
+
+function missingSystemPermissions(readiness?: ToolRuntimeReadiness): DesktopNativePermission[] {
+  if (!readiness || !["browser", "desktop"].includes(readiness.capability)) return [];
+  if (readiness.missingPermissions) return readiness.missingPermissions;
+  if (readiness.reason === "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED") return ["screen_capture"];
+  if (readiness.reason === "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED") return ["accessibility"];
+  return [];
 }
 
 const localWebSearchProviderStatusLabels: Record<
@@ -445,6 +450,24 @@ function userFacingError(error: unknown, fallback: string): string {
   const modelMessage = modelCode ? modelFailureMessage(modelCode) : undefined;
   if (modelMessage) return modelMessage;
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (
+    message.includes("OS_CREDENTIAL_DECRYPT_FAILED") ||
+    message.includes("OS_CREDENTIAL_DATA_INVALID")
+  ) {
+    return "本机已保存的 Key 记录无法读取。请重新填写需要使用的 Key，再选择“备份旧记录并重新保存”。";
+  }
+  if (
+    message.includes("OS_CREDENTIAL_STORE_UNAVAILABLE") ||
+    message.includes("OS_CREDENTIAL_ENCRYPT_FAILED")
+  ) {
+    return "无法访问系统凭据存储。请解锁钥匙串或允许应用访问后重试，Key 尚未保存。";
+  }
+  if (
+    message.includes("CREDENTIAL_RECOVERY_NOT_REQUIRED") ||
+    message.includes("CREDENTIAL_RECOVERY_CONFLICT")
+  ) {
+    return "Key 记录已发生变化，请重新打开模型设置后再试。旧记录未被替换。";
+  }
   if (message.includes("SKILL_TOO_MANY_FILES")) {
     return "Skill 包含的文件过多（最多 20,000 个），请精简包内资源后重试。";
   }
@@ -533,22 +556,6 @@ function messageFailureLabel(errorCode: string): string {
     return "此操作需要登录，请先前往账户设置。";
   }
   return "本次生成没有完成，可以重试并保留当前内容。";
-}
-
-function withUiTimeout<T>(promise: Promise<T>, timeoutMs = 8_000): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error("UI_REQUEST_TIMEOUT")), timeoutMs);
-    void promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        window.clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 }
 
 const sendReceiptTimeoutMs = 12_000;
@@ -1601,10 +1608,6 @@ function ContextDock({
   const queryClient = useQueryClient();
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [contextNotice, setContextNotice] = useState<string | null>(null);
-  const [workspaceAccess, setWorkspaceAccess] = useState<WorkspaceAccessChoice>("read_write");
-  const [workspaceAllowNetwork, setWorkspaceAllowNetwork] = useState(false);
-  const [workspaceExpiryChoice, setWorkspaceExpiryChoice] =
-    useState<WorkspaceExpiryChoice>("never");
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const chooseFilesButtonRef = useRef<HTMLButtonElement>(null);
   const chooseDirectoryButtonRef = useRef<HTMLButtonElement>(null);
@@ -1620,36 +1623,6 @@ function ContextDock({
     queryFn: () => withUiTimeout(window.openerx.listFiles({ conversationId })),
     enabled: Boolean(conversationId),
     retry: false,
-  });
-  const workspaces = useQuery({
-    queryKey: ["workspaces", conversationId],
-    queryFn: () => withUiTimeout(window.openerx.listWorkspaces({ conversationId })),
-    enabled: Boolean(conversationId),
-    retry: false,
-  });
-  const chooseWorkspace = useMutation({
-    mutationFn: () =>
-      window.openerx.chooseWorkspace({
-        conversationId,
-        access: workspaceAccess,
-        allowNetwork: workspaceAccess === "read_write" && workspaceAllowNetwork,
-        expiresAt: workspaceExpiry(workspaceExpiryChoice),
-      }),
-    onSuccess: async (workspace) => {
-      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-      setContextNotice(
-        workspace
-          ? `已授权工作区 ${workspace.displayName}；${workspace.access === "read_write" ? "读写" : "只读"}、网络${workspace.allowNetwork ? "允许" : "禁止"}、${workspaceExpiryLabel(workspace.expiresAt)}。`
-          : "已取消工作区选择。",
-      );
-    },
-  });
-  const revokeWorkspace = useMutation({
-    mutationFn: (workspaceGrantId: string) => window.openerx.revokeWorkspace({ workspaceGrantId }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-      setContextNotice("已撤销工作区；后续 Turn 不再暴露其工具或项目指令。");
-    },
   });
   const chooseFiles = useMutation({
     mutationFn: () => window.openerx.chooseFiles({ conversationId }),
@@ -1702,7 +1675,7 @@ function ContextDock({
       <header className="context-dock-header">
         <div>
           <div className="context-title-row">
-            <h2>当前上下文</h2>
+            <h2>工作区与附件</h2>
             <Info size={15} weight="regular" />
           </div>
           <p>
@@ -1729,41 +1702,43 @@ function ContextDock({
             {contextProject.data?.project.name ?? "正在读取项目…"}
           </NavLink>
           <p className="context-project-source-instructions">
-            {contextProject.data?.project.instructions ||
-              "此项目没有说明；已连接目录仍会在下一轮自动继承。"}
+            {contextProject.data?.project.instructions || "此项目没有额外说明。"}
           </p>
         </section>
       ) : null}
+
+      <WorkspaceSection
+        conversationId={conversationId}
+        projectId={conversation.data?.conversation.projectId ?? null}
+        onClose={onClose}
+      />
 
       <section className="context-files" aria-labelledby="context-files-title">
         <div className="context-section-heading">
           <h3 id="context-files-title">文件</h3>
           <span>{fileList.length}</span>
         </div>
-        <div className="context-dropzone">
-          <FileText size={26} weight="regular" />
-          <strong>添加文件或受控文件夹</strong>
-          <span>支持 PDF、Office、表格、图片、文本、代码与 HTML（单个 ≤50MB）</span>
-          <span>选择文件夹只授权读取所选目录；原始路径权限可随时撤销。</span>
-          <div className="context-picker-actions">
-            <button
-              ref={chooseFilesButtonRef}
-              type="button"
-              onClick={() => chooseFiles.mutate()}
-              disabled={chooseFiles.isPending}
-            >
-              {chooseFiles.isPending ? "正在选择…" : "选择文件"}
-            </button>
-            <button
-              ref={chooseDirectoryButtonRef}
-              type="button"
-              onClick={() => chooseDirectory.mutate()}
-              disabled={chooseDirectory.isPending}
-            >
-              {chooseDirectory.isPending ? "正在选择…" : "选择文件夹"}
-            </button>
-          </div>
+        <div className="context-file-import-actions">
+          <button
+            ref={chooseFilesButtonRef}
+            type="button"
+            onClick={() => chooseFiles.mutate()}
+            disabled={chooseFiles.isPending}
+          >
+            <FileText size={16} aria-hidden="true" />
+            {chooseFiles.isPending ? "正在选择…" : "选择文件"}
+          </button>
+          <button
+            ref={chooseDirectoryButtonRef}
+            type="button"
+            onClick={() => chooseDirectory.mutate()}
+            disabled={chooseDirectory.isPending}
+          >
+            <FolderSimple size={16} aria-hidden="true" />
+            {chooseDirectory.isPending ? "正在选择…" : "导入文件夹"}
+          </button>
         </div>
+        <p className="workspace-help">作为附件加入当前对话，不改变工作目录。</p>
         {contextNotice && !chooseFiles.error && !chooseDirectory.error && !revoke.error ? (
           <p className="inline-success" role="status">
             {contextNotice}
@@ -1788,183 +1763,68 @@ function ContextDock({
             </button>
           </div>
         ) : null}
-        <div className="context-file-list">
-          {fileList.map((file) => {
-            const sourceScopeId = file.sourceScopeId;
-            return (
-              <article className="context-file" key={file.id}>
-                <div className="context-file-icon">
-                  <FileText size={19} weight="regular" />
-                </div>
-                <div className="context-file-copy">
-                  <strong title={file.displayName}>{file.displayName}</strong>
-                  <span>
-                    {formatBytes(file.sizeBytes)} · {file.format.toUpperCase()}
-                  </span>
-                </div>
-                <span
-                  className={`context-file-status status-${file.parseStatus === "ready" ? "ready" : "pending"}`}
-                >
-                  {file.parseStatus === "ready"
-                    ? "已解析"
-                    : file.parseStatus === "failed"
-                      ? file.parseErrorCode
-                      : "待解析"}
-                </span>
-                {sourceScopeId ? (
-                  <button
-                    type="button"
-                    className="icon-button context-file-menu"
-                    aria-label={`撤销 ${file.displayName} 的源文件权限`}
-                    title="撤销源文件权限（受控副本仍保留）"
-                    onClick={() => revoke.mutate(sourceScopeId)}
+        <details className="context-attachment-list" open={fileList.length === 0 || undefined}>
+          <summary>已添加的附件 · {fileList.length}</summary>
+          <div className="context-file-list">
+            {fileList.map((file) => {
+              const sourceScopeId = file.sourceScopeId;
+              return (
+                <article className="context-file" key={file.id}>
+                  <div className="context-file-icon">
+                    <FileText size={19} weight="regular" />
+                  </div>
+                  <div className="context-file-copy">
+                    <strong title={file.displayName}>{file.displayName}</strong>
+                    <span>
+                      {formatBytes(file.sizeBytes)} · {file.format.toUpperCase()}
+                    </span>
+                  </div>
+                  <span
+                    className={`context-file-status status-${file.parseStatus === "ready" ? "ready" : "pending"}`}
                   >
-                    <X size={16} weight="bold" />
-                  </button>
-                ) : (
-                  <span className="context-file-cloud-copy">云端副本</span>
-                )}
-              </article>
-            );
-          })}
-          {files.isPending ? <p className="muted-copy">正在读取文件…</p> : null}
-          {files.error ? (
-            <div className="context-inline-state">
-              <p className="inline-error">
-                {userFacingError(files.error, "暂时无法读取当前对话的文件。")}
+                    {file.parseStatus === "ready"
+                      ? "已解析"
+                      : file.parseStatus === "failed"
+                        ? file.parseErrorCode
+                        : "待解析"}
+                  </span>
+                  {sourceScopeId ? (
+                    <button
+                      type="button"
+                      className="icon-button context-file-menu"
+                      aria-label={`撤销 ${file.displayName} 的源文件权限`}
+                      title="撤销源文件权限（受控副本仍保留）"
+                      onClick={() => revoke.mutate(sourceScopeId)}
+                    >
+                      <X size={16} weight="bold" />
+                    </button>
+                  ) : (
+                    <span className="context-file-cloud-copy">云端副本</span>
+                  )}
+                </article>
+              );
+            })}
+            {files.isPending ? <p className="muted-copy">正在读取文件…</p> : null}
+            {files.error ? (
+              <div className="context-inline-state">
+                <p className="inline-error">
+                  {userFacingError(files.error, "暂时无法读取当前对话的文件。")}
+                </p>
+                <button type="button" onClick={() => void files.refetch()}>
+                  重试
+                </button>
+              </div>
+            ) : null}
+            {!files.isPending && !files.error && fileList.length === 0 ? (
+              <p className="muted-copy">还没有添加文件。上方选择的内容只会用于当前对话。</p>
+            ) : null}
+            {revoke.error ? (
+              <p className="inline-error" role="alert">
+                {userFacingError(revoke.error, "暂时无法撤销原始路径权限，请重试。")}
               </p>
-              <button type="button" onClick={() => void files.refetch()}>
-                重试
-              </button>
-            </div>
-          ) : null}
-          {!files.isPending && !files.error && fileList.length === 0 ? (
-            <p className="muted-copy">还没有添加文件。上方选择的内容只会用于当前对话。</p>
-          ) : null}
-          {revoke.error ? (
-            <p className="inline-error" role="alert">
-              {userFacingError(revoke.error, "暂时无法撤销原始路径权限，请重试。")}
-            </p>
-          ) : null}
-        </div>
-      </section>
-
-      <section className="context-files" aria-labelledby="context-workspaces-title">
-        <div className="context-section-heading">
-          <h3 id="context-workspaces-title">工作区目录</h3>
-          <span>{workspaces.data?.length ?? 0}</span>
-        </div>
-        <div className="context-dropzone">
-          <FolderSimple size={26} weight="regular" />
-          <strong>添加仅用于当前对话的目录</strong>
-          <span>项目目录在上方标记为“来自项目”；这里新增的授权不会反向修改项目配置。</span>
-          <div className="workspace-grant-controls">
-            <label>
-              <span>访问权限</span>
-              <select
-                value={workspaceAccess}
-                onChange={(event) => {
-                  const access = event.target.value as WorkspaceAccessChoice;
-                  setWorkspaceAccess(access);
-                  if (access === "read_only") setWorkspaceAllowNetwork(false);
-                }}
-              >
-                <option value="read_write">读写</option>
-                <option value="read_only">只读</option>
-              </select>
-            </label>
-            <label>
-              <span>有效期</span>
-              <select
-                value={workspaceExpiryChoice}
-                onChange={(event) =>
-                  setWorkspaceExpiryChoice(event.target.value as WorkspaceExpiryChoice)
-                }
-              >
-                <option value="never">长期有效</option>
-                <option value="1h">1 小时</option>
-                <option value="24h">24 小时</option>
-                <option value="7d">7 天</option>
-              </select>
-            </label>
-            <label className="workspace-network-choice">
-              <input
-                type="checkbox"
-                checked={workspaceAllowNetwork}
-                disabled={workspaceAccess === "read_only"}
-                onChange={(event) => setWorkspaceAllowNetwork(event.target.checked)}
-              />
-              <span>允许 Shell 网络</span>
-            </label>
+            ) : null}
           </div>
-          <div className="context-picker-actions">
-            <button
-              type="button"
-              onClick={() => chooseWorkspace.mutate()}
-              disabled={chooseWorkspace.isPending}
-            >
-              {chooseWorkspace.isPending ? "正在选择…" : "授权工作区"}
-            </button>
-          </div>
-        </div>
-        <div className="context-file-list">
-          {workspaces.data?.map((workspace) => {
-            const sourceLabel =
-              workspace.bindingSource === "project"
-                ? "来自项目"
-                : workspace.bindingSource === "default"
-                  ? "默认工作区"
-                  : "仅此对话";
-            const roleLabel =
-              workspace.bindingRole === "primary"
-                ? "主目录"
-                : workspace.bindingRole === "additional"
-                  ? "附加目录"
-                  : "目录";
-            return (
-              <article className="context-file" key={workspace.id}>
-                <div className="context-file-icon">
-                  <FolderSimple size={19} weight="regular" />
-                </div>
-                <div className="context-file-copy">
-                  <strong title={workspace.rootPath}>{workspace.displayName}</strong>
-                  <span>
-                    {sourceLabel} · {roleLabel} ·{" "}
-                    {workspace.access === "read_write" ? "读写" : "只读"} · 网络
-                    {workspace.allowNetwork ? "允许" : "禁止"} ·{" "}
-                    {workspaceExpiryLabel(workspace.expiresAt)} · {workspace.rootPath}
-                  </span>
-                </div>
-                {workspace.bindingSource === "default" ? (
-                  <span className="context-file-cloud-copy">自动管理</span>
-                ) : workspace.bindingSource === "project" ? (
-                  <span className="context-file-cloud-copy">来自项目</span>
-                ) : (
-                  <button
-                    type="button"
-                    className="icon-button context-file-menu"
-                    aria-label={`撤销 ${workspace.displayName} 工作区`}
-                    onClick={() => revokeWorkspace.mutate(workspace.id)}
-                  >
-                    <X size={16} weight="bold" />
-                  </button>
-                )}
-              </article>
-            );
-          })}
-          {workspaces.isPending ? <p className="muted-copy">正在读取工作区…</p> : null}
-          {!workspaces.isPending && (workspaces.data?.length ?? 0) === 0 ? (
-            <p className="muted-copy">尚未授权项目目录。</p>
-          ) : null}
-          {workspaces.error || chooseWorkspace.error || revokeWorkspace.error ? (
-            <p className="inline-error" role="alert">
-              {userFacingError(
-                workspaces.error ?? chooseWorkspace.error ?? revokeWorkspace.error,
-                "暂时无法更新工作区授权，请重试。",
-              )}
-            </p>
-          ) : null}
-        </div>
+        </details>
       </section>
 
       <footer className="context-dock-footer">
@@ -3764,10 +3624,12 @@ function ConversationToolbar({
   snapshot,
   railOpen,
   onToggleRail,
+  onOpenWorkspace,
 }: {
   snapshot: ConversationSnapshot;
   railOpen: boolean;
   onToggleRail: () => void;
+  onOpenWorkspace: () => void;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
   const conversation = snapshot.conversation;
@@ -3837,7 +3699,10 @@ function ConversationToolbar({
     <header className="conversation-toolbar">
       <div className="conversation-heading">
         <h1>{conversation.title}</h1>
-        <ConversationProjectBadge projectId={conversation.projectId} />
+        <div className="conversation-heading-context">
+          <ConversationProjectBadge projectId={conversation.projectId} />
+          <WorkspaceLocation conversationId={conversation.id} onOpen={onOpenWorkspace} />
+        </div>
       </div>
       <div className="toolbar-actions">
         <button
@@ -4101,51 +3966,34 @@ function ConversationRail({
   files,
   workItems,
   selectedBrowserPreview,
-  selectedArtifactId,
-  onSelectArtifact,
+  selectedResult,
+  onSelectResult,
   onBackFromBrowserPreview,
-  onBackToOverview,
   onAddSource,
   onClose,
+  listState,
+  onReload,
 }: {
   artifacts: Artifact[];
   files: PersonalFile[];
   workItems: WorkItem[];
   selectedBrowserPreview: BrowserCallPreview | null;
-  selectedArtifactId: string | null;
-  onSelectArtifact: (artifactId: string) => void;
+  selectedResult: ResultSelection | null;
+  onSelectResult: (selection: ResultSelection | null) => void;
   onBackFromBrowserPreview: () => void;
-  onBackToOverview: () => void;
   onAddSource: () => void;
   onClose: () => void;
+  listState: ResultListState;
+  onReload: () => void;
 }): React.JSX.Element {
-  const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview");
-  const [expandedOutputDirectories, setExpandedOutputDirectories] = useState<ReadonlySet<string>>(
-    () => new Set([""]),
-  );
-  const selectedArtifact = artifacts.find(({ id }) => id === selectedArtifactId) ?? null;
-  const preview = useQuery({
-    queryKey: ["content-preview", "artifact", selectedArtifactId, selectedArtifact?.currentVersion],
-    queryFn: () => {
-      if (!selectedArtifactId) throw new Error("No artifact selected");
-      return window.openerx.previewArtifact({ artifactId: selectedArtifactId });
-    },
-    enabled: selectedArtifactId !== null,
-    retry: false,
-  });
-  const saveArtifact = useMutation({
-    mutationFn: async (artifactId: string) => await window.openerx.saveArtifact({ artifactId }),
-  });
   useEffect(() => {
-    if (!selectedArtifactId && !selectedBrowserPreview) return;
+    if (!selectedBrowserPreview) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      if (selectedBrowserPreview) onBackFromBrowserPreview();
-      else onBackToOverview();
+      if (event.key === "Escape" && !event.defaultPrevented) onBackFromBrowserPreview();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onBackFromBrowserPreview, onBackToOverview, selectedArtifactId, selectedBrowserPreview]);
+  }, [selectedBrowserPreview, onBackFromBrowserPreview]);
 
   if (selectedBrowserPreview) {
     return (
@@ -4157,183 +4005,30 @@ function ConversationRail({
     );
   }
 
-  if (selectedArtifactId) {
-    return (
-      <aside className="conversation-rail conversation-rail-preview" aria-label="成果预览">
-        <header className="conversation-rail-header artifact-preview-header">
-          <button
-            type="button"
-            className="artifact-preview-back"
-            aria-label="返回输出内容"
-            onClick={onBackToOverview}
-          >
-            <ArrowLeft size={17} weight="regular" />
-          </button>
-          <div>
-            <strong>
-              {selectedArtifact?.displayName ?? preview.data?.displayName ?? "正在加载…"}
-            </strong>
-            <span>
-              {selectedArtifact
-                ? `${selectedArtifact.format.toUpperCase()} · v${selectedArtifact.currentVersion}`
-                : "受控成果预览"}
-            </span>
-          </div>
-          <button type="button" className="icon-button" aria-label="隐藏成果预览" onClick={onClose}>
-            <X size={17} weight="regular" />
-          </button>
-        </header>
-        <div className="artifact-preview-toolbar">
-          {preview.data && preview.data.source !== null ? (
-            <fieldset className="artifact-preview-modes" aria-label="预览模式">
-              <button
-                type="button"
-                className={previewMode === "preview" ? "is-active" : ""}
-                aria-pressed={previewMode === "preview"}
-                onClick={() => setPreviewMode("preview")}
-              >
-                预览
-              </button>
-              <button
-                type="button"
-                className={previewMode === "source" ? "is-active" : ""}
-                aria-pressed={previewMode === "source"}
-                onClick={() => setPreviewMode("source")}
-              >
-                源码
-              </button>
-            </fieldset>
-          ) : (
-            <span />
-          )}
-          <button
-            type="button"
-            disabled={!selectedArtifact || saveArtifact.isPending}
-            onClick={() => selectedArtifact && saveArtifact.mutate(selectedArtifact.id)}
-          >
-            <DownloadSimple size={15} />
-            {saveArtifact.isPending ? "保存中…" : "下载 / 另存"}
-          </button>
-        </div>
-        <section className="artifact-preview-body" aria-live="polite">
-          {preview.error ? (
-            <div className="artifact-preview-state">
-              <p className="inline-error">
-                {userFacingError(preview.error, "暂时无法预览成果，请重试。")}
-              </p>
-              <button type="button" onClick={() => void preview.refetch()}>
-                重试
-              </button>
-            </div>
-          ) : preview.data ? (
-            <ContentPreviewRenderer
-              preview={preview.data}
-              previewMode={previewMode}
-              ariaLabel={`${preview.data.displayName} 视觉预览`}
-            />
-          ) : (
-            <div className="artifact-preview-state">正在准备预览…</div>
-          )}
-          {saveArtifact.error ? (
-            <p className="inline-error">
-              {userFacingError(saveArtifact.error, "成果保存失败，请重试。")}
-            </p>
-          ) : null}
-          {saveArtifact.data ? (
-            <p className="inline-success">已保存 {saveArtifact.data.fileName}</p>
-          ) : null}
-        </section>
-      </aside>
-    );
-  }
-
   return (
-    <aside className="conversation-rail" aria-label="成果与来源">
-      <header className="conversation-rail-header">
-        <div>
-          <strong>成果与来源</strong>
-          <span>与回复并排查看</span>
-        </div>
-        <button type="button" className="icon-button" aria-label="隐藏成果与来源" onClick={onClose}>
-          <X size={17} weight="regular" />
-        </button>
-      </header>
-
-      <section className="rail-section" aria-labelledby="rail-outputs-title">
-        <div className="rail-section-heading">
-          <h2 id="rail-outputs-title">输出内容</h2>
-          <NavLink to="/files" aria-label="查看全部成果" title="查看全部成果">
-            <Plus size={17} weight="regular" />
-          </NavLink>
-        </div>
-        {artifacts.length > 0 ? (
-          <ArtifactDirectory
-            artifacts={artifacts}
-            expandedDirectories={expandedOutputDirectories}
-            onToggleDirectory={(path) =>
-              setExpandedOutputDirectories((previous) => {
-                const expanded = new Set(previous);
-                if (expanded.has(path)) expanded.delete(path);
-                else expanded.add(path);
-                return expanded;
-              })
-            }
-            onSelectArtifact={(artifactId) => {
-              setPreviewMode("preview");
-              onSelectArtifact(artifactId);
-            }}
-          />
-        ) : (
-          <p className="rail-empty">创建的文件、报告和页面会出现在这里。</p>
-        )}
-      </section>
-
-      <section className="rail-section" aria-labelledby="rail-sources-title">
-        <div className="rail-section-heading">
-          <h2 id="rail-sources-title">来源</h2>
-          <button type="button" aria-label="添加来源" title="添加来源" onClick={onAddSource}>
-            <Plus size={17} weight="regular" />
-          </button>
-        </div>
-        {files.length > 0 ? (
-          <div className="rail-list">
-            {files.map((file) => (
-              <button className="rail-item" type="button" key={file.id} onClick={onAddSource}>
-                <FileText size={18} weight="regular" />
-                <span>
-                  <strong>{file.displayName}</strong>
-                  <small>{file.parseStatus === "ready" ? "已解析" : "处理中"}</small>
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <button type="button" className="rail-empty rail-empty-action" onClick={onAddSource}>
-            添加文件、工作区或其他上下文来源。
-          </button>
-        )}
-      </section>
-
-      <section className="rail-section rail-runs" aria-labelledby="rail-runs-title">
-        <div className="rail-section-heading">
-          <h2 id="rail-runs-title">本次运行</h2>
-          <span>{workItems.length}</span>
-        </div>
-        {workItems.slice(-4).map((workItem) => (
-          <div className="rail-run" key={workItem.id}>
-            <TerminalWindow size={17} weight="regular" />
-            <span>
-              <strong>{workItem.title}</strong>
-              <small>
-                {elapsedTime(workItem.createdAt, workItem.completedAt)
-                  ? `用时 ${elapsedTime(workItem.createdAt, workItem.completedAt)}`
-                  : workItemStatusLabel[workItem.status]}
-              </small>
-            </span>
-          </div>
-        ))}
-      </section>
-    </aside>
+    <ConversationResults
+      artifacts={artifacts}
+      files={files}
+      workItems={workItems}
+      selected={selectedResult}
+      onSelect={onSelectResult}
+      onAddSource={onAddSource}
+      onClose={onClose}
+      listState={listState}
+      onReload={onReload}
+      errorMessage={userFacingError}
+      runDescription={(item) => {
+        const duration = elapsedTime(item.createdAt, item.completedAt);
+        return `${workItemStatusLabel[item.status]}${duration ? ` · 用时 ${duration}` : ""}`;
+      }}
+      renderPreview={(preview, previewMode) => (
+        <ContentPreviewRenderer
+          preview={preview}
+          previewMode={previewMode}
+          ariaLabel={`${preview.displayName} 视觉预览`}
+        />
+      )}
+    />
   );
 }
 
@@ -4353,7 +4048,7 @@ function ChatPage({
   const previousConversationIdRef = useRef(conversationId);
   const [following, setFollowing] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [selectedResult, setSelectedResult] = useState<ResultSelection | null>(null);
   const [selectedBrowserPreview, setSelectedBrowserPreview] = useState<BrowserCallPreview | null>(
     null,
   );
@@ -4384,7 +4079,7 @@ function ChatPage({
     followingRef.current = true;
     lastMessageListScrollTopRef.current = 0;
     setFollowing(true);
-    setSelectedArtifactId(null);
+    setSelectedResult(null);
     setSelectedBrowserPreview(null);
   }, [conversationId]);
   useEffect(() => {
@@ -4453,13 +4148,14 @@ function ChatPage({
   const filesById = new Map((conversationFiles.data ?? []).map((file) => [file.id, file] as const));
   return (
     <main
-      className={`conversation-workspace ${railOpen ? "rail-is-open" : ""} ${selectedArtifactId ? "artifact-preview-is-open" : ""} ${selectedBrowserPreview ? "browser-preview-is-open" : ""}`}
+      className={`conversation-workspace ${railOpen ? "rail-is-open" : ""} ${selectedResult ? "artifact-preview-is-open" : ""} ${selectedBrowserPreview ? "browser-preview-is-open" : ""}`}
     >
       <section className="conversation-page" aria-label="对话工作区">
         <ConversationToolbar
           snapshot={snapshot.data}
           railOpen={railOpen}
           onToggleRail={() => setRailOpen((open) => !open)}
+          onOpenWorkspace={onToggleContext}
         />
         <section
           ref={messageListRef}
@@ -4489,7 +4185,7 @@ function ChatPage({
                     filesById={filesById}
                     activities={message.role === "assistant" ? activities : []}
                     onOpenBrowserPreview={(preview) => {
-                      setSelectedArtifactId(null);
+                      setSelectedResult(null);
                       setSelectedBrowserPreview(preview);
                       setRailOpen(true);
                     }}
@@ -4500,7 +4196,7 @@ function ChatPage({
                           key={workItem.id}
                           workItem={workItem}
                           onOpenBrowserPreview={(preview) => {
-                            setSelectedArtifactId(null);
+                            setSelectedResult(null);
                             setSelectedBrowserPreview(preview);
                             setRailOpen(true);
                           }}
@@ -4546,17 +4242,26 @@ function ChatPage({
           artifacts={artifacts.data ?? []}
           files={conversationFiles.data ?? []}
           workItems={workItems.data ?? []}
+          listState={{
+            files: { loading: artifacts.isPending, error: artifacts.error },
+            sources: { loading: conversationFiles.isPending, error: conversationFiles.error },
+            activity: { loading: workItems.isPending, error: workItems.error },
+          }}
+          onReload={() => {
+            void artifacts.refetch();
+            void conversationFiles.refetch();
+            void workItems.refetch();
+          }}
           selectedBrowserPreview={selectedBrowserPreview}
-          selectedArtifactId={selectedArtifactId}
-          onSelectArtifact={(artifactId) => {
+          selectedResult={selectedResult}
+          onSelectResult={(selection) => {
             setSelectedBrowserPreview(null);
-            setSelectedArtifactId(artifactId);
+            setSelectedResult(selection);
           }}
           onBackFromBrowserPreview={() => setSelectedBrowserPreview(null)}
-          onBackToOverview={() => setSelectedArtifactId(null)}
           onAddSource={onToggleContext}
           onClose={() => {
-            setSelectedArtifactId(null);
+            setSelectedResult(null);
             setSelectedBrowserPreview(null);
             setRailOpen(false);
           }}
@@ -5187,7 +4892,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     }));
   }, [settings.data]);
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: (recoverUnreadableCredentials: boolean) => {
       const providerApiKeys = Object.fromEntries(
         Object.entries(providerKeys)
           .map(([providerId, apiKey]) => [providerId, apiKey?.trim()] as const)
@@ -5196,18 +4901,22 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       return window.openerx.updateModelServiceSettings({
         ...draft,
         ...(Object.keys(providerApiKeys).length > 0 ? { providerApiKeys } : {}),
+        ...(recoverUnreadableCredentials ? { recoverUnreadableCredentials: true as const } : {}),
       });
     },
-    onSuccess: async (value) => {
+    onMutate: () => setNotice(null),
+    onSuccess: async (value, recovered) => {
       queryClient.setQueryData(["model-service", "settings"], value);
       await queryClient.invalidateQueries({ queryKey: ["models", "catalog"] });
       setDraft((current) => ({ ...current, apiKey: undefined }));
       setProviderKeys({});
       const configuredProviders = Object.values(value.providerCredentials).filter(Boolean).length;
       setNotice(
-        value.mode === "byok"
-          ? `模型 API 已保存 · 已配置 ${configuredProviders} 个厂商，可在任务中直接切换。`
-          : "已切换到托管服务模式。",
+        recovered
+          ? "旧 Key 记录已备份，重新填写的 Key 已安全保存。其他需要使用的厂商 Key 请重新填写。"
+          : value.mode === "byok"
+            ? `模型 API 已保存 · 已配置 ${configuredProviders} 个厂商，可在任务中直接切换。`
+            : "已切换到托管服务模式。",
       );
     },
   });
@@ -5267,6 +4976,12 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     },
   });
   const byok = draft.byok;
+  const credentialIssue = settings.data?.credentialIssue;
+  const unreadableCredentials =
+    credentialIssue === "unreadable" ||
+    /OS_CREDENTIAL_DECRYPT_FAILED|OS_CREDENTIAL_DATA_INVALID/.test(save.error?.message ?? "");
+  const hasNewKey =
+    Boolean(draft.apiKey?.trim()) || Object.values(providerKeys).some((key) => key?.trim());
   const patchByok = (patch: Partial<NonNullable<ModelServiceSettingsUpdate["byok"]>>): void => {
     if (byok) setDraft({ ...draft, byok: { ...byok, ...patch } });
   };
@@ -5278,6 +4993,18 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
           <p>各厂商地址和模型均已预置。可同时保存多个 Key，请求从本机直连对应厂商。</p>
         </div>
       </div>
+      {credentialIssue ? (
+        <p className="inline-error" role="alert">
+          {userFacingError(
+            new Error(
+              credentialIssue === "unreadable"
+                ? "OS_CREDENTIAL_DECRYPT_FAILED"
+                : "OS_CREDENTIAL_STORE_UNAVAILABLE",
+            ),
+            "无法读取本机 Key 记录。",
+          )}
+        </p>
+      ) : null}
       <label htmlFor="model-service-mode">运行模式</label>
       <select
         id="model-service-mode"
@@ -5412,12 +5139,27 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
             <button
               type="button"
               className="primary-action"
-              onClick={() => save.mutate()}
-              disabled={save.isPending}
+              onClick={() => save.mutate(false)}
+              disabled={save.isPending || unreadableCredentials}
             >
               保存全部并启用
             </button>
           </div>
+          {unreadableCredentials ? (
+            <section className="model-key-recovery" aria-label="恢复本机 Key 存储">
+              <p>
+                恢复时会保留旧记录的加密备份，只保存本次重新填写的 Key。其他厂商的 Key
+                需要重新填写；项目、聊天和文件保持不变。
+              </p>
+              <button
+                type="button"
+                disabled={save.isPending || !hasNewKey}
+                onClick={() => save.mutate(true)}
+              >
+                {save.isPending ? "正在备份并保存…" : "备份旧记录并重新保存"}
+              </button>
+            </section>
+          ) : null}
           <details className="settings-disclosure model-custom-provider">
             <summary>
               自定义 OpenAI-compatible 接口
@@ -5526,7 +5268,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
         <button
           type="button"
           className="primary-action"
-          onClick={() => save.mutate()}
+          onClick={() => save.mutate(false)}
           disabled={save.isPending}
         >
           保存模式
@@ -7259,6 +7001,7 @@ type ToolCenterRow = {
   id: string;
   name: string;
   detail: string;
+  permissionSummary?: string;
   source: string;
   category: Exclude<ToolCenterCategory, "all">;
   capability: ToolRuntimeCapability;
@@ -7295,6 +7038,13 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
     queryKey: ["tools", "runtime-readiness"],
     queryFn: () => window.openerx.listToolRuntimeReadiness(),
   });
+  useEffect(() => {
+    const refreshPermissions = () => {
+      void queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
+    };
+    window.addEventListener("focus", refreshPermissions);
+    return () => window.removeEventListener("focus", refreshPermissions);
+  }, [queryClient]);
   const localWebSearchSettings = useQuery({
     queryKey: ["tools", "local-web-search", "settings"],
     queryFn: () => window.openerx.getLocalWebSearchSettings(),
@@ -7349,7 +7099,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
         state.status === "granted"
           ? "系统权限已生效。"
           : state.settingsOpened
-            ? "系统设置已打开；授权后请返回并刷新工具状态。"
+            ? "系统设置已打开；授权后返回即可重新检测。如系统要求，请重启 openerx。"
             : "当前系统无法请求该权限。",
       );
     },
@@ -7445,15 +7195,20 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       .map<ToolCenterRow>((tool) => {
         const readiness = readinessByCapability.get(tool.capability);
         const status = readiness?.status;
+        const missingPermissions = missingSystemPermissions(readiness);
         return {
           id: `capability:${tool.capability}`,
           name: tool.name,
           detail: tool.detail,
+          permissionSummary: missingPermissions.length
+            ? `缺少系统权限：${missingPermissions.map((permission) => systemPermissionLabels[permission]).join("、")}`
+            : undefined,
           source: sourceFor(tool.capability),
           category: categoryFor(tool.capability),
           capability: tool.capability,
-          status:
-            status === "available"
+          status: missingPermissions.length
+            ? "待系统授权"
+            : status === "available"
               ? "已启用"
               : status === "degraded"
                 ? "部分可用"
@@ -7464,8 +7219,9 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                     : runtimeReadiness.isFetching
                       ? "检测中"
                       : "状态未知",
-          statusTone:
-            status === "available"
+          statusTone: missingPermissions.length
+            ? "warning"
+            : status === "available"
               ? "enabled"
               : status === "degraded" || status === "authorization_required"
                 ? "warning"
@@ -7507,6 +7263,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
   const selectedReadiness = selectedRow
     ? readinessByCapability.get(selectedRow.capability)
     : undefined;
+  const selectedMissingPermissions = missingSystemPermissions(selectedReadiness);
   const selectedMcp = selectedRow?.mcpServerId
     ? mcpServers.data?.find((server) => server.id === selectedRow.mcpServerId)
     : undefined;
@@ -7600,7 +7357,10 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 <span className="tool-library-icon" aria-hidden="true">
                   {renderToolIcon(row.capability)}
                 </span>
-                <strong>{row.name}</strong>
+                <span className="tool-library-name-copy">
+                  <strong>{row.name}</strong>
+                  {row.permissionSummary ? <small>{row.permissionSummary}</small> : null}
+                </span>
               </div>
               <p>{row.detail}</p>
               <span className="tool-library-source">{row.source}</span>
@@ -7620,7 +7380,11 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
               <button
                 type="button"
                 className="tool-row-settings"
-                onClick={() => setSelectedToolId(row.id)}
+                onClick={() => {
+                  setNativePermissionNotice(null);
+                  requestNativePermission.reset();
+                  setSelectedToolId(row.id);
+                }}
               >
                 <GearSix size={17} />
                 设置
@@ -7841,11 +7605,36 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
               </section>
             ) : (
               <section className="tool-settings-section">
-                <h3>工具信息</h3>
+                <h3>{selectedMissingPermissions.length ? "系统权限" : "工具信息"}</h3>
                 <p>
-                  {toolRuntimeReason(selectedReadiness?.reason ?? null) ??
-                    "此工具由 openerx 提供，当前不需要额外设置。"}
+                  {selectedMissingPermissions.length
+                    ? "请在系统设置中允许以下权限。授权后返回即可重新检测。"
+                    : (toolRuntimeReason(selectedReadiness?.reason ?? null) ??
+                      "此工具由 openerx 提供，当前不需要额外设置。")}
                 </p>
+                {selectedMissingPermissions.length ? (
+                  <ul className="tool-system-permissions" aria-label="缺少的系统权限">
+                    {selectedMissingPermissions.map((permission) => (
+                      <li key={permission}>
+                        <div>
+                          <strong>{systemPermissionLabels[permission]}</strong>
+                          <p>
+                            {permission === "screen_capture"
+                              ? "用于读取屏幕和窗口内容。"
+                              : "用于点击、输入和操作应用窗口。"}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={requestNativePermission.isPending}
+                          onClick={() => requestNativePermission.mutate(permission)}
+                        >
+                          打开{systemPermissionLabels[permission]}设置
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {selectedReadiness?.details?.length ? (
                   <ul>
                     {selectedReadiness.details.map((detail) => (
@@ -7865,27 +7654,28 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                     添加 MCP 工具
                   </button>
                 ) : null}
-                {selectedRow.capability === "desktop" &&
-                selectedReadiness?.reason === "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED" ? (
+                {["browser", "desktop"].includes(selectedRow.capability) ? (
                   <button
                     type="button"
-                    disabled={requestNativePermission.isPending}
-                    onClick={() => requestNativePermission.mutate("screen_capture")}
+                    className="tool-permission-refresh"
+                    disabled={runtimeReadiness.isFetching}
+                    onClick={() => {
+                      setNativePermissionNotice(null);
+                      void runtimeReadiness.refetch();
+                    }}
                   >
-                    打开屏幕录制设置
-                  </button>
-                ) : null}
-                {selectedRow.capability === "desktop" &&
-                selectedReadiness?.reason === "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED" ? (
-                  <button
-                    type="button"
-                    disabled={requestNativePermission.isPending}
-                    onClick={() => requestNativePermission.mutate("accessibility")}
-                  >
-                    请求辅助功能权限
+                    {runtimeReadiness.isFetching ? "正在检测…" : "重新检测权限"}
                   </button>
                 ) : null}
                 {nativePermissionNotice ? <p role="status">{nativePermissionNotice}</p> : null}
+                {requestNativePermission.error || runtimeReadiness.error ? (
+                  <p className="inline-error" role="alert">
+                    {userFacingError(
+                      requestNativePermission.error ?? runtimeReadiness.error,
+                      "无法读取或打开系统权限设置，请稍后重试。",
+                    )}
+                  </p>
+                ) : null}
               </section>
             )}
           </section>

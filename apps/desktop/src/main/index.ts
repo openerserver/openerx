@@ -122,6 +122,7 @@ import {
   workspaceChooseInputSchema,
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
+  workspaceSetPrimaryInputSchema,
 } from "@openerx/contracts";
 import {
   DiagnosticsService,
@@ -981,7 +982,7 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     const parsed = workspaceChooseInputSchema.parse(input ?? {});
     const selection = await dialog.showOpenDialog({
-      title: "授权项目工作区",
+      title: parsed.role === "additional" ? "添加附加目录" : "选择工作目录",
       properties: ["openDirectory"],
       message: "openerx 只能在你明确授权的目录内读取或修改文件",
     });
@@ -1034,6 +1035,11 @@ function registerIpcHandlers(
   );
   registerChatHandler(ipcChannels.workspaceList, "workspace.list", workspaceListInputSchema);
   registerChatHandler(ipcChannels.workspaceRevoke, "workspace.revoke", workspaceRevokeInputSchema);
+  registerChatHandler(
+    ipcChannels.workspaceSetPrimary,
+    "workspace.setPrimary",
+    workspaceSetPrimaryInputSchema,
+  );
   registerChatHandler(ipcChannels.fileList, "file.list", fileListInputSchema);
   registerChatHandler(ipcChannels.fileSearch, "file.search", fileSearchInputSchema);
   registerChatHandler(ipcChannels.filePreview, "file.preview", filePreviewInputSchema);

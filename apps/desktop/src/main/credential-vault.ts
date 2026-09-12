@@ -40,12 +40,31 @@ export class ElectronSafeStorageProtector implements CredentialProtector {
   }
 
   async encrypt(value: string): Promise<Buffer> {
-    return await safeStorage.encryptStringAsync(value);
+    try {
+      return await safeStorage.encryptStringAsync(value);
+    } catch {
+      throw new Error("OS_CREDENTIAL_ENCRYPT_FAILED");
+    }
   }
 
   async decrypt(value: Buffer): Promise<{ result: string; shouldReEncrypt: boolean }> {
-    return await safeStorage.decryptStringAsync(value);
+    try {
+      return await safeStorage.decryptStringAsync(value);
+    } catch (error) {
+      throw new Error(
+        error instanceof Error && /temporarily unavailable/i.test(error.message)
+          ? "OS_CREDENTIAL_STORE_UNAVAILABLE"
+          : "OS_CREDENTIAL_DECRYPT_FAILED",
+      );
+    }
   }
+}
+
+export function isUnreadableCredentialError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    ["OS_CREDENTIAL_DECRYPT_FAILED", "OS_CREDENTIAL_DATA_INVALID"].includes(error.message)
+  );
 }
 
 export class DeviceCredentialVault {
@@ -118,9 +137,35 @@ export class ToolCredentialVault {
   ) {}
 
   async save(credentialRef: string, value: string): Promise<void> {
-    const values = await this.#load();
-    values[credentialRef] = value;
-    await this.#write(values);
+    await this.saveMany({ [credentialRef]: value });
+  }
+
+  async saveMany(values: Record<string, string>): Promise<void> {
+    await this.#write({ ...(await this.#load()), ...values });
+  }
+
+  async references(): Promise<string[]> {
+    return Object.keys(await this.#load());
+  }
+
+  /** Explicit recovery only: retain the original encrypted bytes before replacing this vault. */
+  async recoverUnreadable(values: Record<string, string>): Promise<void> {
+    if (Object.keys(values).length === 0) throw new Error("BYOK_API_KEY_REQUIRED");
+    const original = await readFile(this.filePath);
+    try {
+      await this.#decode(original);
+      throw new Error("CREDENTIAL_RECOVERY_NOT_REQUIRED");
+    } catch (error) {
+      if (!isUnreadableCredentialError(error)) throw error;
+    }
+    // Check encryption first. A locked/unavailable store must never be reset.
+    const replacement = await this.#encrypt(values);
+    if (!(await readFile(this.filePath)).equals(original)) {
+      throw new Error("CREDENTIAL_RECOVERY_CONFLICT");
+    }
+    const backup = `${this.filePath}.unreadable-${Date.now()}-${randomBytes(4).toString("hex")}.bak`;
+    await writeFile(backup, original, { mode: 0o600, flag: "wx" });
+    await this.#writeEncrypted(replacement);
   }
 
   async resolve(credentialRef: string): Promise<string> {
@@ -143,17 +188,35 @@ export class ToolCredentialVault {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
       throw error;
     }
+    const { values, shouldReEncrypt } = await this.#decode(encrypted);
+    if (shouldReEncrypt) await this.#write(values);
+    return { ...values };
+  }
+
+  async #decode(
+    encrypted: Buffer,
+  ): Promise<{ values: Record<string, string>; shouldReEncrypt: boolean }> {
     if (!(await this.protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
     const decrypted = await this.protector.decrypt(encrypted);
-    const payload = persistedToolCredentialsSchema.parse(JSON.parse(decrypted.result));
-    if (decrypted.shouldReEncrypt) await this.#write(payload.values);
-    return { ...payload.values };
+    try {
+      const payload = persistedToolCredentialsSchema.parse(JSON.parse(decrypted.result));
+      return { values: payload.values, shouldReEncrypt: decrypted.shouldReEncrypt };
+    } catch {
+      throw new Error("OS_CREDENTIAL_DATA_INVALID");
+    }
+  }
+
+  async #encrypt(values: Record<string, string>): Promise<Buffer> {
+    if (!(await this.protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
+    const payload = persistedToolCredentialsSchema.parse({ version: 1, values });
+    return await this.protector.encrypt(JSON.stringify(payload));
   }
 
   async #write(values: Record<string, string>): Promise<void> {
-    if (!(await this.protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
-    const payload = persistedToolCredentialsSchema.parse({ version: 1, values });
-    const encrypted = await this.protector.encrypt(JSON.stringify(payload));
+    await this.#writeEncrypted(await this.#encrypt(values));
+  }
+
+  async #writeEncrypted(encrypted: Buffer): Promise<void> {
     const directory = path.dirname(this.filePath);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const temporaryPath = path.join(

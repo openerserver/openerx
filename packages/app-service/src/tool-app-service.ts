@@ -651,14 +651,18 @@ export class ToolAppService {
     allowNetwork: boolean;
     expiresAt: string | null;
     projectOperationId?: string;
+    role?: WorkspaceGrant["bindingRole"];
   }): WorkspaceGrant {
     if (input.expiresAt && Date.parse(input.expiresAt) <= Date.now()) {
       throw new Error("WORKSPACE_EXPIRY_INVALID");
     }
     const canonicalRoot = realpathSync(input.rootPath);
     if (!lstatSync(canonicalRoot).isDirectory()) throw new Error("WORKSPACE_DIRECTORY_REQUIRED");
-    if (input.conversationId) {
+    if (input.conversationId && input.role !== "additional") {
       this.#repository.revokeDefaultWorkspaceGrants(input.conversationId);
+    }
+    if (input.conversationId && input.role === "additional") {
+      this.ensureConversationWorkspace(input.conversationId);
     }
     return this.#repository.grantWorkspace({
       conversationId: input.conversationId,
@@ -669,14 +673,33 @@ export class ToolAppService {
       expiresAt: input.expiresAt,
       ...(input.projectOperationId ? { projectOperationId: input.projectOperationId } : {}),
       ...(input.conversationId
-        ? { binding: { role: "primary" as const, source: "user_added" as const } }
+        ? { binding: { role: input.role ?? "primary", source: "user_added" as const } }
         : {}),
     });
   }
 
   listWorkspaces(conversationId?: string): WorkspaceGrant[] {
     if (conversationId) this.ensureConversationWorkspace(conversationId);
-    return this.#repository.listWorkspaceGrants(conversationId);
+    return conversationId
+      ? this.#repository.effectiveWorkspaceGrants(conversationId)
+      : this.#repository.listWorkspaceGrants();
+  }
+
+  setPrimaryWorkspace(input: { conversationId: string; workspaceGrantId: string }): WorkspaceGrant {
+    const selected = this.#repository.activeWorkspaceGrant(
+      input.workspaceGrantId,
+      input.conversationId,
+    );
+    if (selected.conversationId !== input.conversationId)
+      throw new Error("WORKSPACE_BINDING_CONVERSATION_REQUIRED");
+    return this.grantWorkspace({
+      conversationId: input.conversationId,
+      rootPath: selected.rootPath,
+      access: selected.access,
+      allowNetwork: selected.allowNetwork,
+      expiresAt: selected.expiresAt,
+      role: "primary",
+    });
   }
 
   ensureConversationWorkspace(conversationId: string): WorkspaceGrant {
@@ -749,15 +772,15 @@ export class ToolAppService {
         return false;
       }
     });
-    const grants = this.#repository.reconcileProjectWorkspaceBindings({
+    this.#repository.reconcileProjectWorkspaceBindings({
       conversationId: input.conversationId,
       directories: validDirectories,
     });
-    const activeExecutionGrantId = validDirectories.find(({ role }) => role === "primary")
-      ? grants[validDirectories.findIndex(({ role }) => role === "primary")]?.id
-      : undefined;
-    const additionalExecutionGrantIds = grants
-      .filter((_, index) => validDirectories[index]?.role === "additional")
+    const primary = this.#repository.primaryWorkspaceGrant(input.conversationId);
+    const activeExecutionGrantId = primary?.id;
+    const additionalExecutionGrantIds = this.#repository
+      .effectiveWorkspaceGrants(input.conversationId)
+      .filter((grant) => grant.id !== primary?.id && grant.rootPath !== primary?.rootPath)
       .map(({ id }) => id);
     return {
       ...(activeExecutionGrantId ? { activeExecutionGrantId } : {}),
@@ -779,21 +802,15 @@ export class ToolAppService {
     networkPolicy?: BrokeredBashNetworkPolicy;
   }): Promise<PreparedGenerationTools> {
     this.ensureConversationWorkspace(input.conversationId);
-    const listedWorkspaceGrants = this.#repository.listWorkspaceGrants(input.conversationId);
-    const conversationWorkspaceGrants = listedWorkspaceGrants.filter(
-      (grant) => grant.conversationId === input.conversationId,
-    );
-    const workspaceGrants = (
-      conversationWorkspaceGrants.length > 0
-        ? conversationWorkspaceGrants
-        : listedWorkspaceGrants.filter((grant) => grant.conversationId === null)
-    ).filter((grant) => {
-      try {
-        return lstatSync(realpathSync(grant.rootPath)).isDirectory();
-      } catch {
-        return false;
-      }
-    });
+    const workspaceGrants = this.#repository
+      .effectiveWorkspaceGrants(input.conversationId)
+      .filter((grant) => {
+        try {
+          return lstatSync(realpathSync(grant.rootPath)).isDirectory();
+        } catch {
+          return false;
+        }
+      });
     const instructionSources = workspaceGrants.flatMap((grant) => {
       try {
         return this.#workspace.instructionSources(grant);
@@ -972,12 +989,14 @@ export class ToolAppService {
       reason: string | null,
       availableToolNames: string[],
       details: string[] = [],
+      missingPermissions: ToolRuntimeReadiness["missingPermissions"] = [],
     ): ToolRuntimeReadiness => ({
       capability,
       status,
       reason,
       availableToolNames,
       ...(details.length > 0 ? { details } : {}),
+      ...(missingPermissions.length > 0 ? { missingPermissions } : {}),
       checkedAt,
     });
     const onlineStatus: ToolRuntimeStatus = !input.platformConfigured
@@ -1044,11 +1063,18 @@ export class ToolAppService {
       ),
       readiness(
         "browser",
-        browserAvailable ? "available" : "unavailable",
+        browserAvailable
+          ? "available"
+          : hostAvailability.missingPermissions?.openerx_browser?.length ||
+              hostAvailability.unavailableReasons.openerx_browser?.includes("PERMISSION_REQUIRED")
+            ? "authorization_required"
+            : "unavailable",
         browserAvailable
           ? null
           : (hostAvailability.unavailableReasons.openerx_browser ?? "MAIN_CAPABILITY_UNAVAILABLE"),
         browserAvailable ? ["openerx_browser"] : [],
+        [],
+        hostAvailability.missingPermissions?.openerx_browser,
       ),
       readiness(
         "shell",
@@ -1123,6 +1149,8 @@ export class ToolAppService {
           ? desktopInteractionReason
           : (desktopReason ?? "MAIN_CAPABILITY_UNAVAILABLE"),
         desktopAvailable ? ["openerx_desktop"] : [],
+        [],
+        hostAvailability.missingPermissions?.openerx_desktop,
       ),
       mcp,
     ];

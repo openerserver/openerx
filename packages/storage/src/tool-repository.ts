@@ -979,6 +979,42 @@ export class ToolRepository {
           return grant;
         }
       }
+      const connected =
+        input.conversationId && input.binding?.source === "user_added"
+          ? this.listWorkspaceGrants(input.conversationId).filter(
+              (grant) =>
+                grant.conversationId === input.conversationId && grant.rootPath === input.rootPath,
+            )
+          : [];
+      const duplicates = connected.filter(
+        (grant) => grant.bindingSource === "user_added" || !grant.bindingSource,
+      );
+      const reusable = duplicates.find(
+        (grant) =>
+          grant.access === input.access &&
+          grant.allowNetwork === input.allowNetwork &&
+          grant.expiresAt === input.expiresAt,
+      );
+      // Re-selecting a connected directory must not create another authorization.
+      // Keep its primary role when it is selected through Add directory.
+      const binding = input.binding && {
+        ...input.binding,
+        role: connected.some((grant) => grant.bindingRole === "primary")
+          ? ("primary" as const)
+          : input.binding.role,
+      };
+      if (reusable && input.conversationId && binding) {
+        this.#bindWorkspace({
+          workspaceGrantId: reusable.id,
+          conversationId: input.conversationId,
+          ...binding,
+          createdAt: this.#now(),
+        });
+        for (const duplicate of duplicates) {
+          if (duplicate.id !== reusable.id) this.#revokeWorkspaceGrant(duplicate.id);
+        }
+        return this.workspaceGrant(reusable.id);
+      }
       const id = this.#idFactory();
       const createdAt = this.#now();
       this.#database
@@ -1022,14 +1058,15 @@ export class ToolRepository {
           expiresAt: input.expiresAt,
         });
       }
-      if (input.conversationId && input.binding) {
+      if (input.conversationId && binding) {
         this.#bindWorkspace({
           workspaceGrantId: id,
           conversationId: input.conversationId,
-          ...input.binding,
+          ...binding,
           createdAt,
         });
       }
+      for (const duplicate of duplicates) this.#revokeWorkspaceGrant(duplicate.id);
       return this.workspaceGrant(id);
     });
   }
@@ -1084,6 +1121,8 @@ export class ToolRepository {
     conversationId: string;
     directories: ProjectWorkspaceBindingInput[];
   }): WorkspaceGrant[] {
+    const hasConversationPrimary =
+      this.primaryWorkspaceGrant(input.conversationId)?.bindingSource === "user_added";
     if (input.directories.filter(({ role }) => role === "primary").length > 1) {
       throw new Error("PROJECT_PRIMARY_DIRECTORY_REQUIRED");
     }
@@ -1125,12 +1164,14 @@ export class ToolRepository {
 
     const grants: WorkspaceGrant[] = [];
     for (const directory of input.directories) {
+      const role =
+        hasConversationPrimary && directory.role === "primary" ? "additional" : directory.role;
       const existing = reusable.get(directory.projectDirectoryBindingId);
       if (existing) {
         this.bindWorkspace({
           workspaceGrantId: String(existing.workspace_grant_id),
           conversationId: input.conversationId,
-          role: directory.role,
+          role,
           source: "project",
           projectDirectoryBindingId: directory.projectDirectoryBindingId,
           sourceRevision: directory.sourceRevision,
@@ -1156,7 +1197,7 @@ export class ToolRepository {
           allowNetwork: false,
           expiresAt: source.expiresAt,
           binding: {
-            role: directory.role,
+            role,
             source: "project",
             projectDirectoryBindingId: directory.projectDirectoryBindingId,
             sourceRevision: directory.sourceRevision,
@@ -1227,6 +1268,27 @@ export class ToolRepository {
     return (rows as SqlRow[]).map((row) => this.#workspaceGrant(row));
   }
 
+  effectiveWorkspaceGrants(conversationId: string): WorkspaceGrant[] {
+    const available = this.listWorkspaceGrants(conversationId).filter(
+      (grant) => grant.conversationId !== null || !this.isProjectSourceWorkspaceGrant(grant.id),
+    );
+    const local = available.filter((grant) => grant.conversationId === conversationId);
+    const rank = (grant: WorkspaceGrant): number =>
+      grant.bindingRole === "primary" ? 0 : grant.bindingSource === "user_added" ? 1 : 2;
+    const ordered = (local.length > 0 ? local : available).sort(
+      (left, right) =>
+        rank(left) - rank(right) ||
+        right.createdAt.localeCompare(left.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+    const paths = new Set<string>();
+    return ordered.filter((grant) => {
+      if (paths.has(grant.rootPath)) return false;
+      paths.add(grant.rootPath);
+      return true;
+    });
+  }
+
   isProjectSourceWorkspaceGrant(workspaceGrantId: string): boolean {
     const row = this.#database
       .prepare(
@@ -1273,24 +1335,26 @@ export class ToolRepository {
   }
 
   revokeWorkspaceGrant(id: string): WorkspaceGrant {
-    return this.#transaction(() => {
-      const now = this.#now();
-      const result = this.#database
-        .prepare(
-          `UPDATE workspace_grants SET revoked_at = COALESCE(revoked_at, ?)
+    return this.#transaction(() => this.#revokeWorkspaceGrant(id));
+  }
+
+  #revokeWorkspaceGrant(id: string): WorkspaceGrant {
+    const now = this.#now();
+    const result = this.#database
+      .prepare(
+        `UPDATE workspace_grants SET revoked_at = COALESCE(revoked_at, ?)
            WHERE id = ? AND owner_profile_id = ?`,
-        )
-        .run(now, id, this.#ownerProfileId);
-      if (result.changes !== 1) throw new Error("WORKSPACE_GRANT_NOT_FOUND");
-      this.#database
-        .prepare(
-          `UPDATE capability_scopes SET revoked_at = COALESCE(revoked_at, ?)
+      )
+      .run(now, id, this.#ownerProfileId);
+    if (result.changes !== 1) throw new Error("WORKSPACE_GRANT_NOT_FOUND");
+    this.#database
+      .prepare(
+        `UPDATE capability_scopes SET revoked_at = COALESCE(revoked_at, ?)
            WHERE owner_profile_id = ? AND resource_type = 'workspace' AND resource = ?`,
-        )
-        .run(now, this.#ownerProfileId, id);
-      this.#database.prepare("DELETE FROM workspace_bindings WHERE workspace_grant_id = ?").run(id);
-      return this.workspaceGrant(id);
-    });
+      )
+      .run(now, this.#ownerProfileId, id);
+    this.#database.prepare("DELETE FROM workspace_bindings WHERE workspace_grant_id = ?").run(id);
+    return this.workspaceGrant(id);
   }
 
   createWorkspaceChange(input: {

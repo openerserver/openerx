@@ -54,6 +54,9 @@ function outputDirectory(artifacts: Artifact[]): OutputDirectory {
 
 interface DirectoryActions {
   expandedDirectories: ReadonlySet<string>;
+  compact?: boolean;
+  expandAll?: boolean;
+  collapsedDirectories?: ReadonlySet<string>;
   onToggleDirectory: (path: string) => void;
   onSelectArtifact: (artifactId: string) => void;
 }
@@ -63,7 +66,9 @@ function DirectoryNode({
   ...actions
 }: DirectoryActions & { directory: OutputDirectory }): React.JSX.Element {
   const contentsId = useId();
-  const expanded = actions.expandedDirectories.has(directory.path);
+  const expanded = actions.expandAll
+    ? !actions.collapsedDirectories?.has(directory.path)
+    : actions.expandedDirectories.has(directory.path);
   return (
     <li className="artifact-directory">
       <button
@@ -78,7 +83,10 @@ function DirectoryNode({
         <CaretRight className="artifact-directory-caret" size={12} aria-hidden="true" />
         <FolderSimple size={18} aria-hidden="true" />
         <strong>{directory.name}</strong>
-        <small>{directory.fileCount} 个文件</small>
+        <small>
+          {directory.fileCount}
+          {actions.compact ? "" : " 个文件"}
+        </small>
       </button>
       <ul id={contentsId} className="artifact-directory-children" hidden={!expanded}>
         {[...directory.directories.values()]
@@ -100,10 +108,15 @@ function DirectoryNode({
                 <FileText size={18} aria-hidden="true" />
                 <span>
                   <strong>{name}</strong>
-                  <small>
-                    {artifact.format.toUpperCase()} · v{artifact.currentVersion}
-                  </small>
+                  {actions.compact ? null : (
+                    <small>
+                      {artifact.format.toUpperCase()} · v{artifact.currentVersion}
+                    </small>
+                  )}
                 </span>
+                {actions.compact ? (
+                  <small className="artifact-file-version">v{artifact.currentVersion}</small>
+                ) : null}
               </button>
             </li>
           ))}
@@ -118,7 +131,10 @@ export function ArtifactDirectory({
 }: DirectoryActions & { artifacts: Artifact[] }): React.JSX.Element {
   const directory = useMemo(() => outputDirectory(artifacts), [artifacts]);
   return (
-    <ul className="artifact-directory-list" aria-label="输出文件目录">
+    <ul
+      className={`artifact-directory-list ${actions.compact ? "is-compact" : ""}`}
+      aria-label="输出文件目录"
+    >
       <DirectoryNode directory={directory} {...actions} />
     </ul>
   );

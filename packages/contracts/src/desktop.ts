@@ -100,6 +100,7 @@ export const ipcChannels = Object.freeze({
   workspaceChoose: "workspace:choose",
   workspaceList: "workspace:list",
   workspaceRevoke: "workspace:revoke",
+  workspaceSetPrimary: "workspace:setPrimary",
   projectList: "project:list",
   projectGet: "project:get",
   projectCreate: "project:create",

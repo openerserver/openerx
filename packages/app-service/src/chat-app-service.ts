@@ -397,9 +397,22 @@ export class ChatAppService {
       case "workspace.grant":
         return this.#requiredTools().grantWorkspace(request.input);
       case "workspace.list":
+        if (
+          request.input.conversationId &&
+          this.#projects &&
+          ![...this.#conversationByGeneration.values()].includes(request.input.conversationId)
+        ) {
+          this.#requiredTools().reconcileProjectWorkspaces({
+            conversationId: request.input.conversationId,
+            directories:
+              this.#projects.generationContext(request.input.conversationId)?.directories ?? [],
+          });
+        }
         return this.#requiredTools().listWorkspaces(request.input.conversationId);
       case "workspace.revoke":
         return this.#requiredTools().revokeWorkspace(request.input.workspaceGrantId);
+      case "workspace.setPrimary":
+        return this.#requiredTools().setPrimaryWorkspace(request.input);
       case "mcp.servers.list":
         return this.#requiredToolsRepository().listMcpServers();
       case "mcp.servers.authorization":

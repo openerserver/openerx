@@ -29,6 +29,7 @@ export const workspaceGrantPrivilegedInputSchema = z
     access: workspaceAccessSchema.default("read_write"),
     allowNetwork: z.boolean().default(false),
     expiresAt: timestampSchema.nullable().default(null),
+    role: workspaceBindingRoleSchema.optional(),
   })
   .strict();
 
@@ -41,6 +42,9 @@ export const workspaceListInputSchema = z
   .strict();
 
 export const workspaceRevokeInputSchema = z.object({ workspaceGrantId: entityIdSchema }).strict();
+export const workspaceSetPrimaryInputSchema = z
+  .object({ conversationId: entityIdSchema, workspaceGrantId: entityIdSchema })
+  .strict();
 
 export const workspaceInstructionSourceSchema = z
   .object({
@@ -138,4 +142,7 @@ export interface WorkspaceBridge {
   ): Promise<WorkspaceGrant | null>;
   listWorkspaces(input?: z.input<typeof workspaceListInputSchema>): Promise<WorkspaceGrant[]>;
   revokeWorkspace(input: z.input<typeof workspaceRevokeInputSchema>): Promise<WorkspaceGrant>;
+  setPrimaryWorkspace(
+    input: z.input<typeof workspaceSetPrimaryInputSchema>,
+  ): Promise<WorkspaceGrant>;
 }
