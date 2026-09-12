@@ -8,6 +8,7 @@ import {
   recalledMemorySchema,
 } from "./memory";
 import { thinkingLevelSchema, usageRecordSchema } from "./model";
+import { byokUsageRecordSchema } from "./model-usage";
 import { processNonceSchema } from "./process";
 import { piSkillMountSchema } from "./skill";
 import {
@@ -21,7 +22,7 @@ import {
 } from "./tool";
 import { workspaceInstructionSourceSchema } from "./workspace";
 
-export const piHostContractVersion = 10 as const;
+export const piHostContractVersion = 11 as const;
 
 export const piHostBootstrapSchema = z
   .object({
@@ -77,6 +78,7 @@ export const piPromptFrameSchema = z
     conversationId: entityIdSchema,
     branchId: entityIdSchema,
     assistantMessageId: entityIdSchema,
+    selectedModelRef: z.string().min(1).optional(),
     thinkingLevel: thinkingLevelSchema.optional(),
     history: z.array(piHistoryMessageSchema).min(1),
     files: z
@@ -232,6 +234,7 @@ export const piMemoryExtractFrameSchema = z
     jobId: entityIdSchema,
     conversationId: entityIdSchema,
     sourceAssistantMessageId: entityIdSchema,
+    selectedModelRef: z.string().min(1).optional(),
     thinkingLevel: thinkingLevelSchema.optional(),
     messages: z
       .array(
@@ -300,6 +303,7 @@ export const piMemoryClusterFrameSchema = z
     kind: z.literal("pi.memory.cluster"),
     requestId: entityIdSchema,
     runId: entityIdSchema,
+    selectedModelRef: z.string().min(1).optional(),
     thinkingLevel: thinkingLevelSchema.optional(),
     memories: z.array(piMemoryClusterItemSchema).min(2).max(40),
     platform: piBackgroundPlatformSchema.optional(),
@@ -427,7 +431,16 @@ export const piHostEventFrameSchema = z
   })
   .strict();
 
+export const piModelUsageFrameSchema = z
+  .object({
+    kind: z.literal("pi.model-usage"),
+    usage: byokUsageRecordSchema,
+  })
+  .strict();
+export type PiModelUsageFrame = z.infer<typeof piModelUsageFrameSchema>;
+
 export const piHostPortFrameSchema = z.union([
+  piModelUsageFrameSchema,
   piHostReadyFrameSchema,
   piHostRequestFrameSchema,
   piHostEventFrameSchema,
