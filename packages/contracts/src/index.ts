@@ -11,6 +11,7 @@ export * from "./desktop-remote";
 export * from "./diagnostics";
 export * from "./errors";
 export * from "./file";
+export * from "./file-formats";
 export * from "./html-preview";
 export * from "./local-web-search";
 export * from "./memory";

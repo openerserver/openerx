@@ -9,6 +9,7 @@ const timestampSchema = z.string().refine((value) => !Number.isNaN(Date.parse(va
 export const supportedFileFormatSchema = z.enum([
   "pdf",
   "docx",
+  "xls",
   "xlsx",
   "csv",
   "pptx",

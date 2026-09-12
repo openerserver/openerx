@@ -1162,6 +1162,7 @@ function Composer({
             type="button"
             className="icon-button"
             aria-label="添加附件"
+            title="添加 PDF、DOCX、XLS / XLSX、CSV / TSV、PPTX、图片、文本或代码文件"
             onClick={() => chooseFiles.mutate()}
             disabled={chooseFiles.isPending}
           >
