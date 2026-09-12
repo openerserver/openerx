@@ -23,7 +23,7 @@ async function startPlatform(): Promise<void> {
       OPENERX_PLATFORM_PORT: String(port),
       OPENERX_DEV_PLATFORM_DATA_DIR: path.join(directory, "data"),
       OPENERX_DEV_EMAIL_CODE: "123456",
-      DEEPSEEK_API_KEY: "sk-remote-configuration-test-no-provider-requests",
+      DEEPSEEK_API_KEY: "sk-remote-test-fixture",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
