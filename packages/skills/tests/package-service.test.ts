@@ -81,7 +81,7 @@ describe("SkillPackageService", () => {
       "presentations",
       "pdf",
     ]);
-    expect(new Set(builtIns.map(({ version }) => version))).toEqual(new Set(["1.0.2-openerx"]));
+    expect(new Set(builtIns.map(({ version }) => version))).toEqual(new Set(["1.0.3-openerx"]));
     expect(service.mounts("default")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ installationId: builtIn?.id, name: "structured-report" }),
@@ -180,9 +180,9 @@ describe("SkillPackageService", () => {
 
     expect(() => service.seedBuiltIns()).not.toThrow();
     expect(service.get(builtInStructuredReportSkill.installationId)).toMatchObject({
-      version: "1.0.2-openerx",
-      publisher: "OpenERX",
-      sourceLabel: "OpenERX bundled skills",
+      version: "1.0.3-openerx",
+      publisher: "openerx",
+      sourceLabel: "openerx bundled skills",
       packageState: "installed",
     });
     expect(service.get(builtInStructuredReportSkill.installationId).rollbackVersions).toContain(
