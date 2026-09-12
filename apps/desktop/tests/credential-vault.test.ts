@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -9,7 +9,7 @@ import {
   defaultByokModelConfiguration,
   isByokModelRef,
 } from "@openerx/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type CredentialProtector,
   DeviceCredentialVault,
@@ -141,6 +141,107 @@ describe("ModelServiceSettingsStore", () => {
       "BYOK_MODEL_NOT_FOUND",
     );
     expect(await readFile(file, "utf8")).not.toContain("provider-secret");
+  });
+
+  it("reports unreadable keys and requires explicit recovery with an exact encrypted backup", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "model-service.bin");
+    const original = Buffer.from("old-unreadable-encrypted-fixture");
+    await writeFile(filePath, original);
+    const protector = new TestProtector();
+    const decode = protector.decrypt.bind(protector);
+    vi.spyOn(protector, "decrypt").mockImplementation(async (value) => {
+      if (value.equals(original)) throw new Error("OS_CREDENTIAL_DECRYPT_FAILED");
+      return await decode(value);
+    });
+    const vault = new ToolCredentialVault(filePath, protector);
+    const store = new ModelServiceSettingsStore(path.join(directory, "model-service.json"), vault);
+    expect(await store.state()).toMatchObject({
+      credentialIssue: "unreadable",
+      credentialConfigured: false,
+    });
+    expect(protector.decrypt).toHaveBeenCalledTimes(1);
+    const input = {
+      mode: "byok" as const,
+      byok: defaultByokModelConfiguration(),
+      providerApiKeys: { deepseek: "new-synthetic-deepseek", qwen: "new-synthetic-qwen" },
+    };
+    await expect(store.update(input)).rejects.toThrow("OS_CREDENTIAL_DECRYPT_FAILED");
+    expect(await readFile(filePath)).toEqual(original);
+    expect((await readdir(directory)).filter((name) => name.endsWith(".bak"))).toHaveLength(0);
+    expect(await store.update({ ...input, recoverUnreadableCredentials: true })).toMatchObject({
+      credentialIssue: null,
+      providerCredentials: { deepseek: true, qwen: true },
+    });
+    const backups = (await readdir(directory)).filter((name) => name.endsWith(".bak"));
+    expect(backups).toHaveLength(1);
+    expect(await readFile(path.join(directory, backups[0]!))).toEqual(original);
+    expect((await stat(path.join(directory, backups[0]!))).mode & 0o777).toBe(0o600);
+    expect((await readFile(filePath)).toString()).not.toContain("new-synthetic");
+    expect(await vault.resolve("model-service:byok:deepseek:api-key")).toBe(
+      "new-synthetic-deepseek",
+    );
+    await store.update({ ...input, providerApiKeys: { kimi: "another-synthetic-key" } });
+    expect((await store.state()).providerCredentials).toMatchObject({
+      deepseek: true,
+      qwen: true,
+      kimi: true,
+    });
+  });
+
+  it("never resets readable keys or a temporarily unavailable store", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "model-service.bin");
+    const vault = new ToolCredentialVault(filePath, new TestProtector());
+    await vault.save("existing", "synthetic-existing-key");
+    const original = await readFile(filePath);
+    await expect(vault.recoverUnreadable({ replacement: "fixture" })).rejects.toThrow(
+      "CREDENTIAL_RECOVERY_NOT_REQUIRED",
+    );
+    const unavailable = new ToolCredentialVault(filePath, new TestProtector(false));
+    await expect(unavailable.recoverUnreadable({ replacement: "fixture" })).rejects.toThrow(
+      "OS_CREDENTIAL_STORE_UNAVAILABLE",
+    );
+    await expect(vault.recoverUnreadable({})).rejects.toThrow("BYOK_API_KEY_REQUIRED");
+    expect(await readFile(filePath)).toEqual(original);
+    expect((await readdir(directory)).filter((name) => name.endsWith(".bak"))).toHaveLength(0);
+  });
+
+  it("preserves the unreadable file if encrypting its replacement fails", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "model-service.bin");
+    const original = Buffer.from("encrypted-unreadable-fixture");
+    await writeFile(filePath, original);
+    const protector = new TestProtector();
+    vi.spyOn(protector, "decrypt").mockRejectedValue(new Error("OS_CREDENTIAL_DECRYPT_FAILED"));
+    vi.spyOn(protector, "encrypt").mockRejectedValue(new Error("OS_CREDENTIAL_ENCRYPT_FAILED"));
+    const vault = new ToolCredentialVault(filePath, protector);
+    await expect(vault.recoverUnreadable({ replacement: "fixture" })).rejects.toThrow(
+      "OS_CREDENTIAL_ENCRYPT_FAILED",
+    );
+    expect(await readFile(filePath)).toEqual(original);
+    expect((await readdir(directory)).filter((name) => name.endsWith(".bak"))).toHaveLength(0);
+  });
+
+  it("does not overwrite a credential file changed during recovery", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "model-service.bin");
+    await writeFile(filePath, "old-unreadable-fixture");
+    const protector = new TestProtector();
+    vi.spyOn(protector, "decrypt").mockRejectedValue(new Error("OS_CREDENTIAL_DECRYPT_FAILED"));
+    const encrypt = protector.encrypt.bind(protector);
+    vi.spyOn(protector, "encrypt").mockImplementation(async (value) => {
+      await writeFile(filePath, "concurrent-writer-fixture");
+      return await encrypt(value);
+    });
+    await expect(
+      new ToolCredentialVault(filePath, protector).recoverUnreadable({ replacement: "fixture" }),
+    ).rejects.toThrow("CREDENTIAL_RECOVERY_CONFLICT");
+    expect(await readFile(filePath, "utf8")).toBe("concurrent-writer-fixture");
   });
 
   it("defaults to unconfigured BYOK mode and stores secrets only in the protected vault", async () => {

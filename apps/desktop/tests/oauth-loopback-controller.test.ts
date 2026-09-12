@@ -14,7 +14,7 @@ describe("OAuthLoopbackController", () => {
       expect(authorizationUrl).toBe("https://identity.example/authorize?client_id=openerx");
       const response = await fetch(`${callbackUrl}?code=code-123&state=state-123`);
       expect(response.status).toBe(200);
-      expect(await response.text()).toContain("授权已返回 OpenERX");
+      expect(await response.text()).toContain("授权已返回 openerx");
     });
     const controller = new OAuthLoopbackController(openExternal, 5_000);
     controllers.push(controller);
