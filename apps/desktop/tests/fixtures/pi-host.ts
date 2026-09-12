@@ -55,6 +55,32 @@ function responseFor(context: Context): AssistantMessage {
   const toolResults = context.messages
     .slice(lastUserIndex + 1)
     .filter(({ role }) => role === "toolResult");
+  if (latestUser.includes("[PI_TEST_XLS_ATTACHMENT]")) {
+    const personalFileId = context.systemPrompt?.match(/\(xls, id ([0-9a-f-]{36})\)/u)?.[1];
+    if (!personalFileId) return fauxAssistantMessage("XLS 附件未进入模型上下文。");
+    if (toolResults.length === 0) {
+      return fauxAssistantMessage(
+        fauxToolCall("openerx_file_read", { personalFileId }, { id: "read-xls-attachment" }),
+        { stopReason: "toolUse" },
+      );
+    }
+    const result = toolResults[0];
+    const details = result && "details" in result ? result.details : null;
+    const { text, citations } = (details && typeof details === "object" ? details : {}) as Record<
+      string,
+      unknown
+    >;
+    const verified =
+      typeof text === "string" &&
+      text.includes("女士衬衫") &&
+      text.includes("=B2*C2 → 58.50") &&
+      text.includes("2026-09-12") &&
+      Array.isArray(citations) &&
+      citations.length === 2;
+    return fauxAssistantMessage(
+      verified ? "已读取 XLS：女士衬衫，金额 58.50，日期 2026-09-12。" : "XLS 附件读取校验失败。",
+    );
+  }
   if (latestUser.includes("[PI_TEST_BROWSER_COMPUTER_USE_OPEN]")) {
     const url = latestUser.match(/https?:\/\/\S+/u)?.[0];
     if (!url) return fauxAssistantMessage("缺少系统浏览器测试 URL。");
