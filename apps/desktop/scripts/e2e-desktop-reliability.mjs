@@ -4,7 +4,9 @@ import path from "node:path";
 import { chromium } from "playwright";
 
 // Attach to a fresh deterministic E2E profile started with npm run dev:desktop.
-const evidenceDirectory = path.resolve(process.argv[2] ?? "/tmp/openerx-chat-queue-evidence");
+const evidenceDirectory = path.resolve(
+  process.argv[2] ?? "/tmp/openerx-desktop-reliability-evidence",
+);
 const endpoint = process.env.OPENERX_E2E_CDP ?? "http://127.0.0.1:9238";
 const inspector = process.env.OPENERX_E2E_INSPECTOR ?? "http://127.0.0.1:9229";
 mkdirSync(evidenceDirectory, { recursive: true });
@@ -132,6 +134,18 @@ try {
   await menu.waitFor({ state: "hidden" });
   assert.deepEqual(pageErrors, []);
   await page.screenshot({ path: path.join(evidenceDirectory, "03-resent.png") });
+  await page.getByRole("link", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "记忆", exact: true }).click();
+  const memorySearch = page.getByLabel("搜索记忆", { exact: true });
+  await memorySearch.fill("类");
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  assert.equal(await memorySearch.evaluate((element) => element === document.activeElement), true);
+  await page.keyboard.type("型检查");
+  assert.equal(await memorySearch.inputValue(), "类型检查");
+  assert.deepEqual(pageErrors, []);
+  await page.screenshot({ path: path.join(evidenceDirectory, "04-settings-focus.png") });
   const report = {
     checkedAt: new Date().toISOString(),
     runtime: "npm run dev:desktop",
@@ -147,6 +161,7 @@ try {
     resendCreatedBranch: resent.conversation.activeBranchId,
     outsideClickDismissedMenu: true,
     escapeDismissedMenu: true,
+    settingsSearchKeptFocus: true,
     pageErrors,
   };
   writeFileSync(
