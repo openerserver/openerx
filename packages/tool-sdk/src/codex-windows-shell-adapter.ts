@@ -268,7 +268,7 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
       await this.#request(
         "initialize",
         {
-          clientInfo: { name: "uwa", title: "UWA", version: "2.0" },
+          clientInfo: { name: "openerx", title: "openerx", version: "2.0" },
           capabilities: { experimentalApi: true, requestAttestation: false },
         },
         5_000,

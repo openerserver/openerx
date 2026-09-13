@@ -1,9 +1,9 @@
 {
   "name": "openerx-v2",
-  "version": "2.0.1",
+  "version": "2.0.3",
   "private": true,
   "license": "Apache-2.0",
-  "description": "UWA (Unicom Work Assistant) personal AI desktop client",
+  "description": "openerx (personal AI workspace) personal AI desktop client",
   "packageManager": "npm@11.3.0",
   "engines": {
     "node": ">=24.3.0",

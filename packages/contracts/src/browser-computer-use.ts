@@ -296,7 +296,7 @@ function validateBrowserSessionDescriptor(
       context.addIssue({
         code: "custom",
         path: ["ownership"],
-        message: "System browser surfaces are not UWA-managed profiles",
+        message: "System browser surfaces are not openerx-managed profiles",
       });
     }
   } else {
@@ -318,7 +318,7 @@ function validateBrowserSessionDescriptor(
       context.addIssue({
         code: "custom",
         path: ["ownership"],
-        message: "Managed Chromium surface must be UWA-owned",
+        message: "Managed Chromium surface must be openerx-owned",
       });
     }
   }

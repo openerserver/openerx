@@ -29,6 +29,7 @@ export const workspaceGrantPrivilegedInputSchema = z
     access: workspaceAccessSchema.default("read_write"),
     allowNetwork: z.boolean().default(false),
     expiresAt: timestampSchema.nullable().default(null),
+    role: workspaceBindingRoleSchema.optional(),
   })
   .strict();
 
@@ -41,6 +42,9 @@ export const workspaceListInputSchema = z
   .strict();
 
 export const workspaceRevokeInputSchema = z.object({ workspaceGrantId: entityIdSchema }).strict();
+export const workspaceSetPrimaryInputSchema = z
+  .object({ conversationId: entityIdSchema, workspaceGrantId: entityIdSchema })
+  .strict();
 
 export const workspaceInstructionSourceSchema = z
   .object({
@@ -99,8 +103,10 @@ export const workspaceChangeSetEntrySchema = z
       .string()
       .regex(/^[a-f0-9]{64}$/u)
       .nullable(),
-    beforeText: z.string().max(1_000_000).nullable(),
-    afterText: z.string().max(1_000_000).nullable(),
+    beforeText: z.string().max(5_000_000).nullable(),
+    afterText: z.string().max(5_000_000).nullable(),
+    beforeMode: z.number().int().min(0).max(0o7777).optional(),
+    afterMode: z.number().int().min(0).max(0o7777).optional(),
     applySupported: z.boolean(),
   })
   .strict();
@@ -122,6 +128,40 @@ export const workspaceChangeSetSchema = z
   })
   .strict();
 
+export const workspaceEditSummarySchema = z
+  .object({
+    id: entityIdSchema,
+    kind: z.enum(["patch", "change_set"]),
+    workspaceGrantId: entityIdSchema,
+    relativePaths: z.array(z.string().max(2_048)).max(10_000),
+    status: z.union([workspaceChangeSchema.shape.status, workspaceChangeSetStatusSchema]),
+    canUndo: z.boolean(),
+    createdAt: timestampSchema,
+  })
+  .strict();
+
+export type WorkspaceEditSummary = z.infer<typeof workspaceEditSummarySchema>;
+// A durable combined undo plan survives a process exit between file and database writes.
+export const workspaceUndoRecordSchema = z
+  .object({
+    id: entityIdSchema,
+    runId: entityIdSchema,
+    edits: z.array(workspaceEditSummarySchema.pick({ id: true, kind: true, status: true })),
+    mutations: z.array(
+      z
+        .object({
+          workspaceGrantId: entityIdSchema,
+          relativePath: z.string().min(1).max(2_048),
+          beforeText: z.string().max(5_000_000).nullable(),
+          afterText: z.string().max(5_000_000).nullable(),
+          beforeMode: z.number().int().min(0).max(0o7777).optional(),
+          afterMode: z.number().int().min(0).max(0o7777).optional(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type WorkspaceUndoRecord = z.infer<typeof workspaceUndoRecordSchema>;
 export type WorkspaceAccess = z.infer<typeof workspaceAccessSchema>;
 export type WorkspaceBindingRole = z.infer<typeof workspaceBindingRoleSchema>;
 export type WorkspaceBindingSource = z.infer<typeof workspaceBindingSourceSchema>;
@@ -129,8 +169,8 @@ export type WorkspaceGrant = z.infer<typeof workspaceGrantSchema>;
 export type WorkspaceInstructionSource = z.infer<typeof workspaceInstructionSourceSchema>;
 export type WorkspaceChange = z.infer<typeof workspaceChangeSchema>;
 export type WorkspaceChangeSetStatus = z.infer<typeof workspaceChangeSetStatusSchema>;
-export type WorkspaceChangeSetEntry = z.infer<typeof workspaceChangeSetEntrySchema>;
 export type WorkspaceChangeSet = z.infer<typeof workspaceChangeSetSchema>;
+export type WorkspaceChangeSetEntry = z.infer<typeof workspaceChangeSetEntrySchema>;
 
 export interface WorkspaceBridge {
   chooseWorkspace(
@@ -138,4 +178,7 @@ export interface WorkspaceBridge {
   ): Promise<WorkspaceGrant | null>;
   listWorkspaces(input?: z.input<typeof workspaceListInputSchema>): Promise<WorkspaceGrant[]>;
   revokeWorkspace(input: z.input<typeof workspaceRevokeInputSchema>): Promise<WorkspaceGrant>;
+  setPrimaryWorkspace(
+    input: z.input<typeof workspaceSetPrimaryInputSchema>,
+  ): Promise<WorkspaceGrant>;
 }

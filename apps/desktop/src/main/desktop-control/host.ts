@@ -302,7 +302,7 @@ export class DesktopControlHost {
         )
           throw error;
         // Keep this tool call and its trusted generation alive while the user
-        // resumes from the foreground UWA window. Never retry by stealing focus.
+        // resumes from the foreground openerx window. Never retry by stealing focus.
         this.#pause(session, "DESKTOP_TARGET_NOT_FRONTMOST");
         session.busy = false;
         await this.#waitForResume(session, signal);

@@ -1,12 +1,14 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { defaultWorkspaceDirectory as resolveDefaultWorkspaceDirectory } from "@openerx/app-service/default-workspace";
 import {
   acceptBillingTermsInputSchema,
   accountRequestCodeInputSchema,
   accountRevokeDeviceInputSchema,
   accountStateSchema,
   accountVerifyCodeInputSchema,
+  aggregateByokUsage,
   artifactGetInputSchema,
   artifactListInputSchema,
   artifactPreviewInputSchema,
@@ -61,10 +63,12 @@ import {
   emptyInputSchema,
   fileAttachInputSchema,
   fileChooseInputSchema,
+  fileImportDataInputSchema,
   fileListInputSchema,
   filePreviewInputSchema,
   fileRevokeScopeInputSchema,
   fileSearchInputSchema,
+  htmlPreviewProtocol,
   ipcChannels,
   localExportResultSchema,
   localWebSearchRuntimeResetInputSchema,
@@ -80,6 +84,7 @@ import {
   memorySettingsUpdateInputSchema,
   memorySourcesListInputSchema,
   memoryUpsertInputSchema,
+  modelFailureMessage,
   modelServiceSettingsUpdateSchema,
   permissionListInputSchema,
   permissionResolveInputSchema,
@@ -109,6 +114,7 @@ import {
   skillResetPermissionsInputSchema,
   skillRollbackInputSchema,
   skillUninstallInputSchema,
+  supportedFileExtensions,
   syncResolveConflictInputSchema,
   toolListInputSchema,
   toolPermissionModeGetInputSchema,
@@ -120,6 +126,8 @@ import {
   workspaceChooseInputSchema,
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
+  workspaceSetPrimaryInputSchema,
+  workspaceUndoInputSchema,
 } from "@openerx/contracts";
 import {
   DiagnosticsService,
@@ -157,10 +165,12 @@ import {
 import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
 import { initializeAccountSession } from "./development-account-bootstrap";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
+import { HtmlPreviewRegistry } from "./html-preview";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { DesktopLoginStartupService, isBackgroundLoginStartup } from "./login-startup";
 import { memoryNotificationContent } from "./memory-notification";
 import { ModelServiceSettingsStore } from "./model-service-settings";
+import { localByokUsage } from "./model-usage";
 import { PlatformAccountClient } from "./platform-account-client";
 import { RemoteDesktopController } from "./remote-desktop-controller";
 import {
@@ -183,26 +193,29 @@ import {
 
 const e2eApplicationName =
   process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_APPLICATION_NAME?.trim() : undefined;
-if (e2eApplicationName && !/^UWA CX110 D3 [A-Za-z0-9_-]{1,64}$/u.test(e2eApplicationName)) {
+if (e2eApplicationName && !/^openerx CX110 D3 [A-Za-z0-9_-]{1,64}$/u.test(e2eApplicationName)) {
   throw new Error("OPENERX_E2E_APPLICATION_NAME_INVALID");
 }
+// Historical OS credential identity: changing it would orphan existing encrypted
+// credentials/cookies. Electron captures it before ready; UI naming is set below.
+// This compatibility string does not identify the current product as Unicom.
 app.name = e2eApplicationName || "UWA";
 
 function configureApplicationMenu(): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
-        label: "UWA",
+        label: "openerx",
         submenu: [
-          { role: "about", label: "关于 UWA" },
+          { role: "about", label: "关于 openerx" },
           { type: "separator" },
           { role: "services", label: "服务" },
           { type: "separator" },
-          { role: "hide", label: "隐藏 UWA" },
+          { role: "hide", label: "隐藏 openerx" },
           { role: "hideOthers", label: "隐藏其他" },
           { role: "unhide", label: "全部显示" },
           { type: "separator" },
-          { role: "quit", label: "退出 UWA" },
+          { role: "quit", label: "退出 openerx" },
         ],
       },
       { role: "fileMenu", label: "文件" },
@@ -215,8 +228,13 @@ function configureApplicationMenu(): void {
 
 const processStartedAt = performance.now();
 const performanceBudgets = new PerformanceBudgetTracker(processStartedAt);
+const htmlPreviews = new HtmlPreviewRegistry();
 
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: htmlPreviewProtocol,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+  },
   {
     scheme: appProtocol,
     privileges: {
@@ -231,9 +249,6 @@ if (started) {
   app.quit();
 }
 
-const primaryInstance = app.requestSingleInstanceLock();
-if (!primaryInstance) app.quit();
-
 const e2eProfileDirectory =
   process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_PROFILE_DIR : undefined;
 if (e2eProfileDirectory) {
@@ -242,6 +257,10 @@ if (e2eProfileDirectory) {
   // Keep existing installations on their original profile directory after the product rename.
   app.setPath("userData", path.join(app.getPath("appData"), "OpenerX"));
 }
+
+// Select the profile before Electron derives the single-instance identity.
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 
 function registerIpcHandlers(
   supervisor: AppServiceSupervisor,
@@ -396,7 +415,7 @@ function registerIpcHandlers(
       : await dialog.showSaveDialog({
           title: "导出脱敏诊断包",
           defaultPath: path.join(app.getPath("documents"), "openerx-diagnostics.json"),
-          filters: [{ name: "UWA 诊断包", extensions: ["json"] }],
+          filters: [{ name: "openerx 诊断包", extensions: ["json"] }],
         });
     if (selection.canceled || !selection.filePath) return null;
     diagnostics.record({ source: "desktop", level: "info", code: "diagnostics.exported" });
@@ -427,7 +446,7 @@ function registerIpcHandlers(
       : await dialog.showSaveDialog({
           title: "导出个人数据",
           defaultPath: path.join(app.getPath("documents"), "openerx-personal-data.zip"),
-          filters: [{ name: "UWA 个人数据", extensions: ["zip"] }],
+          filters: [{ name: "openerx 个人数据", extensions: ["zip"] }],
         });
     if (selection.canceled || !selection.filePath) return null;
     diagnostics.record({ source: "desktop", level: "info", code: "personal_data.exported" });
@@ -454,6 +473,7 @@ function registerIpcHandlers(
     const parsed = accountVerifyCodeInputSchema.parse(input);
     const state = await accounts.verifyCode(parsed.challengeId, parsed.code);
     if (state.account) {
+      htmlPreviews.clear();
       await supervisor.switchProfile(
         path.join(baseProfileDirectory, "accounts", state.account.accountId),
         state.account.accountId,
@@ -466,6 +486,7 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     await remote.prepareSignOut();
     const state = await accounts.signOut();
+    htmlPreviews.clear();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
   });
@@ -473,6 +494,7 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     await remote.prepareSignOut();
     const state = await accounts.signOutAll();
+    htmlPreviews.clear();
     await supervisor.switchProfile(baseProfileDirectory, "local-default");
     return state;
   });
@@ -482,6 +504,7 @@ function registerIpcHandlers(
     if (parsed.sessionId === accounts.state().session?.sessionId) await remote.prepareSignOut();
     const state = await accounts.revokeDevice(parsed.sessionId);
     if (state.status !== "signed_in") {
+      htmlPreviews.clear();
       await supervisor.switchProfile(baseProfileDirectory, "local-default");
     }
     return state;
@@ -533,29 +556,32 @@ function registerIpcHandlers(
           : (["off"] as const),
       })),
     );
-    const customByokModel = settings.byok && settings.credentialConfigured
-      ? {
-          modelRef: "platform/byok" as const,
-          displayName: settings.byok.displayName,
-          version: "user-configured",
-          capabilities: {
-            textInput: true,
-            imageInput: settings.byok.capabilities.imageInput,
-            fileInput: false,
-            functionCalling: settings.byok.capabilities.functionCalling,
-            structuredOutput: false,
-          },
-          contextWindow: settings.byok.contextWindow,
-          maxOutputTokens: settings.byok.maxOutputTokens,
-          status: settings.credentialConfigured ? ("available" as const) : ("unavailable" as const),
-          priceRef: "byok/user-provider",
-          priceSummary: "由 API 提供商直接计费",
-          free: false,
-          thinkingLevels: settings.byok.capabilities.reasoning
-            ? (["off", "medium", "high"] as const)
-            : (["off"] as const),
-        }
-      : null;
+    const customByokModel =
+      settings.byok && settings.credentialConfigured
+        ? {
+            modelRef: "platform/byok" as const,
+            displayName: settings.byok.displayName,
+            version: "user-configured",
+            capabilities: {
+              textInput: true,
+              imageInput: settings.byok.capabilities.imageInput,
+              fileInput: false,
+              functionCalling: settings.byok.capabilities.functionCalling,
+              structuredOutput: false,
+            },
+            contextWindow: settings.byok.contextWindow,
+            maxOutputTokens: settings.byok.maxOutputTokens,
+            status: settings.credentialConfigured
+              ? ("available" as const)
+              : ("unavailable" as const),
+            priceRef: "byok/user-provider",
+            priceSummary: "由 API 提供商直接计费",
+            free: false,
+            thinkingLevels: settings.byok.capabilities.reasoning
+              ? (["off", "medium", "high"] as const)
+              : (["off"] as const),
+          }
+        : null;
     if (settings.mode === "byok") {
       return customByokModel ? [...presetModels, customByokModel] : presetModels;
     }
@@ -583,6 +609,11 @@ function registerIpcHandlers(
   });
   ipcMain.handle(ipcChannels.usageGet, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
+    const query = usageQueryInputSchema.parse(input ?? {});
+    const local = await localByokUsage(query, (await modelSettings.state()).mode, (input) =>
+      supervisor.request({ command: "usage.byok.list", input }),
+    );
+    if (local !== null) return aggregateByokUsage(local, query);
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     return await platformClient.usage(
       await accounts.accessToken(),
@@ -591,6 +622,11 @@ function registerIpcHandlers(
   });
   ipcMain.handle(ipcChannels.usageRecords, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
+    const query = usageQueryInputSchema.parse(input ?? {});
+    const local = await localByokUsage(query, (await modelSettings.state()).mode, (input) =>
+      supervisor.request({ command: "usage.byok.list", input }),
+    );
+    if (local !== null) return local;
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     return usageRecordSchema
       .array()
@@ -708,7 +744,10 @@ function registerIpcHandlers(
         accounts.state().status === "signed_in"
           ? await accounts.authorization(platformUrl)
           : undefined;
-      return await supervisor.request(request, authorization, 15_000, byok);
+      const result = await supervisor.request(request, authorization, 15_000, byok);
+      return request.command === "artifact.preview" || request.command === "file.preview"
+        ? htmlPreviews.prepare(result)
+        : result;
     });
   };
 
@@ -931,32 +970,7 @@ function registerIpcHandlers(
       filters: [
         {
           name: "支持的文件",
-          extensions: [
-            "pdf",
-            "docx",
-            "xlsx",
-            "csv",
-            "pptx",
-            "txt",
-            "md",
-            "json",
-            "yaml",
-            "yml",
-            "png",
-            "jpg",
-            "jpeg",
-            "gif",
-            "webp",
-            "html",
-            "htm",
-            "ts",
-            "tsx",
-            "js",
-            "jsx",
-            "py",
-            "go",
-            "rs",
-          ],
+          extensions: supportedFileExtensions,
         },
       ],
     });
@@ -965,6 +979,15 @@ function registerIpcHandlers(
       chatCommandEnvelopeSchema.parse({
         command: "file.import",
         input: { localPaths: selection.filePaths, conversationId: parsed.conversationId },
+      }),
+    );
+  });
+  ipcMain.handle(ipcChannels.fileImportData, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "file.importData",
+        input: fileImportDataInputSchema.parse(input),
       }),
     );
   });
@@ -987,9 +1010,9 @@ function registerIpcHandlers(
     assertTrustedIpcSender(event);
     const parsed = workspaceChooseInputSchema.parse(input ?? {});
     const selection = await dialog.showOpenDialog({
-      title: "授权项目工作区",
+      title: parsed.role === "additional" ? "添加附加目录" : "选择工作目录",
       properties: ["openDirectory"],
-      message: "UWA 只能在你明确授权的目录内读取或修改文件",
+      message: "openerx 只能在你明确授权的目录内读取或修改文件",
     });
     if (selection.canceled || !selection.filePaths[0]) return null;
     return await supervisor.request(
@@ -1005,7 +1028,7 @@ function registerIpcHandlers(
     const selection = await dialog.showOpenDialog({
       title: parsed.projectDirectoryId ? "重新连接项目目录" : "添加项目目录",
       properties: ["openDirectory"],
-      message: "UWA 只能在你明确授权的项目目录内读取或修改文件",
+      message: "openerx 只能在你明确授权的项目目录内读取或修改文件",
     });
     if (selection.canceled || !selection.filePaths[0]) return null;
     return await supervisor.request(
@@ -1040,6 +1063,11 @@ function registerIpcHandlers(
   );
   registerChatHandler(ipcChannels.workspaceList, "workspace.list", workspaceListInputSchema);
   registerChatHandler(ipcChannels.workspaceRevoke, "workspace.revoke", workspaceRevokeInputSchema);
+  registerChatHandler(
+    ipcChannels.workspaceSetPrimary,
+    "workspace.setPrimary",
+    workspaceSetPrimaryInputSchema,
+  );
   registerChatHandler(ipcChannels.fileList, "file.list", fileListInputSchema);
   registerChatHandler(ipcChannels.fileSearch, "file.search", fileSearchInputSchema);
   registerChatHandler(ipcChannels.filePreview, "file.preview", filePreviewInputSchema);
@@ -1050,6 +1078,11 @@ function registerIpcHandlers(
   registerChatHandler(ipcChannels.artifactPreview, "artifact.preview", artifactPreviewInputSchema);
   registerChatHandler(ipcChannels.toolWorkItemsList, "tool.workItems.list", toolListInputSchema);
   registerChatHandler(ipcChannels.toolWorkItemGet, "tool.workItem.get", workItemGetInputSchema);
+  registerChatHandler(
+    ipcChannels.toolWorkspaceUndo,
+    "tool.workspace.undo",
+    workspaceUndoInputSchema,
+  );
   registerChatHandler(
     ipcChannels.localWebSearchSettingsGet,
     "tool.webSearch.settings.get",
@@ -1244,7 +1277,7 @@ function registerIpcHandlers(
     );
     const selection = await dialog.showSaveDialog({
       title: "保存成果副本",
-      defaultPath: path.join(app.getPath("documents"), artifact.displayName),
+      defaultPath: path.join(app.getPath("documents"), path.basename(artifact.displayName)),
     });
     if (selection.canceled || !selection.filePath) return null;
     return await supervisor.request(
@@ -1257,6 +1290,7 @@ function registerIpcHandlers(
 }
 
 function registerAppProtocol(): void {
+  protocol.handle(htmlPreviewProtocol, (request) => htmlPreviews.respond(request));
   const rendererRoot = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`);
   protocol.handle(appProtocol, (request) => {
     if (request.method !== "GET") {
@@ -1360,8 +1394,8 @@ function showMainWindow(diagnostics: DiagnosticsService): BrowserWindow {
 async function createBackgroundTray(diagnostics: DiagnosticsService): Promise<void> {
   if (!keepsAutomationRuntimeAliveAfterWindowClose(process.platform) || backgroundTray) return;
   const iconCandidates = [
-    path.join(app.getAppPath(), "public", "assets", "china-unicom-logo.png"),
-    path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/assets/china-unicom-logo.png`),
+    path.join(app.getAppPath(), "public", "assets", "openerx-mark.png"),
+    path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/assets/openerx-mark.png`),
   ];
   let icon = nativeImage.createEmpty();
   for (const candidate of iconCandidates) {
@@ -1371,14 +1405,14 @@ async function createBackgroundTray(diagnostics: DiagnosticsService): Promise<vo
   }
   if (icon.isEmpty()) icon = await app.getFileIcon(process.execPath, { size: "small" });
   backgroundTray = new Tray(icon.resize({ width: 16, height: 16 }));
-  backgroundTray.setToolTip("UWA · 自动化后台运行中");
+  backgroundTray.setToolTip("openerx · 自动化后台运行中");
   backgroundTray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "自动化在后台运行", enabled: false },
       { type: "separator" },
-      { label: "打开 UWA", click: () => showMainWindow(diagnostics) },
+      { label: "打开 openerx", click: () => showMainWindow(diagnostics) },
       {
-        label: "退出 UWA（停止自动化）",
+        label: "退出 openerx（停止自动化）",
         click: () => {
           quitRequested = true;
           app.quit();
@@ -1396,6 +1430,7 @@ app.on("second-instance", () => {
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return;
+  app.name = e2eApplicationName || "openerx";
   configureApplicationMenu();
   const profileDirectory = app.getPath("userData");
   mkdirSync(profileDirectory, { recursive: true });
@@ -1413,9 +1448,11 @@ app.whenReady().then(async () => {
   const desktopPlatform = process.platform === "darwin" ? "darwin" : "win32";
   const desktopArch = process.arch === "arm64" ? "arm64" : "x64";
   const updates = new DesktopUpdateService({
-    configuration: app.isPackaged && !process.windowsStore
-      ? loadPackagedUpdateConfiguration(app.getAppPath())
-      : developmentUpdateConfiguration(),
+    expectedProduct: "openerx",
+    configuration:
+      app.isPackaged && !process.windowsStore
+        ? loadPackagedUpdateConfiguration(app.getAppPath())
+        : developmentUpdateConfiguration(),
     currentVersion: app.getVersion(),
     platform: desktopPlatform,
     arch: desktopArch,
@@ -1465,7 +1502,7 @@ app.whenReady().then(async () => {
         directory,
         new ToolCredentialVault(path.join(directory, "credentials", "tool-credentials.bin")),
       ),
-    path.join(app.getPath("documents"), "UWA Workspace"),
+    resolveDefaultWorkspaceDirectory(app.getPath("documents")),
   );
   if (process.platform === "win32") {
     globalShortcut.register("Control+Alt+Shift+F12", () => supervisor?.stopDesktopControl());
@@ -1565,6 +1602,13 @@ app.whenReady().then(async () => {
     });
   }
   supervisor.onEvent((event) => {
+    if (
+      event.type === "run.failed" &&
+      event.payload.reason &&
+      modelFailureMessage(event.payload.reason)
+    ) {
+      diagnostics.record({ source: "pi_host", level: "error", code: event.payload.reason });
+    }
     if (event.type === "service.status" && event.payload.status) {
       const status = event.payload.status;
       if (status === "ready") performanceBudgets.markAppServiceReady();

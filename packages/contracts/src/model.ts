@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { entityIdSchema, timestampSchema } from "./common";
+import type { ModelUsageAggregate, ModelUsageRecord } from "./model-usage";
 
 export const thinkingLevelValues = [
   "off",
@@ -31,10 +32,13 @@ export const modelCapabilitiesSchema = z
   })
   .strict();
 
+export const toolSystemPermissionSchema = z.enum(["screen_capture", "accessibility"]);
+
 export const hostToolAvailabilitySchema = z
   .object({
     availableToolNames: z.array(z.string().min(1).max(200)).max(2_000),
     unavailableReasons: z.record(z.string(), z.string().min(1).max(1_000)),
+    missingPermissions: z.record(z.string(), z.array(toolSystemPermissionSchema).max(2)).optional(),
   })
   .strict();
 
@@ -210,6 +214,6 @@ export const automaticModelRef = "platform/auto" as const;
 
 export interface ModelUsageBridge {
   listModels(): Promise<ModelCatalogEntry[]>;
-  getUsage(input?: z.input<typeof usageQueryInputSchema>): Promise<UsageAggregate>;
-  getUsageRecords(input?: z.input<typeof usageQueryInputSchema>): Promise<UsageRecord[]>;
+  getUsage(input?: z.input<typeof usageQueryInputSchema>): Promise<ModelUsageAggregate>;
+  getUsageRecords(input?: z.input<typeof usageQueryInputSchema>): Promise<ModelUsageRecord[]>;
 }

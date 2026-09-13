@@ -10,8 +10,9 @@ import type {
   SelectableLocalWebSearchProviderId,
 } from "./local-web-search";
 import { memoryConflictKeySchema, memoryKindSchema } from "./memory";
-import { thinkingLevelSchema, usageRecordSchema } from "./model";
-import { workspaceInstructionSourceSchema } from "./workspace";
+import { thinkingLevelSchema, toolSystemPermissionSchema } from "./model";
+import { modelUsageRecordSchema } from "./model-usage";
+import { workspaceEditSummarySchema, workspaceInstructionSourceSchema } from "./workspace";
 
 export const toolRiskSchema = z.enum(["L0", "L1", "L2", "L3", "L4", "L5"]);
 export const toolPermissionModeSchema = z.enum(["ask", "full_access"]);
@@ -63,6 +64,7 @@ export const toolRuntimeReadinessSchema = z
     reason: z.string().min(1).max(500).nullable(),
     availableToolNames: z.array(z.string().min(1).max(200)).max(2_000),
     details: z.array(z.string().min(1).max(200)).max(20).optional(),
+    missingPermissions: z.array(toolSystemPermissionSchema).max(2).optional(),
     checkedAt: timestampSchema,
   })
   .strict();
@@ -183,7 +185,7 @@ export const executionRunSchema = z
     skillInstallationIds: z.array(entityIdSchema).max(500),
     instructionSources: z.array(workspaceInstructionSourceSchema).max(500),
     piSessionRef: z.string().min(1).nullable(),
-    usageRecords: z.array(usageRecordSchema),
+    usageRecords: z.array(modelUsageRecordSchema),
     cancellationRequestedAt: timestampSchema.nullable(),
     lastPiEventSequence: z.number().int().nonnegative(),
     retryCount: z.number().int().nonnegative(),
@@ -401,6 +403,14 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
       operation: z.literal("workspace_instructions"),
       workspaceGrantId: entityIdSchema,
       relativePath: z.string().max(2_048).default("."),
+    })
+    .strict(),
+  z
+    .object({
+      ...toolOperationBase,
+      operation: z.literal("workspace_patch"),
+      workspaceGrantId: entityIdSchema,
+      patch: z.string().min(1).max(5_000_000),
     })
     .strict(),
   z
@@ -1016,6 +1026,13 @@ export const toolScopeRevokeInputSchema = z.object({ scopeId: entityIdSchema }).
 export const workItemGetInputSchema = z
   .object({ workItemId: entityIdSchema, runId: entityIdSchema.optional() })
   .strict();
+export const workspaceUndoInputSchema = z
+  .object({
+    workItemId: entityIdSchema,
+    runId: entityIdSchema,
+    editId: entityIdSchema.optional(),
+  })
+  .strict();
 export const permissionListInputSchema = z
   .object({ status: permissionRequestSchema.shape.status.optional() })
   .strict();
@@ -1029,6 +1046,7 @@ export const workItemDetailSchema = z
     steps: z.array(runStepSchema),
     toolCalls: z.array(toolCallSchema),
     permissions: z.array(permissionRequestSchema),
+    workspaceEdits: z.array(workspaceEditSummarySchema).optional(),
   })
   .strict();
 
@@ -1075,6 +1093,7 @@ export interface ToolBridge {
   }): Promise<LocalWebSearchSettingsState>;
   listWorkItems(input?: z.input<typeof toolListInputSchema>): Promise<WorkItem[]>;
   getWorkItem(input: z.input<typeof workItemGetInputSchema>): Promise<WorkItemDetail>;
+  undoWorkspaceEdits(input: z.input<typeof workspaceUndoInputSchema>): Promise<WorkItemDetail>;
   listPermissionRequests(
     input?: z.input<typeof permissionListInputSchema>,
   ): Promise<PermissionRequest[]>;

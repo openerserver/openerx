@@ -1,0 +1,74 @@
+{
+  "checkedAt": "2026-09-11T06:51:49.576Z",
+  "conversationId": "a38ec3dd-1b1f-4384-8c5f-b8342c79845d",
+  "outputCount": 12,
+  "renderedOutputCount": 12,
+  "outputs": [
+    {
+      "displayName": "assets/js/data.js",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "index.html",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "product.html",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "collections.html",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "about.html",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "policies.html",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "services.html",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "contact.html",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "assets/css/style.css",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "assets/js/app.js",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "tools/site-test.js",
+      "currentVersion": 1
+    },
+    {
+      "displayName": "README.md",
+      "currentVersion": 1
+    }
+  ],
+  "preview": {
+    "displayName": "index.html",
+    "bytes": 28181,
+    "sha256": "6e0822d8d38f7f5e74a9c72865fe899f697945450e590a86f7368cb182c59bac"
+  },
+  "duplicateFree": true,
+  "sourcePreviewOpened": true,
+  "pageErrors": [],
+  "liveVerification": {
+    "profile": "local-default",
+    "schemaVersion": 34,
+    "outputCount": 12,
+    "allOutputHashesMatchWorkspace": true,
+    "sqliteQuickCheck": "ok",
+    "nativeUiShowsAllOutputs": true,
+    "serviceReadyAt": "2026-09-11T06:56:26.250Z",
+    "modelConfiguration": "Loaded: native UI shows DeepSeek V4 Flash and an enabled model menu."
+  }
+}

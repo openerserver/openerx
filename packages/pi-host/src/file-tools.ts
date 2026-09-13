@@ -80,7 +80,7 @@ export function createProductFileTools(input: {
     defineTool({
       name: "openerx_file_list",
       label: "List attached files",
-      description: "List files explicitly attached to this UWA conversation.",
+      description: "List files explicitly attached to this openerx conversation.",
       promptSnippet: "List the files attached to the current conversation.",
       parameters: Type.Object({}, { additionalProperties: false }),
       execute: async (toolCallId) =>
@@ -120,7 +120,7 @@ export function createProductFileTools(input: {
       name: "openerx_artifact_write",
       label: "Write artifact version",
       description:
-        "Create a text-like artifact or append a new immutable version through the UWA Broker.",
+        "Create a text-like artifact or append a new immutable version through the openerx Broker.",
       promptSnippet: "Create or version text, Markdown, code, JSON, YAML, CSV, or HTML artifacts.",
       promptGuidelines: [
         "Never overwrite an artifact. Pass artifactId to append a new immutable version.",

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./default-workspace": "./src/default-workspace.ts",
     "./process": "./src/process.ts"
   },
   "types": "./src/index.ts",

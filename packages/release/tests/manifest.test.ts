@@ -11,7 +11,7 @@ import {
 
 const manifest: ReleaseManifest = {
   schemaVersion: 1,
-  product: "UWA",
+  product: "openerx",
   keyId: "release-key-2026-01",
   version: "2.0.0",
   channel: "stable",
@@ -24,7 +24,7 @@ const manifest: ReleaseManifest = {
       platform: "darwin",
       arch: "arm64",
       kind: "zip",
-      downloadUrl: "https://releases.openerx.example/2.0.0/UWA-arm64.zip",
+      downloadUrl: "https://releases.openerx.example/2.0.0/openerx-arm64.zip",
       feedUrl: "https://releases.openerx.example/stable/darwin/arm64",
       sha256: "a".repeat(64),
       sizeBytes: 1024,

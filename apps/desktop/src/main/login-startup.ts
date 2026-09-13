@@ -107,6 +107,7 @@ export class DesktopLoginStartupService {
       ...target,
       openAtLogin: input.openAtLogin,
       enabled: input.openAtLogin,
+      // Retain the historical Run key so disabling startup also updates upgrades.
       name: "UWA",
     });
     return this.state();

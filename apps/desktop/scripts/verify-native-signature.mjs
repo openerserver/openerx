@@ -2,9 +2,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { desktopArtifactIdentity } from "./desktop-artifact-identity.mjs";
 import { verifyWindowsFile } from "./windows-signing.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const product = desktopArtifactIdentity(desktopRoot);
 const outRoot = process.env.OPENERX_RELEASE_OUT_DIR
   ? path.resolve(process.env.OPENERX_RELEASE_OUT_DIR)
   : path.join(desktopRoot, "out");
@@ -14,6 +16,7 @@ const requireSigned =
   process.env.OPENERX_REQUIRE_SIGNED_MACOS === "1" ||
   process.env.OPENERX_REQUIRE_SIGNED_WINDOWS === "1";
 const requireNotarized = releaseMode || process.env.OPENERX_REQUIRE_NOTARIZED_MACOS === "1";
+const executableName = product.executableName;
 const selectedTarget =
   process.env.OPENERX_RELEASE_TARGET ??
   (process.env.OPENERX_REQUIRE_SIGNED_MACOS === "1" ? `${process.platform}-${process.arch}` : null);
@@ -23,12 +26,16 @@ function find(directory) {
     const absolute = path.join(directory, entry.name);
     if (entry.isDirectory() && entry.name.endsWith(".app")) return [absolute];
     if (entry.isDirectory()) return find(absolute);
-    return entry.isFile() && entry.name.toLowerCase() === "uwa.exe" ? [absolute] : [];
+    return entry.isFile() && entry.name.toLowerCase() === `${executableName}.exe`.toLowerCase()
+      ? [absolute]
+      : [];
   });
 }
 
 const targets = find(outRoot).filter(
-  (target) => !selectedTarget || target.includes(`${path.sep}UWA-${selectedTarget}${path.sep}`),
+  (target) =>
+    !selectedTarget ||
+    target.includes(`${path.sep}${product.productName}-${selectedTarget}${path.sep}`),
 );
 if (targets.length === 0) throw new Error("RELEASE_NATIVE_TARGET_NOT_FOUND");
 
@@ -63,7 +70,7 @@ for (const target of targets) {
       ["-c", "Print :CFBundleIdentifier", path.join(target, "Contents", "Info.plist")],
       { encoding: "utf8" },
     );
-    if (identifier.status !== 0 || identifier.stdout.trim() !== "com.openerx.desktop") {
+    if (identifier.status !== 0 || identifier.stdout.trim() !== product.appBundleId) {
       throw new Error(`MAC_BUNDLE_IDENTIFIER_INVALID:${relative}`);
     }
     const usage = spawnSync(
@@ -91,7 +98,7 @@ for (const target of targets) {
     const requirementOutput = `${requirement.stdout}${requirement.stderr}`;
     if (
       requirement.status !== 0 ||
-      !/identifier "com\.openerx\.desktop"/u.test(requirementOutput) ||
+      !requirementOutput.includes(`identifier "${product.appBundleId}"`) ||
       !/anchor apple generic/u.test(requirementOutput)
     ) {
       throw new Error(`MAC_DESIGNATED_REQUIREMENT_INVALID:${relative}`);

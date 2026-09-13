@@ -18,12 +18,10 @@ it("persists browser selection and prepares a concrete extension setup", async (
     getBrowserConnectionState: vi.fn().mockResolvedValue(state),
     listBrowserComputerUseSessions: vi.fn().mockResolvedValue([]),
     updateBrowserMode: vi.fn(async (mode) => ({ ...state, mode })),
-    prepareBrowserExtension: vi
-      .fn()
-      .mockResolvedValue({
-        extensionDirectory: state.extensionDirectory,
-        pairingCode: "http://127.0.0.1:12345#fixture",
-      }),
+    prepareBrowserExtension: vi.fn().mockResolvedValue({
+      extensionDirectory: state.extensionDirectory,
+      pairingCode: "http://127.0.0.1:12345#fixture",
+    }),
   };
   Object.defineProperty(window, "openerx", { configurable: true, value: bridge });
   const client = new QueryClient({

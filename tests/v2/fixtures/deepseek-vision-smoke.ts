@@ -17,7 +17,7 @@ import {
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const imageData = readFileSync(
-  path.join(repositoryRoot, "apps/desktop/public/assets/china-unicom-logo.png"),
+  path.join(repositoryRoot, "apps/desktop/public/assets/openerx-mark.svg"),
 ).toString("base64");
 
 try {

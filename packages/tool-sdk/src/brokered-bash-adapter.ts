@@ -88,6 +88,7 @@ export type BrokeredBashLogArtifactWriter = (
 ) => Promise<string> | string;
 
 export interface BrokeredBashWorkspaceChangeSetInput {
+  directWrite?: boolean;
   workspaceGrantId: string;
   runId: string;
   toolCallId: string;
@@ -304,7 +305,8 @@ export class BrokeredBashAdapter implements ToolAdapter {
       : null;
     let workspaceChangeSet: { id: string; status: string } | null = null;
     if (
-      result.workspaceChanges?.mode === "ISOLATED_CHANGE_SET" &&
+      result.workspaceChanges &&
+      (result.workspaceChanges.mode === "ISOLATED_CHANGE_SET" || this.writeWorkspaceChangeSet) &&
       result.workspaceChanges.manifest.length > 0
     ) {
       if (!this.writeWorkspaceChangeSet) {
@@ -312,6 +314,7 @@ export class BrokeredBashAdapter implements ToolAdapter {
       }
       const changes = result.workspaceChanges;
       workspaceChangeSet = this.writeWorkspaceChangeSet({
+        ...(changes.mode === "DIRECT_WORKSPACE_WRITE" ? { directWrite: true } : {}),
         workspaceGrantId: activeGrant.id,
         runId: projection.runId,
         toolCallId: context.toolCallId,

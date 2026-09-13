@@ -300,6 +300,11 @@ export class CapabilityBroker {
     signal: AbortSignal,
   ): Promise<"approved" | "denied"> {
     if (signal.aborted) return Promise.reject(new ToolBrokerError("TOOL_CANCELLED"));
+    // A permission event listener may resolve the request before this waiter is registered.
+    const current = this.#repository.permission(request.id);
+    if (current.status === "approved" || current.status === "denied") {
+      return Promise.resolve(current.status);
+    }
     return new Promise((resolve, reject) => {
       const abort = () => {
         this.#pendingApprovals.delete(request.id);

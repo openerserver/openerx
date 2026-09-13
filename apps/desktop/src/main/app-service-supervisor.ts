@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { defaultWorkspaceDirectory as resolveDefaultWorkspaceDirectory } from "@openerx/app-service/default-workspace";
 import type {
   BrowserConnectionState,
   BrowserExtensionSetup,
@@ -117,7 +118,7 @@ export class AppServiceSupervisor {
     ownerProfileId = "local-default",
     deviceId = "00000000-0000-4000-8000-000000000000",
     capabilityHostFactory: ((profileDirectory: string) => MainCapabilityHost) | null = null,
-    defaultWorkspaceDirectory = path.join(profileDirectory, "UWA Workspace"),
+    defaultWorkspaceDirectory = resolveDefaultWorkspaceDirectory(profileDirectory),
   ) {
     this.#profileDirectory = profileDirectory;
     this.#piHostEntry = piHostEntry;
@@ -349,15 +350,15 @@ export class AppServiceSupervisor {
     const utilityStdio = process.env.OPENERX_E2E === "1" ? "pipe" : "inherit";
     this.#mainPort = mainChannel.port1;
     this.#piHostProcess = utilityProcess.fork(path.join(__dirname, this.#piHostEntry), [], {
-      serviceName: "UWA Pi Host",
+      serviceName: "openerx Pi Host",
       stdio: utilityStdio,
     });
     this.#appProcess = utilityProcess.fork(path.join(__dirname, "app-service.js"), [], {
-      serviceName: "UWA App Service",
+      serviceName: "openerx App Service",
       stdio: utilityStdio,
     });
     this.#remoteHostProcess = utilityProcess.fork(path.join(__dirname, "remote-host.js"), [], {
-      serviceName: "UWA Remote Connector",
+      serviceName: "openerx Remote Connector",
       stdio: utilityStdio,
     });
     if (process.env.OPENERX_E2E === "1") {

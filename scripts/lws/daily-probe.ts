@@ -40,7 +40,7 @@ function usage(): string {
     "  --help                  Print this help",
     "",
     "Required environment:",
-    "  OPENERX_LWS_PROBE_UA    Stable UA from the packaged Electron/UWA runtime",
+    "  OPENERX_LWS_PROBE_UA    Stable UA from the packaged Electron/openerx runtime",
   ].join("\n");
 }
 

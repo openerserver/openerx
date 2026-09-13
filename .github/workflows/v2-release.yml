@@ -127,7 +127,7 @@ jobs:
       - run: npm run verify:native-signature --workspace @openerx/desktop
       - uses: actions/upload-artifact@v4
         with:
-          name: UWA-${{ matrix.target }}-${{ inputs.channel }}-signed
+          name: openerx-${{ matrix.target }}-${{ inputs.channel }}-signed
           path: apps/desktop/out/make/
           if-no-files-found: error
           retention-days: 14

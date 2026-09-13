@@ -1,17 +1,19 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ShellToolAdapter, WorkspaceToolAdapter } from "../src";
 
 const directories: string[] = [];
@@ -90,6 +92,230 @@ function fixture() {
 afterEach(() => {
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
+});
+
+describe("Workspace context patch integration", () => {
+  async function prepared() {
+    const f = fixture();
+    const { toolCall } = f.repository.createToolCall({
+      runId: f.context.projection.runId,
+      piCallRef: "context-patch",
+      toolName: "openerx_workspace_apply_patch",
+      source: "openerx",
+      risk: "L3",
+      idempotencyKey: "context-patch-call",
+      inputSummary: "context patch",
+      targetSummary: f.grant.id,
+    });
+    const context = { ...f.context, toolCallId: toolCall.id };
+    await f.adapter.execute(
+      {
+        operation: "workspace_instructions",
+        workspaceGrantId: f.grant.id,
+        relativePath: "src/app.ts",
+        idempotencyKey: "instructions-context",
+      },
+      context,
+    );
+    const read = async (relativePath: string) =>
+      await f.adapter.execute(
+        {
+          operation: "workspace_read",
+          workspaceGrantId: f.grant.id,
+          relativePath,
+          startLine: 1,
+          maxLines: 500,
+          idempotencyKey: "read-context",
+        },
+        context,
+      );
+    await read("src/app.ts");
+    const patch = async (body: string) =>
+      await f.adapter.execute(
+        {
+          operation: "workspace_patch",
+          workspaceGrantId: f.grant.id,
+          patch: `*** Begin Patch\n${body}\n*** End Patch`,
+          idempotencyKey: "patch-context",
+        },
+        context,
+      );
+    const close = () => {
+      f.chat.close();
+      f.repository.close();
+    };
+    return { ...f, context, read, patch, close };
+  }
+
+  it("applies and undoes multi-file additions, edits, deletion and executable rename", async () => {
+    const f = await prepared();
+    writeFileSync(path.join(f.workspace, "src/run.sh"), "echo old\n");
+    chmodSync(path.join(f.workspace, "src/run.sh"), 0o751);
+    writeFileSync(path.join(f.workspace, "src/obsolete.txt"), "obsolete\n");
+    await f.read("src/run.sh");
+    await f.read("src/obsolete.txt");
+    await f.patch(
+      "*** Update File: src/app.ts\n@@\n-export const value = 1;\n+export const value = 2;\n*** Add File: src/new/sub/file.txt\n+created\n*** Update File: src/run.sh\n*** Move to: src/bin/run.sh\n@@\n-echo old\n+echo new\n*** Delete File: src/obsolete.txt",
+    );
+    expect(readFileSync(path.join(f.workspace, "src/app.ts"), "utf8")).toContain("value = 2");
+    expect(readFileSync(path.join(f.workspace, "src/new/sub/file.txt"), "utf8")).toBe("created\n");
+    expect(existsSync(path.join(f.workspace, "src/obsolete.txt"))).toBe(false);
+    expect(statSync(path.join(f.workspace, "src/bin/run.sh")).mode & 0o777).toBe(0o751);
+    const edits = f.repository.workItemDetail(f.context.projection.workItemId).workspaceEdits;
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.relativePaths).toHaveLength(4);
+    f.adapter.undoRunEdits(f.context.projection.runId, edits[0]?.id, f.context);
+    expect(readFileSync(path.join(f.workspace, "src/app.ts"), "utf8")).toContain("value = 1");
+    expect(existsSync(path.join(f.workspace, "src/new/sub/file.txt"))).toBe(false);
+    expect(readFileSync(path.join(f.workspace, "src/obsolete.txt"), "utf8")).toBe("obsolete\n");
+    expect(readFileSync(path.join(f.workspace, "src/run.sh"), "utf8")).toBe("echo old\n");
+    expect(statSync(path.join(f.workspace, "src/run.sh")).mode & 0o777).toBe(0o751);
+    expect(existsSync(path.join(f.workspace, "src/bin/run.sh"))).toBe(false);
+    f.close();
+  });
+
+  it("recovers a rename interrupted after removing its original path", async () => {
+    const f = await prepared();
+    await f.patch("*** Update File: src/app.ts\n*** Move to: src/renamed.ts");
+    const changeSet = f.repository.runWorkspaceChanges(f.context.projection.runId).changeSets[0];
+    if (!changeSet) throw new Error("change set missing");
+    // A rename is two file mutations; a process may exit between them.
+    rmSync(path.join(f.workspace, "src/renamed.ts"));
+    f.repository.markWorkspaceChangeSet(changeSet.id, "outcome_unknown");
+    await f.adapter.execute(
+      {
+        operation: "workspace_change_set_undo",
+        workspaceGrantId: f.grant.id,
+        workspaceChangeSetId: changeSet.id,
+        idempotencyKey: "rename-recovery-test",
+      },
+      f.context,
+    );
+    expect(readFileSync(path.join(f.workspace, "src/app.ts"), "utf8")).toBe(
+      "export const value = 1;\n",
+    );
+    expect(existsSync(path.join(f.workspace, "src/renamed.ts"))).toBe(false);
+    expect(f.repository.workspaceChangeSet(changeSet.id).status).toBe("reverted");
+    f.close();
+  });
+
+  it("rejects an unread or externally changed file before writing anything", async () => {
+    const f = await prepared();
+    writeFileSync(path.join(f.workspace, "src/other.txt"), "other\n");
+    await expect(
+      f.patch(
+        "*** Add File: created.txt\n+new\n*** Update File: src/other.txt\n@@\n-other\n+changed",
+      ),
+    ).rejects.toThrow("WORKSPACE_READ_REQUIRED");
+    expect(existsSync(path.join(f.workspace, "created.txt"))).toBe(false);
+    writeFileSync(path.join(f.workspace, "src/app.ts"), "export const value = 1;\n// external\n");
+    await expect(
+      f.patch(
+        "*** Update File: src/app.ts\n@@\n-export const value = 1;\n+export const value = 2;",
+      ),
+    ).rejects.toThrow("WORKSPACE_CONTENT_CHANGED");
+    expect(f.repository.runWorkspaceChanges(f.context.projection.runId).changeSets).toHaveLength(0);
+    f.close();
+  });
+
+  it("binds current instructions and rejects traversal, symlinks, metadata and duplicate paths", async () => {
+    const f = await prepared();
+    await expect(f.patch("*** Add File: ../escape.txt\n+bad")).rejects.toThrow(
+      "WORKSPACE_PATH_ESCAPE",
+    );
+    await expect(f.patch("*** Add File: .git/config\n+bad")).rejects.toThrow(
+      "WORKSPACE_PATCH_PROTECTED_PATH",
+    );
+    symlinkSync(f.outside, path.join(f.workspace, "linked"));
+    await expect(f.patch("*** Add File: linked/escape.txt\n+bad")).rejects.toThrow(
+      "WORKSPACE_SYMLINK_DENIED",
+    );
+    await expect(
+      f.patch("*** Add File: src/new.txt\n+one\n*** Add File: src/./new.txt\n+two"),
+    ).rejects.toThrow("WORKSPACE_PATCH_DUPLICATE_PATH");
+    writeFileSync(path.join(f.workspace, "src/AGENTS.md"), "changed instructions\n");
+    await expect(
+      f.patch(
+        "*** Update File: src/app.ts\n@@\n-export const value = 1;\n+export const value = 2;",
+      ),
+    ).rejects.toThrow("WORKSPACE_INSTRUCTIONS_NOT_ACKNOWLEDGED");
+    f.close();
+  });
+
+  it("preflights full-run undo and reverses successive edits to the same file", async () => {
+    const f = await prepared();
+    const target = path.join(f.workspace, "src/app.ts");
+    await f.patch(
+      "*** Update File: src/app.ts\n@@\n-export const value = 1;\n+export const value = 2;\n*** Add File: src/new.txt\n+created",
+    );
+    await f.patch(
+      "*** Update File: src/app.ts\n@@\n-export const value = 2;\n+export const value = 3;",
+    );
+    writeFileSync(path.join(f.workspace, "src/new.txt"), "user edit\n");
+    expect(() => f.adapter.undoRunEdits(f.context.projection.runId, undefined, f.context)).toThrow(
+      "WORKSPACE_UNDO_CONTENT_CHANGED",
+    );
+    expect(readFileSync(target, "utf8")).toContain("value = 3");
+    writeFileSync(path.join(f.workspace, "src/new.txt"), "created\n");
+    f.adapter.undoRunEdits(f.context.projection.runId, undefined, f.context);
+    expect(readFileSync(target, "utf8")).toContain("value = 1");
+    expect(existsSync(path.join(f.workspace, "src/new.txt"))).toBe(false);
+    expect(
+      f.repository
+        .workItemDetail(f.context.projection.workItemId)
+        .workspaceEdits.every(({ status }) => status === "reverted"),
+    ).toBe(true);
+    expect(() =>
+      f.adapter.undoRunEdits(f.context.projection.runId, undefined, f.context),
+    ).not.toThrow();
+    f.close();
+  });
+
+  it.each(["partial", "complete"])(
+    "resumes a %s full-run undo from its journal after reopening storage",
+    async (interruption) => {
+      const f = await prepared();
+      const target = path.join(f.workspace, "src/app.ts");
+      await f.patch(
+        "*** Update File: src/app.ts\n@@\n-export const value = 1;\n+export const value = 2;\n*** Add File: src/new.txt\n+created",
+      );
+      await f.patch(
+        "*** Update File: src/app.ts\n@@\n-export const value = 2;\n+export const value = 3;",
+      );
+      const begin = f.repository.beginWorkspaceUndo.bind(f.repository);
+      vi.spyOn(f.repository, "beginWorkspaceUndo").mockImplementationOnce((input) => {
+        begin(input);
+        // Simulate a process exit after an atomic file write, before journal completion.
+        for (const mutation of interruption === "partial"
+          ? input.mutations.slice(0, 1)
+          : input.mutations) {
+          const destination = path.join(f.workspace, mutation.relativePath);
+          if (mutation.afterText === null) rmSync(destination);
+          else writeFileSync(destination, mutation.afterText);
+        }
+        throw new Error("SIMULATED_PROCESS_EXIT");
+      });
+      expect(() =>
+        f.adapter.undoRunEdits(f.context.projection.runId, undefined, f.context),
+      ).toThrow("SIMULATED_PROCESS_EXIT");
+      f.close();
+      const reopened = new ToolRepository(path.join(f.profile, "openerx.sqlite"), {
+        ownerProfileId: "profile-a",
+      });
+      reopened.recoverInterrupted();
+      const adapter = new WorkspaceToolAdapter(reopened, f.profile);
+      adapter.undoRunEdits(f.context.projection.runId, undefined, f.context);
+      expect(readFileSync(target, "utf8")).toContain("value = 1");
+      expect(existsSync(path.join(f.workspace, "src/new.txt"))).toBe(false);
+      expect(reopened.pendingWorkspaceUndo(f.context.projection.runId)).toBeNull();
+      expect(
+        reopened
+          .workItemDetail(f.context.projection.workItemId)
+          .workspaceEdits.every(({ status }) => status === "reverted"),
+      ).toBe(true);
+      reopened.close();
+    },
+  );
 });
 
 describe("WorkspaceToolAdapter", () => {

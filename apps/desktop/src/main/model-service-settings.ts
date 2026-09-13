@@ -9,6 +9,7 @@ import {
   type ByokProviderId,
   byokConnectionTestResultSchema,
   byokProviderPresets,
+  classifyModelError,
   defaultByokModelConfiguration,
   type ModelServiceSettings,
   type ModelServiceSettingsUpdate,
@@ -16,7 +17,7 @@ import {
   modelServiceSettingsUpdateSchema,
   resolveByokModelPreset,
 } from "@openerx/contracts";
-import type { ToolCredentialVault } from "./credential-vault";
+import { isUnreadableCredentialError, type ToolCredentialVault } from "./credential-vault";
 
 const credentialRef = "model-service:byok:api-key";
 
@@ -133,7 +134,10 @@ export class ModelServiceSettingsStore {
   ) {}
 
   async state(): Promise<ModelServiceSettings> {
-    let stored: Omit<ModelServiceSettings, "credentialConfigured" | "providerCredentials"> = {
+    let stored: Omit<
+      ModelServiceSettings,
+      "credentialConfigured" | "providerCredentials" | "credentialIssue"
+    > = {
       mode: "byok",
       byok: defaultByokModelConfiguration(),
       updatedAt: null,
@@ -143,26 +147,29 @@ export class ModelServiceSettingsStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    let credentialConfigured = true;
+    let references: string[] = [];
+    let credentialIssue: ModelServiceSettings["credentialIssue"] = null;
     try {
-      await this.credentials.resolve(credentialRef);
-    } catch {
-      credentialConfigured = false;
+      references = await this.credentials.references();
+    } catch (error) {
+      if (isUnreadableCredentialError(error)) credentialIssue = "unreadable";
+      else if (error instanceof Error && error.message === "OS_CREDENTIAL_STORE_UNAVAILABLE")
+        credentialIssue = "unavailable";
+      else throw error;
     }
+    const credentialConfigured = references.includes(credentialRef);
     const legacyProvider = credentialConfigured ? matchingProvider(stored.byok) : null;
     const providerCredentials: Partial<Record<ByokProviderId, boolean>> = {};
     for (const provider of byokProviderPresets) {
-      try {
-        await this.credentials.resolve(providerCredentialRef(provider.id));
-        providerCredentials[provider.id] = true;
-      } catch {
-        providerCredentials[provider.id] = legacyProvider?.id === provider.id;
-      }
+      providerCredentials[provider.id] =
+        references.includes(providerCredentialRef(provider.id)) ||
+        legacyProvider?.id === provider.id;
     }
     return modelServiceSettingsSchema.parse({
       ...stored,
       credentialConfigured,
       providerCredentials,
+      credentialIssue,
     });
   }
 
@@ -171,10 +178,13 @@ export class ModelServiceSettingsStore {
     const byok = input.byok
       ? { ...input.byok, baseUrl: assertSafeBaseUrl(input.byok.baseUrl) }
       : null;
-    if (input.apiKey) await this.credentials.save(credentialRef, input.apiKey);
+    const values: Record<string, string> = {};
+    if (input.apiKey) values[credentialRef] = input.apiKey;
     for (const [providerId, apiKey] of Object.entries(input.providerApiKeys ?? {})) {
-      await this.credentials.save(providerCredentialRef(providerId as ByokProviderId), apiKey);
+      values[providerCredentialRef(providerId as ByokProviderId)] = apiKey;
     }
+    if (input.recoverUnreadableCredentials) await this.credentials.recoverUnreadable(values);
+    else if (Object.keys(values).length > 0) await this.credentials.saveMany(values);
     const current = await this.state();
     const hasProviderCredential = Object.values(current.providerCredentials).some(Boolean);
     if (
@@ -273,10 +283,34 @@ export class ModelServiceSettingsStore {
       }),
       signal: AbortSignal.timeout(20_000),
       redirect: "error",
+    }).catch((error: unknown) => {
+      throw new Error(classifyModelError(error).code);
     });
-    if (!response.ok) throw new Error(`BYOK_CONNECTION_FAILED:${response.status}`);
-    const body = (await response.json()) as { model?: unknown; choices?: unknown[] };
-    if (!Array.isArray(body.choices)) throw new Error("BYOK_RESPONSE_INVALID");
+    const payload: unknown = await response.json().catch(() => {
+      throw new Error(
+        response.ok
+          ? "MODEL_RESPONSE_INVALID"
+          : classifyModelError("", { httpStatus: response.status }).code,
+      );
+    });
+    const body = (payload && typeof payload === "object" ? payload : {}) as {
+      model?: unknown;
+      choices?: Array<{ message?: { content?: unknown } }>;
+      error?: unknown;
+    };
+    if (!response.ok)
+      throw new Error(
+        classifyModelError(JSON.stringify(body.error ?? {}), { httpStatus: response.status }).code,
+      );
+    if (
+      !Array.isArray(body.choices) ||
+      !body.choices.some(
+        (choice) =>
+          typeof choice?.message?.content === "string" && choice.message.content.trim().length > 0,
+      )
+    ) {
+      throw new Error("MODEL_RESPONSE_INVALID");
+    }
     return byokConnectionTestResultSchema.parse({
       ok: true,
       latencyMs: Math.round(performance.now() - started),

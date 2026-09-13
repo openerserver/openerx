@@ -26,7 +26,7 @@ writeFileSync(
   path.join(sourceDirectory, "agents", "openai.yaml"),
   `version: 1.0.0
 display_name: E2E report
-publisher: UWA Test
+publisher: openerx Test
 tools: [openerx_skill_script]
 permissions:
   - capability: shell
@@ -124,7 +124,7 @@ try {
   await card.waitFor();
   await card.getByText("未验证来源", { exact: true }).waitFor();
   await card.getByText("权限与详情", { exact: true }).click();
-  await card.getByText(/UWA Test/).waitFor();
+  await card.getByText(/openerx Test/).waitFor();
   await card.getByRole("button", { name: "审核并批准权限" }).click();
   await card.getByRole("button", { name: "启用 E2E report" }).click();
   await card.getByText("已启用", { exact: true }).waitFor();

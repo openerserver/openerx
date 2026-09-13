@@ -1,7 +1,9 @@
-# Brand assets
+# openerx assets
 
-`china-unicom-logo.png` contains only the red China Unicom emblem, cropped from the transparent Logo asset currently published by China Unicom's official service site:
+`openerx-mark.svg` is the source for the openerx mark: a white open ring and cross
+on an indigo tile. It is an original vector asset distributed with the project.
+`openerx-mark.png` and the native application icons are rendered from that source
+by `node apps/desktop/scripts/build-brand-icons.mjs`.
 
-https://www.10010.com/wt_service_web/images/new_wt_logo_new.png
-
-The trailing `10010.com` / online-service wordmark has been removed; the desktop renderer uses this emblem as the product mark.
+UWA names, the China Unicom emblem and the Xiaolian character belong to the
+Unicom edition in the separate private repository. They are not openerx assets.

@@ -22,9 +22,7 @@ async function api(route, body) {
   });
   if (!response.ok)
     throw new Error(
-      response.status === 403
-        ? "配对已失效，请从 UWA 获取新配对码"
-        : "UWA 连接中断，请重新配对",
+      response.status === 403 ? "配对已失效，请从 UWA 获取新配对码" : "UWA 连接中断，请重新配对",
     );
   return await response.json();
 }

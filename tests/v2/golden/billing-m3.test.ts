@@ -20,7 +20,7 @@ const initialTime = "2026-08-25T10:00:00.000Z";
 const terms: BillingTerms = {
   version: "terms-2026-08-v1",
   effectiveAt: "2026-08-01T00:00:00.000Z",
-  contentHash: createHash("sha256").update("UWA Billing Alpha terms").digest("hex"),
+  contentHash: createHash("sha256").update("openerx Billing Alpha terms").digest("hex"),
   summary: "按服务端记录的实际用量结算；失败时释放未使用预留。",
 };
 const modelCatalog: ModelCatalogEntry[] = [

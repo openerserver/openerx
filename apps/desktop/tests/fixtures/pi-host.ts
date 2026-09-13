@@ -55,6 +55,80 @@ function responseFor(context: Context): AssistantMessage {
   const toolResults = context.messages
     .slice(lastUserIndex + 1)
     .filter(({ role }) => role === "toolResult");
+  if (latestUser.includes("[PI_TEST_WORKSPACE_PATCH]")) {
+    const workspaceGrantId = context.systemPrompt?.match(
+      /\(grant ([0-9a-f-]{36}), read_write/u,
+    )?.[1];
+    if (!workspaceGrantId) return fauxAssistantMessage("EDIT_FIXTURE_NO_WORKSPACE");
+    const calls = [
+      { name: "openerx_workspace_instructions", params: { workspaceGrantId, relativePath: "." } },
+      {
+        name: "openerx_workspace_apply_patch",
+        params: {
+          workspaceGrantId,
+          patch:
+            "*** Begin Patch\n*** Add File: example.ts\n+export const value = 1;\n*** Add File: obsolete.txt\n+obsolete\n*** Add File: old-name.txt\n+rename me\n*** End Patch",
+        },
+      },
+      ...["example.ts", "obsolete.txt", "old-name.txt"].map((relativePath) => ({
+        name: "openerx_workspace_read",
+        params: { workspaceGrantId, relativePath },
+      })),
+      {
+        name: "openerx_workspace_apply_patch",
+        params: {
+          workspaceGrantId,
+          patch:
+            "*** Begin Patch\n*** Update File: example.ts\n@@\n-export const value = 1;\n+export const value = 2;\n*** Delete File: obsolete.txt\n*** Update File: old-name.txt\n*** Move to: docs/renamed.txt\n*** Add File: docs/notes.md\n+# Editing verification\n*** End Patch",
+        },
+      },
+      {
+        name: "openerx_workspace_apply_patch",
+        params: {
+          workspaceGrantId,
+          patch:
+            "*** Begin Patch\n*** Update File: example.ts\n@@\n-export const value = 2;\n+export const value = 3;\n*** End Patch",
+        },
+      },
+    ];
+    if (toolResults.some((result) => "isError" in result && result.isError))
+      return fauxAssistantMessage("EDIT_FIXTURE_TOOL_FAILED");
+    const call = calls[toolResults.length];
+    return call
+      ? fauxAssistantMessage(
+          fauxToolCall(call.name, call.params, { id: `workspace-edit-${toolResults.length}` }),
+          { stopReason: "toolUse" },
+        )
+      : fauxAssistantMessage(
+          "EDIT_FIXTURE_OK：已完成新增、修改、删除和重命名，可以查看差异并撤销。",
+        );
+  }
+  if (latestUser.includes("[PI_TEST_XLS_ATTACHMENT]")) {
+    const personalFileId = context.systemPrompt?.match(/\(xls, id ([0-9a-f-]{36})\)/u)?.[1];
+    if (!personalFileId) return fauxAssistantMessage("XLS 附件未进入模型上下文。");
+    if (toolResults.length === 0) {
+      return fauxAssistantMessage(
+        fauxToolCall("openerx_file_read", { personalFileId }, { id: "read-xls-attachment" }),
+        { stopReason: "toolUse" },
+      );
+    }
+    const result = toolResults[0];
+    const details = result && "details" in result ? result.details : null;
+    const { text, citations } = (details && typeof details === "object" ? details : {}) as Record<
+      string,
+      unknown
+    >;
+    const verified =
+      typeof text === "string" &&
+      text.includes("女士衬衫") &&
+      text.includes("=B2*C2 → 58.50") &&
+      text.includes("2026-09-12") &&
+      Array.isArray(citations) &&
+      citations.length === 2;
+    return fauxAssistantMessage(
+      verified ? "已读取 XLS：女士衬衫，金额 58.50，日期 2026-09-12。" : "XLS 附件读取校验失败。",
+    );
+  }
   if (latestUser.includes("[PI_TEST_BROWSER_COMPUTER_USE_OPEN]")) {
     const url = latestUser.match(/https?:\/\/\S+/u)?.[0];
     if (!url) return fauxAssistantMessage("缺少系统浏览器测试 URL。");
@@ -183,7 +257,7 @@ function responseFor(context: Context): AssistantMessage {
       return fauxAssistantMessage(
         fauxToolCall(
           "openerx_browser",
-          { action: "type", sessionId, selector: "#name", text: "UWA M5" },
+          { action: "type", sessionId, selector: "#name", text: "openerx M5" },
           { id: "browser-type" },
         ),
         { stopReason: "toolUse" },
@@ -234,7 +308,7 @@ function responseFor(context: Context): AssistantMessage {
       return fauxAssistantMessage(
         fauxToolCall(
           "openerx_desktop",
-          { action: "screenshot", application: "UWA" },
+          { action: "screenshot", application: "openerx" },
           { id: "desktop-screenshot" },
         ),
         { stopReason: "toolUse" },
@@ -247,7 +321,7 @@ function responseFor(context: Context): AssistantMessage {
     return fauxAssistantMessage(
       [
         "```ts",
-        'const client = "UWA";',
+        'const client = "openerx";',
         "```",
         "",
         "| 项目 | 状态 | 版本 |",

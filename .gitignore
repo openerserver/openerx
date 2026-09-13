@@ -25,6 +25,7 @@ npm-debug.log*
 
 # Local desktop build tools, diagnostics, and distribution outputs.
 /.codex-temp/
+/.codex-tmp/
 /apps/desktop/out-codex/
 /deliverables/*.exe
 /deliverables/OpenERX-*-store-x64/

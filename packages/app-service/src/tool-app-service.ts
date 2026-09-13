@@ -23,11 +23,14 @@ import type {
   ThinkingLevel,
   ToolCall,
   ToolOperation,
+  ToolPermissionMode,
+  ToolPermissionModeState,
   ToolRuntimeCapability,
   ToolRuntimeReadiness,
   ToolRuntimeStatus,
   UsageRecord,
   WorkItem,
+  WorkItemDetail,
   WorkspaceGrant,
   WorkspaceInstructionSource,
 } from "@openerx/contracts";
@@ -40,6 +43,7 @@ import {
   BROKERED_BASH_RUNNER_MODE_ENV,
   BROKERED_BASH_V1_FEATURE_FLAG,
   type BrokeredBashRunnerMode,
+  type ByokUsageRecord,
   brokeredBashRunnerMode,
   brokeredBashV1Enabled,
   defaultLocalWebSearchPolicy,
@@ -91,6 +95,7 @@ import {
   type ToolExecutionContext,
   WorkspaceToolAdapter,
 } from "@openerx/tool-sdk";
+import { defaultWorkspaceDirectory as resolveDefaultWorkspaceDirectory } from "./default-workspace";
 
 class GenerationWebSearchAdapter implements ToolAdapter {
   readonly operations = ["web_search"] as const;
@@ -390,7 +395,7 @@ export class ToolAppService {
     this.#repository = options.repository;
     const preferredDefaultWorkspace =
       options.defaultWorkspaceDirectory ??
-      path.join(path.dirname(options.workspaceDirectory), "UWA Workspace");
+      resolveDefaultWorkspaceDirectory(path.dirname(options.workspaceDirectory));
     let defaultWorkspaceFallback = false;
     try {
       mkdirSync(path.join(preferredDefaultWorkspace, "conversations"), { recursive: true });
@@ -481,8 +486,27 @@ export class ToolAppService {
       new GenerationImageGenerationAdapter((generationId) =>
         this.#authorizationByGeneration.get(generationId),
       ),
-      new ShellToolAdapter([options.workspaceDirectory], (workspaceGrantId, conversationId) =>
-        options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
+      new ShellToolAdapter(
+        [options.workspaceDirectory],
+        (workspaceGrantId, conversationId) =>
+          options.repository.activeWorkspaceGrant(workspaceGrantId, conversationId),
+        undefined,
+        (changes, context) => {
+          const workspaceGrantId = changes.materialization[0]?.workspaceGrantId;
+          if (!workspaceGrantId || !context.projection) return;
+          const changeSet = this.#repository.createWorkspaceChangeSet({
+            workspaceGrantId,
+            runId: context.projection.runId,
+            toolCallId: context.toolCallId,
+            baselineRevision: changes.baselineRevision,
+            finalRevision: changes.finalRevision,
+            manifest: changes.manifest,
+            diffs: changes.diffs,
+            entries: changes.materialization,
+            blocked: false,
+          });
+          this.#repository.markWorkspaceChangeSet(changeSet.id, "applied");
+        },
       ),
       ...(this.#brokeredBashV1 && this.#brokeredBashRunnerMode === "fake"
         ? [
@@ -502,7 +526,12 @@ export class ToolAppService {
                 (generationId) => this.#brokeredBashExecutionByGeneration.get(generationId),
                 this.#platformSandboxEngine,
                 options.writeBrokeredBashLogArtifact,
-                (input) => this.#repository.createWorkspaceChangeSet(input),
+                (input) => {
+                  const changeSet = this.#repository.createWorkspaceChangeSet(input);
+                  return input.directWrite
+                    ? this.#repository.markWorkspaceChangeSet(changeSet.id, "applied")
+                    : changeSet;
+                },
                 (generationId) => {
                   const digest =
                     this.#brokeredBashExecutionByGeneration.get(
@@ -623,14 +652,18 @@ export class ToolAppService {
     allowNetwork: boolean;
     expiresAt: string | null;
     projectOperationId?: string;
+    role?: WorkspaceGrant["bindingRole"];
   }): WorkspaceGrant {
     if (input.expiresAt && Date.parse(input.expiresAt) <= Date.now()) {
       throw new Error("WORKSPACE_EXPIRY_INVALID");
     }
     const canonicalRoot = realpathSync(input.rootPath);
     if (!lstatSync(canonicalRoot).isDirectory()) throw new Error("WORKSPACE_DIRECTORY_REQUIRED");
-    if (input.conversationId) {
+    if (input.conversationId && input.role !== "additional") {
       this.#repository.revokeDefaultWorkspaceGrants(input.conversationId);
+    }
+    if (input.conversationId && input.role === "additional") {
+      this.ensureConversationWorkspace(input.conversationId);
     }
     return this.#repository.grantWorkspace({
       conversationId: input.conversationId,
@@ -641,14 +674,33 @@ export class ToolAppService {
       expiresAt: input.expiresAt,
       ...(input.projectOperationId ? { projectOperationId: input.projectOperationId } : {}),
       ...(input.conversationId
-        ? { binding: { role: "primary" as const, source: "user_added" as const } }
+        ? { binding: { role: input.role ?? "primary", source: "user_added" as const } }
         : {}),
     });
   }
 
   listWorkspaces(conversationId?: string): WorkspaceGrant[] {
     if (conversationId) this.ensureConversationWorkspace(conversationId);
-    return this.#repository.listWorkspaceGrants(conversationId);
+    return conversationId
+      ? this.#repository.effectiveWorkspaceGrants(conversationId)
+      : this.#repository.listWorkspaceGrants();
+  }
+
+  setPrimaryWorkspace(input: { conversationId: string; workspaceGrantId: string }): WorkspaceGrant {
+    const selected = this.#repository.activeWorkspaceGrant(
+      input.workspaceGrantId,
+      input.conversationId,
+    );
+    if (selected.conversationId !== input.conversationId)
+      throw new Error("WORKSPACE_BINDING_CONVERSATION_REQUIRED");
+    return this.grantWorkspace({
+      conversationId: input.conversationId,
+      rootPath: selected.rootPath,
+      access: selected.access,
+      allowNetwork: selected.allowNetwork,
+      expiresAt: selected.expiresAt,
+      role: "primary",
+    });
   }
 
   ensureConversationWorkspace(conversationId: string): WorkspaceGrant {
@@ -721,15 +773,15 @@ export class ToolAppService {
         return false;
       }
     });
-    const grants = this.#repository.reconcileProjectWorkspaceBindings({
+    this.#repository.reconcileProjectWorkspaceBindings({
       conversationId: input.conversationId,
       directories: validDirectories,
     });
-    const activeExecutionGrantId = validDirectories.find(({ role }) => role === "primary")
-      ? grants[validDirectories.findIndex(({ role }) => role === "primary")]?.id
-      : undefined;
-    const additionalExecutionGrantIds = grants
-      .filter((_, index) => validDirectories[index]?.role === "additional")
+    const primary = this.#repository.primaryWorkspaceGrant(input.conversationId);
+    const activeExecutionGrantId = primary?.id;
+    const additionalExecutionGrantIds = this.#repository
+      .effectiveWorkspaceGrants(input.conversationId)
+      .filter((grant) => grant.id !== primary?.id && grant.rootPath !== primary?.rootPath)
       .map(({ id }) => id);
     return {
       ...(activeExecutionGrantId ? { activeExecutionGrantId } : {}),
@@ -751,21 +803,15 @@ export class ToolAppService {
     networkPolicy?: BrokeredBashNetworkPolicy;
   }): Promise<PreparedGenerationTools> {
     this.ensureConversationWorkspace(input.conversationId);
-    const listedWorkspaceGrants = this.#repository.listWorkspaceGrants(input.conversationId);
-    const conversationWorkspaceGrants = listedWorkspaceGrants.filter(
-      (grant) => grant.conversationId === input.conversationId,
-    );
-    const workspaceGrants = (
-      conversationWorkspaceGrants.length > 0
-        ? conversationWorkspaceGrants
-        : listedWorkspaceGrants.filter((grant) => grant.conversationId === null)
-    ).filter((grant) => {
-      try {
-        return lstatSync(realpathSync(grant.rootPath)).isDirectory();
-      } catch {
-        return false;
-      }
-    });
+    const workspaceGrants = this.#repository
+      .effectiveWorkspaceGrants(input.conversationId)
+      .filter((grant) => {
+        try {
+          return lstatSync(realpathSync(grant.rootPath)).isDirectory();
+        } catch {
+          return false;
+        }
+      });
     const instructionSources = workspaceGrants.flatMap((grant) => {
       try {
         return this.#workspace.instructionSources(grant);
@@ -944,12 +990,14 @@ export class ToolAppService {
       reason: string | null,
       availableToolNames: string[],
       details: string[] = [],
+      missingPermissions: ToolRuntimeReadiness["missingPermissions"] = [],
     ): ToolRuntimeReadiness => ({
       capability,
       status,
       reason,
       availableToolNames,
       ...(details.length > 0 ? { details } : {}),
+      ...(missingPermissions.length > 0 ? { missingPermissions } : {}),
       checkedAt,
     });
     const onlineStatus: ToolRuntimeStatus = !input.platformConfigured
@@ -1016,11 +1064,18 @@ export class ToolAppService {
       ),
       readiness(
         "browser",
-        browserAvailable ? "available" : "unavailable",
+        browserAvailable
+          ? "available"
+          : hostAvailability.missingPermissions?.openerx_browser?.length ||
+              hostAvailability.unavailableReasons.openerx_browser?.includes("PERMISSION_REQUIRED")
+            ? "authorization_required"
+            : "unavailable",
         browserAvailable
           ? null
           : (hostAvailability.unavailableReasons.openerx_browser ?? "MAIN_CAPABILITY_UNAVAILABLE"),
         browserAvailable ? ["openerx_browser"] : [],
+        [],
+        hostAvailability.missingPermissions?.openerx_browser,
       ),
       readiness(
         "shell",
@@ -1095,6 +1150,8 @@ export class ToolAppService {
           ? desktopInteractionReason
           : (desktopReason ?? "MAIN_CAPABILITY_UNAVAILABLE"),
         desktopAvailable ? ["openerx_desktop"] : [],
+        [],
+        hostAvailability.missingPermissions?.openerx_desktop,
       ),
       mcp,
     ];
@@ -1243,6 +1300,73 @@ export class ToolAppService {
   async removeMcpServer(serverId: string): Promise<{ serverId: string; removed: boolean }> {
     await this.#mcp.unregister(serverId);
     return this.#repository.removeMcpServer(serverId);
+  }
+
+  undoWorkspaceEdits(input: {
+    workItemId: string;
+    runId: string;
+    editId?: string;
+  }): WorkItemDetail {
+    const detail = this.#repository.workItemDetail(input.workItemId, input.runId);
+    const terminal = new Set(["completed", "failed", "interrupted", "cancelled"]);
+    if (
+      !terminal.has(detail.run.status) ||
+      this.#repository.hasActiveRun(detail.workItem.conversationId)
+    ) {
+      throw new Error("WORKSPACE_UNDO_RUN_ACTIVE");
+    }
+    const piToolCallId = `user-undo:${randomUUID()}`;
+    const { toolCall } = this.#repository.createToolCall({
+      runId: detail.run.id,
+      piCallRef: piToolCallId,
+      toolName: "openerx_workspace_user_undo",
+      source: "openerx",
+      risk: "L3",
+      idempotencyKey: piToolCallId,
+      inputSummary: input.editId ? "用户撤销这组文件修改" : "用户撤销本轮文件修改",
+      targetSummary: input.editId ?? detail.run.id,
+    });
+    this.#repository.markToolCall(toolCall.id, "running");
+    try {
+      const result = this.#workspace.undoRunEdits(detail.run.id, input.editId, {
+        signal: new AbortController().signal,
+        toolCallId: toolCall.id,
+        update: () => undefined,
+        projection: {
+          generationId: piToolCallId,
+          workItemId: detail.workItem.id,
+          runId: detail.run.id,
+          conversationId: detail.workItem.conversationId,
+          assistantMessageId: detail.workItem.messageId,
+          piToolCallId,
+          toolName: toolCall.toolName,
+        },
+      });
+      const completed = this.#repository.markToolCall(toolCall.id, "completed", {
+        resultSummary: result.summary,
+        resultContent: result.content,
+        resultData: result.data,
+      });
+      this.#emitEvent({
+        eventId: randomUUID(),
+        type: "tool.completed",
+        conversationId: detail.workItem.conversationId,
+        messageId: detail.workItem.messageId,
+        sequence: 0,
+        occurredAt: new Date().toISOString(),
+        payloadVersion: 1,
+        payload: { workItem: detail.workItem, run: detail.run, toolCall: completed },
+      });
+      return this.#repository.workItemDetail(input.workItemId, input.runId);
+    } catch (error) {
+      this.#repository.markToolCall(toolCall.id, "failed", {
+        errorCode:
+          error instanceof Error
+            ? error.message.split(":")[0]?.slice(0, 200)
+            : "WORKSPACE_UNDO_FAILED",
+      });
+      throw error;
+    }
   }
 
   async handleRequest(
@@ -1409,7 +1533,8 @@ export class ToolAppService {
       this.#repository.upsertRunItem({
         runId: projection.run.id,
         piItemRef: itemRef,
-        status: frame.type === "model.completed" ? "completed" : "running",
+        status:
+          frame.type === "model.completed" ? (frame.errorCode ? "failed" : "completed") : "running",
         content: {
           type: "model",
           modelRef: frame.modelRef ?? projection.run.selectedModelRef,
@@ -1517,6 +1642,35 @@ export class ToolAppService {
     }
   }
 
+  setPermissionMode(input: {
+    conversationId: string;
+    mode: ToolPermissionMode;
+  }): ToolPermissionModeState {
+    const state = this.#repository.setPermissionMode(input);
+    if (state.mode !== "full_access") return state;
+
+    // Updating the scope alone does not release tools already waiting for approval.
+    for (const [generationId, projection] of this.#projectionByGeneration) {
+      if (
+        projection.workItem.conversationId !== input.conversationId ||
+        this.#abortByGeneration.get(generationId)?.signal.aborted
+      ) {
+        continue;
+      }
+      for (const permission of this.#repository.listPermissionsForRun(projection.run.id)) {
+        if (permission.status !== "pending") {
+          continue;
+        }
+        this.resolvePermission({
+          permissionRequestId: permission.id,
+          decision: "once",
+          payloadDigest: permission.payloadDigest,
+        });
+      }
+    }
+    return state;
+  }
+
   resolvePermission(input: {
     permissionRequestId: string;
     decision: "once" | "session" | "persistent" | "deny";
@@ -1546,6 +1700,18 @@ export class ToolAppService {
     return permission;
   }
 
+  recordByokUsage(record: ByokUsageRecord): void {
+    const projection =
+      record.operation === "chat"
+        ? this.#projectionByGeneration.get(record.operationId)
+        : undefined;
+    this.#repository.recordByokUsage(record, projection?.run.id);
+  }
+
+  byokUsage(query: { conversationId?: string; messageId?: string }) {
+    return this.#repository.byokUsage(query);
+  }
+
   completeGeneration(
     generationId: string,
     status: "completed" | "failed" | "interrupted",
@@ -1554,6 +1720,7 @@ export class ToolAppService {
   ): void {
     const projection = this.#projectionByGeneration.get(generationId);
     if (projection) {
+      this.#workspace.releaseRun(projection.run.id);
       this.#repository.completeRun(
         projection.run.id,
         status,

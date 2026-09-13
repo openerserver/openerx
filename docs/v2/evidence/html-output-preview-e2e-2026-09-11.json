@@ -1,0 +1,130 @@
+{
+  "checkedAt": "2026-09-11T08:11:27.869Z",
+  "conversationId": "a38ec3dd-1b1f-4384-8c5f-b8342c79845d",
+  "fixtureId": "945b8a36-1916-410e-b165-91d212556738",
+  "websiteState": {
+    "background": "rgb(251, 247, 243)",
+    "productCount": 3,
+    "svgCount": 6,
+    "bridge": "undefined"
+  },
+  "fixtureState": {
+    "ready": true,
+    "value": 42,
+    "data": "saved-snapshot",
+    "bridge": "undefined",
+    "require": "undefined",
+    "process": "undefined",
+    "parentBlocked": true,
+    "background": "rgb(23, 80, 115)",
+    "heading": "rgb(34, 170, 119)",
+    "inline": "ready",
+    "imageWidth": 1
+  },
+  "pageNavigation": true,
+  "stablePreviewUrl": true,
+  "sourcePreview": true,
+  "directoryGrouping": {
+    "defaultDirectory": "输出文件",
+    "outputCount": 21,
+    "singleRoot": true,
+    "nestedDirectories": [
+      "css",
+      "css/theme",
+      "images",
+      "js",
+      "pages"
+    ],
+    "keyboardToggle": true,
+    "expandedAfterPreview": true,
+    "relativePathsPreserved": true
+  },
+  "resources": [
+    {
+      "path": "/index.html",
+      "status": 200,
+      "mediaType": "text/html; charset=utf-8"
+    },
+    {
+      "path": "/assets/css/style.css",
+      "status": 200,
+      "mediaType": "text/css; charset=utf-8"
+    },
+    {
+      "path": "/assets/js/data.js",
+      "status": 200,
+      "mediaType": "text/javascript; charset=utf-8"
+    },
+    {
+      "path": "/assets/js/app.js",
+      "status": 200,
+      "mediaType": "text/javascript; charset=utf-8"
+    },
+    {
+      "path": "/product.html",
+      "status": 200,
+      "mediaType": "text/html; charset=utf-8"
+    },
+    {
+      "path": "/assets/css/style.css",
+      "status": 200,
+      "mediaType": "text/css; charset=utf-8"
+    },
+    {
+      "path": "/assets/js/data.js",
+      "status": 200,
+      "mediaType": "text/javascript; charset=utf-8"
+    },
+    {
+      "path": "/assets/js/app.js",
+      "status": 200,
+      "mediaType": "text/javascript; charset=utf-8"
+    },
+    {
+      "path": "/pages/index.html",
+      "status": 200,
+      "mediaType": "text/html; charset=utf-8"
+    },
+    {
+      "path": "/css/site.css",
+      "status": 200,
+      "mediaType": "text/css; charset=utf-8"
+    },
+    {
+      "path": "/images/pixel.png",
+      "status": 200,
+      "mediaType": "image/png"
+    },
+    {
+      "path": "/css/theme/palette.css",
+      "status": 200,
+      "mediaType": "text/css; charset=utf-8"
+    },
+    {
+      "path": "/js/app.mjs",
+      "status": 200,
+      "mediaType": "text/javascript; charset=utf-8"
+    },
+    {
+      "path": "/js/helper.mjs",
+      "status": 200,
+      "mediaType": "text/javascript; charset=utf-8"
+    },
+    {
+      "path": "/data.json",
+      "status": 200,
+      "mediaType": "application/json; charset=utf-8"
+    },
+    {
+      "path": "/images/logo%20%E4%B8%AD.svg",
+      "status": 200,
+      "mediaType": "image/svg+xml"
+    },
+    {
+      "path": "/pages/next.html",
+      "status": 200,
+      "mediaType": "text/html; charset=utf-8"
+    }
+  ],
+  "pageErrors": []
+}

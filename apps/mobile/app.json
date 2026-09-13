@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "UWA Remote",
+    "name": "openerx Remote",
     "slug": "openerx-remote",
-    "version": "2.0.1",
+    "version": "2.0.3",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -12,9 +12,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.openerx.remote",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
-        "NSCameraUsageDescription": "扫描桌面显示的一次性 UWA Remote 配对码。",
+        "NSCameraUsageDescription": "扫描桌面显示的一次性 openerx Remote 配对码。",
         "NSFaceIDUsageDescription": "确认高风险远程审批由当前设备用户作出。"
       },
       "privacyManifests": {
@@ -76,13 +76,23 @@
     },
     "android": {
       "package": "com.openerx.remote",
-      "versionCode": 1,
+      "versionCode": 2,
       "permissions": ["CAMERA", "USE_BIOMETRIC", "POST_NOTIFICATIONS"]
     },
     "plugins": [
       "expo-secure-store",
-      ["expo-camera", { "cameraPermission": "扫描桌面的一次性 Remote 配对码" }],
-      ["expo-local-authentication", { "faceIDPermission": "确认远程审批" }],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "扫描桌面的一次性 Remote 配对码"
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "确认远程审批"
+        }
+      ],
       "expo-notifications",
       "expo-document-picker",
       "expo-image-picker"

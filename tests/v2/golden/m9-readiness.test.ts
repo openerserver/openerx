@@ -30,7 +30,10 @@ describe("M9 release readiness ledger", () => {
       userApproval: false,
       completedEvidence: [],
     });
-    expect(status.externalRelease.requiredEvidence).toHaveLength(12);
+    expect(status.externalRelease.requiredEvidence).toHaveLength(13);
+    expect(status.externalRelease.requiredEvidence).toContain(
+      "personal-projects-signed-cross-device-directory-reconnect-and-remote",
+    );
   });
 
   it("has release automation inputs without committing credentials", () => {

@@ -34,6 +34,7 @@ export interface DesktopAutoUpdater {
 export interface DesktopUpdateServiceOptions {
   configuration: ReleaseUpdateConfiguration;
   currentVersion: string;
+  expectedProduct?: string;
   platform: ReleasePlatform;
   arch: ReleaseArch;
   cohortId: string;
@@ -70,6 +71,7 @@ function updateErrorCode(error: unknown): string {
 export class DesktopUpdateService {
   readonly #configuration: ReleaseUpdateConfiguration;
   readonly #currentVersion: string;
+  readonly #expectedProduct: string;
   readonly #platform: ReleasePlatform;
   readonly #arch: ReleaseArch;
   readonly #cohortId: string;
@@ -82,6 +84,7 @@ export class DesktopUpdateService {
   constructor(options: DesktopUpdateServiceOptions) {
     this.#configuration = releaseUpdateConfigurationSchema.parse(options.configuration);
     this.#currentVersion = options.currentVersion;
+    this.#expectedProduct = options.expectedProduct ?? "openerx";
     this.#platform = options.platform;
     this.#arch = options.arch;
     this.#cohortId = options.cohortId;
@@ -119,19 +122,36 @@ export class DesktopUpdateService {
       const response = await this.#fetch(this.#configuration.manifestUrl, {
         method: "GET",
         cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
         headers: { accept: "application/json" },
       });
       if (!response.ok) throw new Error(`RELEASE_MANIFEST_HTTP_${response.status}`);
       const contentLength = Number(response.headers.get("content-length") ?? "0");
       if (contentLength > 1_048_576) throw new Error("RELEASE_MANIFEST_TOO_LARGE");
-      const raw = await response.text();
-      if (Buffer.byteLength(raw, "utf8") > 1_048_576) throw new Error("RELEASE_MANIFEST_TOO_LARGE");
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("RELEASE_MANIFEST_EMPTY");
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 1_048_576) throw new Error("RELEASE_MANIFEST_TOO_LARGE");
+          chunks.push(value);
+        }
+      } finally {
+        await reader.cancel();
+      }
+      const raw = Buffer.concat(chunks).toString("utf8");
       const envelope = signedReleaseManifestSchema.parse(JSON.parse(raw));
       const manifest = verifySignedReleaseManifest(
         envelope,
         this.#configuration.keyId,
         this.#configuration.publicKeyPem,
       );
+      if (manifest.product !== this.#expectedProduct) throw new Error("RELEASE_PRODUCT_MISMATCH");
       assertReleaseChannel(manifest.channel, this.#configuration.channel);
       if (Date.parse(manifest.publishedAt) > this.#now().getTime() + 5 * 60_000) {
         throw new Error("RELEASE_MANIFEST_FROM_FUTURE");

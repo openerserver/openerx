@@ -17,6 +17,7 @@
     "@openerx/contracts": "0.0.0",
     "@openerx/domain": "0.0.0",
     "@openerx/storage": "0.0.0",
+    "diff": "8.0.4",
     "parse5": "8.0.1"
   },
   "devDependencies": {

@@ -2,10 +2,10 @@
   "name": "openerx.OpenERX",
   "publisher": "CN=6533DE8D-63EF-414A-A709-7316D9261511",
   "publisherDisplayName": "openerx",
-  "displayName": "OpenERX",
-  "version": "2.0.2.0",
-  "description": "OpenERX 桌面 AI 工作助手",
-  "executable": "UWA.exe",
+  "displayName": "openerx",
+  "version": "2.0.3.0",
+  "description": "openerx 桌面 AI 工作助手",
+  "executable": "openerx.exe",
   "minVersion": "10.0.22000.0",
   "maxVersionTested": "10.0.26100.0"
 }

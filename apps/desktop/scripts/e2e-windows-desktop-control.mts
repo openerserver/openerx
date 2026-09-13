@@ -16,7 +16,10 @@ import { WindowsDesktopDriver } from "../src/main/desktop-control/windows-driver
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const helperDirectory = path.join(desktop, "native/windows-desktop-helper/bin/publish/x64");
-const directory = path.join(process.env.OPENERX_WDC_EVIDENCE_DIR ?? path.resolve(desktop, "../../.codex-temp/wdc-evidence"), randomUUID());
+const directory = path.join(
+  process.env.OPENERX_WDC_EVIDENCE_DIR ?? path.resolve(desktop, "../../.codex-temp/wdc-evidence"),
+  randomUUID(),
+);
 await mkdir(directory, { recursive: true });
 const targetTitle = `WDC fixture ${randomUUID()}`;
 const outputFile = path.join(directory, "edited.txt");
@@ -29,8 +32,10 @@ const fixture = spawn(
   ],
   { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
 );
-fixture.on("error", error => console.error("WDC fixture launch failed", error.message));
-fixture.stderr?.on("data", (chunk: Buffer) => console.error("WDC fixture:", chunk.toString().slice(0, 1000)));
+fixture.on("error", (error) => console.error("WDC fixture launch failed", error.message));
+fixture.stderr?.on("data", (chunk: Buffer) =>
+  console.error("WDC fixture:", chunk.toString().slice(0, 1000)),
+);
 const driver = new WindowsDesktopDriver(
   path.join(helperDirectory, "openerx-desktop-helper.exe"),
   path.join(helperDirectory, "manifest.json"),

@@ -17,6 +17,7 @@ import {
   type FileScope,
   type FileSearchResult,
   fileAttachInputSchema,
+  fileImportDataInputSchema,
   fileImportPrivilegedInputSchema,
   fileListInputSchema,
   filePreviewInputSchema,
@@ -57,7 +58,8 @@ import {
   memorySourcesListInputSchema,
   memoryUpsertInputSchema,
 } from "./memory";
-import { defaultThinkingLevel, thinkingLevelSchema } from "./model";
+import { defaultThinkingLevel, thinkingLevelSchema, usageQueryInputSchema } from "./model";
+import { byokUsageQueryResultSchema } from "./model-usage";
 import {
   type SkillInstallation,
   type SkillInvocation,
@@ -108,6 +110,7 @@ import {
   workItemDetailSchema,
   workItemGetInputSchema,
   workItemSchema,
+  workspaceUndoInputSchema,
 } from "./tool";
 import {
   type WorkspaceGrant,
@@ -115,6 +118,7 @@ import {
   workspaceGrantSchema,
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
+  workspaceSetPrimaryInputSchema,
 } from "./workspace";
 
 export { entityIdSchema, timestampSchema } from "./common";
@@ -327,6 +331,7 @@ export const chatEventsInputSchema = z
 export const emptyInputSchema = z.object({}).strict();
 
 export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
+  z.object({ command: z.literal("usage.byok.list"), input: usageQueryInputSchema }).strict(),
   z.object({ command: z.literal("sync.now"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("sync.conflicts"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("sync.resolve"), input: syncResolveConflictInputSchema }).strict(),
@@ -391,6 +396,7 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     .strict(),
   z.object({ command: z.literal("chat.events"), input: chatEventsInputSchema }).strict(),
   z.object({ command: z.literal("file.import"), input: fileImportPrivilegedInputSchema }).strict(),
+  z.object({ command: z.literal("file.importData"), input: fileImportDataInputSchema }).strict(),
   z.object({ command: z.literal("file.list"), input: fileListInputSchema }).strict(),
   z.object({ command: z.literal("file.search"), input: fileSearchInputSchema }).strict(),
   z.object({ command: z.literal("file.preview"), input: filePreviewInputSchema }).strict(),
@@ -427,6 +433,7 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     })
     .strict(),
   z.object({ command: z.literal("tool.workItem.get"), input: workItemGetInputSchema }).strict(),
+  z.object({ command: z.literal("tool.workspace.undo"), input: workspaceUndoInputSchema }).strict(),
   z
     .object({ command: z.literal("tool.permissions.list"), input: permissionListInputSchema })
     .strict(),
@@ -452,6 +459,9 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     .strict(),
   z.object({ command: z.literal("workspace.list"), input: workspaceListInputSchema }).strict(),
   z.object({ command: z.literal("workspace.revoke"), input: workspaceRevokeInputSchema }).strict(),
+  z
+    .object({ command: z.literal("workspace.setPrimary"), input: workspaceSetPrimaryInputSchema })
+    .strict(),
   z.object({ command: z.literal("mcp.servers.list"), input: emptyInputSchema }).strict(),
   z.object({ command: z.literal("mcp.servers.authorization"), input: emptyInputSchema }).strict(),
   z
@@ -582,6 +592,7 @@ export type ChatCommandEnvelope = z.infer<typeof chatCommandEnvelopeSchema>;
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 
 export interface ChatCommandResultMap {
+  "usage.byok.list": z.infer<typeof byokUsageQueryResultSchema>;
   "sync.now": z.infer<typeof syncStatusSchema>;
   "sync.conflicts": SyncConflict[];
   "sync.resolve": z.infer<typeof syncStatusSchema>;
@@ -612,6 +623,7 @@ export interface ChatCommandResultMap {
   "chat.activateBranch": ConversationSnapshot;
   "chat.events": ChatEvent[];
   "file.import": PersonalFile[];
+  "file.importData": PersonalFile[];
   "file.list": PersonalFile[];
   "file.search": FileSearchResult[];
   "file.preview": ContentPreview;
@@ -629,6 +641,7 @@ export interface ChatCommandResultMap {
   "tool.webSearch.settings.update": z.infer<typeof localWebSearchSettingsStateSchema>;
   "tool.webSearch.runtime.reset": z.infer<typeof localWebSearchSettingsStateSchema>;
   "tool.workItem.get": z.infer<typeof workItemDetailSchema>;
+  "tool.workspace.undo": z.infer<typeof workItemDetailSchema>;
   "tool.permissions.list": z.infer<typeof permissionRequestSchema>[];
   "tool.permission.resolve": z.infer<typeof permissionRequestSchema>;
   "tool.permissionMode.get": z.infer<typeof toolPermissionModeStateSchema>;
@@ -638,6 +651,7 @@ export interface ChatCommandResultMap {
   "workspace.grant": WorkspaceGrant;
   "workspace.list": WorkspaceGrant[];
   "workspace.revoke": WorkspaceGrant;
+  "workspace.setPrimary": WorkspaceGrant;
   "mcp.servers.list": z.infer<typeof mcpServerConfigSchema>[];
   "mcp.servers.authorization": z.infer<typeof mcpServerAuthorizationStateSchema>[];
   "mcp.server.authorize": z.infer<typeof mcpServerAuthorizationStateSchema>;
@@ -662,6 +676,9 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
 ): ChatCommandResultMap[C] {
   let parsed: unknown;
   switch (command) {
+    case "usage.byok.list":
+      parsed = byokUsageQueryResultSchema.parse(value);
+      break;
     case "sync.now":
     case "sync.resolve":
       parsed = syncStatusSchema.parse(value);
@@ -730,6 +747,7 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       parsed = z.array(chatEventSchema).parse(value);
       break;
     case "file.import":
+    case "file.importData":
     case "file.list":
       parsed = z.array(personalFileSchema).parse(value);
       break;
@@ -769,6 +787,7 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       parsed = localWebSearchSettingsStateSchema.parse(value);
       break;
     case "tool.workItem.get":
+    case "tool.workspace.undo":
       parsed = workItemDetailSchema.parse(value);
       break;
     case "tool.permissions.list":
@@ -789,6 +808,7 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "workspace.grant":
     case "workspace.revoke":
+    case "workspace.setPrimary":
       parsed = workspaceGrantSchema.parse(value);
       break;
     case "workspace.list":

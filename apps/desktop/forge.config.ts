@@ -93,7 +93,7 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
       optionsForFile: (filePath: string) => ({
         hardenedRuntime: true,
         entitlements:
-          path.basename(filePath) === "UWA.app" ? macEntitlements : macChildEntitlements,
+          path.basename(filePath) === "openerx.app" ? macEntitlements : macChildEntitlements,
       }),
     };
     if (!releaseMode) return { osxSign };
@@ -142,17 +142,34 @@ const config: ForgeConfig = {
         "**/{*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1,openerx-desktop-helper.exe}",
     },
     appBundleId: "com.openerx.desktop",
+    icon: path.join(desktopDirectory, "public", "assets", "openerx"),
     appCategoryType: "public.app-category-type.productivity",
-    appCopyright: "Copyright © 2026 UWA",
-    executableName: "UWA",
+    appCopyright: "Copyright © 2026 openerx",
+    executableName: "openerx",
     extendInfo: {
       NSAppleEventsUsageDescription:
-        "UWA 仅在您逐次批准桌面操作后，使用系统自动化控制您指定的应用。",
+        "openerx 仅在您逐次批准桌面操作后，使用系统自动化控制您指定的应用。",
     },
-    name: "UWA",
+    name: "openerx",
     ...signingConfiguration(),
   },
   hooks: {
+    postPackage: async (forgeConfig, { platform, outputPaths }) => {
+      if (!["darwin", "mas"].includes(platform)) return;
+      for (const output of outputPaths) {
+        const appBundle = path.join(output, "openerx.app");
+        // Packager finalizes Info.plist after packageAfterCopy. Refresh the
+        // local ad-hoc seal only after those edits; retain formal signatures.
+        if (!forgeConfig.packagerConfig.osxSign) {
+          execFileSync("codesign", ["--force", "--deep", "--sign", "-", appBundle], {
+            stdio: "inherit",
+          });
+        }
+        execFileSync("codesign", ["--verify", "--deep", "--strict", appBundle], {
+          stdio: "inherit",
+        });
+      }
+    },
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
       cpSync(
         path.join(desktopDirectory, "browser-extension"),
@@ -209,8 +226,8 @@ const config: ForgeConfig = {
       );
       const appBasePath = path.resolve(buildPath, "../..");
       const executablePath = ["darwin", "mas"].includes(platform)
-        ? path.join(appBasePath, "MacOS", "UWA")
-        : path.join(appBasePath, platform === "win32" ? "electron.exe" : "UWA");
+        ? path.join(appBasePath, "MacOS", "openerx")
+        : path.join(appBasePath, platform === "win32" ? "electron.exe" : "openerx");
       const hasMacSigning = Boolean(forgeConfig.packagerConfig.osxSign);
 
       await flipFuses(executablePath, {
@@ -233,11 +250,11 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({
-      name: "UWA",
-      exe: "UWA.exe",
-      setupExe: "UWASetup.exe",
-      title: "UWA",
-      authors: "UWA",
+      name: "openerx",
+      exe: "openerx.exe",
+      setupExe: "openerxSetup.exe",
+      title: "openerx",
+      authors: "openerx",
     }),
     new MakerZIP({}, ["darwin"]),
     new MakerDMG({}),

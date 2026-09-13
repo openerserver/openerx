@@ -345,9 +345,9 @@ export function AssistantPage({
       <header className="assistant-page-header">
         <div>
           <span className="assistant-eyebrow">
-            <Sparkle size={14} weight="fill" aria-hidden="true" /> UWA 工作助手
+            <Sparkle size={14} weight="fill" aria-hidden="true" /> openerx 工作助手
           </span>
-          <h1>你好，我是小联</h1>
+          <h1>你好，我是 openerx</h1>
           <p>把后台工作变成一眼就懂的状态，在需要你时再轻轻提醒。</p>
         </div>
         <button
@@ -359,13 +359,13 @@ export function AssistantPage({
         </button>
       </header>
 
-      <section className={`assistant-hero assistant-state-${state}`} aria-label="小联状态">
+      <section className={`assistant-hero assistant-state-${state}`} aria-label="openerx 状态">
         <div className="assistant-hero-copy">
           <span className="assistant-status-pill">
             <span aria-hidden="true" /> {assistantStateLabel(state)}
           </span>
           <h2 aria-live="polite">{heroCopy}</h2>
-          <p>小联会汇总自动化和最近对话的进展；开启伴随模式后，它会常驻工作区右下角。</p>
+          <p>openerx 会汇总自动化和最近对话的进展；开启伴随模式后，它会常驻工作区右下角。</p>
           <div className="assistant-hero-actions">
             <button
               type="button"
@@ -381,7 +381,7 @@ export function AssistantPage({
         </div>
         <div className="assistant-mascot-stage" aria-hidden="true">
           <span className="assistant-mascot-halo" />
-          <img src="/assets/uwa-assistant-xiaolian.png" alt="" />
+          <img src="/assets/openerx-mark.svg" alt="" />
           <span className="assistant-mascot-caption">
             {statusUnavailable ? (
               <WarningCircle size={15} weight="fill" />
@@ -415,7 +415,7 @@ export function AssistantPage({
           <strong className="assistant-next-run">
             {nextAutomation ? formatDateTime(nextAutomation.nextRunAt) : "暂无安排"}
           </strong>
-          <small>{nextAutomation?.name ?? "小联正在待命"}</small>
+          <small>{nextAutomation?.name ?? "openerx 正在待命"}</small>
         </article>
       </section>
 
@@ -424,7 +424,7 @@ export function AssistantPage({
           <header>
             <div>
               <span className="assistant-panel-kicker">WORK PULSE</span>
-              <h2>小联正在关注</h2>
+              <h2>openerx 正在关注</h2>
             </div>
             <button type="button" onClick={() => navigate("/automations")}>
               全部动态
@@ -456,7 +456,7 @@ export function AssistantPage({
             <div className="assistant-empty-watch">
               <Lightning size={24} weight="duotone" aria-hidden="true" />
               <strong>还没有需要关注的动态</strong>
-              <p>创建自动化或开始对话后，小联会在这里替你归拢进展。</p>
+              <p>创建自动化或开始对话后，openerx 会在这里替你归拢进展。</p>
               <button type="button" onClick={() => navigate("/automations")}>
                 创建自动化
               </button>
@@ -501,7 +501,7 @@ export function AssistantPage({
               <ChatCircle size={18} />
               <span>
                 <strong>开始一个任务</strong>
-                <small>把目标告诉小联</small>
+                <small>把目标告诉 openerx</small>
               </span>
               <ArrowRight size={16} />
             </button>
@@ -636,7 +636,7 @@ export function AssistantCompanion({ onOpen }: { onOpen: () => void }): React.JS
         {speech}
       </span>
       <span className="assistant-companion-avatar">
-        <img src="/assets/uwa-assistant-xiaolian.png" alt="" />
+        <img src="/assets/openerx-mark.svg" alt="" />
         <span className={`assistant-companion-state state-${state}`} aria-hidden="true" />
       </span>
     </button>

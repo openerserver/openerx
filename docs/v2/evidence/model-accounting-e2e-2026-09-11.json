@@ -1,0 +1,35 @@
+{
+  "checkedAt": "2026-09-11T06:18:11.942Z",
+  "scope": "local Electron with synthetic loopback provider; no external model calls",
+  "piHostContractVersion": 11,
+  "requests": 3,
+  "results": [
+    {
+      "scenario": "success",
+      "messageStatus": "completed",
+      "errorCode": null,
+      "records": 1,
+      "totalTokens": 120,
+      "unknownRecords": 0
+    },
+    {
+      "scenario": "missing",
+      "messageStatus": "completed",
+      "errorCode": null,
+      "records": 1,
+      "totalTokens": null,
+      "unknownRecords": 1
+    },
+    {
+      "scenario": "authentication",
+      "messageStatus": "failed",
+      "errorCode": "MODEL_AUTHENTICATION_FAILED",
+      "records": 1,
+      "totalTokens": null,
+      "unknownRecords": 1
+    }
+  ],
+  "restartPersistence": true,
+  "classifiedDiagnostic": true,
+  "passed": true
+}

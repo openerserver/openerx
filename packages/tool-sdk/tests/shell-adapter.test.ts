@@ -76,9 +76,7 @@ describe("ShellToolAdapter", () => {
       availableToolNames: ["openerx_shell", "openerx_shell_process"],
       unavailableReasons: {},
     });
-    expect(
-      shellToolAvailability({ platform: "darwin", sandboxExecutableExists: false }),
-    ).toEqual({
+    expect(shellToolAvailability({ platform: "darwin", sandboxExecutableExists: false })).toEqual({
       availableToolNames: [],
       unavailableReasons: {
         openerx_shell: "SHELL_OS_SANDBOX_UNAVAILABLE",
