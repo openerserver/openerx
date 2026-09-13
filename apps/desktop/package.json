@@ -9,7 +9,7 @@
     "package:windows-store": "node scripts/package-windows-store.mjs",
     "build:windows-desktop-helper": "node scripts/build-windows-desktop-helper.mjs",
     "test:e2e:windows-desktop": "vite build --config vite.windows-desktop-control.config.mts && node .vite/windows-desktop-live/run.mjs",
-    "start": "node scripts/build-macos-browser-helper.mjs && electron-forge start",
+    "start": "electron-forge start",
     "build": "node scripts/clean-test-build.mjs && electron-forge package",
     "package": "node scripts/clean-test-build.mjs && electron-forge package",
     "make": "node scripts/clean-test-build.mjs && electron-forge make",

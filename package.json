@@ -22,6 +22,7 @@
     "check:release:v2": "node scripts/m9/check-release-readiness.mjs --mode local",
     "dev:deepseek": "vite build --config tests/v2/vite.deepseek-platform.config.mts --logLevel error && node --env-file-if-exists=.env scripts/dev-deepseek.mjs",
     "dev:desktop": "npm run start --workspace @openerx/desktop",
+    "clean:desktop": "node apps/desktop/scripts/clean-debug-artifacts.mjs",
     "dev:v2": "npm run dev:deepseek",
     "eval:pbash:model": "vite build --config scripts/pbash/vite.model-ab.config.mts --logLevel error && node --env-file-if-exists=.env .vite/pbash-model-ab/pbash-model-ab.mjs",
     "eval:memory:model": "vite build --config scripts/memory/vite.model-golden.config.mts --logLevel error && node --env-file-if-exists=.env .vite/memory-model-golden/memory-model-golden.mjs",
