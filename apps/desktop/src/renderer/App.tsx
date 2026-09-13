@@ -2574,7 +2574,7 @@ function MessageCard({
       }),
     onSuccess: async () => {
       setEditing(false);
-      setActionNotice("已提交修改，正在从这里重新生成回复。");
+      setActionNotice("已重新发送，正在从这里重新生成回复。");
       await queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
     },
   });
@@ -2705,7 +2705,7 @@ function MessageCard({
             className="edit-message"
             onSubmit={(event) => {
               event.preventDefault();
-              if (editText.trim()) edit.mutate();
+              if (editText.trim() && !edit.isPending) edit.mutate();
             }}
           >
             <textarea
@@ -2719,10 +2719,7 @@ function MessageCard({
               <button type="button" onClick={() => setEditing(false)}>
                 取消
               </button>
-              <button
-                type="submit"
-                disabled={!editText.trim() || editText.trim() === text.trim() || edit.isPending}
-              >
+              <button type="submit" disabled={!editText.trim() || edit.isPending}>
                 {edit.isPending ? "正在发送…" : "发送"}
               </button>
             </div>
@@ -3705,6 +3702,21 @@ function ConversationToolbar({
   useEffect(() => setSelectedBranchId(conversation.activeBranchId), [conversation.activeBranchId]);
   useEffect(() => {
     if (moreOpen) menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [moreOpen]);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (
+        menuRef.current?.contains(event.target) ||
+        moreButtonRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setMoreOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress, true);
   }, [moreOpen]);
   useEffect(() => {
     if (renaming) window.requestAnimationFrame(() => renameInputRef.current?.focus());

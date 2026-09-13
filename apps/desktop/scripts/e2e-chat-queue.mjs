@@ -96,6 +96,42 @@ try {
   await page.getByRole("button", { name: "发送", exact: true }).waitFor();
   assert.deepEqual(pageErrors, []);
   await page.screenshot({ path: path.join(evidenceDirectory, "02-completed.png") });
+  const thirdUser = page.locator(".message-user").filter({ hasText: "队列第三条" });
+  await thirdUser.getByRole("button", { name: "编辑消息", exact: true }).click();
+  const editor = thirdUser.getByRole("textbox", { name: "编辑消息内容", exact: true });
+  assert.equal(await editor.inputValue(), "队列第三条");
+  const resend = thirdUser.getByRole("button", { name: "发送", exact: true });
+  assert.equal(await resend.isEnabled(), true);
+  await resend.click();
+  await page.waitForFunction(
+    async ({ conversationId, previousBranch }) => {
+      const value = await window.openerx.getConversation({ conversationId });
+      return (
+        value.conversation.activeBranchId !== previousBranch &&
+        value.messages.at(-1)?.status === "completed"
+      );
+    },
+    { conversationId, previousBranch: completed.conversation.activeBranchId },
+  );
+  const resent = await page.evaluate(
+    (conversationId) => window.openerx.getConversation({ conversationId }),
+    conversationId,
+  );
+  assert.equal(resent.messages.at(-2).parts[0].text, "队列第三条");
+  assert.notEqual(resent.messages.at(-1).id, replies[2].id);
+  const more = page.getByRole("button", { name: "更多操作", exact: true });
+  const menu = page.getByRole("menu", { name: "对话操作", exact: true });
+  await more.click();
+  await menu.waitFor();
+  await composer.click();
+  await menu.waitFor({ state: "hidden" });
+  assert.equal(await more.getAttribute("aria-expanded"), "false");
+  await more.click();
+  await menu.waitFor();
+  await page.keyboard.press("Escape");
+  await menu.waitFor({ state: "hidden" });
+  assert.deepEqual(pageErrors, []);
+  await page.screenshot({ path: path.join(evidenceDirectory, "03-resent.png") });
   const report = {
     checkedAt: new Date().toISOString(),
     runtime: "npm run dev:desktop",
@@ -107,6 +143,10 @@ try {
     finalStatuses: replies.map(({ status }) => status),
     secondReply: replyTexts[1],
     thirdReply: replyTexts[2],
+    originalTextResent: true,
+    resendCreatedBranch: resent.conversation.activeBranchId,
+    outsideClickDismissedMenu: true,
+    escapeDismissedMenu: true,
     pageErrors,
   };
   writeFileSync(

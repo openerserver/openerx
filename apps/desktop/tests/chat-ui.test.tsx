@@ -2992,6 +2992,37 @@ describe("M1 chat renderer", () => {
     expect(await within(dialog).findByText(/已连接附加目录 fixture-project/u)).toBeTruthy();
   });
 
+  it("dismisses the conversation menu on outside clicks and preserves menu interactions", async () => {
+    cleanup();
+    renderApp(createBridge(), `/chat/${conversationId}`);
+    const user = userEvent.setup();
+    const trigger = await screen.findByRole("button", { name: "更多操作" });
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("menu", { name: "对话操作" }));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await user.click(await screen.findByText("生成代码块和表格"));
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    await user.click(trigger);
+    await user.click(document.body);
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+
+    await user.click(trigger);
+    await user.click(trigger);
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "重命名" }));
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "对话标题" })).toBeTruthy();
+  });
+
   it("announces copy, archive and branch-creating regeneration results", async () => {
     cleanup();
     const bridge = createBridge();
@@ -3023,40 +3054,46 @@ describe("M1 chat renderer", () => {
     expect(await screen.findByText("对话已归档。")).toBeTruthy();
   });
 
-  it("edits a user message with a send action instead of exposing branch creation", async () => {
-    cleanup();
-    const bridge = createBridge();
-    vi.mocked(bridge.editMessage).mockResolvedValue({
-      conversationId,
-      branchId,
-      userMessageId,
-      assistantMessageId,
-    });
-    renderApp(bridge, `/chat/${conversationId}`);
-    const user = userEvent.setup();
+  it.each(["生成代码块和表格", "修改后的问题"])(
+    "resends a user message from the editor: %s",
+    async (resendText) => {
+      cleanup();
+      const bridge = createBridge();
+      vi.mocked(bridge.editMessage).mockResolvedValue({
+        conversationId,
+        branchId,
+        userMessageId,
+        assistantMessageId,
+      });
+      renderApp(bridge, `/chat/${conversationId}`);
+      const user = userEvent.setup();
 
-    const message = await screen.findByText("生成代码块和表格");
-    const card = message.closest<HTMLElement>(".message-user");
-    if (!card) throw new Error("User message card missing");
+      const message = await screen.findByText("生成代码块和表格");
+      const card = message.closest<HTMLElement>(".message-user");
+      if (!card) throw new Error("User message card missing");
 
-    await user.click(within(card).getByRole("button", { name: "编辑消息" }));
-    const editor = within(card).getByRole("textbox", { name: "编辑消息内容" });
-    const send = within(card).getByRole("button", { name: "发送" });
-    expect((send as HTMLButtonElement).disabled).toBe(true);
-    expect(card.textContent).not.toContain("新建分支");
+      await user.click(within(card).getByRole("button", { name: "编辑消息" }));
+      const editor = within(card).getByRole("textbox", { name: "编辑消息内容" });
+      const send = within(card).getByRole("button", { name: "发送" });
+      expect((send as HTMLButtonElement).disabled).toBe(false);
+      expect(card.textContent).not.toContain("新建分支");
 
-    await user.clear(editor);
-    await user.type(editor, "修改后的问题");
-    await user.click(send);
+      if (resendText !== "生成代码块和表格") {
+        await user.clear(editor);
+        expect((send as HTMLButtonElement).disabled).toBe(true);
+        await user.type(editor, resendText);
+      }
+      await user.click(send);
 
-    expect(bridge.editMessage).toHaveBeenCalledWith({
-      conversationId,
-      messageId: userMessageId,
-      text: "修改后的问题",
-      idempotencyKey: expect.stringMatching(/^edit-/u),
-    });
-    expect(await screen.findByText("已提交修改，正在从这里重新生成回复。")).toBeTruthy();
-  });
+      expect(bridge.editMessage).toHaveBeenCalledWith({
+        conversationId,
+        messageId: userMessageId,
+        text: resendText,
+        idempotencyKey: expect.stringMatching(/^edit-/u),
+      });
+      expect(await screen.findByText("已重新发送，正在从这里重新生成回复。")).toBeTruthy();
+    },
+  );
 
   it("uses the fixed-workbench hierarchy for completed replies", async () => {
     cleanup();
