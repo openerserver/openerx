@@ -132,37 +132,70 @@ export function createProductWorkspaceTools(input: {
       name: "openerx_workspace_apply_patch",
       label: "Apply workspace patch",
       description:
-        "Apply exact, unique replacements atomically. Requires the current SHA-256 and every applicable instruction digest; returns a recoverable diff.",
+        "Apply a context patch across up to 100 authorized text files. Use *** Begin Patch / *** End Patch with *** Add File:, *** Update File:, *** Delete File:, optional *** Move to:, and @@ hunks with space/context, -/removed, +/added lines. Read existing files with openerx_workspace_read in this turn and load applicable instructions for every source/destination before editing; the host binds those versions and digests. All files are checked before writing. Returns contextual diffs and data.changeSet.id; use openerx_workspace_change_set_review or openerx_workspace_change_set_undo with that id. Legacy exact replacements remain accepted.",
       parameters: Type.Object(
         {
           workspaceGrantId: grantId,
-          relativePath,
-          expectedSha256: Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
-          replacements: Type.Array(
-            Type.Object(
-              {
-                oldText: Type.String({ maxLength: 1_000_000 }),
-                newText: Type.String({ maxLength: 1_000_000 }),
-              },
-              { additionalProperties: false },
-            ),
-            { minItems: 1, maxItems: 100 },
+          patch: Type.Optional(Type.String({ minLength: 1, maxLength: 5_000_000 })),
+          relativePath: Type.Optional(relativePath),
+          expectedSha256: Type.Optional(
+            Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
           ),
-          instructionDigests: Type.Array(Type.String({ pattern: "^[a-f0-9]{64}$" }), {
-            maxItems: 100,
-          }),
+          replacements: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  oldText: Type.String({ maxLength: 1_000_000 }),
+                  newText: Type.String({ maxLength: 1_000_000 }),
+                },
+                { additionalProperties: false },
+              ),
+              { minItems: 1, maxItems: 100 },
+            ),
+          ),
+          instructionDigests: Type.Optional(
+            Type.Array(Type.String({ pattern: "^[a-f0-9]{64}$" }), {
+              maxItems: 100,
+            }),
+          ),
         },
         { additionalProperties: false },
       ),
-      execute: async (toolCallId, params) =>
-        await invoke(toolCallId, "openerx_workspace_apply_patch", {
+      execute: async (toolCallId, params) => {
+        if (params.patch !== undefined) {
+          if (
+            [
+              params.relativePath,
+              params.expectedSha256,
+              params.replacements,
+              params.instructionDigests,
+            ].some((value) => value !== undefined)
+          )
+            throw new Error(
+              "WORKSPACE_PATCH_INVALID: Choose patch or legacy replacements, not both",
+            );
+          return await invoke(toolCallId, "openerx_workspace_apply_patch", {
+            operation: "workspace_patch",
+            workspaceGrantId: params.workspaceGrantId,
+            patch: params.patch,
+          });
+        }
+        if (
+          !params.relativePath ||
+          params.expectedSha256 === undefined ||
+          !params.replacements ||
+          !params.instructionDigests
+        )
+          throw new Error("WORKSPACE_PATCH_INVALID: Supply a context patch");
+        return await invoke(toolCallId, "openerx_workspace_apply_patch", {
           operation: "workspace_apply_patch",
           workspaceGrantId: params.workspaceGrantId,
           relativePath: params.relativePath,
           expectedSha256: params.expectedSha256,
           replacements: params.replacements,
           instructionDigests: params.instructionDigests,
-        }),
+        });
+      },
     }),
     defineTool({
       name: "openerx_workspace_diff",
@@ -217,8 +250,9 @@ export function createProductWorkspaceTools(input: {
     ...[
       {
         name: "openerx_workspace_change_set_review",
-        label: "Review isolated workspace changes",
-        description: "Review a persisted isolated Bash change set and its bounded diffs.",
+        label: "Review workspace change set",
+        description:
+          "Review a persisted context patch or isolated Bash change set and its bounded diffs.",
         operation: "workspace_change_set_review" as const,
       },
       {
@@ -237,9 +271,9 @@ export function createProductWorkspaceTools(input: {
       },
       {
         name: "openerx_workspace_change_set_undo",
-        label: "Undo applied isolated changes",
+        label: "Undo applied workspace changes",
         description:
-          "Restore all recorded pre-change text only when every host file still matches the applied change set.",
+          "Undo a context patch or isolated Bash change set. Restore all recorded pre-change text only when every host file still matches the applied change set.",
         operation: "workspace_change_set_undo" as const,
       },
     ].map(({ name, label, description, operation }) =>

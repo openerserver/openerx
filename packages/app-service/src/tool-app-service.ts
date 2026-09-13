@@ -30,6 +30,7 @@ import type {
   ToolRuntimeStatus,
   UsageRecord,
   WorkItem,
+  WorkItemDetail,
   WorkspaceGrant,
   WorkspaceInstructionSource,
 } from "@openerx/contracts";
@@ -1301,6 +1302,73 @@ export class ToolAppService {
     return this.#repository.removeMcpServer(serverId);
   }
 
+  undoWorkspaceEdits(input: {
+    workItemId: string;
+    runId: string;
+    editId?: string;
+  }): WorkItemDetail {
+    const detail = this.#repository.workItemDetail(input.workItemId, input.runId);
+    const terminal = new Set(["completed", "failed", "interrupted", "cancelled"]);
+    if (
+      !terminal.has(detail.run.status) ||
+      this.#repository.hasActiveRun(detail.workItem.conversationId)
+    ) {
+      throw new Error("WORKSPACE_UNDO_RUN_ACTIVE");
+    }
+    const piToolCallId = `user-undo:${randomUUID()}`;
+    const { toolCall } = this.#repository.createToolCall({
+      runId: detail.run.id,
+      piCallRef: piToolCallId,
+      toolName: "openerx_workspace_user_undo",
+      source: "openerx",
+      risk: "L3",
+      idempotencyKey: piToolCallId,
+      inputSummary: input.editId ? "用户撤销这组文件修改" : "用户撤销本轮文件修改",
+      targetSummary: input.editId ?? detail.run.id,
+    });
+    this.#repository.markToolCall(toolCall.id, "running");
+    try {
+      const result = this.#workspace.undoRunEdits(detail.run.id, input.editId, {
+        signal: new AbortController().signal,
+        toolCallId: toolCall.id,
+        update: () => undefined,
+        projection: {
+          generationId: piToolCallId,
+          workItemId: detail.workItem.id,
+          runId: detail.run.id,
+          conversationId: detail.workItem.conversationId,
+          assistantMessageId: detail.workItem.messageId,
+          piToolCallId,
+          toolName: toolCall.toolName,
+        },
+      });
+      const completed = this.#repository.markToolCall(toolCall.id, "completed", {
+        resultSummary: result.summary,
+        resultContent: result.content,
+        resultData: result.data,
+      });
+      this.#emitEvent({
+        eventId: randomUUID(),
+        type: "tool.completed",
+        conversationId: detail.workItem.conversationId,
+        messageId: detail.workItem.messageId,
+        sequence: 0,
+        occurredAt: new Date().toISOString(),
+        payloadVersion: 1,
+        payload: { workItem: detail.workItem, run: detail.run, toolCall: completed },
+      });
+      return this.#repository.workItemDetail(input.workItemId, input.runId);
+    } catch (error) {
+      this.#repository.markToolCall(toolCall.id, "failed", {
+        errorCode:
+          error instanceof Error
+            ? error.message.split(":")[0]?.slice(0, 200)
+            : "WORKSPACE_UNDO_FAILED",
+      });
+      throw error;
+    }
+  }
+
   async handleRequest(
     frame: PiToolRequestFrame,
     authorization?: AppServiceAuthorization,
@@ -1652,6 +1720,7 @@ export class ToolAppService {
   ): void {
     const projection = this.#projectionByGeneration.get(generationId);
     if (projection) {
+      this.#workspace.releaseRun(projection.run.id);
       this.#repository.completeRun(
         projection.run.id,
         status,

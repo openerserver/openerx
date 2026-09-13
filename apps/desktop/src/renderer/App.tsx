@@ -126,6 +126,7 @@ import {
 } from "./projects";
 import { withUiTimeout } from "./ui-timeout";
 import { WorkspaceLocation, WorkspaceSection } from "./WorkspaceContext";
+import { WorkItemWorkspaceEdits } from "./WorkspaceEdits";
 
 const suggestions = [
   "复盘最近一周 A 股行情：哪些板块最受关注，背后的驱动因素是什么？",
@@ -2779,6 +2780,13 @@ function MessageCard({
                 </section>
               </div>
             ) : null}
+            {activities.map((workItem) => (
+              <WorkItemWorkspaceEdits
+                key={workItem.id}
+                workItemId={workItem.id}
+                runId={selectedActivityRunIds[workItem.id] ?? workItem.activeRunId}
+              />
+            ))}
           </>
         ) : (
           <p className="user-text">{text}</p>

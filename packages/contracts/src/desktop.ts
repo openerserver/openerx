@@ -124,6 +124,7 @@ export const ipcChannels = Object.freeze({
   artifactSave: "artifact:save",
   toolWorkItemsList: "tool:work-items:list",
   toolWorkItemGet: "tool:work-item:get",
+  toolWorkspaceUndo: "tool:workspace:undo",
   toolPermissionsList: "tool:permissions:list",
   toolPermissionResolve: "tool:permission:resolve",
   toolPermissionModeGet: "tool:permission-mode:get",

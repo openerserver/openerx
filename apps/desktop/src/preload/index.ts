@@ -145,6 +145,7 @@ import {
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
   workspaceSetPrimaryInputSchema,
+  workspaceUndoInputSchema,
 } from "@openerx/contracts";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -755,6 +756,12 @@ const bridge: DesktopBridge = {
       ipcChannels.toolWorkItemGet,
       "tool.workItem.get",
       workItemGetInputSchema.parse(input),
+    ),
+  undoWorkspaceEdits: async (input) =>
+    invokeChat(
+      ipcChannels.toolWorkspaceUndo,
+      "tool.workspace.undo",
+      workspaceUndoInputSchema.parse(input),
     ),
   listPermissionRequests: async (input = {}) =>
     invokeChat(

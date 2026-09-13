@@ -110,6 +110,7 @@ import {
   workItemDetailSchema,
   workItemGetInputSchema,
   workItemSchema,
+  workspaceUndoInputSchema,
 } from "./tool";
 import {
   type WorkspaceGrant,
@@ -432,6 +433,7 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     })
     .strict(),
   z.object({ command: z.literal("tool.workItem.get"), input: workItemGetInputSchema }).strict(),
+  z.object({ command: z.literal("tool.workspace.undo"), input: workspaceUndoInputSchema }).strict(),
   z
     .object({ command: z.literal("tool.permissions.list"), input: permissionListInputSchema })
     .strict(),
@@ -639,6 +641,7 @@ export interface ChatCommandResultMap {
   "tool.webSearch.settings.update": z.infer<typeof localWebSearchSettingsStateSchema>;
   "tool.webSearch.runtime.reset": z.infer<typeof localWebSearchSettingsStateSchema>;
   "tool.workItem.get": z.infer<typeof workItemDetailSchema>;
+  "tool.workspace.undo": z.infer<typeof workItemDetailSchema>;
   "tool.permissions.list": z.infer<typeof permissionRequestSchema>[];
   "tool.permission.resolve": z.infer<typeof permissionRequestSchema>;
   "tool.permissionMode.get": z.infer<typeof toolPermissionModeStateSchema>;
@@ -784,6 +787,7 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       parsed = localWebSearchSettingsStateSchema.parse(value);
       break;
     case "tool.workItem.get":
+    case "tool.workspace.undo":
       parsed = workItemDetailSchema.parse(value);
       break;
     case "tool.permissions.list":

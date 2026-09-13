@@ -1,21 +1,22 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
   readdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import type {
   NormalizedToolResult,
   ToolOperation,
+  WorkspaceChangeSetEntry,
+  WorkspaceEditSummary,
   WorkspaceGrant,
   WorkspaceInstructionSource,
+  WorkspaceUndoRecord,
 } from "@openerx/contracts";
 import type {
   ToolRepository,
@@ -23,6 +24,16 @@ import type {
   WorkspaceChangeSetRecord,
 } from "@openerx/storage";
 import type { ToolAdapter, ToolExecutionContext } from "./types";
+import {
+  applyWorkspaceFileTransaction,
+  atomicWorkspaceWrite,
+  changeSetMutations,
+  readWorkspaceText,
+  reverseMutations,
+  type WorkspaceFileMutation,
+  workspaceFileMatches,
+} from "./workspace-file-transaction";
+import { applyWorkspaceHunks, parseWorkspacePatch, workspaceUnifiedDiff } from "./workspace-patch";
 
 const MAX_TEXT_BYTES = 5_000_000;
 const MAX_LIST_ENTRIES = 5_000;
@@ -46,25 +57,11 @@ function normalizedRelative(value: string): string {
 }
 
 function textFile(filePath: string): string {
-  const size = statSync(filePath).size;
-  if (size > MAX_TEXT_BYTES) throw new Error("WORKSPACE_FILE_TOO_LARGE");
-  const content = readFileSync(filePath, "utf8");
-  if (content.includes("\0")) throw new Error("WORKSPACE_BINARY_FILE_UNSUPPORTED");
-  return content;
+  return readWorkspaceText(filePath);
 }
 
 function unifiedDiff(relativePath: string, before: string | null, after: string): string {
-  const beforeLines = before === null ? [] : before.split("\n");
-  const afterLines = after.split("\n");
-  return [
-    `--- ${before === null ? "/dev/null" : `a/${relativePath}`}`,
-    `+++ b/${relativePath}`,
-    `@@ -1,${beforeLines.length} +1,${afterLines.length} @@`,
-    ...beforeLines.map((line) => `-${line}`),
-    ...afterLines.map((line) => `+${line}`),
-  ]
-    .join("\n")
-    .slice(0, 5_000_000);
+  return workspaceUnifiedDiff(relativePath, before, after);
 }
 
 function result(
@@ -77,12 +74,186 @@ function result(
 }
 
 export class WorkspaceToolAdapter implements ToolAdapter {
+  readonly #readVersions = new Map<string, Map<string, string>>();
+
+  releaseRun(runId: string): void {
+    this.#readVersions.delete(runId);
+  }
+
+  /** Restore one edit or all recorded edits in a run, preflighting the combined result. */
+  undoRunEdits(
+    runId: string,
+    editId: string | undefined,
+    context: ToolExecutionContext,
+  ): NormalizedToolResult {
+    if (context.projection?.runId !== runId) throw new Error("WORKSPACE_RUN_CONTEXT_REQUIRED");
+    const interrupted = this.repository.pendingWorkspaceUndo(runId);
+    if (interrupted) {
+      if (editId && !interrupted.edits.some((edit) => edit.id === editId))
+        throw new Error("WORKSPACE_UNDO_RECOVERY_PENDING");
+      return this.#performUndo(interrupted, context, true);
+    }
+    const { changes, changeSets } = this.repository.runWorkspaceChanges(runId);
+    type Edit = Pick<WorkspaceEditSummary, "id" | "kind" | "status" | "createdAt"> & {
+      mutations: WorkspaceFileMutation[];
+    };
+    const available: Edit[] = [
+      ...changes.map(
+        (change): Edit => ({
+          id: change.id,
+          kind: "patch",
+          status: change.status,
+          createdAt: change.createdAt,
+          mutations: reverseMutations([
+            {
+              workspaceGrantId: change.workspaceGrantId,
+              relativePath: change.relativePath,
+              beforeText: change.beforeText,
+              afterText: change.afterText,
+            },
+          ]),
+        }),
+      ),
+      ...changeSets
+        .filter((change) => !editId || change.id === editId)
+        .map(
+          (change): Edit => ({
+            id: change.id,
+            kind: "change_set",
+            status: change.status,
+            createdAt: change.createdAt,
+            mutations: ["applied", "outcome_unknown"].includes(change.status)
+              ? reverseMutations(changeSetMutations(change.entries))
+              : [],
+          }),
+        ),
+    ]
+      .filter((edit) => !editId || edit.id === editId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (editId && !available.length) throw new Error("WORKSPACE_CHANGE_NOT_FOUND");
+    const edits = available.filter(
+      (edit) => edit.status === "applied" || edit.status === "outcome_unknown",
+    );
+    if (!edits.length) {
+      if (available.some((edit) => edit.status !== "reverted"))
+        throw new Error("WORKSPACE_CHANGE_NOT_APPLIED");
+      return result("修改已撤销", { undoneEditIds: [], relativePaths: [] });
+    }
+    type State = { text: string | null; mode?: number };
+    const initial = new Map<string, State & { mutation: WorkspaceFileMutation }>();
+    const virtual = new Map<string, State>();
+    const keyFor = (mutation: WorkspaceFileMutation) => {
+      const target = this.#mutationTarget(mutation, context);
+      const key = process.platform === "linux" ? target : target.toLowerCase();
+      if (!initial.has(key)) {
+        const text = existsSync(target) ? textFile(target) : null;
+        const mode = text === null ? undefined : statSync(target).mode & 0o7777;
+        initial.set(key, { text, mode, mutation });
+        virtual.set(key, { text, mode });
+      }
+      return key;
+    };
+    for (const edit of edits) for (const mutation of edit.mutations) keyFor(mutation);
+    const matches = (state: State, text: string | null, mode?: number) =>
+      state.text === text && (text === null || mode === undefined || state.mode === mode);
+    const pending = [...edits];
+    // Content chains determine order even when multiple writes share a timestamp.
+    while (pending.length) {
+      const index = pending.findIndex((edit) =>
+        edit.mutations.every((mutation) => {
+          const state = virtual.get(keyFor(mutation));
+          return (
+            state &&
+            (matches(state, mutation.beforeText, mutation.beforeMode) ||
+              (edit.status === "outcome_unknown" &&
+                matches(state, mutation.afterText, mutation.afterMode)))
+          );
+        }),
+      );
+      if (index < 0)
+        throw new Error(
+          "WORKSPACE_UNDO_CONTENT_CHANGED: " +
+            (pending[0]?.mutations[0]?.relativePath ?? "workspace"),
+        );
+      const edit = pending.splice(index, 1)[0];
+      if (!edit) throw new Error("WORKSPACE_CHANGE_NOT_FOUND");
+      for (const mutation of edit.mutations) {
+        const key = keyFor(mutation);
+        virtual.set(key, {
+          text: mutation.afterText,
+          mode:
+            mutation.afterText === null
+              ? undefined
+              : (mutation.afterMode ?? virtual.get(key)?.mode ?? 0o600),
+        });
+      }
+    }
+    const plan: WorkspaceFileMutation[] = [...initial].flatMap(([key, state]) => {
+      const restored = virtual.get(key);
+      if (!restored || matches(state, restored.text, restored.mode)) return [];
+      return [
+        {
+          ...state.mutation,
+          beforeText: state.text,
+          beforeMode: state.mode,
+          afterText: restored.text,
+          afterMode: restored.mode,
+        },
+      ];
+    });
+    const record = this.repository.beginWorkspaceUndo({
+      runId,
+      edits: edits.map(({ id, kind, status }) => ({ id, kind, status })),
+      mutations: plan,
+    });
+    return this.#performUndo(record, context, false);
+  }
+
+  #performUndo(
+    record: WorkspaceUndoRecord,
+    context: ToolExecutionContext,
+    resuming: boolean,
+  ): NormalizedToolResult {
+    let filesRestored = false;
+    try {
+      const plan = record.mutations.filter(
+        (mutation) =>
+          !workspaceFileMatches(
+            this.#mutationTarget(mutation, context),
+            mutation.afterText,
+            mutation.afterMode,
+          ),
+      );
+      applyWorkspaceFileTransaction(plan, (mutation) => this.#mutationTarget(mutation, context));
+      filesRestored = true;
+      this.repository.finishWorkspaceUndo(record, "completed");
+    } catch (error) {
+      const unknown =
+        resuming ||
+        filesRestored ||
+        (error instanceof Error && error.message === "WORKSPACE_CHANGE_SET_RECOVERY_REQUIRED");
+      this.repository.finishWorkspaceUndo(record, unknown ? "unknown" : "aborted");
+      throw error;
+    }
+    this.releaseRun(record.runId);
+    return result(
+      `已撤销 ${record.edits.length} 组文件修改`,
+      {
+        undoneEditIds: record.edits.map(({ id }) => id),
+        relativePaths: record.mutations.map(({ relativePath }) => relativePath),
+      },
+      undefined,
+      true,
+    );
+  }
+
   readonly operations = [
     "workspace_list",
     "workspace_search",
     "workspace_read",
     "workspace_instructions",
     "workspace_apply_patch",
+    "workspace_patch",
     "workspace_diff",
     "workspace_changes",
     "workspace_undo",
@@ -112,6 +283,8 @@ export class WorkspaceToolAdapter implements ToolAdapter {
         return this.#instructions(operation, context);
       case "workspace_apply_patch":
         return this.#applyPatch(operation, context);
+      case "workspace_patch":
+        return this.#applyContextPatch(operation, context);
       case "workspace_diff":
         return this.#diff(operation.workspaceGrantId, operation.workspaceChangeId, context);
       case "workspace_changes":
@@ -227,15 +400,21 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     const root = realpathSync(grant.rootPath);
     const relative = normalizedRelative(relativePath);
     if (relative === ".") throw new Error("WORKSPACE_FILE_PATH_REQUIRED");
+    if (relative.split("/").some((segment) => segment.toLowerCase() === ".git")) {
+      throw new Error("WORKSPACE_PATCH_PROTECTED_PATH");
+    }
     const target = path.resolve(root, relative);
     if (!inside(root, target)) throw new Error("WORKSPACE_PATH_ESCAPE");
-    if (existsSync(target)) {
-      if (lstatSync(target).isSymbolicLink()) throw new Error("WORKSPACE_SYMLINK_DENIED");
-      if (!inside(root, realpathSync(target))) throw new Error("WORKSPACE_SYMLINK_ESCAPE");
-      if (!statSync(target).isFile()) throw new Error("WORKSPACE_FILE_REQUIRED");
+    let current = root;
+    for (const segment of relative.split("/")) {
+      current = path.join(current, segment);
+      const stat = lstatSync(current, { throwIfNoEntry: false });
+      if (!stat) continue;
+      if (stat.isSymbolicLink()) throw new Error("WORKSPACE_SYMLINK_DENIED");
+      if (current === target ? !stat.isFile() : !stat.isDirectory()) {
+        throw new Error("WORKSPACE_FILE_REQUIRED");
+      }
     }
-    const parent = realpathSync(path.dirname(target));
-    if (!inside(root, parent)) throw new Error("WORKSPACE_SYMLINK_ESCAPE");
     return { root, target, relative };
   }
 
@@ -326,6 +505,12 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     const { target, relative } = this.#existing(grant, operation.relativePath);
     if (!statSync(target).isFile()) throw new Error("WORKSPACE_FILE_REQUIRED");
     const content = textFile(target);
+    if (context.projection) {
+      const versions =
+        this.#readVersions.get(context.projection.runId) ?? new Map<string, string>();
+      versions.set(`${grant.id}\0${relative}`, sha256(content));
+      this.#readVersions.set(context.projection.runId, versions);
+    }
     const lines = content.split("\n");
     const selected = lines.slice(
       operation.startLine - 1,
@@ -361,6 +546,135 @@ export class WorkspaceToolAdapter implements ToolAdapter {
             .map((source) => `[${source.kind}] ${source.relativePath}\n${source.content}`)
             .join("\n\n");
     return result(`${sources.length} 个适用项目指令`, { sources }, [{ type: "text", text }]);
+  }
+
+  #applyContextPatch(
+    operation: Extract<ToolOperation, { operation: "workspace_patch" }>,
+    context: ToolExecutionContext,
+  ): NormalizedToolResult {
+    const projection = context.projection;
+    if (!projection) throw new Error("WORKSPACE_RUN_CONTEXT_REQUIRED");
+    if (context.signal.aborted) throw new Error("WORKSPACE_PATCH_CANCELLED");
+    const grant = this.#grant(context, operation.workspaceGrantId);
+    if (grant.access !== "read_write") throw new Error("WORKSPACE_WRITE_NOT_GRANTED");
+    const versions = this.#readVersions.get(projection.runId) ?? new Map<string, string>();
+    const acknowledged = new Set(
+      this.repository.run(projection.runId).instructionSources.map(({ digest }) => digest),
+    );
+    const touched = new Set<string>();
+    const instructions: WorkspaceInstructionSource[] = [];
+    const resolve = (relativePath: string) => {
+      const resolved = this.#writeTarget(grant, relativePath);
+      const key = process.platform === "linux" ? resolved.target : resolved.target.toLowerCase();
+      if (touched.has(key)) throw new Error(`WORKSPACE_PATCH_DUPLICATE_PATH: ${resolved.relative}`);
+      touched.add(key);
+      const required = this.instructionSources(grant, resolved.relative);
+      if (required.some(({ digest }) => !acknowledged.has(digest))) {
+        throw new Error(
+          `WORKSPACE_INSTRUCTIONS_NOT_ACKNOWLEDGED: Load instructions for ${resolved.relative}`,
+        );
+      }
+      instructions.push(...required);
+      return resolved;
+    };
+    let totalBytes = 0;
+    const entries = parseWorkspacePatch(operation.patch)
+      .map((file): WorkspaceChangeSetEntry => {
+        const source = resolve(file.path);
+        const beforeText = existsSync(source.target) ? textFile(source.target) : null;
+        const beforeMode = beforeText === null ? undefined : statSync(source.target).mode & 0o7777;
+        const beforeSha256 = beforeText === null ? null : sha256(beforeText);
+        if (file.kind === "created") {
+          if (beforeText !== null)
+            throw new Error(`WORKSPACE_PATCH_FILE_EXISTS: ${source.relative}`);
+        } else {
+          if (beforeText === null) throw new Error(`WORKSPACE_PATH_NOT_FOUND: ${source.relative}`);
+          const expected = versions.get(`${grant.id}\0${source.relative}`);
+          if (!expected)
+            throw new Error(
+              "WORKSPACE_READ_REQUIRED: Read " +
+                source.relative +
+                " in this turn before editing it",
+            );
+          if (expected !== beforeSha256)
+            throw new Error(`WORKSPACE_CONTENT_CHANGED: Read ${source.relative} again`);
+        }
+        const destination = file.kind === "modified" && file.moveTo ? resolve(file.moveTo) : source;
+        if (destination !== source && existsSync(destination.target)) {
+          throw new Error(`WORKSPACE_PATCH_FILE_EXISTS: ${destination.relative}`);
+        }
+        const afterText =
+          file.kind === "created"
+            ? file.content
+            : file.kind === "deleted"
+              ? null
+              : applyWorkspaceHunks(beforeText ?? "", file.hunks);
+        if (afterText !== null && Buffer.byteLength(afterText, "utf8") > MAX_TEXT_BYTES)
+          throw new Error("WORKSPACE_FILE_TOO_LARGE");
+        totalBytes +=
+          Buffer.byteLength(beforeText ?? "", "utf8") + Buffer.byteLength(afterText ?? "", "utf8");
+        if (totalBytes > 20_000_000) throw new Error("WORKSPACE_PATCH_TOO_LARGE");
+        return {
+          workspaceGrantId: grant.id,
+          workspaceLogicalName: grant.displayName,
+          relativePath: destination.relative,
+          previousRelativePath: destination === source ? null : source.relative,
+          kind: destination === source ? file.kind : "renamed",
+          entryType: "file",
+          beforeText,
+          afterText,
+          beforeSha256,
+          afterSha256: afterText === null ? null : sha256(afterText),
+          beforeMode,
+          afterMode: afterText === null ? undefined : (beforeMode ?? 0o600),
+          applySupported: true,
+        };
+      })
+      .filter((entry) => entry.kind === "renamed" || entry.beforeText !== entry.afterText);
+    if (!entries.length) throw new Error("WORKSPACE_PATCH_NO_CHANGE");
+    const diffs = entries.map((entry) => ({
+      relativePath: entry.relativePath,
+      patch: workspaceUnifiedDiff(
+        entry.relativePath,
+        entry.beforeText,
+        entry.afterText,
+        entry.previousRelativePath ?? entry.relativePath,
+      ),
+    }));
+    this.repository.addRunInstructionSources(projection.runId, instructions);
+    const changeSet = this.repository.createWorkspaceChangeSet({
+      workspaceGrantId: grant.id,
+      runId: projection.runId,
+      toolCallId: context.toolCallId,
+      baselineRevision: sha256(
+        JSON.stringify(
+          entries.map((entry) => [
+            entry.previousRelativePath ?? entry.relativePath,
+            entry.beforeSha256,
+          ]),
+        ),
+      ),
+      finalRevision: sha256(
+        JSON.stringify(entries.map((entry) => [entry.relativePath, entry.afterSha256])),
+      ),
+      manifest: entries.map(({ relativePath, previousRelativePath, kind }) => ({
+        relativePath,
+        previousRelativePath,
+        kind,
+      })),
+      diffs,
+      entries,
+      blocked: false,
+    });
+    this.repository.markWorkspaceChangeSet(changeSet.id, "reviewed");
+    const applied = this.#changeSetApply(grant.id, changeSet.id, context);
+    for (const entry of entries) {
+      if (entry.previousRelativePath) versions.delete(`${grant.id}\0${entry.previousRelativePath}`);
+      if (entry.afterSha256 === null) versions.delete(`${grant.id}\0${entry.relativePath}`);
+      else versions.set(`${grant.id}\0${entry.relativePath}`, entry.afterSha256);
+    }
+    this.#readVersions.set(projection.runId, versions);
+    return applied;
   }
 
   #applyPatch(
@@ -479,6 +793,8 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     if (change.workspaceGrantId !== grantId) throw new Error("WORKSPACE_CHANGE_SCOPE_MISMATCH");
     const grant = this.#grant(context, change.workspaceGrantId);
     if (grant.access !== "read_write") throw new Error("WORKSPACE_WRITE_NOT_GRANTED");
+    if (this.repository.pendingWorkspaceUndo(change.runId))
+      throw new Error("WORKSPACE_UNDO_RECOVERY_PENDING");
     if (change.status === "reverted") return this.#changeResult(change, false);
     if (change.status !== "applied" && change.status !== "outcome_unknown") {
       throw new Error("WORKSPACE_CHANGE_NOT_APPLIED");
@@ -506,16 +822,7 @@ export class WorkspaceToolAdapter implements ToolAdapter {
   }
 
   #atomicWrite(target: string, content: string): void {
-    const temporary = path.join(path.dirname(target), `.openerx-${randomUUID()}.tmp`);
-    try {
-      writeFileSync(temporary, content, {
-        encoding: "utf8",
-        mode: existsSync(target) ? statSync(target).mode : 0o600,
-      });
-      renameSync(temporary, target);
-    } finally {
-      if (existsSync(temporary)) unlinkSync(temporary);
-    }
+    atomicWorkspaceWrite(target, content);
   }
 
   #changeSet(
@@ -580,11 +887,12 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     try {
       this.#writeChangeSet(changeSet, "apply", context);
     } catch (error) {
-      try {
-        this.#writeChangeSet(changeSet, "undo", context, false);
-      } finally {
-        this.repository.markWorkspaceChangeSet(changeSet.id, "apply_failed");
-      }
+      this.repository.markWorkspaceChangeSet(
+        changeSet.id,
+        error instanceof Error && error.message === "WORKSPACE_CHANGE_SET_RECOVERY_REQUIRED"
+          ? "outcome_unknown"
+          : "apply_failed",
+      );
       throw error;
     }
     return this.#changeSetResult(
@@ -599,6 +907,8 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     context: ToolExecutionContext,
   ): NormalizedToolResult {
     const changeSet = this.#changeSet(grantId, changeSetId, context);
+    if (this.repository.pendingWorkspaceUndo(changeSet.runId))
+      throw new Error("WORKSPACE_UNDO_RECOVERY_PENDING");
     if (changeSet.status === "reverted") return this.#changeSetResult(changeSet, false);
     if (changeSet.status !== "applied" && changeSet.status !== "outcome_unknown") {
       throw new Error("WORKSPACE_CHANGE_SET_NOT_APPLIED");
@@ -608,7 +918,18 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     } else {
       this.#validateChangeSetState(changeSet, "after", context);
     }
-    this.#writeChangeSet(changeSet, "undo", context);
+    this.repository.markWorkspaceChangeSet(changeSet.id, "applying");
+    try {
+      this.#writeChangeSet(changeSet, "undo", context);
+    } catch (error) {
+      this.repository.markWorkspaceChangeSet(
+        changeSet.id,
+        error instanceof Error && error.message === "WORKSPACE_CHANGE_SET_RECOVERY_REQUIRED"
+          ? "outcome_unknown"
+          : changeSet.status,
+      );
+      throw error;
+    }
     return this.#changeSetResult(
       this.repository.markWorkspaceChangeSet(changeSet.id, "reverted"),
       true,
@@ -653,65 +974,40 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     changeSet: WorkspaceChangeSetRecord,
     direction: "apply" | "undo",
     context: ToolExecutionContext,
-    strict = true,
   ): void {
-    const entries = direction === "apply" ? changeSet.entries : [...changeSet.entries].reverse();
-    for (const entry of entries) {
-      try {
-        const grant = this.#grant(context, entry.workspaceGrantId);
-        const applying = direction === "apply";
-        if (entry.kind === "renamed") {
-          const fromRelative = applying
-            ? (entry.previousRelativePath ?? entry.relativePath)
-            : entry.relativePath;
-          const toRelative = applying
-            ? entry.relativePath
-            : (entry.previousRelativePath ?? entry.relativePath);
-          const { target: from } = this.#writeTarget(grant, fromRelative);
-          const { target: to } = this.#writeTarget(grant, toRelative);
-          const content = applying ? entry.afterText : entry.beforeText;
-          if (content === null) throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
-          this.#atomicWrite(to, content);
-          if (existsSync(from)) unlinkSync(from);
-          continue;
-        }
-        const { target } = this.#writeTarget(grant, entry.relativePath);
-        const content = applying ? entry.afterText : entry.beforeText;
-        if (content === null) {
-          if (existsSync(target)) unlinkSync(target);
-        } else {
-          this.#atomicWrite(target, content);
-        }
-      } catch (error) {
-        if (strict) throw error;
-      }
-    }
+    const mutations = changeSetMutations(changeSet.entries);
+    const plan = direction === "apply" ? mutations : reverseMutations(mutations);
+    // Recovery may encounter a mixture of before/after states. Keep already-restored files.
+    const pending =
+      changeSet.status === "outcome_unknown" && direction === "undo"
+        ? plan.filter(
+            (mutation) =>
+              !workspaceFileMatches(
+                this.#mutationTarget(mutation, context),
+                mutation.afterText,
+                mutation.afterMode,
+              ),
+          )
+        : plan;
+    applyWorkspaceFileTransaction(pending, (mutation) => this.#mutationTarget(mutation, context));
+  }
+
+  #mutationTarget(mutation: WorkspaceFileMutation, context: ToolExecutionContext): string {
+    const grant = this.#grant(context, mutation.workspaceGrantId);
+    if (grant.access !== "read_write") throw new Error("WORKSPACE_WRITE_NOT_GRANTED");
+    return this.#writeTarget(grant, mutation.relativePath).target;
   }
 
   #validateRecoverableChangeSetState(
     changeSet: WorkspaceChangeSetRecord,
     context: ToolExecutionContext,
   ): void {
-    for (const entry of changeSet.entries) {
-      if (!entry.applySupported || entry.entryType !== "file") {
-        throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
-      }
-      const grant = this.#grant(context, entry.workspaceGrantId);
-      if (entry.kind === "renamed") {
-        const previous = entry.previousRelativePath;
-        if (!previous) throw new Error("WORKSPACE_CHANGE_SET_BLOCKED");
-        const { target: beforeTarget } = this.#writeTarget(grant, previous);
-        const { target: afterTarget } = this.#writeTarget(grant, entry.relativePath);
-        const beforeHash = existsSync(beforeTarget) ? sha256(textFile(beforeTarget)) : null;
-        const afterHash = existsSync(afterTarget) ? sha256(textFile(afterTarget)) : null;
-        const atBefore = beforeHash === entry.beforeSha256 && afterHash === null;
-        const atAfter = beforeHash === null && afterHash === entry.afterSha256;
-        if (!atBefore && !atAfter) throw new Error("WORKSPACE_CHANGE_SET_CONFLICT");
-        continue;
-      }
-      const { target } = this.#writeTarget(grant, entry.relativePath);
-      const actual = existsSync(target) ? sha256(textFile(target)) : null;
-      if (actual !== entry.beforeSha256 && actual !== entry.afterSha256) {
+    for (const mutation of changeSetMutations(changeSet.entries)) {
+      const target = this.#mutationTarget(mutation, context);
+      if (
+        !workspaceFileMatches(target, mutation.beforeText, mutation.beforeMode) &&
+        !workspaceFileMatches(target, mutation.afterText, mutation.afterMode)
+      ) {
         throw new Error("WORKSPACE_CHANGE_SET_CONFLICT");
       }
     }

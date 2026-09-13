@@ -1553,6 +1553,21 @@ const migrations: readonly Migration[] = [
         ON workspace_artifact_links(owner_profile_id, conversation_id);
     `,
   },
+  {
+    version: 35,
+    checksum: "workspace-undo-journal-v35-20260913",
+    sql: `
+      CREATE TABLE workspace_undo_journal (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        record_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE UNIQUE INDEX workspace_undo_pending_idx
+        ON workspace_undo_journal(owner_profile_id, run_id);
+    `,
+  },
 ];
 
 export function migrateDatabase(

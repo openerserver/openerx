@@ -384,6 +384,8 @@ export class ChatAppService {
           request.input.workItemId,
           request.input.runId,
         );
+      case "tool.workspace.undo":
+        return this.#requiredTools().undoWorkspaceEdits(request.input);
       case "tool.permissions.list":
         return this.#requiredToolsRepository().listPermissions(request.input.status);
       case "tool.permission.resolve":

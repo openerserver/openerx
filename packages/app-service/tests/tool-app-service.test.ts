@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -255,6 +255,52 @@ afterEach(() => {
 });
 
 describe("ToolAppService", () => {
+  it("routes context edits and explicit user undo through the current run with conflict protection", async () => {
+    const { chat, tools, service, base, events } = fixture();
+    service.initialize();
+    const grant = service.ensureConversationWorkspace(base.conversationId);
+    service.setPermissionMode({ conversationId: base.conversationId, mode: "full_access" });
+    const projection = service.startGeneration({
+      ...base,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "high",
+    });
+    const result = await service.handleRequest({
+      ...base,
+      piToolCallId: "context-edit-create",
+      toolName: "openerx_workspace_apply_patch",
+      operation: {
+        operation: "workspace_patch",
+        workspaceGrantId: grant.id,
+        patch: "*** Begin Patch\n*** Add File: nested/result.txt\n+hello\n*** End Patch",
+        idempotencyKey: "context-edit-service-0001",
+      },
+    });
+    expect(result.sideEffectCommitted).toBe(true);
+    const target = path.join(grant.rootPath, "nested/result.txt");
+    expect(readFileSync(target, "utf8")).toBe("hello\n");
+    const input = { workItemId: projection.workItem.id, runId: projection.run.id };
+    expect(() => service.undoWorkspaceEdits(input)).toThrow("WORKSPACE_UNDO_RUN_ACTIVE");
+    service.completeGeneration(base.generationId, "completed");
+    expect(tools.workItemDetail(input.workItemId).workspaceEdits[0]).toMatchObject({
+      canUndo: true,
+      relativePaths: ["nested/result.txt"],
+    });
+    expect(() => service.undoWorkspaceEdits({ ...input, editId: crypto.randomUUID() })).toThrow(
+      "WORKSPACE_CHANGE_NOT_FOUND",
+    );
+    const undone = service.undoWorkspaceEdits(input);
+    expect(existsSync(target)).toBe(false);
+    expect(undone.workspaceEdits?.[0]).toMatchObject({ status: "reverted", canUndo: false });
+    expect(
+      undone.toolCalls.some(
+        (call) => call.toolName === "openerx_workspace_user_undo" && call.status === "completed",
+      ),
+    ).toBe(true);
+    expect(events.filter(({ type }) => type === "permission.required")).toHaveLength(0);
+    chat.close();
+    await service.close();
+  });
   it("creates an isolated default writable workspace for every projectless conversation", async () => {
     const { chat, tools, service, base, defaultWorkspaceDirectory } = fixture();
     const second = chat.createGeneration({

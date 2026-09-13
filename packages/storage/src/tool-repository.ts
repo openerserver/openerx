@@ -37,12 +37,15 @@ import {
   type WorkspaceChangeSet,
   type WorkspaceChangeSetEntry,
   type WorkspaceChangeSetStatus,
+  type WorkspaceEditSummary,
   type WorkspaceGrant,
   type WorkspaceInstructionSource,
+  type WorkspaceUndoRecord,
   workItemSchema,
   workspaceChangeSchema,
   workspaceChangeSetSchema,
   workspaceGrantSchema,
+  workspaceUndoRecordSchema,
 } from "@openerx/contracts";
 import { migrateDatabase } from "./migrations";
 
@@ -1502,6 +1505,115 @@ export class ToolRepository {
     ).map((row) => this.#workspaceChangeSet(row));
   }
 
+  runWorkspaceChanges(runId: string): {
+    changes: WorkspaceChangeRecord[];
+    changeSets: WorkspaceChangeSetRecord[];
+  } {
+    return {
+      changes: (
+        this.#database
+          .prepare(
+            "SELECT * FROM workspace_changes WHERE owner_profile_id = ? AND run_id = ? ORDER BY rowid DESC",
+          )
+          .all(this.#ownerProfileId, runId) as SqlRow[]
+      ).map((row) => this.#workspaceChange(row)),
+      changeSets: (
+        this.#database
+          .prepare(
+            "SELECT * FROM workspace_change_sets WHERE owner_profile_id = ? AND run_id = ? ORDER BY rowid DESC",
+          )
+          .all(this.#ownerProfileId, runId) as SqlRow[]
+      ).map((row) => this.#workspaceChangeSet(row)),
+    };
+  }
+
+  pendingWorkspaceUndo(runId: string): WorkspaceUndoRecord | null {
+    const row = this.#database
+      .prepare(
+        "SELECT record_json FROM workspace_undo_journal WHERE owner_profile_id = ? AND run_id = ?",
+      )
+      .get(this.#ownerProfileId, runId) as SqlRow | undefined;
+    return row ? workspaceUndoRecordSchema.parse(JSON.parse(String(row.record_json))) : null;
+  }
+
+  beginWorkspaceUndo(input: Omit<WorkspaceUndoRecord, "id">): WorkspaceUndoRecord {
+    const record = workspaceUndoRecordSchema.parse({ ...input, id: this.#idFactory() });
+    return this.#transaction(() => {
+      this.#database
+        .prepare(
+          "INSERT INTO workspace_undo_journal(id, owner_profile_id, run_id, record_json, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(record.id, this.#ownerProfileId, record.runId, JSON.stringify(record), this.#now());
+      for (const edit of record.edits) {
+        if (edit.kind === "patch") this.markWorkspaceChange(edit.id, "preparing");
+        else this.markWorkspaceChangeSet(edit.id, "applying");
+      }
+      return record;
+    });
+  }
+
+  finishWorkspaceUndo(
+    record: WorkspaceUndoRecord,
+    outcome: "completed" | "aborted" | "unknown",
+  ): void {
+    this.#transaction(() => {
+      for (const edit of record.edits) {
+        const status =
+          outcome === "completed"
+            ? "reverted"
+            : outcome === "unknown"
+              ? "outcome_unknown"
+              : edit.status;
+        if (edit.kind === "patch")
+          this.markWorkspaceChange(edit.id, workspaceChangeSchema.shape.status.parse(status));
+        else
+          this.markWorkspaceChangeSet(edit.id, workspaceChangeSetSchema.shape.status.parse(status));
+      }
+      if (outcome !== "unknown")
+        this.#database
+          .prepare("DELETE FROM workspace_undo_journal WHERE id = ? AND owner_profile_id = ?")
+          .run(record.id, this.#ownerProfileId);
+    });
+  }
+
+  hasActiveRun(conversationId: string): boolean {
+    return !!this.#database
+      .prepare(
+        "SELECT 1 FROM execution_runs r JOIN work_items w ON w.id = r.work_item_id WHERE w.owner_profile_id = ? AND w.conversation_id = ? AND r.status NOT IN ('completed', 'failed', 'interrupted', 'cancelled') LIMIT 1",
+      )
+      .get(this.#ownerProfileId, conversationId);
+  }
+
+  #workspaceEditSummaries(runId: string): WorkspaceEditSummary[] {
+    const { changes, changeSets } = this.runWorkspaceChanges(runId);
+    return [
+      ...changes.map(
+        (change): WorkspaceEditSummary => ({
+          id: change.id,
+          kind: "patch",
+          workspaceGrantId: change.workspaceGrantId,
+          relativePaths: [change.relativePath],
+          status: change.status,
+          canUndo: change.status === "applied" || change.status === "outcome_unknown",
+          createdAt: change.createdAt,
+        }),
+      ),
+      ...changeSets.map(
+        (change): WorkspaceEditSummary => ({
+          id: change.id,
+          kind: "change_set",
+          workspaceGrantId: change.workspaceGrantId,
+          relativePaths: change.entries.map(({ relativePath }) => relativePath),
+          status: change.status,
+          canUndo:
+            (change.status === "applied" || change.status === "outcome_unknown") &&
+            change.entries.every((entry) => entry.applySupported && entry.entryType === "file"),
+          createdAt: change.createdAt,
+        }),
+      ),
+    ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
   markWorkspaceChangeSet(id: string, status: WorkspaceChangeSetStatus): WorkspaceChangeSetRecord {
     const result = this.#database
       .prepare(
@@ -2063,6 +2175,7 @@ export class ToolRepository {
     steps: RunStep[];
     toolCalls: ToolCall[];
     permissions: PermissionRequest[];
+    workspaceEdits: WorkspaceEditSummary[];
   } {
     const workItem = this.workItem(workItemId);
     if (!workItem.activeRunId) throw new Error("RUN_NOT_FOUND");
@@ -2077,6 +2190,7 @@ export class ToolRepository {
       steps: this.listSteps(run.id),
       toolCalls: this.listToolCalls(run.id),
       permissions: this.listPermissionsForRun(run.id),
+      workspaceEdits: this.#workspaceEditSummaries(run.id),
     };
   }
 

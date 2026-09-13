@@ -457,6 +457,7 @@ function createBridge(): DesktopBridge {
     resetLocalWebSearchRuntime: vi.fn(),
     listWorkItems: vi.fn().mockResolvedValue([]),
     getWorkItem: vi.fn(),
+    undoWorkspaceEdits: vi.fn(),
     listPermissionRequests: vi.fn().mockResolvedValue([]),
     resolvePermission: vi.fn(),
     getToolPermissionMode: vi.fn().mockImplementation(async ({ conversationId: targetId }) => ({

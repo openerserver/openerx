@@ -107,6 +107,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         reason: `读取已授权工作区：${operation.operation}`,
         approval: "automatic",
       };
+    case "workspace_patch":
     case "workspace_apply_patch":
     case "workspace_undo":
     case "workspace_change_set_discard":
@@ -381,6 +382,7 @@ export function hasUncertainExternalSideEffect(operation: ToolOperation): boolea
     case "memory_upsert":
     case "memory_forget":
       return false;
+    case "workspace_patch":
     case "workspace_apply_patch":
     case "workspace_undo":
     case "workspace_change_set_apply":
@@ -452,6 +454,8 @@ export function summarizeOperation(operation: ToolOperation): { input: string; t
         input: operation.operation === "workspace_search" ? operation.query : operation.operation,
         target: `${operation.workspaceGrantId}:${operation.relativePath}`,
       };
+    case "workspace_patch":
+      return { input: "Apply context patch", target: operation.workspaceGrantId };
     case "workspace_apply_patch":
       return {
         input: `${operation.replacements.length} replacements`,

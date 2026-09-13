@@ -124,6 +124,7 @@ import {
   workspaceListInputSchema,
   workspaceRevokeInputSchema,
   workspaceSetPrimaryInputSchema,
+  workspaceUndoInputSchema,
 } from "@openerx/contracts";
 import {
   DiagnosticsService,
@@ -1060,6 +1061,11 @@ function registerIpcHandlers(
   registerChatHandler(ipcChannels.artifactPreview, "artifact.preview", artifactPreviewInputSchema);
   registerChatHandler(ipcChannels.toolWorkItemsList, "tool.workItems.list", toolListInputSchema);
   registerChatHandler(ipcChannels.toolWorkItemGet, "tool.workItem.get", workItemGetInputSchema);
+  registerChatHandler(
+    ipcChannels.toolWorkspaceUndo,
+    "tool.workspace.undo",
+    workspaceUndoInputSchema,
+  );
   registerChatHandler(
     ipcChannels.localWebSearchSettingsGet,
     "tool.webSearch.settings.get",

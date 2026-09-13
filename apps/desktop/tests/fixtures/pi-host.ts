@@ -55,6 +55,54 @@ function responseFor(context: Context): AssistantMessage {
   const toolResults = context.messages
     .slice(lastUserIndex + 1)
     .filter(({ role }) => role === "toolResult");
+  if (latestUser.includes("[PI_TEST_WORKSPACE_PATCH]")) {
+    const workspaceGrantId = context.systemPrompt?.match(
+      /\(grant ([0-9a-f-]{36}), read_write/u,
+    )?.[1];
+    if (!workspaceGrantId) return fauxAssistantMessage("EDIT_FIXTURE_NO_WORKSPACE");
+    const calls = [
+      { name: "openerx_workspace_instructions", params: { workspaceGrantId, relativePath: "." } },
+      {
+        name: "openerx_workspace_apply_patch",
+        params: {
+          workspaceGrantId,
+          patch:
+            "*** Begin Patch\n*** Add File: example.ts\n+export const value = 1;\n*** Add File: obsolete.txt\n+obsolete\n*** Add File: old-name.txt\n+rename me\n*** End Patch",
+        },
+      },
+      ...["example.ts", "obsolete.txt", "old-name.txt"].map((relativePath) => ({
+        name: "openerx_workspace_read",
+        params: { workspaceGrantId, relativePath },
+      })),
+      {
+        name: "openerx_workspace_apply_patch",
+        params: {
+          workspaceGrantId,
+          patch:
+            "*** Begin Patch\n*** Update File: example.ts\n@@\n-export const value = 1;\n+export const value = 2;\n*** Delete File: obsolete.txt\n*** Update File: old-name.txt\n*** Move to: docs/renamed.txt\n*** Add File: docs/notes.md\n+# Editing verification\n*** End Patch",
+        },
+      },
+      {
+        name: "openerx_workspace_apply_patch",
+        params: {
+          workspaceGrantId,
+          patch:
+            "*** Begin Patch\n*** Update File: example.ts\n@@\n-export const value = 2;\n+export const value = 3;\n*** End Patch",
+        },
+      },
+    ];
+    if (toolResults.some((result) => "isError" in result && result.isError))
+      return fauxAssistantMessage("EDIT_FIXTURE_TOOL_FAILED");
+    const call = calls[toolResults.length];
+    return call
+      ? fauxAssistantMessage(
+          fauxToolCall(call.name, call.params, { id: `workspace-edit-${toolResults.length}` }),
+          { stopReason: "toolUse" },
+        )
+      : fauxAssistantMessage(
+          "EDIT_FIXTURE_OK：已完成新增、修改、删除和重命名，可以查看差异并撤销。",
+        );
+  }
   if (latestUser.includes("[PI_TEST_XLS_ATTACHMENT]")) {
     const personalFileId = context.systemPrompt?.match(/\(xls, id ([0-9a-f-]{36})\)/u)?.[1];
     if (!personalFileId) return fauxAssistantMessage("XLS 附件未进入模型上下文。");
