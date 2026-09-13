@@ -58,6 +58,7 @@ export class ChatAppService {
   readonly #branchTails = new Map<string, Promise<void>>();
   readonly #releaseGeneration = new Map<string, () => void>();
   #closed = false;
+  #closePromise: Promise<void> | null = null;
 
   constructor(
     repository: ChatRepository,
@@ -102,16 +103,18 @@ export class ChatAppService {
     return recovered;
   }
 
-  close(): void {
+  close(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
     this.#closed = true;
     for (const release of this.#releaseGeneration.values()) release();
     this.#releaseGeneration.clear();
     this.#repository.close();
     this.#files?.close();
-    void this.#tools?.close();
+    this.#closePromise = this.#tools?.close() ?? Promise.resolve();
     this.#remote?.close();
     this.#skills?.close();
     this.#memories?.close();
+    return this.#closePromise;
   }
 
   onEvent(listener: (event: ChatEvent) => void): () => void {
