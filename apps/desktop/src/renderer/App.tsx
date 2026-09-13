@@ -1145,6 +1145,12 @@ function Composer({
     },
   });
   const selectedSkill = skills.data?.find(({ id }) => id === skillInstallationId);
+  const hasActiveReply =
+    conversationSnapshot?.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        ["pending", "streaming", "cancelling"].includes(message.status),
+    ) ?? false;
 
   return (
     <form
@@ -1450,13 +1456,13 @@ function Composer({
         <button
           type="submit"
           className="primary-action"
-          aria-label="发送"
+          aria-label={hasActiveReply ? "加入队列" : "发送"}
           disabled={
             !draft.trim() || send.isPending || sendingBlockedByModel || isImportingAttachments
           }
         >
           <PaperPlaneTilt size={17} weight="fill" />
-          <span>{send.isPending ? "发送中…" : "发送"}</span>
+          <span>{send.isPending ? "发送中…" : hasActiveReply ? "加入队列" : "发送"}</span>
           <kbd>↵</kbd>
         </button>
       </div>

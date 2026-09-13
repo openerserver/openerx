@@ -605,6 +605,7 @@ describe("M1 chat renderer", () => {
     renderApp(bridge, `/chat/${conversationId}`);
 
     expect(await screen.findByText("第一段")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "加入队列" })).toBeTruthy();
     await waitFor(() => expect(listener).toBeTypeOf("function"));
     const assistant = document.querySelector<HTMLElement>(".message-assistant");
     expect(assistant?.getAttribute("aria-busy")).toBe("true");

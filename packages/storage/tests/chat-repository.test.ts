@@ -20,6 +20,40 @@ afterEach(() => {
 });
 
 describe("ChatRepository", () => {
+  it("limits prompt history and attachment message IDs to the current queued request", () => {
+    const repository = new ChatRepository(databasePath());
+    try {
+      const first = repository.createGeneration({ text: "first", idempotencyKey: "queue-first" });
+      const second = repository.createGeneration({
+        conversationId: first.receipt.conversationId,
+        text: "second",
+        idempotencyKey: "queue-second",
+      });
+      const third = repository.createGeneration({
+        conversationId: first.receipt.conversationId,
+        text: "third",
+        idempotencyKey: "queue-third",
+      });
+      expect(
+        repository.piHistory(first.receipt.assistantMessageId).map(({ text }) => text),
+      ).toEqual(["first"]);
+      expect(
+        repository.piHistory(second.receipt.assistantMessageId).map(({ text }) => text),
+      ).toEqual(["first", "second"]);
+      expect(repository.branchMessageIds(second.receipt.assistantMessageId)).toEqual([
+        first.receipt.userMessageId,
+        first.receipt.assistantMessageId,
+        second.receipt.userMessageId,
+        second.receipt.assistantMessageId,
+      ]);
+      expect(repository.branchMessageIds(second.receipt.assistantMessageId)).not.toContain(
+        third.receipt.userMessageId,
+      );
+    } finally {
+      repository.close();
+    }
+  });
+
   it("uses a configured model for a new conversation without changing the repository fallback", () => {
     const repository = new ChatRepository(databasePath(), {
       selectedModelRef: "platform/auto",

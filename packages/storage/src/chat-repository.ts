@@ -868,8 +868,12 @@ export class ChatRepository {
 
   piHistory(assistantMessageId: string): PiHistoryMessage[] {
     const assistant = this.#message(assistantMessageId);
-    return this.#resolveBranch(assistant.branchId)
-      .filter((message) => message.id !== assistantMessageId)
+    const messages = this.#resolveBranch(assistant.branchId);
+    return messages
+      .slice(
+        0,
+        messages.findIndex(({ id }) => id === assistantMessageId),
+      )
       .filter((message) => message.role !== "assistant" || message.status === "completed")
       .map((message) => ({
         messageId: message.id,
@@ -880,7 +884,10 @@ export class ChatRepository {
 
   branchMessageIds(assistantMessageId: string): string[] {
     const assistant = this.#message(assistantMessageId);
-    return this.#resolveBranch(assistant.branchId).map(({ id }) => id);
+    const messages = this.#resolveBranch(assistant.branchId);
+    return messages
+      .slice(0, messages.findIndex(({ id }) => id === assistantMessageId) + 1)
+      .map(({ id }) => id);
   }
 
   message(messageId: string): Message {

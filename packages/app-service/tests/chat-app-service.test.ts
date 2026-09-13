@@ -166,6 +166,79 @@ class DeferredPiHostClient implements PiHostClient {
   }
 }
 
+describe("same-branch message queue", () => {
+  it("serializes rapid sends and includes completed replies without future prompts", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-queue-"));
+    temporaryDirectories.push(directory);
+    const pi = new ScriptedPiHostClient();
+    const service = new ChatAppService(new ChatRepository(path.join(directory, "chat.sqlite")), pi);
+    try {
+      const first = (await service.handle({
+        command: "chat.send",
+        input: { text: "first", idempotencyKey: "q1" },
+      })) as { conversationId: string };
+      for (const text of ["second", "third"]) {
+        await service.handle({
+          command: "chat.send",
+          input: { conversationId: first.conversationId, text, idempotencyKey: text },
+        });
+      }
+      expect(pi.prompts).toHaveLength(1);
+      await vi.waitFor(async () => {
+        const snapshot = (await service.handle({
+          command: "chat.get",
+          input: first,
+        })) as ConversationSnapshot;
+        expect(
+          snapshot.messages.filter((m) => m.role === "assistant").map((m) => m.status),
+        ).toEqual(["completed", "completed", "completed"]);
+      });
+      expect(pi.prompts.map((p) => p.history.at(-1)?.text)).toEqual(["first", "second", "third"]);
+      expect(pi.prompts[1]?.history.map((m) => m.text)).toEqual([
+        "first",
+        "Pi AgentSession 已收到：first",
+        "second",
+      ]);
+    } finally {
+      service.close();
+    }
+  });
+
+  it("continues after failure and skips cancelled queued messages", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-queue-stop-"));
+    temporaryDirectories.push(directory);
+    const pi = new ScriptedPiHostClient();
+    const service = new ChatAppService(new ChatRepository(path.join(directory, "chat.sqlite")), pi);
+    try {
+      const first = (await service.handle({
+        command: "chat.send",
+        input: { text: "[PI_TEST_FAIL]", idempotencyKey: "q1" },
+      })) as { conversationId: string };
+      const queued = (await service.handle({
+        command: "chat.send",
+        input: { conversationId: first.conversationId, text: "cancel me", idempotencyKey: "q2" },
+      })) as { conversationId: string; assistantMessageId: string };
+      await service.handle({ command: "chat.stop", input: queued });
+      await service.handle({
+        command: "chat.send",
+        input: { conversationId: first.conversationId, text: "continue", idempotencyKey: "q3" },
+      });
+      await vi.waitFor(async () => {
+        const snapshot = (await service.handle({
+          command: "chat.get",
+          input: first,
+        })) as ConversationSnapshot;
+        expect(
+          snapshot.messages.filter((m) => m.role === "assistant").map((m) => m.status),
+        ).toEqual(["failed", "interrupted", "completed"]);
+      });
+      expect(pi.prompts.map((p) => p.history.at(-1)?.text)).toEqual(["[PI_TEST_FAIL]", "continue"]);
+    } finally {
+      service.close();
+    }
+  });
+});
+
 class OfficeWorkflowPiHost implements PiHostClient {
   readonly prompts: PiPromptFrame[] = [];
   readonly results: unknown[] = [];
