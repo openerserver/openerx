@@ -1,0 +1,66 @@
+name: Dependency Actions Compatibility
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [codex/dependency-actions-validation-20260913]
+    paths: [.github/workflows/dependency-actions-validation.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Actions v7 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - name: Install the public repository lockfile
+        run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+      - name: Verify runtime and prepare directory artifact fixture
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          assert.equal(process.version, 'v24.3.0');
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          assert.equal(head, process.env.GITHUB_SHA);
+          assert.ok(fs.existsSync('package-lock.json'));
+          fs.mkdirSync('dependency-action-proof/nested', { recursive: true });
+          fs.writeFileSync('dependency-action-proof/runtime.json', JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch, head }, null, 2));
+          fs.writeFileSync('dependency-action-proof/nested/fixture.txt', 'Actions compatibility fixture; not an application package.');
+          JS
+      - name: Upload directory artifact using the default archive mode
+        id: artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-actions-${{ matrix.os }}
+          path: dependency-action-proof/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify artifact outputs
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          assert.match(process.env.ARTIFACT_ID, /^[0-9]+$/);
+          assert.match(process.env.ARTIFACT_DIGEST, /^[a-f0-9]{64}$/);
+          assert.ok(process.env.ARTIFACT_URL.startsWith('https://github.com/openerserver/openerx/actions/runs/'));
+          JS
