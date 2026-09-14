@@ -7658,7 +7658,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 <h3>{selectedMissingPermissions.length ? "系统权限" : "工具信息"}</h3>
                 <p>
                   {selectedMissingPermissions.length
-                    ? "请在系统设置中允许以下权限。授权后返回即可重新检测。"
+                    ? "点击下方按钮，在“系统设置 → 隐私与安全性”中为 openerx 开启相应权限。"
                     : (toolRuntimeReason(selectedReadiness?.reason ?? null) ??
                       "此工具由 openerx 提供，当前不需要额外设置。")}
                 </p>
@@ -7684,6 +7684,12 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                       </li>
                     ))}
                   </ul>
+                ) : null}
+                {selectedMissingPermissions.length ? (
+                  <p>
+                    若列表中没有
+                    openerx，请点击“+”添加当前应用。授权后返回即可重新检测；如系统提示，请退出并重新打开应用。
+                  </p>
                 ) : null}
                 {selectedReadiness?.details?.length ? (
                   <ul>

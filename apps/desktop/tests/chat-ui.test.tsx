@@ -3662,6 +3662,12 @@ describe("M1 chat renderer", () => {
       expect(within(row).getByText("缺少系统权限：屏幕录制、辅助功能")).toBeTruthy();
       await user.click(within(row).getByRole("button", { name: "设置" }));
       const dialog = await screen.findByRole("dialog", { name });
+      expect(
+        within(dialog).getByText(
+          "点击下方按钮，在“系统设置 → 隐私与安全性”中为 openerx 开启相应权限。",
+        ),
+      ).toBeTruthy();
+      expect(within(dialog).getByText(/请点击“\+”添加当前应用/)).toBeTruthy();
       expect(bridge.requestDesktopNativePermission).not.toHaveBeenCalled();
       await user.click(within(dialog).getByRole("button", { name: "打开屏幕录制设置" }));
       expect(bridge.requestDesktopNativePermission).toHaveBeenLastCalledWith({
