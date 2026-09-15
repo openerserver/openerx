@@ -67,6 +67,7 @@ export interface MainCapabilityHost {
   listDesktopControlSessions?(): DesktopControlSession[];
   controlDesktopSession?(command: DesktopControlCommand): Promise<DesktopControlSession>;
   stopDesktopControl?(conversationId?: string): void;
+  releaseBrowserGeneration?(generationId?: string): Promise<void>;
   availability(): Promise<HostToolAvailability>;
   getBrowserConnectionState?(): BrowserConnectionState;
   updateBrowserMode?(mode: BrowserMode): BrowserConnectionState;
@@ -708,8 +709,15 @@ export class AppServiceSupervisor {
         ["run.completed", "run.failed", "run.interrupted", "run.cancelling"].includes(
           event.data.event.type,
         )
-      )
+      ) {
         this.stopDesktopControl(event.data.event.conversationId);
+        const generationId = event.data.event.payload.generationId;
+        if (typeof generationId === "string") {
+          void this.#capabilityHost
+            ?.releaseBrowserGeneration?.(generationId)
+            .catch((error) => console.warn("Browser generation cleanup failed", error));
+        }
+      }
       this.#emit(event.data.event);
     }
   }
@@ -746,6 +754,11 @@ export class AppServiceSupervisor {
       this.#remoteHandshakeComplete = false;
       return;
     }
+    for (const controller of this.#capabilityRequests.values()) controller.abort();
+    this.#capabilityRequests.clear();
+    void this.#capabilityHost
+      ?.releaseBrowserGeneration?.()
+      .catch((error) => console.warn("Browser host cleanup failed", error));
     this.#appProcess?.kill();
     this.#piHostProcess?.kill();
     this.#remoteHostProcess?.kill();

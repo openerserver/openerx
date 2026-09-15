@@ -554,6 +554,7 @@ export const chatEventSchema = z
         reason: z.string().optional(),
         workItem: workItemSchema.optional(),
         run: executionRunSchema.optional(),
+        generationId: z.uuid().optional(),
         step: runStepSchema.optional(),
         toolCall: toolCallSchema.optional(),
         permission: permissionRequestSchema.optional(),

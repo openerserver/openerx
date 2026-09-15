@@ -149,7 +149,9 @@ function responseFor(context: Context): AssistantMessage {
       );
       return fauxAssistantMessage("系统浏览器没有返回可控制的 Session。");
     }
-    return fauxAssistantMessage(`系统浏览器会话已打开。SESSION_ID=${sessionId}`);
+    return fauxAssistantMessage(
+      `系统浏览器会话已打开。SESSION_ID=${sessionId}${latestUser.includes("[WAIT]") ? " 等待浏览器控制验证。".repeat(8_000) : ""}`,
+    );
   }
   if (latestUser.includes("[PI_TEST_BROWSER_COMPUTER_USE_CLOSE]")) {
     const sessionId = latestUser.match(/SESSION_ID=([0-9a-f-]{36})/u)?.[1];

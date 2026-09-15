@@ -283,6 +283,15 @@ async function openAuthorizedBridge(endpoint = new FakeBridgeEndpoint()) {
 }
 
 describe("BCU-003 connected Browser Bridge", () => {
+  it("releases authorization without closing the user's browser tab on host cleanup", async () => {
+    const { browser, endpoint } = await openAuthorizedBridge();
+    const requestCount = endpoint.requests.length;
+    await browser.releaseGeneration();
+    expect(browser.descriptors()).toEqual([]);
+    expect(endpoint.requests).toHaveLength(requestCount);
+    expect(endpoint.posts.some((post) => post.kind === "release")).toBe(true);
+  });
+
   it("binds one user-authorized tab and sends only bounded semantic commands", async () => {
     const { browser, endpoint, signal, initial, result } = await openAuthorizedBridge();
 

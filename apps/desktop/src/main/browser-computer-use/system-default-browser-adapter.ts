@@ -87,6 +87,7 @@ export interface ConnectedBrowserBridgeDriver extends SystemBrowserSessionDriver
 }
 
 interface SystemBrowserSession {
+  generationId?: string;
   binding: SystemBrowserBinding;
   driver: SystemBrowserSessionDriver;
   kind: "bridge" | "dedicated_window" | "managed";
@@ -166,12 +167,13 @@ export class SystemDefaultBrowserAdapter {
   async execute(
     input: BrowserComputerUseOperationV2,
     signal: AbortSignal,
+    generationId?: string,
   ): Promise<NormalizedToolResult> {
     throwIfAborted(signal);
     const operation = browserComputerUseOperationV2Schema.parse(input);
     if (operation.action === "contexts")
       throw new BrowserObservationError("BROWSER_ACTION_NOT_SUPPORTED");
-    if (operation.action === "open") return await this.#open(operation, signal);
+    if (operation.action === "open") return await this.#open(operation, signal, generationId);
     if (operation.action === "detach") return this.#detach(operation.sessionId);
 
     const session = this.#requiredSession(operation.sessionId);
@@ -246,6 +248,31 @@ export class SystemDefaultBrowserAdapter {
     );
   }
 
+  async releaseGeneration(generationId?: string): Promise<void> {
+    const releases = [...this.#sessions.entries()]
+      .filter(([, session]) => generationId === undefined || session.generationId === generationId)
+      .map(async ([sessionId, session]) => {
+        const descriptor = this.#observations.descriptor(sessionId);
+        // Cleanup uses the trusted window binding, not a possibly stale page observation.
+        // A user takeover or a connected user tab transfers window lifetime to the user.
+        const closeWindow =
+          descriptor.state !== "paused_for_user" &&
+          ["external_openerx", "openerx_managed"].includes(descriptor.ownership) &&
+          descriptor.capabilities.closeOwnedWindow;
+        this.#detach(sessionId);
+        if (closeWindow) {
+          await session.driver.closeOwnedWindow(session.binding, AbortSignal.timeout(5_000));
+        }
+      });
+    const results = await Promise.allSettled(releases);
+    const errors = results.filter((result) => result.status === "rejected");
+    if (errors.length)
+      throw new AggregateError(
+        errors.map((result) => result.reason),
+        "Browser cleanup failed",
+      );
+  }
+
   close(): void {
     for (const [sessionId, session] of this.#sessions) {
       session.monitor?.close();
@@ -308,6 +335,7 @@ export class SystemDefaultBrowserAdapter {
   async #open(
     operation: Extract<BrowserComputerUseOperationV2, { action: "open" }>,
     signal: AbortSignal,
+    generationId?: string,
   ): Promise<NormalizedToolResult> {
     const managed = operation.requestedBackend === "managed_chromium";
     if (managed && operation.browserContextRef)
@@ -315,7 +343,7 @@ export class SystemDefaultBrowserAdapter {
     const driver = managed ? this.managedDriver : this.driver;
     if (!driver) throw new BrowserObservationError("BROWSER_BACKEND_UNAVAILABLE");
     if (operation.browserContextRef) {
-      return await this.#openBridge(operation, signal);
+      return await this.#openBridge(operation, signal, generationId);
     }
     const binding = await driver.openDedicatedWindow(operation.url, signal);
     if (
@@ -325,11 +353,12 @@ export class SystemDefaultBrowserAdapter {
       binding.descriptor.surfaceKind !== (managed ? "tab" : "window") ||
       binding.descriptor.ownership !== (managed ? "openerx_managed" : "external_openerx")
     ) {
-      await driver.closeOwnedWindow(binding, signal).catch(() => undefined);
+      await driver.closeOwnedWindow(binding, AbortSignal.timeout(5_000)).catch(() => undefined);
       throw new BrowserObservationError("BROWSER_SURFACE_MISMATCH");
     }
     this.#observations.registerSession(binding.descriptor);
     const session: SystemBrowserSession = {
+      generationId,
       binding,
       driver,
       kind: managed ? "managed" : "dedicated_window",
@@ -371,6 +400,7 @@ export class SystemDefaultBrowserAdapter {
         },
       );
     } catch (error) {
+      if (!this.#sessions.has(binding.descriptor.sessionId)) throw error;
       if (this.#observations.descriptor(binding.descriptor.sessionId).state === "paused_for_user") {
         return lifecycleResult(
           "用户已接管系统浏览器专用窗口，自动操作已暂停",
@@ -381,7 +411,7 @@ export class SystemDefaultBrowserAdapter {
       session.monitor?.close();
       this.#sessions.delete(binding.descriptor.sessionId);
       this.#observations.endSession(binding.descriptor.sessionId, "closed");
-      await driver.closeOwnedWindow(binding, signal).catch(() => undefined);
+      await driver.closeOwnedWindow(binding, AbortSignal.timeout(5_000)).catch(() => undefined);
       throw error;
     }
   }
@@ -389,6 +419,7 @@ export class SystemDefaultBrowserAdapter {
   async #openBridge(
     operation: Extract<BrowserComputerUseOperationV2, { action: "open" }>,
     signal: AbortSignal,
+    generationId?: string,
   ): Promise<NormalizedToolResult> {
     const bridge = this.bridgeDriver;
     if (!bridge || !operation.browserContextRef) {
@@ -423,6 +454,7 @@ export class SystemDefaultBrowserAdapter {
     const session: SystemBrowserSession = {
       binding,
       driver: bridge,
+      generationId,
       kind: "bridge",
       surface: {
         identity: {
@@ -462,10 +494,8 @@ export class SystemDefaultBrowserAdapter {
           false,
         );
       }
-      session.monitor?.close();
-      this.#sessions.delete(binding.descriptor.sessionId);
-      this.#observations.endSession(binding.descriptor.sessionId, "detached");
-      bridge.releaseAuthorizedTab(binding);
+      if (this.#sessions.has(binding.descriptor.sessionId))
+        this.#detach(binding.descriptor.sessionId);
       throw error;
     }
   }

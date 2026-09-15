@@ -56,6 +56,7 @@ const execFileAsync = promisify(execFile);
 
 interface BrowserSession {
   id: string;
+  generationId?: string;
   window: BrowserWindow;
   allowedNavigationKeys: Set<string>;
 }
@@ -109,6 +110,7 @@ function inside(root: string, target: string): boolean {
 export class ElectronToolCapabilityHost {
   readonly #profileDirectory: string;
   readonly #browserSessions = new Map<string, BrowserSession>();
+  readonly #browserGenerations = new Map<string, AbortController>();
   readonly #browserComputerUse: SystemDefaultBrowserAdapter;
   readonly #browserComputerUseDriver: SystemDefaultBrowserDriver;
   readonly #managedBrowser = new ManagedChromiumDriver();
@@ -163,6 +165,15 @@ export class ElectronToolCapabilityHost {
     executionContext?: DesktopExecutionContext,
   ): Promise<NormalizedToolResult> {
     if (signal.aborted) throw new Error("TOOL_CANCELLED");
+    if (
+      executionContext &&
+      (operation.operation === "browser" || operation.operation === "browser_computer_use")
+    ) {
+      const generation =
+        this.#browserGenerations.get(executionContext.generationId) ?? new AbortController();
+      this.#browserGenerations.set(executionContext.generationId, generation);
+      signal = AbortSignal.any([signal, generation.signal]);
+    }
     const startedAt = Date.now();
     if (operation.operation === "desktop_control") {
       if (
@@ -192,9 +203,9 @@ export class ElectronToolCapabilityHost {
     try {
       const value =
         operation.operation === "browser"
-          ? await this.#browser(operation)
+          ? await this.#browser(operation, signal, executionContext?.generationId)
           : operation.operation === "browser_computer_use"
-            ? await this.#executeBrowser(operation.request, signal)
+            ? await this.#executeBrowser(operation.request, signal, executionContext?.generationId)
             : operation.operation === "desktop"
               ? await this.#desktop(operation, signal)
               : (() => {
@@ -291,6 +302,7 @@ export class ElectronToolCapabilityHost {
   async #executeBrowser(
     request: Extract<ToolOperation, { operation: "browser_computer_use" }>["request"],
     signal: AbortSignal,
+    generationId?: string,
   ): Promise<NormalizedToolResult> {
     if (request.action === "contexts") {
       const state = this.getBrowserConnectionState();
@@ -301,7 +313,8 @@ export class ElectronToolCapabilityHost {
       };
       return result(`可用浏览器上下文\n${JSON.stringify(data)}`, data);
     }
-    if (request.action !== "open") return await this.#browserComputerUse.execute(request, signal);
+    if (request.action !== "open")
+      return await this.#browserComputerUse.execute(request, signal, generationId);
     return await this.#browserComputerUse.execute(
       routeBrowserOpen(
         request,
@@ -309,7 +322,22 @@ export class ElectronToolCapabilityHost {
         this.#chromeExtension.grants.availableAuthorizations(),
       ),
       signal,
+      generationId,
     );
+  }
+
+  async releaseBrowserGeneration(generationId?: string): Promise<void> {
+    for (const [id, controller] of this.#browserGenerations) {
+      if (generationId !== undefined && id !== generationId) continue;
+      controller.abort();
+      this.#browserGenerations.delete(id);
+    }
+    for (const browser of this.#browserSessions.values()) {
+      if (generationId !== undefined && browser.generationId !== generationId) continue;
+      if (!browser.window.isDestroyed()) browser.window.destroy();
+      this.#browserSessions.delete(browser.id);
+    }
+    await this.#browserComputerUse.releaseGeneration(generationId);
   }
 
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[] {
@@ -350,6 +378,9 @@ export class ElectronToolCapabilityHost {
 
   close(): void {
     this.#windowsDesktop?.close();
+    void this.releaseBrowserGeneration().catch((error) =>
+      console.warn("Browser shutdown cleanup failed", error),
+    );
     for (const browser of this.#browserSessions.values()) browser.window.destroy();
     this.#browserSessions.clear();
     this.#browserComputerUse.close();
@@ -387,6 +418,8 @@ export class ElectronToolCapabilityHost {
 
   async #browser(
     operation: Extract<ToolOperation, { operation: "browser" }>,
+    signal: AbortSignal,
+    generationId?: string,
   ): Promise<NormalizedToolResult> {
     if (operation.action === "open") {
       if (!operation.url) throw new Error("BROWSER_URL_REQUIRED");
@@ -407,7 +440,12 @@ export class ElectronToolCapabilityHost {
           allowRunningInsecureContent: false,
         },
       });
-      const browser: BrowserSession = { id, window, allowedNavigationKeys: new Set([key]) };
+      const browser: BrowserSession = {
+        id,
+        generationId,
+        window,
+        allowedNavigationKeys: new Set([key]),
+      };
       window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       window.webContents.on("will-navigate", (event, url) => {
         try {
@@ -418,7 +456,19 @@ export class ElectronToolCapabilityHost {
       });
       window.on("closed", () => this.#browserSessions.delete(id));
       this.#browserSessions.set(id, browser);
-      await window.loadURL(operation.url);
+      const abort = () => {
+        if (!window.isDestroyed()) window.destroy();
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      try {
+        await window.loadURL(operation.url);
+        if (signal.aborted) throw new Error("TOOL_CANCELLED");
+      } catch (error) {
+        abort();
+        throw error;
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
       return result("隔离浏览器已打开", {
         sessionId: id,
         url: window.webContents.getURL(),

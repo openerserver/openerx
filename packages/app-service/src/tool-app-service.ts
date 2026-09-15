@@ -1752,7 +1752,7 @@ export class ToolAppService {
         sequence: 0,
         occurredAt: new Date().toISOString(),
         payloadVersion: 1,
-        payload: { workItem, run, ...(errorCode ? { reason: errorCode } : {}) },
+        payload: { workItem, run, generationId, ...(errorCode ? { reason: errorCode } : {}) },
       });
     }
     this.#abortByGeneration.get(generationId)?.abort();
@@ -1780,7 +1780,7 @@ export class ToolAppService {
         sequence: 0,
         occurredAt: new Date().toISOString(),
         payloadVersion: 1,
-        payload: { workItem, run },
+        payload: { workItem, run, generationId },
       });
     }
     this.#abortByGeneration.get(generationId)?.abort();

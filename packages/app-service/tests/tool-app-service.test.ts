@@ -255,6 +255,29 @@ afterEach(() => {
 });
 
 describe("ToolAppService", () => {
+  it.each(["completed", "failed", "interrupted"] as const)(
+    "identifies the exact generation to release on %s",
+    async (status) => {
+      const { chat, service, base, events } = fixture();
+      service.initialize();
+      service.startGeneration({
+        ...base,
+        selectedModelRef: "platform/auto",
+        thinkingLevel: "medium",
+      });
+      service.requestCancellation(base.generationId);
+      expect(events.find((event) => event.type === "run.cancelling")?.payload.generationId).toBe(
+        base.generationId,
+      );
+      service.completeGeneration(base.generationId, status);
+      expect(events.find((event) => event.type === `run.${status}`)?.payload.generationId).toBe(
+        base.generationId,
+      );
+      await service.close();
+      chat.close();
+    },
+  );
+
   it("routes context edits and explicit user undo through the current run with conflict protection", async () => {
     const { chat, tools, service, base, events } = fixture();
     service.initialize();

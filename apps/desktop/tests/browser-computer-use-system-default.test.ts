@@ -267,6 +267,76 @@ describe("BCU-003 SystemDefaultBrowserAdapter", () => {
     ).rejects.toThrow("BROWSER_OBSERVATION_EXPIRED");
   });
 
+  it("releases only the completed generation even when its page observation is stale", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    const signal = new AbortController().signal;
+    const open = {
+      contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+      action: "open" as const,
+      url: "https://fixture.test/",
+    };
+    await adapter.execute(open, signal, "generation-a");
+    driver.emitControlEvent({ kind: "navigation" });
+    driver.binding.descriptor = descriptor();
+    const second = resultObservation(await adapter.execute(open, signal, "generation-b"));
+    await adapter.releaseGeneration("generation-a");
+    expect(driver.closeCount).toBe(1);
+    expect(adapter.descriptors().map(({ sessionId }) => sessionId)).toEqual([second.sessionId]);
+    await adapter.releaseGeneration("generation-a");
+    expect(driver.closeCount).toBe(1);
+    await adapter.releaseGeneration("generation-b");
+    expect(driver.closeCount).toBe(2);
+    expect(adapter.descriptors()).toEqual([]);
+  });
+
+  it("preserves a window taken over by the user when its generation finishes", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    await adapter.execute(
+      {
+        contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+        action: "open",
+        url: "https://fixture.test/",
+      },
+      new AbortController().signal,
+      "generation-a",
+    );
+    driver.emitControlEvent({ kind: "user_input" });
+    await adapter.releaseGeneration("generation-a");
+    expect(driver.closeCount).toBe(0);
+    expect(driver.monitorStops).toBe(1);
+    expect(adapter.descriptors()).toEqual([]);
+  });
+
+  it("closes a window created after cancellation using a fresh cleanup signal", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const controller = new AbortController();
+    driver.openDedicatedWindow = async () => {
+      controller.abort();
+      return driver.binding;
+    };
+    const close = vi
+      .spyOn(driver, "closeOwnedWindow")
+      .mockImplementation(async (...args: unknown[]) => {
+        expect((args[1] as AbortSignal).aborted).toBe(false);
+      });
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    await expect(
+      adapter.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: "https://fixture.test/",
+        },
+        controller.signal,
+        "generation-a",
+      ),
+    ).rejects.toThrow("BROWSER_CANCELLED");
+    expect(close).toHaveBeenCalledOnce();
+    expect(adapter.descriptors()).toEqual([]);
+  });
+
   it("detaches without closing, closes only with a fresh observation and rejects managed fallback", async () => {
     const detachDriver = new FakeSystemBrowserDriver();
     const detachAdapter = new SystemDefaultBrowserAdapter(detachDriver);

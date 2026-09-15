@@ -47,14 +47,19 @@ async function browserSessions(page) {
 }
 
 async function closeBrowserSessionThroughChat(page, sessionId) {
-  await page.getByRole("link", { name: "新对话" }).click();
-  await page.getByLabel("发送消息").waitFor();
+  const session = (await browserSessions(page)).find((item) => item.sessionId === sessionId);
+  if (session?.state === "paused_for_user") {
+    await page.evaluate(
+      async (id) => await window.openerx.resumeBrowserComputerUseSession({ sessionId: id }),
+      sessionId,
+    );
+  }
+  await page.goto(conversationUrl);
   await page
-    .getByLabel("发送消息")
-    .fill(`关闭系统浏览器测试窗口 [PI_TEST_BROWSER_COMPUTER_USE_CLOSE] SESSION_ID=${sessionId}`);
-  await page.getByRole("button", { name: "发送", exact: true }).click();
-  await allowPendingBrowserRequest(page, "close");
-  await page.getByText("系统浏览器会话已关闭。", { exact: true }).waitFor({ timeout: 90_000 });
+    .locator(".message-assistant")
+    .last()
+    .getByRole("button", { name: "停止" })
+    .dispatchEvent("click");
   await page.waitForFunction(
     async () => (await window.openerx.listBrowserComputerUseSessions()).length === 0,
   );
@@ -62,6 +67,7 @@ async function closeBrowserSessionThroughChat(page, sessionId) {
 
 let application;
 let page;
+let conversationUrl;
 let sessionId = null;
 let closed = false;
 let applicationLog = "";
@@ -92,16 +98,12 @@ try {
   await page.waitForLoadState("domcontentloaded");
   await page
     .getByLabel("发送消息")
-    .fill(`打开系统浏览器测试窗口 [PI_TEST_BROWSER_COMPUTER_USE_OPEN] ${fixtureUrl}`);
+    .fill(`打开系统浏览器测试窗口 [PI_TEST_BROWSER_COMPUTER_USE_OPEN] [WAIT] ${fixtureUrl}`);
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await allowPendingBrowserRequest(page, "open");
-  await page.locator(".message-assistant[data-message-status='completed']").last().waitFor({
-    timeout: 90_000,
-  });
-  const openAssistantText = await page
-    .locator(".message-assistant[data-message-status='completed']")
-    .last()
-    .innerText();
+  await page.getByText(/系统浏览器会话已打开。SESSION_ID=/u).waitFor({ timeout: 90_000 });
+  conversationUrl = page.url();
+  const openAssistantText = await page.locator(".message-assistant").last().innerText();
   assert.match(openAssistantText, /系统浏览器会话已打开。SESSION_ID=/u);
 
   await page.waitForFunction(
