@@ -11,6 +11,7 @@ const desktopDirectory = path.resolve(import.meta.dirname, "..");
 const profileDirectory = mkdtempSync(path.join(tmpdir(), "openerx-browser-lifecycle-"));
 let scenario = "completed";
 let pageUrl;
+let releaseModelResponse;
 const server = createServer(async (request, response) => {
   if (request.method !== "POST") {
     if (request.url === "/pending") return;
@@ -22,6 +23,11 @@ const server = createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(chunk);
   const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   const opened = body.messages.some((message) => message.role === "tool");
+  if (opened && ["completed", "failed"].includes(scenario)) {
+    await new Promise((resolve) => {
+      releaseModelResponse = resolve;
+    });
+  }
   if (opened && scenario === "failed") {
     response.writeHead(401, { "content-type": "application/json" });
     response.end(
@@ -124,6 +130,7 @@ try {
     });
   }, `${pageUrl}v1`);
   for (scenario of ["completed", "failed", "cancelled", "loading-cancelled", "host-disconnected"]) {
+    releaseModelResponse = undefined;
     await application.evaluate(() => {
       globalThis.__openerxBrowserLifecycleWindows = [];
     });
@@ -144,6 +151,28 @@ try {
     await waitForBrowserWindow("created");
     if (["cancelled", "host-disconnected"].includes(scenario))
       await page.getByText("BROWSER_AUTO_CLOSE_WAIT", { exact: true }).waitFor();
+    if (["completed", "failed"].includes(scenario)) {
+      const deadline = Date.now() + 20_000;
+      while (!releaseModelResponse) {
+        assert.ok(Date.now() < deadline, "Browser open never returned to the model");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    // Prove open succeeded and the window is alive before triggering terminal cleanup.
+    assert.deepEqual(
+      await application.evaluate(() =>
+        globalThis.__openerxBrowserLifecycleWindows.map((window) => window.closed),
+      ),
+      [false],
+      `${scenario}: window closed before the task ended`,
+    );
+    if (scenario !== "loading-cancelled") {
+      const sessions = await page.evaluate(() => window.openerx.listBrowserComputerUseSessions());
+      assert.equal(sessions.length, 1, `${scenario}: browser open failed`);
+      assert.equal(sessions[0].state, "active");
+      assert.equal(sessions[0].backend, "managed_chromium");
+    }
+    releaseModelResponse?.();
     if (scenario === "host-disconnected") {
       await application.evaluate(() => globalThis.__openerxCrashAppServiceForTest());
     } else if (scenario.includes("cancelled")) {
@@ -204,6 +233,7 @@ try {
   );
   throw error;
 } finally {
+  releaseModelResponse?.();
   await page?.evaluate(() => window.openerx.clearByokApiKey()).catch(() => undefined);
   await application?.close();
   server.closeAllConnections();
