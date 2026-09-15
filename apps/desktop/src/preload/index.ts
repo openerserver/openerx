@@ -84,6 +84,8 @@ import {
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
   mcpServerRemoveResultSchema,
+  mcpServerTestInputSchema,
+  mcpServerTestResultSchema,
   memoryClearInputSchema,
   memoryDeleteInputSchema,
   memoryListInputSchema,
@@ -843,6 +845,13 @@ const bridge: DesktopBridge = {
       desktopMcpServerSaveInputSchema.parse(input),
     );
     return mcpServerConfigSchema.parse(value);
+  },
+  testMcpServer: async (input) => {
+    const value: unknown = await ipcRenderer.invoke(
+      ipcChannels.mcpServerTest,
+      mcpServerTestInputSchema.parse(input),
+    );
+    return mcpServerTestResultSchema.parse(value);
   },
   removeMcpServer: async (input) => {
     const value: unknown = await ipcRenderer.invoke(

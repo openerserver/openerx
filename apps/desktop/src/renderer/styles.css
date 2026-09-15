@@ -6166,6 +6166,7 @@ h1 {
 }
 
 .mcp-config-form input,
+.mcp-config-form textarea,
 .mcp-config-form select {
   min-width: 0;
   padding: 8px 9px;
@@ -6173,6 +6174,122 @@ h1 {
   background: var(--workspace-surface);
   border: 1px solid var(--workspace-border);
   border-radius: 7px;
+}
+
+.mcp-editor-dialog {
+  padding: 0;
+}
+
+.mcp-editor-dialog::backdrop {
+  background: rgb(15 16 15 / 46%);
+  backdrop-filter: blur(3px);
+}
+
+.mcp-editor-fields {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.mcp-presets {
+  display: grid;
+  gap: 9px;
+}
+
+.mcp-preset-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.mcp-preset-list .mcp-preset-card {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  text-align: left;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+}
+
+.mcp-preset-card:hover,
+.mcp-preset-card[aria-pressed="true"] {
+  border-color: var(--workspace-accent);
+}
+
+.mcp-preset-card:focus-visible {
+  outline: 2px solid var(--workspace-accent);
+  outline-offset: 2px;
+}
+
+.mcp-preset-card span,
+.mcp-preset-hint {
+  margin: 0;
+  color: var(--workspace-muted-strong);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mcp-preset-hint a {
+  color: var(--workspace-accent);
+}
+
+.mcp-config-form textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono, monospace);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.mcp-test-result {
+  display: grid;
+  gap: 10px;
+}
+
+.mcp-test-result .inline-success,
+.tool-library-notice.inline-success {
+  color: var(--workspace-accent);
+}
+
+.mcp-import-preview,
+.mcp-discovered-tools {
+  display: grid;
+  gap: 10px;
+  max-height: 260px;
+  margin: 0;
+  padding: 12px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-import-preview li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mcp-import-preview span,
+.mcp-discovered-tools p {
+  color: var(--workspace-muted-strong);
+  font-size: 12px;
+}
+
+.mcp-discovered-tools p {
+  margin: 4px 0 0;
+}
+
+.tool-settings-section .tool-modal-actions {
+  flex-wrap: wrap;
 }
 
 .content-preview h2 {
@@ -10528,6 +10645,24 @@ summary:focus-visible {
   }
 }
 
-.settings-version { display: grid; gap: 5px; padding: 14px 16px; border-top: 1px solid var(--border); font-size: 11px; overflow-wrap: anywhere; }
-.settings-version strong { font-size: 12px; }
-.settings-version button { padding: 0; width: fit-content; border: 0; background: transparent; color: inherit; font-size: 11px; cursor: pointer; text-decoration: underline; }
+.settings-version {
+  display: grid;
+  gap: 5px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.settings-version strong {
+  font-size: 12px;
+}
+.settings-version button {
+  padding: 0;
+  width: fit-content;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}

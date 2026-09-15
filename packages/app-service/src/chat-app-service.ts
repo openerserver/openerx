@@ -436,6 +436,8 @@ export class ChatAppService {
         return await this.#requiredTools().authorizeMcpServer(request.input.serverId);
       case "mcp.server.upsert":
         return this.#requiredTools().upsertMcpServer(request.input.config);
+      case "mcp.server.test":
+        return await this.#requiredTools().testMcpServer(request.input.serverId);
       case "mcp.server.remove":
         return await this.#requiredTools().removeMcpServer(request.input.serverId);
       case "skill.list":

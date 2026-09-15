@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import {
   type AuthProvider,
   Client,
@@ -10,11 +11,13 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import type {
   McpServerAuthorizationState,
   McpServerConfig,
+  McpServerTestResult,
   McpToolAnnotations,
   McpToolDescriptor,
   NormalizedToolResult,
   ToolOperation,
 } from "@openerx/contracts";
+import { mcpEnvironmentSchema, mcpHeadersSchema } from "@openerx/contracts";
 import { type InteractiveMcpOAuthProvider, inspectMcpOAuthCredential } from "./mcp-oauth-provider";
 import type { CredentialResolver, ToolAdapter, ToolExecutionContext } from "./types";
 
@@ -22,6 +25,40 @@ interface McpConnection {
   client: Client;
   config: McpServerConfig;
   connectedAt: string;
+}
+
+async function withSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    void promise.catch(() => undefined);
+    throw signal.reason;
+  }
+  let abort = () => {};
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+      }),
+    ]);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+
+function connectionError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (/DISABLED/u.test(message)) return "服务已停用，请先启用后再测试。";
+  if (/ENOENT/u.test(message))
+    return "找不到启动命令或工作目录，请检查路径以及 Node.js / uv 是否已安装。";
+  if (/EACCES/u.test(message)) return "启动命令或工作目录无法访问，请检查文件权限。";
+  if (/timeout|timed out|aborted/iu.test(message))
+    return "连接超时，请检查服务是否已启动以及网络是否可达。";
+  if (/OAUTH_AUTHORIZATION_REQUIRED/u.test(message)) return "需要先在浏览器中完成 OAuth 授权。";
+  if (/CREDENTIAL/u.test(message)) return "无法读取本机凭证，请编辑配置并重新保存凭证。";
+  if (error instanceof UnauthorizedError || /401|403/u.test(message))
+    return "服务拒绝了认证，请检查令牌、请求头或 OAuth 授权。";
+  return "连接失败，请检查启动命令、参数、环境变量或服务地址。";
 }
 
 export type McpOAuthProviderFactory = (
@@ -131,6 +168,10 @@ export class McpToolAdapter implements ToolAdapter {
   readonly operations = ["mcp_connect", "mcp_list_tools", "mcp_call", "mcp_disconnect"] as const;
   readonly #configs = new Map<string, McpServerConfig>();
   readonly #connections = new Map<string, McpConnection>();
+  readonly #pending = new Map<
+    string,
+    { controller: AbortController; promise: Promise<McpConnection> }
+  >();
 
   constructor(
     private readonly credentials: CredentialResolver,
@@ -139,8 +180,11 @@ export class McpToolAdapter implements ToolAdapter {
 
   register(config: McpServerConfig): void {
     const previous = this.#configs.get(config.id);
+    if (previous && canonical(previous) === canonical(config)) return;
     this.#configs.set(config.id, config);
     if (previous && canonical(previous) !== canonical(config)) {
+      this.#pending.get(config.id)?.controller.abort();
+      this.#pending.delete(config.id);
       const connection = this.#connections.get(config.id);
       this.#connections.delete(config.id);
       void connection?.client.close().catch(() => undefined);
@@ -164,6 +208,8 @@ export class McpToolAdapter implements ToolAdapter {
   }
 
   async unregister(serverId: string): Promise<void> {
+    this.#pending.get(serverId)?.controller.abort();
+    this.#pending.delete(serverId);
     await this.#connections.get(serverId)?.client.close();
     this.#connections.delete(serverId);
     this.#configs.delete(serverId);
@@ -191,6 +237,35 @@ export class McpToolAdapter implements ToolAdapter {
     );
   }
 
+  async testConnection(
+    serverId: string,
+    signal = AbortSignal.timeout(15_000),
+  ): Promise<McpServerTestResult> {
+    try {
+      const config = this.#config(serverId);
+      const listed = await this.#list(serverId, signal);
+      return {
+        serverId,
+        connected: true,
+        checkedAt: new Date().toISOString(),
+        error: null,
+        tools: listed.tools.map((tool) => ({
+          name: tool.name.slice(0, 300),
+          description: (tool.description ?? "").slice(0, 8_000),
+          enabled: config.enabledTools.length === 0 || config.enabledTools.includes(tool.name),
+        })),
+      };
+    } catch (error) {
+      return {
+        serverId,
+        connected: false,
+        checkedAt: new Date().toISOString(),
+        error: connectionError(error),
+        tools: [],
+      };
+    }
+  }
+
   async authorize(serverId: string, signal: AbortSignal): Promise<McpServerAuthorizationState> {
     if (signal.aborted) throw new Error("TOOL_CANCELLED");
     const config = this.#config(serverId);
@@ -198,9 +273,11 @@ export class McpToolAdapter implements ToolAdapter {
       throw new Error("MCP_OAUTH_NOT_CONFIGURED");
     }
     const existing = this.#connections.get(serverId);
+    this.#pending.get(serverId)?.controller.abort();
+    this.#pending.delete(serverId);
     await existing?.client.close().catch(() => undefined);
     this.#connections.delete(serverId);
-    await this.#connect(serverId, true);
+    await this.#connect(serverId, true, signal);
     return await this.#authorizationState(config);
   }
 
@@ -219,7 +296,7 @@ export class McpToolAdapter implements ToolAdapter {
             this.#connections.delete(operation.serverId);
           }
         }
-        const connection = await this.#connect(operation.serverId);
+        const connection = await this.#connect(operation.serverId, false, context.signal);
         return this.#result(
           `已连接 MCP：${connection.config.name}`,
           this.status(operation.serverId),
@@ -269,16 +346,18 @@ export class McpToolAdapter implements ToolAdapter {
         };
       }
       case "mcp_disconnect": {
+        this.#pending.get(operation.serverId)?.controller.abort();
+        this.#pending.delete(operation.serverId);
         const connection = this.#connections.get(operation.serverId);
         await connection?.client.close();
         this.#connections.delete(operation.serverId);
         const config = this.#config(operation.serverId);
-        if (
-          operation.clearCredentials &&
-          config.transport === "streamable_http" &&
-          config.credentialRef
-        ) {
-          await this.credentials.clear(config.credentialRef);
+        if (operation.clearCredentials) {
+          const refs =
+            config.transport === "stdio"
+              ? [config.envCredentialRef]
+              : [config.credentialRef, config.headersCredentialRef];
+          for (const ref of refs) if (ref) await this.credentials.clear(ref);
         }
         return this.#result("MCP 已断开", { clearCredentials: operation.clearCredentials }, true);
       }
@@ -288,91 +367,174 @@ export class McpToolAdapter implements ToolAdapter {
   }
 
   async stopAll(): Promise<void> {
+    const pending = [...this.#pending.values()];
+    for (const entry of pending) entry.controller.abort();
+    this.#pending.clear();
+    await Promise.allSettled(pending.map(({ promise }) => promise));
     await Promise.all([...this.#connections.values()].map(({ client }) => client.close()));
     this.#connections.clear();
   }
 
-  async #connected(serverId: string): Promise<McpConnection> {
+  async #connected(
+    serverId: string,
+    signal = new AbortController().signal,
+  ): Promise<McpConnection> {
     const existing = this.#connections.get(serverId);
     if (existing) return existing;
-    return await this.#connect(serverId);
+    return await this.#connect(serverId, false, signal);
   }
 
   async #list(serverId: string, signal: AbortSignal): Promise<ListToolsResult> {
-    let connection = await this.#connected(serverId);
+    signal.throwIfAborted();
+    const config = this.#config(serverId);
+    if (!config.enabled) throw new Error("MCP_SERVER_DISABLED");
+    let connection = await this.#connected(serverId, signal);
+    const list = async (): Promise<ListToolsResult> => {
+      const tools: ListToolsResult["tools"] = [];
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      do {
+        const page = await connection.client.listTools(cursor ? { cursor } : undefined, { signal });
+        tools.push(...page.tools);
+        cursor = page.nextCursor;
+        if (cursor && seen.has(cursor)) throw new Error("MCP_INVALID_PAGINATION");
+        if (cursor) seen.add(cursor);
+      } while (cursor && tools.length < 1_000);
+      return { tools: tools.slice(0, 1_000) };
+    };
     try {
-      return await connection.client.listTools(undefined, { signal });
+      return await list();
     } catch {
       await connection.client.close().catch(() => undefined);
-      this.#connections.delete(serverId);
-      connection = await this.#connect(serverId);
-      return await connection.client.listTools(undefined, { signal });
+      if (this.#connections.get(serverId) === connection) this.#connections.delete(serverId);
+      signal.throwIfAborted();
+      connection = await this.#connect(serverId, false, signal);
+      return await list();
     }
   }
 
-  async #connect(serverId: string, interactive = false): Promise<McpConnection> {
+  async #connect(
+    serverId: string,
+    interactive = false,
+    signal = new AbortController().signal,
+  ): Promise<McpConnection> {
+    signal.throwIfAborted();
     const existing = this.#connections.get(serverId);
     if (existing) return existing;
+    const pending = this.#pending.get(serverId);
+    if (pending) return await withSignal(pending.promise, signal);
+    const controller = new AbortController();
+    const entry = {
+      controller,
+      promise: this.#openConnection(
+        serverId,
+        interactive,
+        AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(interactive ? 5 * 60_000 : 15_000),
+        ]),
+      ),
+    };
+    this.#pending.set(serverId, entry);
+    void entry.promise
+      .finally(() => {
+        if (this.#pending.get(serverId) === entry) this.#pending.delete(serverId);
+      })
+      .catch(() => undefined);
+    return await withSignal(entry.promise, signal);
+  }
+
+  async #openConnection(
+    serverId: string,
+    interactive: boolean,
+    signal: AbortSignal,
+  ): Promise<McpConnection> {
     const config = this.#config(serverId);
     if (!config.enabled) throw new Error("MCP_SERVER_DISABLED");
-    const client = new Client({ name: "openerx", version: "2.0.1" });
-    if (config.transport === "stdio") {
-      const transport = new StdioClientTransport({
-        command: config.command,
-        args: config.args,
-        cwd: config.cwd,
-        env: getDefaultEnvironment(),
-        stderr: "pipe",
-        maxBufferSize: 10_000_000,
-      });
-      await client.connect(transport);
-    } else {
-      let authProvider: AuthProvider | InteractiveMcpOAuthProvider | undefined;
-      let oauthProvider: InteractiveMcpOAuthProvider | undefined;
-      if (config.auth === "bearer") {
-        if (!config.credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
-        authProvider = {
-          token: async () => await this.credentials.resolve(config.credentialRef as string),
-        };
-      } else if (config.auth === "oauth") {
-        if (!config.credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
-        if (!this.oauthProviderFactory) throw new Error("MCP_OAUTH_AUTHORIZATION_CODE_UNAVAILABLE");
-        oauthProvider = await this.oauthProviderFactory(config, { interactive });
-        if (interactive) await oauthProvider.invalidateCredentials?.("tokens");
-        authProvider = oauthProvider;
-      }
-      const createTransport = () =>
-        new StreamableHTTPClientTransport(new URL(config.url), {
-          ...(authProvider ? { authProvider } : {}),
-          reconnectionOptions: {
-            initialReconnectionDelay: 500,
-            maxReconnectionDelay: 10_000,
-            reconnectionDelayGrowFactor: 1.5,
-            maxRetries: 3,
-          },
+    let client = new Client({ name: "openerx", version: "2.0.1" });
+    const abort = () => {
+      void client.close().catch(() => undefined);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      if (config.transport === "stdio") {
+        const env = config.envCredentialRef
+          ? mcpEnvironmentSchema.parse(
+              JSON.parse(await this.credentials.resolve(config.envCredentialRef)),
+            )
+          : {};
+        const transport = new StdioClientTransport({
+          command: config.command,
+          args: config.args,
+          cwd: config.cwd || homedir(),
+          env: { ...getDefaultEnvironment(), ...env },
+          stderr: "pipe",
+          maxBufferSize: 10_000_000,
         });
-      let activeClient = client;
-      const transport = createTransport();
-      try {
-        await activeClient.connect(transport);
-      } catch (error) {
-        if (!oauthProvider || !(error instanceof UnauthorizedError)) throw error;
-        const callback = oauthProvider.takeCallbackParams();
-        if (!callback) throw new Error("MCP_OAUTH_AUTHORIZATION_REQUIRED");
-        await transport.finishAuth(callback);
-        await activeClient.close().catch(() => undefined);
-        activeClient = new Client({ name: "openerx", version: "2.0.1" });
-        await activeClient.connect(createTransport());
-      } finally {
-        await oauthProvider?.close();
+        // Drain stderr so a verbose server cannot block on a full pipe. It may contain secrets.
+        transport.stderr?.on("data", () => undefined);
+        await withSignal(client.connect(transport, { signal }), signal);
+      } else {
+        let authProvider: AuthProvider | InteractiveMcpOAuthProvider | undefined;
+        let oauthProvider: InteractiveMcpOAuthProvider | undefined;
+        if (config.auth === "bearer") {
+          if (!config.credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
+          authProvider = {
+            token: async () => await this.credentials.resolve(config.credentialRef as string),
+          };
+        } else if (config.auth === "oauth") {
+          if (!config.credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
+          if (!this.oauthProviderFactory)
+            throw new Error("MCP_OAUTH_AUTHORIZATION_CODE_UNAVAILABLE");
+          oauthProvider = await this.oauthProviderFactory(config, { interactive });
+          if (interactive) await oauthProvider.invalidateCredentials?.("tokens");
+          authProvider = oauthProvider;
+        }
+        const headers = config.headersCredentialRef
+          ? mcpHeadersSchema.parse(
+              JSON.parse(await this.credentials.resolve(config.headersCredentialRef)),
+            )
+          : {};
+        const createTransport = () =>
+          new StreamableHTTPClientTransport(new URL(config.url), {
+            requestInit: { headers },
+            ...(authProvider ? { authProvider } : {}),
+            reconnectionOptions: {
+              initialReconnectionDelay: 500,
+              maxReconnectionDelay: 10_000,
+              reconnectionDelayGrowFactor: 1.5,
+              maxRetries: 3,
+            },
+          });
+        const transport = createTransport();
+        try {
+          await withSignal(client.connect(transport, { signal }), signal);
+        } catch (error) {
+          if (!oauthProvider || !(error instanceof UnauthorizedError)) throw error;
+          const callback = oauthProvider.takeCallbackParams();
+          if (!callback) throw new Error("MCP_OAUTH_AUTHORIZATION_REQUIRED");
+          await withSignal(transport.finishAuth(callback), signal);
+          await client.close().catch(() => undefined);
+          client = new Client({ name: "openerx", version: "2.0.1" });
+          await withSignal(client.connect(createTransport(), { signal }), signal);
+        } finally {
+          await oauthProvider?.close();
+        }
       }
-      const connection = { client: activeClient, config, connectedAt: new Date().toISOString() };
+      signal.throwIfAborted();
+      if (this.#configs.get(serverId) !== config) throw new Error("MCP_CONFIGURATION_CHANGED");
+      const connection = { client, config, connectedAt: new Date().toISOString() };
+      client.onclose = () => {
+        if (this.#connections.get(serverId) === connection) this.#connections.delete(serverId);
+      };
       this.#connections.set(serverId, connection);
       return connection;
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      throw error;
+    } finally {
+      signal.removeEventListener("abort", abort);
     }
-    const connection = { client, config, connectedAt: new Date().toISOString() };
-    this.#connections.set(serverId, connection);
-    return connection;
   }
 
   async #authorizationState(config: McpServerConfig): Promise<McpServerAuthorizationState> {

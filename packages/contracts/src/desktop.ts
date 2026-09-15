@@ -151,6 +151,7 @@ export const ipcChannels = Object.freeze({
   mcpServersAuthorization: "mcp:servers:authorization",
   mcpServerAuthorize: "mcp:server:authorize",
   mcpServerSave: "mcp:server:save",
+  mcpServerTest: "mcp:server:test",
   mcpServerRemove: "mcp:server:remove",
   skillList: "skill:list",
   skillGet: "skill:get",

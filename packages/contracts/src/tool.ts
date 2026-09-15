@@ -252,6 +252,31 @@ export const toolResultContentSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
+export const mcpEnvironmentSchema = z
+  .record(
+    z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/u)
+      .max(200),
+    z
+      .string()
+      .max(20_000)
+      .refine((value) => !value.includes("\0")),
+  )
+  .refine((value) => Object.keys(value).length <= 100);
+export const mcpHeadersSchema = z
+  .record(
+    z
+      .string()
+      .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
+      .max(200),
+    z
+      .string()
+      .max(20_000)
+      .refine((value) => !/[\r\n\0]/u.test(value)),
+  )
+  .refine((value) => Object.keys(value).length <= 100);
+
 export const mcpServerConfigSchema = z.discriminatedUnion("transport", [
   z
     .object({
@@ -260,7 +285,9 @@ export const mcpServerConfigSchema = z.discriminatedUnion("transport", [
       transport: z.literal("stdio"),
       command: z.string().min(1).max(1_000),
       args: z.array(z.string().max(8_000)).max(200),
-      cwd: z.string().min(1).max(4_096),
+      cwd: z.string().max(4_096),
+      envCredentialRef: z.string().min(1).max(500).nullable().optional(),
+      envKeys: z.array(z.string().max(200)).max(100).optional(),
       enabled: z.boolean(),
       enabledTools: z.array(z.string().min(1).max(300)).max(1_000),
     })
@@ -270,9 +297,11 @@ export const mcpServerConfigSchema = z.discriminatedUnion("transport", [
       id: entityIdSchema,
       name: z.string().min(1).max(200),
       transport: z.literal("streamable_http"),
-      url: z.url(),
+      url: z.url({ protocol: /^https?$/u }),
       auth: z.enum(["none", "bearer", "oauth"]),
       credentialRef: z.string().min(1).max(500).nullable(),
+      headersCredentialRef: z.string().min(1).max(500).nullable().optional(),
+      headerNames: z.array(z.string().max(200)).max(100).optional(),
       enabled: z.boolean(),
       enabledTools: z.array(z.string().min(1).max(300)).max(1_000),
     })
@@ -998,6 +1027,26 @@ export const mcpServerRemoveResultSchema = z
   .object({ serverId: entityIdSchema, removed: z.boolean() })
   .strict();
 export const mcpServerAuthorizeInputSchema = z.object({ serverId: entityIdSchema }).strict();
+export const mcpServerTestInputSchema = z.object({ serverId: entityIdSchema }).strict();
+export const mcpServerTestResultSchema = z
+  .object({
+    serverId: entityIdSchema,
+    connected: z.boolean(),
+    checkedAt: timestampSchema,
+    error: z.string().max(2_000).nullable(),
+    tools: z
+      .array(
+        z
+          .object({
+            name: z.string().max(300),
+            description: z.string().max(8_000),
+            enabled: z.boolean(),
+          })
+          .strict(),
+      )
+      .max(1_000),
+  })
+  .strict();
 export const mcpServerAuthorizationStateSchema = z
   .object({
     serverId: entityIdSchema,
@@ -1014,6 +1063,8 @@ export const desktopMcpServerSaveInputSchema = z
     bearerToken: z.string().min(1).max(20_000).optional(),
     oauthClientId: z.string().min(1).max(2_000).optional(),
     oauthScope: z.string().max(4_000).optional(),
+    env: mcpEnvironmentSchema.optional(),
+    headers: mcpHeadersSchema.optional(),
   })
   .strict();
 export const toolListInputSchema = z
@@ -1077,6 +1128,18 @@ export type PiToolProgressFrame = z.infer<typeof piToolProgressFrameSchema>;
 export type PiToolCancelFrame = z.infer<typeof piToolCancelFrameSchema>;
 export type PiActivityEvent = z.infer<typeof piActivityEventSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
+/** Build-time setup templates contain public defaults only, never credentials. */
+export interface McpServerPreset {
+  id: string;
+  name: string;
+  description: string;
+  url: string;
+  auth: Extract<McpServerConfig, { transport: "streamable_http" }>["auth"];
+  hint: string;
+  documentationUrl?: string;
+}
+export type DesktopMcpServerSaveInput = z.infer<typeof desktopMcpServerSaveInputSchema>;
+export type McpServerTestResult = z.infer<typeof mcpServerTestResultSchema>;
 export type McpServerAuthorizationState = z.infer<typeof mcpServerAuthorizationStateSchema>;
 export type McpToolAnnotations = z.infer<typeof mcpToolAnnotationsSchema>;
 export type McpToolDescriptor = z.infer<typeof mcpToolDescriptorSchema>;
@@ -1112,6 +1175,7 @@ export interface ToolBridge {
   ): Promise<CapabilityScope>;
   listMcpServers(): Promise<McpServerConfig[]>;
   listMcpServerAuthorizationStates(): Promise<McpServerAuthorizationState[]>;
+  testMcpServer(input: z.input<typeof mcpServerTestInputSchema>): Promise<McpServerTestResult>;
   authorizeMcpServer(
     input: z.input<typeof mcpServerAuthorizeInputSchema>,
   ): Promise<McpServerAuthorizationState>;

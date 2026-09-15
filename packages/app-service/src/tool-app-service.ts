@@ -12,6 +12,7 @@ import type {
   LocalWebSearchSettingsState,
   McpServerAuthorizationState,
   McpServerConfig,
+  McpServerTestResult,
   McpToolDescriptor,
   NormalizedToolResult,
   PermissionRequest,
@@ -1296,6 +1297,10 @@ export class ToolAppService {
 
   async listMcpServerAuthorizationStates(): Promise<McpServerAuthorizationState[]> {
     return await this.#mcp.authorizationStates();
+  }
+
+  async testMcpServer(serverId: string): Promise<McpServerTestResult> {
+    return await this.#mcp.testConnection(serverId);
   }
 
   async authorizeMcpServer(serverId: string): Promise<McpServerAuthorizationState> {

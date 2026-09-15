@@ -37,3 +37,13 @@ npm run clean:desktop -- --legacy-checkpoints --apply
 仅移除有 Electron 产物标记的包目录。固定名称的有效应用包、发布安装包、源码备份、数据库、截图及正在运行的产物会保留。
 
 Renderer 只能通过 `window.openerx` 暴露的类型化 Bridge 使用桌面能力。
+
+## MCP 添加与管理
+
+在 **设置 → 工具 → 添加工具** 中手动填写，或选择 **JSON 导入** 粘贴 `mcpServers` 配置。
+快捷配置提供 Context7 与 GitHub；点击后补齐所需认证即可添加。GitHub 默认使用只读接口。
+支持本机 STDIO 和 Streamable HTTP；启动参数、环境变量、工作目录、自定义请求头、Bearer 和 OAuth 都可配置。
+在服务的 **设置** 中可以编辑配置、测试连接、查看工具清单或移除服务；列表开关控制启停。
+
+环境变量、请求头和认证凭证通过本机加密存储保存。编辑时留空保留已有值，环境变量与请求头填写 `{}` 可清空。
+具体配置示例、验证步骤和范围见 [MCP 管理说明](../../docs/v2/2026-09-15-mcp-management.md)。

@@ -1,6 +1,9 @@
 import { AppVersion, type VersionInfo } from "@openerx/desktop-ui/version";
+
 declare const __OPENERX_BUILD_INFO__: VersionInfo | undefined;
-const appBuildInfo = typeof __OPENERX_BUILD_INFO__ === "undefined" ? undefined : __OPENERX_BUILD_INFO__;
+const appBuildInfo =
+  typeof __OPENERX_BUILD_INFO__ === "undefined" ? undefined : __OPENERX_BUILD_INFO__;
+
 import type {
   Artifact,
   Attachment,
@@ -18,6 +21,7 @@ import type {
   LocalWebSearchSettingsState,
   McpServerAuthorizationState,
   McpServerConfig,
+  McpServerTestResult,
   MemoryEntry,
   MemoryKind,
   Message,
@@ -118,6 +122,7 @@ import {
   type ResultSelection,
 } from "./ConversationResults";
 import { DesktopControlBar } from "./DesktopControlBar";
+import { McpServerEditor } from "./McpServerEditor";
 import { PendingToolApproval } from "./PendingToolApproval";
 import { clipboardFiles, pastedAttachmentError, serializePastedFiles } from "./pasted-attachments";
 import {
@@ -458,6 +463,12 @@ function userFacingError(error: unknown, fallback: string): string {
   const modelMessage = modelCode ? modelFailureMessage(modelCode) : undefined;
   if (modelMessage) return modelMessage;
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message.includes("MCP_AUTH_HEADER_CONFLICT")) {
+    return "已选择认证方式，请移除重复的 Authorization 请求头。";
+  }
+  if (message.includes("MCP_CREDENTIAL_REQUIRED")) {
+    return "请填写服务凭证；更换服务地址后需要重新填写令牌。";
+  }
   if (
     message.includes("safeStorage.decrypt") ||
     message.includes("OS_CREDENTIAL_DECRYPT_FAILED") ||
@@ -7092,14 +7103,8 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [mcpNotice, setMcpNotice] = useState<string | null>(null);
   const [nativePermissionNotice, setNativePermissionNotice] = useState<string | null>(null);
-  const [mcpName, setMcpName] = useState("");
-  const [mcpTransport, setMcpTransport] = useState<"stdio" | "streamable_http">("stdio");
-  const [mcpEndpoint, setMcpEndpoint] = useState("");
-  const [mcpCwd, setMcpCwd] = useState("");
-  const [mcpAuth, setMcpAuth] = useState<"none" | "bearer" | "oauth">("none");
-  const [mcpToken, setMcpToken] = useState("");
-  const [mcpOAuthClientId, setMcpOAuthClientId] = useState("");
-  const [mcpOAuthScope, setMcpOAuthScope] = useState("");
+  const [editingMcp, setEditingMcp] = useState<McpServerConfig | undefined>();
+  const [mcpTests, setMcpTests] = useState<Record<string, McpServerTestResult>>({});
   const [localWebSearchNotice, setLocalWebSearchNotice] = useState<string | null>(null);
   const [localWebSearchDraft, setLocalWebSearchDraft] = useState<LocalWebSearchSettingsSelection>({
     providerId: "direct:baidu-json",
@@ -7177,47 +7182,40 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       );
     },
   });
-  const saveMcp = useMutation({
-    mutationFn: (config: McpServerConfig) =>
-      window.openerx.saveMcpServer({
-        config,
-        ...(mcpTransport === "streamable_http" && mcpAuth === "bearer" && mcpToken
-          ? { bearerToken: mcpToken }
-          : {}),
-        ...(mcpTransport === "streamable_http" && mcpAuth === "oauth" && mcpOAuthClientId
-          ? {
-              oauthClientId: mcpOAuthClientId,
-              ...(mcpOAuthScope ? { oauthScope: mcpOAuthScope } : {}),
-            }
-          : mcpAuth === "oauth" && mcpOAuthScope
-            ? { oauthScope: mcpOAuthScope }
-            : {}),
-      }),
-    onSuccess: async (saved) => {
-      setMcpName("");
-      setMcpEndpoint("");
-      setMcpCwd("");
-      setMcpToken("");
-      setMcpOAuthClientId("");
-      setMcpOAuthScope("");
-      setAddDialogOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
+  const refreshMcp = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] }),
+      queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] }),
+    ]);
+    await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-authorization"] });
+  };
+  const testMcp = useMutation({
+    mutationFn: (serverId: string) => window.openerx.testMcpServer({ serverId }),
+    onSuccess: async (result) => {
+      setMcpTests((current) => ({ ...current, [result.serverId]: result }));
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-authorization"] });
-      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
-      setMcpNotice(`已添加工具“${saved.name}”。`);
     },
   });
   const toggleMcp = useMutation({
     mutationFn: (server: McpServerConfig) =>
       window.openerx.saveMcpServer({ config: { ...server, enabled: !server.enabled } }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
-      await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
+    onSuccess: async (saved) => {
+      setMcpTests((current) => {
+        const next = { ...current };
+        delete next[saved.id];
+        return next;
+      });
+      await refreshMcp();
     },
   });
   const authorizeMcp = useMutation({
     mutationFn: (serverId: string) => window.openerx.authorizeMcpServer({ serverId }),
     onSuccess: async (state) => {
+      setMcpTests((current) => {
+        const next = { ...current };
+        delete next[state.serverId];
+        return next;
+      });
       queryClient.setQueryData<McpServerAuthorizationState[]>(
         ["tools", "mcp-authorization"],
         (current = []) => [...current.filter(({ serverId }) => serverId !== state.serverId), state],
@@ -7232,6 +7230,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       setSelectedToolId(null);
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
       await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
+      await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-authorization"] });
       setMcpNotice("已移除 MCP 工具及其本机凭证引用。");
     },
   });
@@ -7313,13 +7312,34 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
         source: server.transport === "stdio" ? "MCP / 本机进程" : "MCP / 网络服务",
         category: "mcp",
         capability: "mcp",
-        status: server.enabled ? "已启用" : "已停用",
-        statusTone: server.enabled ? "enabled" : "muted",
+        status: !server.enabled
+          ? "已停用"
+          : mcpTests[server.id]
+            ? mcpTests[server.id]?.connected
+              ? "已连接"
+              : "连接失败"
+            : mcpAuthorization.data?.find(({ serverId }) => serverId === server.id)?.connected
+              ? "已连接"
+              : mcpAuthorization.data?.find(({ serverId }) => serverId === server.id)?.status ===
+                  "authorization_required"
+                ? "待授权"
+                : "未测试",
+        statusTone: !server.enabled
+          ? "muted"
+          : mcpTests[server.id]?.connected === false
+            ? "warning"
+            : "enabled",
         enabled: server.enabled,
         mcpServerId: server.id,
       })) ?? [];
     return [...builtins, ...external];
-  }, [mcpServers.data, readinessByCapability, runtimeReadiness.isFetching]);
+  }, [
+    mcpServers.data,
+    mcpAuthorization.data,
+    mcpTests,
+    readinessByCapability,
+    runtimeReadiness.isFetching,
+  ]);
 
   const filteredRows = useMemo(() => {
     const normalizedSearch = searchText.trim().toLocaleLowerCase();
@@ -7343,6 +7363,8 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
   const selectedAuthorization = selectedMcp
     ? mcpAuthorization.data?.find(({ serverId }) => serverId === selectedMcp.id)
     : undefined;
+
+  const selectedMcpTest = selectedMcp ? mcpTests[selectedMcp.id] : undefined;
 
   const categories: Array<{ id: ToolCenterCategory; label: string }> = [
     { id: "all", label: "全部" },
@@ -7408,6 +7430,15 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       {mcpNotice ? (
         <p className="inline-success tool-library-notice" role="status">
           {mcpNotice}
+        </p>
+      ) : null}
+
+      {mcpServers.error || mcpAuthorization.error || toggleMcp.error || removeMcp.error ? (
+        <p className="inline-error" role="alert">
+          {userFacingError(
+            mcpServers.error ?? mcpAuthorization.error ?? toggleMcp.error ?? removeMcp.error,
+            "MCP 操作失败，请重试。",
+          )}
         </p>
       ) : null}
 
@@ -7638,12 +7669,29 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                   <strong>
                     {selectedMcp.transport === "stdio" ? selectedMcp.command : selectedMcp.url}
                   </strong>
+                  {selectedMcp.transport === "stdio" ? (
+                    <>
+                      <span>启动参数</span>
+                      <strong>{JSON.stringify(selectedMcp.args)}</strong>
+                      <span>工作目录</span>
+                      <strong>{selectedMcp.cwd || "用户主目录"}</strong>
+                      <span>环境变量</span>
+                      <strong>{selectedMcp.envKeys?.join("、") || "无"}</strong>
+                    </>
+                  ) : (
+                    <>
+                      <span>请求头</span>
+                      <strong>{selectedMcp.headerNames?.join("、") || "无"}</strong>
+                    </>
+                  )}
                   {selectedMcp.transport === "streamable_http" ? (
                     <>
                       <span>认证</span>
                       <strong>
                         {selectedMcp.auth === "none"
-                          ? "无认证"
+                          ? selectedMcp.headerNames?.length
+                            ? "自定义请求头"
+                            : "无认证"
                           : selectedMcp.auth === "bearer"
                             ? "Bearer 令牌"
                             : selectedAuthorization
@@ -7654,10 +7702,35 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                   ) : null}
                 </div>
                 <div className="tool-modal-actions">
+                  <button
+                    type="button"
+                    disabled={testMcp.isPending || toggleMcp.isPending || authorizeMcp.isPending}
+                    onClick={() => {
+                      setEditingMcp(selectedMcp);
+                      setSelectedToolId(null);
+                      setAddDialogOpen(true);
+                    }}
+                  >
+                    编辑配置
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      testMcp.isPending ||
+                      toggleMcp.isPending ||
+                      authorizeMcp.isPending ||
+                      !selectedMcp.enabled
+                    }
+                    onClick={() => testMcp.mutate(selectedMcp.id)}
+                  >
+                    {testMcp.isPending && testMcp.variables === selectedMcp.id
+                      ? "正在测试…"
+                      : "测试连接"}
+                  </button>
                   {selectedMcp.transport === "streamable_http" && selectedMcp.auth === "oauth" ? (
                     <button
                       type="button"
-                      disabled={authorizeMcp.isPending || !selectedMcp.enabled}
+                      disabled={authorizeMcp.isPending || testMcp.isPending || !selectedMcp.enabled}
                       onClick={() => authorizeMcp.mutate(selectedMcp.id)}
                     >
                       {authorizeMcp.isPending ? "等待浏览器授权…" : "在浏览器中授权"}
@@ -7666,12 +7739,43 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                   <button
                     type="button"
                     className="danger-action"
-                    disabled={removeMcp.isPending}
+                    disabled={removeMcp.isPending || testMcp.isPending || authorizeMcp.isPending}
                     onClick={() => removeMcp.mutate(selectedMcp.id)}
                   >
                     移除工具
                   </button>
                 </div>
+                {selectedMcpTest ? (
+                  <section className="mcp-test-result" aria-label="MCP 连接测试结果">
+                    <p
+                      className={selectedMcpTest.connected ? "inline-success" : "inline-error"}
+                      role="status"
+                    >
+                      {selectedMcpTest.connected
+                        ? `连接成功，发现 ${selectedMcpTest.tools.length} 个工具。`
+                        : selectedMcpTest.error}
+                    </p>
+                    {selectedMcpTest.connected && selectedMcpTest.tools.length === 0 ? (
+                      <p>服务已连接，当前没有提供工具。</p>
+                    ) : null}
+                    {selectedMcpTest.tools.length ? (
+                      <ul className="mcp-discovered-tools" aria-label="MCP 工具清单">
+                        {selectedMcpTest.tools.map((tool) => (
+                          <li key={tool.name}>
+                            <strong>{tool.name}</strong>
+                            {!tool.enabled ? <span>已停用</span> : null}
+                            <p>{tool.description || "暂无描述"}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </section>
+                ) : null}
+                {testMcp.error && testMcp.variables === selectedMcp.id ? (
+                  <p className="inline-error" role="alert">
+                    {userFacingError(testMcp.error, "连接测试失败，请稍后重试。")}
+                  </p>
+                ) : null}
                 {authorizeMcp.error ? (
                   <p className="inline-error">
                     {userFacingError(authorizeMcp.error, "OAuth 授权失败，请检查服务地址后重试。")}
@@ -7764,175 +7868,29 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       ) : null}
 
       {addDialogOpen ? (
-        <div className="tool-modal-backdrop" role="presentation">
-          <section
-            className="tool-modal tool-add-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="add-tool-title"
-          >
-            <header className="tool-modal-header">
-              <div>
-                <h2 id="add-tool-title">添加工具</h2>
-                <p>通过 MCP 连接本机进程或网络工具服务。</p>
-              </div>
-              <button
-                type="button"
-                aria-label="关闭添加工具"
-                onClick={() => setAddDialogOpen(false)}
-              >
-                <X size={19} />
-              </button>
-            </header>
-            <form
-              className="mcp-config-form tool-add-form"
-              aria-label="添加 MCP 服务"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const id = crypto.randomUUID();
-                const config: McpServerConfig =
-                  mcpTransport === "stdio"
-                    ? {
-                        id,
-                        name: mcpName,
-                        transport: "stdio",
-                        command: mcpEndpoint,
-                        args: [],
-                        cwd: mcpCwd,
-                        enabled: true,
-                        enabledTools: [],
-                      }
-                    : {
-                        id,
-                        name: mcpName,
-                        transport: "streamable_http",
-                        url: mcpEndpoint,
-                        auth: mcpAuth,
-                        credentialRef: null,
-                        enabled: true,
-                        enabledTools: [],
-                      };
-                saveMcp.mutate(config);
-              }}
-            >
-              <label className="mcp-field">
-                <span>显示名称</span>
-                <input
-                  aria-label="MCP 名称"
-                  placeholder="例如：项目知识库"
-                  value={mcpName}
-                  onChange={(event) => setMcpName(event.target.value)}
-                  required
-                />
-              </label>
-              <label className="mcp-field">
-                <span>连接方式</span>
-                <select
-                  aria-label="MCP 传输"
-                  value={mcpTransport}
-                  onChange={(event) =>
-                    setMcpTransport(event.target.value as "stdio" | "streamable_http")
-                  }
-                >
-                  <option value="stdio">本机进程（STDIO）</option>
-                  <option value="streamable_http">网络服务（Streamable HTTP）</option>
-                </select>
-              </label>
-              <label className="mcp-field">
-                <span>{mcpTransport === "stdio" ? "启动命令" : "服务地址"}</span>
-                <input
-                  aria-label={mcpTransport === "stdio" ? "MCP 命令" : "MCP URL"}
-                  placeholder={
-                    mcpTransport === "stdio"
-                      ? "例如：C:\\tools\\my-mcp.exe"
-                      : "https://example.com/mcp"
-                  }
-                  value={mcpEndpoint}
-                  onChange={(event) => setMcpEndpoint(event.target.value)}
-                  required
-                />
-              </label>
-              {mcpTransport === "stdio" ? (
-                <label className="mcp-field">
-                  <span>工作目录</span>
-                  <input
-                    aria-label="MCP 工作目录"
-                    placeholder="例如：C:\\Users\\name\\project"
-                    value={mcpCwd}
-                    onChange={(event) => setMcpCwd(event.target.value)}
-                    required
-                  />
-                  <small>服务进程从此目录启动；只填写你信任且明确授权的目录。</small>
-                </label>
-              ) : (
-                <>
-                  <label className="mcp-field">
-                    <span>认证方式</span>
-                    <select
-                      aria-label="MCP 认证"
-                      value={mcpAuth}
-                      onChange={(event) => setMcpAuth(event.target.value as typeof mcpAuth)}
-                    >
-                      <option value="none">无认证</option>
-                      <option value="bearer">Bearer 令牌</option>
-                      <option value="oauth">OAuth 授权码（PKCE）</option>
-                    </select>
-                  </label>
-                  {mcpAuth === "bearer" ? (
-                    <label className="mcp-field">
-                      <span>Bearer 令牌</span>
-                      <input
-                        aria-label="MCP Bearer Token"
-                        type="password"
-                        autoComplete="off"
-                        placeholder="粘贴服务令牌"
-                        value={mcpToken}
-                        onChange={(event) => setMcpToken(event.target.value)}
-                        required
-                      />
-                    </label>
-                  ) : mcpAuth === "oauth" ? (
-                    <>
-                      <label className="mcp-field">
-                        <span>OAuth Client ID（可选）</span>
-                        <input
-                          aria-label="MCP OAuth Client ID"
-                          autoComplete="off"
-                          placeholder="留空则尝试动态客户端注册"
-                          value={mcpOAuthClientId}
-                          onChange={(event) => setMcpOAuthClientId(event.target.value)}
-                        />
-                      </label>
-                      <label className="mcp-field">
-                        <span>OAuth Scope（可选）</span>
-                        <input
-                          aria-label="MCP OAuth Scope"
-                          autoComplete="off"
-                          placeholder="例如：tools.read"
-                          value={mcpOAuthScope}
-                          onChange={(event) => setMcpOAuthScope(event.target.value)}
-                        />
-                      </label>
-                    </>
-                  ) : null}
-                </>
-              )}
-              <div className="tool-modal-actions">
-                <button type="button" onClick={() => setAddDialogOpen(false)}>
-                  取消
-                </button>
-                <button type="submit" className="primary-action" disabled={saveMcp.isPending}>
-                  {saveMcp.isPending ? "正在添加…" : "添加工具"}
-                </button>
-              </div>
-              {saveMcp.error ? (
-                <p className="inline-error">
-                  {userFacingError(saveMcp.error, "无法添加 MCP 工具，请检查字段后重试。")}
-                </p>
-              ) : null}
-            </form>
-          </section>
-        </div>
+        <McpServerEditor
+          server={editingMcp}
+          existingNames={mcpServers.data?.map(({ name }) => name) ?? []}
+          errorMessage={userFacingError}
+          onClose={() => {
+            setAddDialogOpen(false);
+            setEditingMcp(undefined);
+          }}
+          onSaved={async (saved, complete) => {
+            setMcpTests((current) => {
+              const next = { ...current };
+              for (const item of saved) delete next[item.id];
+              return next;
+            });
+            if (complete) {
+              setAddDialogOpen(false);
+              setEditingMcp(undefined);
+              setMcpNotice("MCP 配置已保存，可在服务设置中测试连接。");
+              if (saved.length === 1) setSelectedToolId(`mcp:${saved[0]?.id}`);
+            }
+            await refreshMcp();
+          }}
+        />
       ) : null}
     </section>
   );

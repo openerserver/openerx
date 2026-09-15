@@ -498,6 +498,7 @@ function createBridge(): DesktopBridge {
     listMcpServerAuthorizationStates: vi.fn().mockResolvedValue([]),
     authorizeMcpServer: vi.fn(),
     saveMcpServer: vi.fn(),
+    testMcpServer: vi.fn(),
     removeMcpServer: vi.fn(),
     listSkills: vi.fn().mockResolvedValue([]),
     getSkill: vi.fn(),
@@ -3738,6 +3739,45 @@ describe("M1 chat renderer", () => {
     await waitFor(() => expect(bridge.authorizeMcpServer).toHaveBeenCalledWith({ serverId }));
     expect(await screen.findByText("OAuth 授权完成，工具已连接。")).toBeTruthy();
     expect(screen.getByText("已授权")).toBeTruthy();
+  });
+
+  it("tests an individual MCP server, renders its tool list, and opens the existing configuration for editing", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const serverId = "66666666-6666-4666-8666-666666666699";
+    vi.mocked(bridge.listMcpServers).mockResolvedValue([
+      {
+        id: serverId,
+        name: "测试 MCP",
+        transport: "stdio",
+        command: "node",
+        args: ["my server.js"],
+        cwd: "",
+        enabled: true,
+        enabledTools: [],
+      },
+    ]);
+    vi.mocked(bridge.testMcpServer).mockResolvedValue({
+      serverId,
+      connected: true,
+      checkedAt: timestamp,
+      error: null,
+      tools: [{ name: "lookup", description: "Search local fixture", enabled: true }],
+    });
+    renderApp(bridge, "/settings/account?section=tools");
+    const user = userEvent.setup();
+    const row = (await screen.findByText("测试 MCP")).closest("article");
+    if (!row) throw new Error("MCP row missing");
+    await user.click(within(row).getByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByText("连接成功，发现 1 个工具。")).toBeTruthy();
+    expect(within(screen.getByLabelText("MCP 工具清单")).getByText("lookup")).toBeTruthy();
+    expect(bridge.testMcpServer).toHaveBeenCalledWith({ serverId });
+    await user.click(screen.getByRole("button", { name: "编辑配置" }));
+    expect((screen.getByLabelText("MCP 参数") as HTMLTextAreaElement).value).toBe(
+      '["my server.js"]',
+    );
+    expect((screen.getByLabelText("MCP 名称") as HTMLInputElement).value).toBe("测试 MCP");
   });
 
   it("shows runtime desktop capability status and permission reasons instead of a static catalog", async () => {

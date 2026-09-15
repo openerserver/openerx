@@ -1,9 +1,8 @@
 declare const __OPENERX_BUILD_INFO__: { version: string; buildId: string };
+
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { requestDesktopNativePermission } from "./desktop-native-permissions";
-import { requestMacScreenCapture } from "./macos-screen-permission";
 import { defaultWorkspaceDirectory as resolveDefaultWorkspaceDirectory } from "@openerx/app-service/default-workspace";
 import {
   acceptBillingTermsInputSchema,
@@ -79,6 +78,7 @@ import {
   mcpServerAuthorizeInputSchema,
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
+  mcpServerTestInputSchema,
   memoryClearInputSchema,
   memoryDeleteInputSchema,
   memoryListInputSchema,
@@ -138,7 +138,6 @@ import {
   PerformanceBudgetTracker,
   PersonalDataExporter,
 } from "@openerx/observability";
-import { createMcpOAuthCredentialValue } from "@openerx/tool-sdk";
 import {
   app,
   autoUpdater,
@@ -167,11 +166,14 @@ import {
   shouldHideMainWindowOnClose,
 } from "./background-lifecycle";
 import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
+import { requestDesktopNativePermission } from "./desktop-native-permissions";
 import { initializeAccountSession } from "./development-account-bootstrap";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
 import { HtmlPreviewRegistry } from "./html-preview";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { DesktopLoginStartupService, isBackgroundLoginStartup } from "./login-startup";
+import { requestMacScreenCapture } from "./macos-screen-permission";
+import { mcpCredentialReferences, saveMcpSettings } from "./mcp-settings";
 import { memoryNotificationContent } from "./memory-notification";
 import { ModelServiceSettingsStore } from "./model-service-settings";
 import { localByokUsage } from "./model-usage";
@@ -206,7 +208,10 @@ if (e2eApplicationName && !/^openerx CX110 D3 [A-Za-z0-9_-]{1,64}$/u.test(e2eApp
 app.name = e2eApplicationName || "UWA";
 
 function configureApplicationMenu(): void {
-  app.setAboutPanelOptions({ applicationVersion: __OPENERX_BUILD_INFO__.version, version: __OPENERX_BUILD_INFO__.buildId });
+  app.setAboutPanelOptions({
+    applicationVersion: __OPENERX_BUILD_INFO__.version,
+    version: __OPENERX_BUILD_INFO__.buildId,
+  });
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -1195,31 +1200,41 @@ function registerIpcHandlers(
       authorization,
     );
   });
+  ipcMain.handle(ipcChannels.mcpServerTest, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    // Leave time for the adapter's 15-second timeout and transport cleanup to return diagnostics.
+    return await supervisor.request(
+      chatCommandEnvelopeSchema.parse({
+        command: "mcp.server.test",
+        input: mcpServerTestInputSchema.parse(input),
+      }),
+      undefined,
+      20_000,
+    );
+  });
   ipcMain.handle(ipcChannels.mcpServerSave, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const parsed = desktopMcpServerSaveInputSchema.parse(input);
-    let config = parsed.config;
-    if (config.transport === "streamable_http") {
-      let credentialRef = config.auth === "none" ? null : config.credentialRef;
-      if (config.auth === "bearer" && parsed.bearerToken) {
-        credentialRef = `mcp:${config.id}`;
-        await supervisor.saveCapabilityCredential(credentialRef, parsed.bearerToken);
-      }
-      if (config.auth === "oauth") {
-        credentialRef = `mcp:${config.id}`;
-        await supervisor.saveCapabilityCredential(
-          credentialRef,
-          createMcpOAuthCredentialValue({
-            ...(parsed.oauthClientId ? { clientId: parsed.oauthClientId } : {}),
-            ...(parsed.oauthScope ? { scope: parsed.oauthScope } : {}),
-          }),
-        );
-      }
-      if (config.auth !== "none" && !credentialRef) throw new Error("MCP_CREDENTIAL_REQUIRED");
-      config = mcpServerConfigSchema.parse({ ...config, credentialRef });
-    }
-    return await supervisor.request(
-      chatCommandEnvelopeSchema.parse({ command: "mcp.server.upsert", input: { config } }),
+    const servers = mcpServerConfigSchema
+      .array()
+      .parse(
+        await supervisor.request(
+          chatCommandEnvelopeSchema.parse({ command: "mcp.servers.list", input: {} }),
+        ),
+      );
+    return await saveMcpSettings(
+      parsed,
+      servers.find(({ id }) => id === parsed.config.id),
+      {
+        save: (ref, value) => supervisor.saveCapabilityCredential(ref, value),
+        clear: (ref) => supervisor.clearCapabilityCredential(ref),
+      },
+      async (config) =>
+        mcpServerConfigSchema.parse(
+          await supervisor.request(
+            chatCommandEnvelopeSchema.parse({ command: "mcp.server.upsert", input: { config } }),
+          ),
+        ),
     );
   });
   ipcMain.handle(ipcChannels.mcpServerAuthorize, async (event, input: unknown) => {
@@ -1245,9 +1260,8 @@ function registerIpcHandlers(
     const removed = await supervisor.request(
       chatCommandEnvelopeSchema.parse({ command: "mcp.server.remove", input: parsed }),
     );
-    if (server?.transport === "streamable_http" && server.credentialRef) {
-      await supervisor.clearCapabilityCredential(server.credentialRef);
-    }
+    for (const ref of mcpCredentialReferences(server))
+      await supervisor.clearCapabilityCredential(ref);
     return removed;
   });
   ipcMain.handle(ipcChannels.artifactSave, async (event, input: unknown) => {

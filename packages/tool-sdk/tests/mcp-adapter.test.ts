@@ -15,6 +15,109 @@ const context = {
 };
 
 describe("McpToolAdapter", () => {
+  it("tests and invokes a STDIO server with encrypted environment values and literal arguments", async () => {
+    const credentials = {
+      resolve: vi
+        .fn()
+        .mockResolvedValue(JSON.stringify({ OPENERX_MCP_FIXTURE_PREFIX: "from-env:" })),
+      clear: vi.fn(),
+    };
+    const adapter = new McpToolAdapter(credentials);
+    adapter.register({
+      id: serverId,
+      name: "environment",
+      transport: "stdio",
+      command: process.execPath,
+      args: [fixturePath, " spaced argument"],
+      cwd: "",
+      enabled: true,
+      enabledTools: [],
+      envCredentialRef: "mcp:fixture:env",
+      envKeys: ["OPENERX_MCP_FIXTURE_PREFIX"],
+    });
+    try {
+      const [tested, discovered] = await Promise.all([
+        adapter.testConnection(serverId),
+        adapter.discoverEnabledTools(),
+      ]);
+      expect(tested).toMatchObject({
+        connected: true,
+        error: null,
+        tools: expect.arrayContaining([expect.objectContaining({ name: "echo" })]),
+      });
+      expect(credentials.resolve).toHaveBeenCalledTimes(1);
+      const echo = discovered.find(({ toolName }) => toolName === "echo");
+      if (!echo) throw new Error("echo missing");
+      const result = await adapter.execute(
+        {
+          operation: "mcp_call",
+          serverId,
+          tool: "echo",
+          arguments: { text: "ok" },
+          annotations: echo.annotations,
+          descriptorDigest: echo.descriptorDigest,
+          idempotencyKey: "env-args-call",
+        },
+        context,
+      );
+      expect(result.summary).toBe("from-env:ok spaced argument");
+    } finally {
+      await adapter.stopAll();
+    }
+  });
+
+  it("reports missing commands and disabled services without leaking raw config values", async () => {
+    const adapter = new McpToolAdapter({ resolve: vi.fn(), clear: vi.fn() });
+    const config = {
+      id: serverId,
+      name: "missing",
+      transport: "stdio" as const,
+      command: "/missing/private-secret-mcp",
+      args: [],
+      cwd: "",
+      enabled: true,
+      enabledTools: [],
+    };
+    adapter.register(config);
+    try {
+      const failed = await adapter.testConnection(serverId);
+      expect(failed.connected).toBe(false);
+      expect(failed.error).toContain("找不到");
+      expect(failed.error).not.toContain("private-secret");
+      adapter.register({ ...config, enabled: false });
+      expect(await adapter.testConnection(serverId)).toMatchObject({
+        connected: false,
+        error: expect.stringContaining("停用"),
+      });
+    } finally {
+      await adapter.stopAll();
+    }
+  });
+
+  it("bounds a stalled handshake and cancels an in-flight connection when disabled", async () => {
+    const adapter = new McpToolAdapter({ resolve: vi.fn(), clear: vi.fn() });
+    const config = {
+      id: serverId,
+      name: "stall",
+      transport: "stdio" as const,
+      command: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1000)"],
+      cwd: "",
+      enabled: true,
+      enabledTools: [],
+    };
+    adapter.register(config);
+    try {
+      const result = await adapter.testConnection(serverId, AbortSignal.timeout(100));
+      expect(result).toMatchObject({ connected: false, error: expect.stringContaining("超时") });
+      adapter.register({ ...config, enabled: false });
+      await adapter.stopAll();
+      expect(adapter.status(serverId).connected).toBe(false);
+    } finally {
+      await adapter.stopAll();
+    }
+  });
+
   it("connects to an official STDIO MCP server, lists, invokes, and disconnects", async () => {
     const credentials = { resolve: vi.fn(), clear: vi.fn() };
     const adapter = new McpToolAdapter(credentials);

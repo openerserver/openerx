@@ -93,6 +93,8 @@ import {
   mcpServerConfigSchema,
   mcpServerRemoveInputSchema,
   mcpServerRemoveResultSchema,
+  mcpServerTestInputSchema,
+  mcpServerTestResultSchema,
   mcpServerUpsertInputSchema,
   permissionListInputSchema,
   permissionRequestSchema,
@@ -468,6 +470,7 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
     .object({ command: z.literal("mcp.server.authorize"), input: mcpServerAuthorizeInputSchema })
     .strict(),
   z.object({ command: z.literal("mcp.server.upsert"), input: mcpServerUpsertInputSchema }).strict(),
+  z.object({ command: z.literal("mcp.server.test"), input: mcpServerTestInputSchema }).strict(),
   z.object({ command: z.literal("mcp.server.remove"), input: mcpServerRemoveInputSchema }).strict(),
   z.object({ command: z.literal("skill.list"), input: skillListInputSchema }).strict(),
   z.object({ command: z.literal("skill.get"), input: skillGetInputSchema }).strict(),
@@ -656,6 +659,7 @@ export interface ChatCommandResultMap {
   "mcp.servers.authorization": z.infer<typeof mcpServerAuthorizationStateSchema>[];
   "mcp.server.authorize": z.infer<typeof mcpServerAuthorizationStateSchema>;
   "mcp.server.upsert": z.infer<typeof mcpServerConfigSchema>;
+  "mcp.server.test": z.infer<typeof mcpServerTestResultSchema>;
   "mcp.server.remove": z.infer<typeof mcpServerRemoveResultSchema>;
   "skill.list": SkillInstallation[];
   "skill.get": SkillInstallation;
@@ -825,6 +829,9 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "mcp.server.upsert":
       parsed = mcpServerConfigSchema.parse(value);
+      break;
+    case "mcp.server.test":
+      parsed = mcpServerTestResultSchema.parse(value);
       break;
     case "mcp.server.remove":
       parsed = mcpServerRemoveResultSchema.parse(value);

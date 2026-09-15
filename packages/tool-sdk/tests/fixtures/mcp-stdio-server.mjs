@@ -7,6 +7,17 @@ serveStdio(() => {
     { name: "openerx-test-server", version: "1.0.0" },
     { capabilities: { tools: {} } },
   );
+  if (process.env.OPENERX_MCP_FIXTURE_EXTRA_TOOL) {
+    server.registerTool(
+      process.env.OPENERX_MCP_FIXTURE_EXTRA_TOOL,
+      {
+        description: `Environment and arguments received: ${process.argv[2] ?? ""}`,
+        inputSchema: z.object({}),
+        annotations: { readOnlyHint: true },
+      },
+      async () => ({ content: [{ type: "text", text: "ready" }] }),
+    );
+  }
   server.registerTool(
     "echo",
     {
@@ -20,7 +31,14 @@ serveStdio(() => {
         openWorldHint: false,
       },
     },
-    async ({ text }) => ({ content: [{ type: "text", text }] }),
+    async ({ text }) => ({
+      content: [
+        {
+          type: "text",
+          text: `${process.env.OPENERX_MCP_FIXTURE_PREFIX ?? ""}${text}${process.argv[2] ?? ""}`,
+        },
+      ],
+    }),
   );
   server.registerTool(
     "write_echo",
