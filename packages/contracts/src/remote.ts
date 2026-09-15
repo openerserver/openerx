@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { deviceDescriptorSchema } from "./account";
 import { entityIdSchema, timestampSchema } from "./common";
 
 export const remoteOpaqueSchema = z
@@ -44,6 +45,70 @@ export const remotePairingChallengeSchema = z
       context.addIssue({ code: "custom", path: ["expiresAt"], message: "Pairing must expire" });
     }
   });
+
+export const remoteConnectionRequestInputSchema = z
+  .object({
+    requestId: entityIdSchema,
+    hostDeviceId: entityIdSchema,
+    controllerDeviceId: entityIdSchema,
+    controllerPublicKey: remoteOpaqueSchema,
+    proof: remoteOpaqueSchema,
+  })
+  .strict();
+
+export const remoteConnectionRequestSchema = z
+  .object({
+    version: z.literal(1),
+    requestId: entityIdSchema,
+    accountId: entityIdSchema,
+    hostDeviceId: entityIdSchema,
+    controllerDevice: deviceDescriptorSchema,
+    controllerPublicKey: remoteOpaqueSchema,
+    proof: remoteOpaqueSchema,
+    status: z.enum(["pending", "approved", "rejected", "expired"]),
+    pairingId: entityIdSchema.nullable(),
+    createdAt: timestampSchema,
+    expiresAt: timestampSchema,
+    resolvedAt: timestampSchema.nullable(),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (request.hostDeviceId === request.controllerDevice.deviceId) {
+      context.addIssue({
+        code: "custom",
+        path: ["controllerDevice"],
+        message: "Distinct devices required",
+      });
+    }
+    if (Date.parse(request.expiresAt) <= Date.parse(request.createdAt)) {
+      context.addIssue({ code: "custom", path: ["expiresAt"], message: "Request must expire" });
+    }
+    if ((request.status === "approved") !== (request.pairingId !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["pairingId"],
+        message: "Only approved requests have a pairing",
+      });
+    }
+    if ((request.status === "pending") !== (request.resolvedAt === null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["resolvedAt"],
+        message: "Resolution time must match request status",
+      });
+    }
+  });
+
+export const remoteConnectionDecisionInputSchema = z.discriminatedUnion("decision", [
+  z
+    .object({
+      requestId: entityIdSchema,
+      decision: z.literal("approve"),
+      hostPublicKey: remoteOpaqueSchema,
+    })
+    .strict(),
+  z.object({ requestId: entityIdSchema, decision: z.literal("reject") }).strict(),
+]);
 
 export const remoteDevicePairingSchema = z
   .object({
@@ -519,6 +584,13 @@ export const remoteConnectorDisableFrameSchema = z
   .object({ kind: z.literal("remote-connector.disable") })
   .strict();
 
+export const remoteConnectorAuthorizationFrameSchema = z
+  .object({
+    kind: z.literal("remote-connector.authorization"),
+    authorization: remoteConnectorConfigureFrameSchema.shape.authorization,
+  })
+  .strict();
+
 export const remoteRevisionRequestFrameSchema = z
   .object({
     kind: z.literal("remote.revision.request"),
@@ -548,6 +620,7 @@ export const remoteLocalEventFrameSchema = z
 export const remoteConnectorPortFrameSchema = z.union([
   remoteConnectorReadyFrameSchema,
   remoteConnectorConfigureFrameSchema,
+  remoteConnectorAuthorizationFrameSchema,
   remoteConnectorDisableFrameSchema,
   remoteRevisionRequestFrameSchema,
   remoteRevisionResponseFrameSchema,
@@ -558,6 +631,9 @@ export const remoteConnectorPortFrameSchema = z.union([
 
 export type RemoteHost = z.infer<typeof remoteHostSchema>;
 export type RemotePairingChallenge = z.infer<typeof remotePairingChallengeSchema>;
+export type RemoteConnectionRequestInput = z.infer<typeof remoteConnectionRequestInputSchema>;
+export type RemoteConnectionRequest = z.infer<typeof remoteConnectionRequestSchema>;
+export type RemoteConnectionDecisionInput = z.infer<typeof remoteConnectionDecisionInputSchema>;
 export type RemoteDevicePairing = z.infer<typeof remoteDevicePairingSchema>;
 export type RemoteCommand = z.infer<typeof remoteCommandSchema>;
 export type RemoteCommandReceipt = z.infer<typeof remoteCommandReceiptSchema>;

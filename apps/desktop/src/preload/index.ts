@@ -114,6 +114,8 @@ import {
   rechargeOrderSchema,
   refundOrderSchema,
   releaseUpdateStateSchema,
+  remoteConnectionRequestSchema,
+  remoteDesktopConnectionDecisionSchema,
   remoteDesktopEnableInputSchema,
   remoteDesktopRevokeInputSchema,
   remoteDesktopStateSchema,
@@ -306,6 +308,17 @@ const bridge: DesktopBridge = {
   createRemotePairingChallenge: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.remotePairingChallenge);
     return remotePairingChallengeSchema.parse(result);
+  },
+  listRemoteConnectionRequests: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.remoteConnectionRequests);
+    return remoteConnectionRequestSchema.array().parse(result);
+  },
+  decideRemoteConnectionRequest: async (input) => {
+    const result: unknown = await ipcRenderer.invoke(
+      ipcChannels.remoteConnectionDecision,
+      remoteDesktopConnectionDecisionSchema.parse(input),
+    );
+    return remoteConnectionRequestSchema.parse(result);
   },
   revokeRemotePairing: async (input) => {
     const result: unknown = await ipcRenderer.invoke(

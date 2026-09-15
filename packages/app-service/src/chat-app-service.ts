@@ -3,6 +3,7 @@ import type {
   AppServiceAuthorization,
   AppServiceByokConfiguration,
   Artifact,
+  AutomationExecutionContext,
   ChatCommandEnvelope,
   ChatEvent,
   ConversationSnapshot,
@@ -67,6 +68,9 @@ export class ChatAppService {
     skills: SkillPackageService | null = null,
     memories: MemoryRepository | null = null,
     projects: ProjectRepository | null = null,
+    private readonly remoteExecutionContext?: (
+      modelRef?: string,
+    ) => Promise<AutomationExecutionContext>,
   ) {
     this.#repository = repository;
     this.#piHost = piHost;
@@ -548,11 +552,15 @@ export class ChatAppService {
     let response: RemoteApplyCommandResponseFrame;
     try {
       const result = await this.#executeRemoteCommand(command, payload, authorization);
+      const resultConversationId = (result as { conversationId?: string } | undefined)
+        ?.conversationId;
       response = {
         kind: "remote.command.result",
         requestId: command.commandId,
         ok: true,
-        appliedRevision: this.#repository.conversationRevision(command.conversationId),
+        appliedRevision: this.#repository.conversationRevision(
+          resultConversationId ?? command.conversationId,
+        ),
         ...(result === undefined ? {} : { result }),
       };
     } catch (caught) {
@@ -588,15 +596,32 @@ export class ChatAppService {
         return this.#requiredProjects().remoteSnapshot(payload.includeArchived);
       case "task.start":
       case "session.prompt": {
+        const previousModel = command.conversationId
+          ? this.#repository.getConversation(command.conversationId).conversation.selectedModelRef
+          : undefined;
+        // Resolve credentials through the local Main process, never through the relay or phone.
+        const context: AutomationExecutionContext = this.remoteExecutionContext
+          ? await this.remoteExecutionContext(previousModel)
+          : { authorization };
+        if (context.authorization && context.authorization.accountId !== command.accountId)
+          throw new Error("ACCOUNT_SCOPE_VIOLATION");
+        const modelRef = context.byok
+          ? previousModel && isByokModelRef(previousModel)
+            ? previousModel
+            : "platform/byok"
+          : previousModel;
+        if (modelRef && isByokModelRef(modelRef) && !context.byok)
+          throw new Error("BYOK_API_KEY_REQUIRED");
         const draft = this.#repository.createGeneration({
           conversationId: command.conversationId,
           text: payload.text,
           idempotencyKey: command.commandId,
+          ...(modelRef ? { modelRef } : {}),
           ...(payload.kind === "task.start" ? { projectId: payload.projectId ?? null } : {}),
         });
         await this.#launch(
           draft,
-          authorization,
+          context.authorization ?? authorization,
           this.#skills?.mounts("default") ?? [],
           undefined,
           [],
@@ -606,6 +631,7 @@ export class ChatAppService {
             controllerDeviceId: command.controllerDeviceId,
             hostDeviceId: command.hostDeviceId,
           },
+          context.byok,
         );
         await this.#syncIfAuthorized(authorization);
         return draft.receipt;

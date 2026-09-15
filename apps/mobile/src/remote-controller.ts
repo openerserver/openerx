@@ -2,6 +2,7 @@ import type {
   RemoteCommand,
   RemoteCommandPayload,
   RemoteCommandReceipt,
+  RemoteConnectionRequest,
   RemoteDevicePairing,
   RemoteHost,
   RemotePairingChallenge,
@@ -14,6 +15,7 @@ import {
   encryptRemotePayload,
   generateRemoteDeviceKeyPair,
   type RemoteDeviceKeyPair,
+  remoteConnectionRequestProof,
   remotePairingProof,
   signRemoteCommand,
 } from "@openerx/remote-protocol";
@@ -24,6 +26,7 @@ import type { MobileSession } from "./session";
 
 const keyPairKey = "openerx.remote.controller-key.v1";
 const sequenceKey = "openerx.remote.sequence.v1";
+let sequenceWrites = Promise.resolve();
 const secureOptions: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
 };
@@ -34,6 +37,7 @@ export interface DecryptedRemoteEvent {
 }
 
 export class RemoteController {
+  #keyPairPromise: Promise<RemoteDeviceKeyPair> | null = null;
   constructor(
     readonly api: MobileApi,
     readonly session: MobileSession,
@@ -52,6 +56,36 @@ export class RemoteController {
       throw new Error("ACCOUNT_SCOPE_VIOLATION");
     }
     return await this.#acceptChallenge(challenge);
+  }
+
+  async requestConnection(hostDeviceId: string): Promise<RemoteConnectionRequest> {
+    const keyPair = await this.#keyPair();
+    const input = {
+      requestId: Crypto.randomUUID(),
+      hostDeviceId,
+      controllerDeviceId: this.controllerDeviceId,
+      controllerPublicKey: keyPair.publicKey,
+    };
+    return await this.api.requestConnection(this.session.accessToken, {
+      ...input,
+      proof: remoteConnectionRequestProof(
+        { ...input, accountId: this.session.account.accountId },
+        keyPair.privateKey,
+      ),
+    });
+  }
+
+  async listOwnPairings(): Promise<RemoteDevicePairing[]> {
+    const [keyPair, pairings] = await Promise.all([
+      this.#keyPair(),
+      this.api.listPairings(this.session.accessToken),
+    ]);
+    return pairings.filter(
+      (pairing) =>
+        pairing.accountId === this.session.account.accountId &&
+        pairing.controllerDeviceId === this.controllerDeviceId &&
+        pairing.controllerPublicKey === keyPair.publicKey,
+    );
   }
 
   async send(
@@ -147,14 +181,31 @@ export class RemoteController {
   }
 
   async #keyPair(): Promise<RemoteDeviceKeyPair> {
-    const stored = await SecureStore.getItemAsync(keyPairKey, secureOptions);
-    if (stored) return JSON.parse(stored) as RemoteDeviceKeyPair;
-    const keyPair = generateRemoteDeviceKeyPair((length) => Crypto.getRandomBytes(length));
-    await SecureStore.setItemAsync(keyPairKey, JSON.stringify(keyPair), secureOptions);
-    return keyPair;
+    if (!this.#keyPairPromise) {
+      this.#keyPairPromise = (async () => {
+        const stored = await SecureStore.getItemAsync(keyPairKey, secureOptions);
+        if (stored) return JSON.parse(stored) as RemoteDeviceKeyPair;
+        const keyPair = generateRemoteDeviceKeyPair((length) => Crypto.getRandomBytes(length));
+        await SecureStore.setItemAsync(keyPairKey, JSON.stringify(keyPair), secureOptions);
+        return keyPair;
+      })().catch((error) => {
+        this.#keyPairPromise = null;
+        throw error;
+      });
+    }
+    return await this.#keyPairPromise;
   }
 
   async #nextSequence(pairingId: string, sessionId: string): Promise<number> {
+    const result = sequenceWrites.then(() => this.#incrementSequence(pairingId, sessionId));
+    sequenceWrites = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await result;
+  }
+
+  async #incrementSequence(pairingId: string, sessionId: string): Promise<number> {
     const stored = await SecureStore.getItemAsync(sequenceKey, secureOptions);
     const sequences = stored ? (JSON.parse(stored) as Record<string, number>) : {};
     const key = `${pairingId}:${sessionId}`;

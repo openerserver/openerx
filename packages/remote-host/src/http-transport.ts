@@ -19,9 +19,13 @@ import type { RemoteGatewayTransport } from "./connector";
 export class HttpRemoteGatewayTransport implements RemoteGatewayTransport {
   constructor(
     private readonly baseUrl: string,
-    private readonly accessToken: string,
+    private accessToken: string,
     private readonly fetchImplementation: typeof fetch = fetch,
   ) {}
+
+  updateAccessToken(accessToken: string): void {
+    this.accessToken = accessToken;
+  }
 
   registerHost(input: RemoteHostRegistrationInput): Promise<RemoteHost> {
     return this.#request("POST", "/api/v2/remote/hosts", input, (value) =>

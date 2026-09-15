@@ -141,6 +141,120 @@ function toolEnabledService(directory: string, chat: ChatRepository) {
 }
 
 describe("ChatAppService remote Pi mapping", () => {
+  it("uses desktop BYOK credentials for a new phone task and its continuation without leaking them", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-byok-"));
+    directories.push(directory);
+    const databasePath = path.join(directory, "profile.sqlite");
+    const chat = new ChatRepository(databasePath);
+    const pi = new RemotePiHostClient();
+    const byok = {
+      apiKey: "local-desktop-test-secret",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      modelId: "desktop-model",
+      displayName: "Desktop model",
+      contextWindow: 32_000,
+      maxOutputTokens: 1_000,
+      capabilities: { imageInput: false, functionCalling: true, reasoning: false },
+    };
+    const context = vi.fn().mockResolvedValue({ authorization, byok });
+    const service = new ChatAppService(
+      chat,
+      pi,
+      null,
+      null,
+      null,
+      new RemoteRepository(databasePath),
+      null,
+      null,
+      null,
+      context,
+    );
+    const payload = {
+      kind: "task.start" as const,
+      text: "phone task",
+      clientOperationId: "mobile-byok-0001",
+    };
+    const command = remoteCommand(payload, {
+      conversationId: null,
+      generationId: null,
+      baseRevision: 0,
+    });
+    const result = await service.applyRemoteCommand(command, payload, authorization);
+    expect(result.ok).toBe(true);
+    expect(pi.prompts[0]).toMatchObject({ selectedModelRef: "platform/byok", byok });
+    expect(pi.prompts[0]).not.toHaveProperty("accessToken");
+    expect(JSON.stringify(result)).not.toContain(byok.apiKey);
+    await service.applyRemoteCommand(command, payload, authorization);
+    expect(context).toHaveBeenCalledOnce();
+    expect(pi.prompts).toHaveLength(1);
+    if (!result.ok) throw new Error("start failed");
+    const conversationId = (result.result as { conversationId: string }).conversationId;
+    expect(result.appliedRevision).toBe(service.currentRemoteRevision(conversationId));
+    expect(result.appliedRevision).toBeGreaterThan(0);
+    await service.handle({
+      command: "chat.stop",
+      input: {
+        conversationId,
+        assistantMessageId: (result.result as { assistantMessageId: string }).assistantMessageId,
+      },
+    });
+    const next = {
+      kind: "session.prompt" as const,
+      text: "continue",
+      clientOperationId: "mobile-byok-0002",
+    };
+    await service.applyRemoteCommand(
+      remoteCommand(next, {
+        conversationId,
+        generationId: null,
+        baseRevision: service.currentRemoteRevision(conversationId),
+      }),
+      next,
+      authorization,
+    );
+    expect(context).toHaveBeenLastCalledWith("platform/byok");
+    expect(pi.prompts).toHaveLength(2);
+    expect(pi.prompts.at(-1)).toMatchObject({ selectedModelRef: "platform/byok", byok });
+    service.close();
+  });
+
+  it("rejects an unavailable desktop model before creating a phone conversation", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-model-missing-"));
+    directories.push(directory);
+    const databasePath = path.join(directory, "profile.sqlite");
+    const chat = new ChatRepository(databasePath);
+    const pi = new RemotePiHostClient();
+    const service = new ChatAppService(
+      chat,
+      pi,
+      null,
+      null,
+      null,
+      new RemoteRepository(databasePath),
+      null,
+      null,
+      null,
+      async () => {
+        throw new Error("BYOK_API_KEY_REQUIRED");
+      },
+    );
+    const payload = {
+      kind: "task.start" as const,
+      text: "phone task",
+      clientOperationId: "mobile-byok-missing",
+    };
+    expect(
+      await service.applyRemoteCommand(
+        remoteCommand(payload, { conversationId: null, generationId: null, baseRevision: 0 }),
+        payload,
+        authorization,
+      ),
+    ).toMatchObject({ ok: false, errorCode: "BYOK_API_KEY_REQUIRED" });
+    expect(chat.listConversations()).toEqual([]);
+    expect(pi.prompts).toHaveLength(0);
+    service.close();
+  });
+
   it("maps steer directly to the active Pi session and replays the product command once", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-app-"));
     directories.push(directory);

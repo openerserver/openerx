@@ -242,7 +242,11 @@ export class RemoteHostConnector {
       }
     }
 
-    const pairing = this.#pairings.get(command.pairingId);
+    let pairing = this.#pairings.get(command.pairingId);
+    if (!pairing) {
+      await this.refreshPairings();
+      pairing = this.#pairings.get(command.pairingId);
+    }
     if (!pairing) {
       await this.#reject(command, "REMOTE_PAIRING_NOT_ACTIVE", existing);
       return;
@@ -297,6 +301,31 @@ export class RemoteHostConnector {
     await this.#transport.recordReceipt(accepted);
     try {
       const result = await this.#applier.apply(command, payload);
+      // The result is encrypted like other product events. It gives the phone a durable
+      // conversation ID (or a recoverable error) instead of treating queueing as success.
+      const receipt = result.ok
+        ? (result.result as Record<string, unknown> | undefined)
+        : undefined;
+      await this.publishEvent({
+        kind: "conversation.updated",
+        conversationId:
+          typeof receipt?.conversationId === "string"
+            ? receipt.conversationId
+            : command.conversationId,
+        payload: {
+          commandId: command.commandId,
+          commandKind: payload.kind,
+          commandStatus: result.ok ? "applied" : "rejected",
+          conversationRevision: result.ok ? result.appliedRevision : result.currentRevision,
+          ...(!result.ok ? { reason: result.errorCode } : {}),
+          ...(result.ok && (payload.kind === "task.start" || payload.kind === "session.prompt")
+            ? {
+                userMessage: { id: receipt?.userMessageId, role: "user", text: payload.text },
+                assistantMessageId: receipt?.assistantMessageId,
+              }
+            : {}),
+        },
+      });
       if (!result.ok) {
         if (result.errorCode === "REMOTE_COMMAND_OUTCOME_UNKNOWN") {
           await this.publishEvent({
@@ -356,6 +385,19 @@ export class RemoteHostConnector {
       this.#mark(command.commandId, status, code, revision);
     }
     await this.#transport.recordReceipt(this.#receipt(command, status, code, revision));
+    if (this.#pairings.has(command.pairingId)) {
+      await this.publishEvent({
+        kind: "conversation.updated",
+        conversationId: command.conversationId,
+        payload: {
+          commandId: command.commandId,
+          commandKind: command.kind,
+          commandStatus: "rejected",
+          reason: code,
+          conversationRevision: revision,
+        },
+      });
+    }
   }
 
   async #replayReceipts(command: RemoteCommand, row: SqlRow): Promise<void> {

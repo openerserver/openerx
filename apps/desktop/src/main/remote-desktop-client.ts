@@ -1,8 +1,11 @@
 import {
+  type RemoteConnectionDecisionInput,
+  type RemoteConnectionRequest,
   type RemoteDevicePairing,
   type RemoteHost,
   type RemoteHostRegistrationInput,
   type RemotePairingChallenge,
+  remoteConnectionRequestSchema,
   remoteDevicePairingSchema,
   remoteHostSchema,
   remotePairingChallengeSchema,
@@ -40,6 +43,29 @@ export class RemoteDesktopClient {
   listPairings(accessToken: string): Promise<RemoteDevicePairing[]> {
     return this.#request(accessToken, "GET", "/api/v2/remote/pairings", undefined, (value) =>
       remoteDevicePairingSchema.array().parse(value),
+    );
+  }
+
+  listConnectionRequests(accessToken: string): Promise<RemoteConnectionRequest[]> {
+    return this.#request(
+      accessToken,
+      "GET",
+      "/api/v2/remote/connection-requests",
+      undefined,
+      (value) => remoteConnectionRequestSchema.array().parse(value),
+    );
+  }
+
+  decideConnectionRequest(
+    accessToken: string,
+    input: RemoteConnectionDecisionInput,
+  ): Promise<RemoteConnectionRequest> {
+    return this.#request(
+      accessToken,
+      "POST",
+      `/api/v2/remote/connection-requests/${encodeURIComponent(input.requestId)}/decision`,
+      input,
+      (value) => remoteConnectionRequestSchema.parse(value),
     );
   }
 

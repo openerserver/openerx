@@ -17,6 +17,8 @@ import {
   pushSubscriptionSchema,
   remoteCommandReceiptSchema,
   remoteCommandSchema,
+  remoteConnectionDecisionInputSchema,
+  remoteConnectionRequestInputSchema,
   remoteCursorAckInputSchema,
   remoteEventListInputSchema,
   remoteEventPublishInputSchema,
@@ -204,6 +206,57 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
           hostDeviceId: remotePresenceMatch[1],
         });
         send(response, 200, services.remote.updatePresence(principal, input));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/v2/remote/connection-requests") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        const input = remoteConnectionRequestInputSchema.parse(await jsonBody(request));
+        const controllerSession = services.identity
+          .listDevices(principal)
+          .find(
+            (session) => session.sessionId === principal.sessionId && session.revokedAt === null,
+          );
+        if (!controllerSession) throw new Error("REMOTE_CONTROLLER_DEVICE_REVOKED");
+        send(
+          response,
+          200,
+          services.remote.createConnectionRequest(principal, input, controllerSession.device),
+        );
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/v2/remote/connection-requests") {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        send(response, 200, services.remote.listConnectionRequests(principal));
+        return;
+      }
+      const connectionDecisionMatch =
+        /^\/api\/v2\/remote\/connection-requests\/([^/]+)\/decision$/.exec(url.pathname);
+      if (request.method === "POST" && connectionDecisionMatch) {
+        if (!services.remote) throw new Error("REMOTE_NOT_CONFIGURED");
+        const input = remoteConnectionDecisionInputSchema.parse({
+          ...((await jsonBody(request)) as object),
+          requestId: connectionDecisionMatch[1],
+        });
+        if (input.decision === "approve") {
+          const pending = services.remote
+            .listConnectionRequests(principal)
+            .find(
+              (value) =>
+                value.requestId === input.requestId && value.hostDeviceId === principal.deviceId,
+            );
+          if (!pending) throw new Error("REMOTE_CONNECTION_REQUEST_NOT_FOUND");
+          if (
+            !services.identity
+              .listDevices(principal)
+              .some(
+                (session) =>
+                  session.device.deviceId === pending.controllerDevice.deviceId &&
+                  session.revokedAt === null,
+              )
+          )
+            throw new Error("REMOTE_CONTROLLER_DEVICE_REVOKED");
+        }
+        send(response, 200, services.remote.decideConnectionRequest(principal, input));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/v2/remote/pairing-challenges") {

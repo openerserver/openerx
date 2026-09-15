@@ -249,7 +249,7 @@ React Renderer 只通过类型化 Bridge 请求桌面能力，不直接调用 No
 
 iOS/Android Remote Companion 不是桌面界面的缩小版。主导航固定为 `Hosts`、`Tasks`、`Inbox` 和 `Settings`：
 
-- `Hosts` 显示已配对 Windows/macOS 主机、在线状态、版本、当前项目/工作区和撤销入口。
+- `Hosts` 自动显示同账户 Windows/macOS 主机、在线状态和连接申请结果。首次连接由目标桌面允许，后续复用有效配对；二维码保留为快捷入口，并提供已配对设备的撤销操作。
 - `Tasks` 用于在在线主机开始/继续对话，查看流式回答、工具活动和成果。
 - `Inbox` 聚合待补充、待审批、完成和失败提醒；推送通过深链接进入准确对象。
 - `Settings` 管理账户、通知、设备密钥、配对、隐私和退出。

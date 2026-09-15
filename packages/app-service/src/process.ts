@@ -11,6 +11,7 @@ import {
   type ErrorEnvelope,
   projectCommandEnvelopeSchema,
   remoteApplyCommandRequestFrameSchema,
+  remoteConnectorAuthorizationFrameSchema,
   remoteConnectorConfigureFrameSchema,
   remoteConnectorDisableFrameSchema,
   remoteRevisionRequestFrameSchema,
@@ -127,6 +128,7 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
     skills,
     memoryRepository,
     projectRepository,
+    (modelRef) => mainCapabilities.automationExecutionContext(modelRef),
   );
   const automationRepository = new AutomationRepository(
     path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
@@ -177,7 +179,12 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
       eventKind: projected.kind,
       conversationId: projected.conversationId,
       occurredAt: projected.occurredAt,
-      payload: projected.payload,
+      payload: {
+        ...projected.payload,
+        ...(event.conversationId
+          ? { conversationRevision: service.currentRemoteRevision(event.conversationId) }
+          : {}),
+      },
     });
   });
   service.initialize();
@@ -238,6 +245,18 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
       void automationScheduler
         .reconcileAfterWake({ suspendedAt, resumedAt })
         .catch(() => undefined);
+      return;
+    }
+    const authorizationUpdate = remoteConnectorAuthorizationFrameSchema.safeParse(event.data);
+    if (authorizationUpdate.success) {
+      const next = authorizationUpdate.data.authorization;
+      if (
+        remoteAuthorization?.accountId === next.accountId &&
+        remoteAuthorization.platformBaseUrl === next.platformBaseUrl
+      ) {
+        remoteAuthorization = next;
+        remotePort.postMessage(authorizationUpdate.data);
+      }
       return;
     }
     const remoteConfiguration = remoteConnectorConfigureFrameSchema.safeParse(event.data);

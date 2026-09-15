@@ -10,7 +10,11 @@ import { errorEnvelopeSchema } from "./errors";
 import { automaticMemoryCreatedEventSchema } from "./memory";
 import { hostToolAvailabilitySchema } from "./model";
 import { projectCommandEnvelopeSchema } from "./project";
-import { remoteConnectorConfigureFrameSchema, remoteConnectorDisableFrameSchema } from "./remote";
+import {
+  remoteConnectorAuthorizationFrameSchema,
+  remoteConnectorConfigureFrameSchema,
+  remoteConnectorDisableFrameSchema,
+} from "./remote";
 import { normalizedToolResultSchema, toolOperationSchema } from "./tool";
 
 export const appServiceContractVersion = 1 as const;
@@ -358,6 +362,7 @@ export const appServicePortFrameSchema = z.union([
   mainOAuthRequestFrameSchema,
   mainOAuthResponseFrameSchema,
   remoteConnectorConfigureFrameSchema,
+  remoteConnectorAuthorizationFrameSchema,
   remoteConnectorDisableFrameSchema,
 ]);
 

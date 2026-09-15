@@ -828,8 +828,8 @@ select:focus-visible {
   background: #f6e8c7;
 }
 .remote-pairing-panel {
-  display: grid;
-  grid-template-columns: 180px 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: 22px;
   align-items: center;
   padding: 18px;
@@ -837,29 +837,107 @@ select:focus-visible {
   border: 1px solid #dcded7;
   border-radius: 14px;
 }
-.remote-pairing-panel img {
-  display: block;
-  width: 180px;
-  height: 180px;
+.remote-pairing-code {
+  flex: 0 0 288px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: #fff;
   border-radius: 8px;
 }
-.remote-pairing-panel > div {
+.remote-pairing-code img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.remote-pairing-placeholder {
   display: grid;
-  gap: 8px;
+  gap: 12px;
+  align-content: center;
+  justify-items: center;
+  height: 100%;
+  color: #6b7068;
+}
+.remote-pairing-instructions {
+  display: grid;
+  flex: 1 1 220px;
+  min-width: 0;
+  gap: 12px;
 }
 .remote-pairing-panel p {
   margin: 0;
 }
-.remote-pairing-panel span,
-.remote-pairing-panel code {
-  color: #777c73;
-  font-size: 11px;
-  overflow-wrap: anywhere;
+.remote-pairing-instructions > span {
+  color: var(--workspace-muted, #6b7068);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.remote-pairing-instructions button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-self: start;
+  padding: 8px 12px;
+  color: var(--workspace-text, #232823);
+  background: var(--workspace-surface, #fff);
+  border: 1px solid var(--workspace-border, #d7d9d2);
+  border-radius: 7px;
 }
 .remote-settings .device-card strong {
   display: inline-flex;
   gap: 7px;
   align-items: center;
+}
+.remote-connection-requests {
+  display: grid;
+  gap: 12px;
+}
+.remote-connection-request {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border);
+  border-radius: 12px;
+}
+.remote-connection-device {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.remote-connection-device > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.remote-connection-device span {
+  color: var(--workspace-muted);
+  font-size: 12px;
+}
+.remote-connection-request p {
+  margin: 0;
+  color: var(--workspace-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.remote-connection-notice {
+  position: fixed;
+  z-index: 70;
+  right: 24px;
+  bottom: 24px;
+  width: min(400px, calc(100vw - 48px));
+  padding: 16px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface);
+  border: 1px solid var(--workspace-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px #0003;
+}
+.remote-connection-notice > p {
+  margin: 0 0 12px;
+  font-weight: 600;
 }
 .settings-note {
   max-width: 680px;

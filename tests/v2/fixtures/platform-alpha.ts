@@ -42,6 +42,7 @@ const catalog: ModelCatalogEntry[] = [
     priceRef: "price/m3-alpha-standard",
     priceSummary: "由服务端按实际 Token 结算",
     free: false,
+    thinkingLevels: ["off", "medium"],
   },
   {
     modelRef: "platform/tools",
@@ -60,6 +61,7 @@ const catalog: ModelCatalogEntry[] = [
     priceRef: "price/m3-alpha-tools",
     priceSummary: "由服务端按实际 Token 结算",
     free: false,
+    thinkingLevels: ["off", "medium"],
   },
 ];
 
@@ -111,6 +113,9 @@ function toolResultText(result: { content?: unknown } | undefined): string {
 }
 
 const identity = new IdentityService(":memory:", {
+  ...(process.env.OPENERX_E2E_ACCESS_TOKEN_TTL_MS
+    ? { accessTokenTtlMs: Number(process.env.OPENERX_E2E_ACCESS_TOKEN_TTL_MS) }
+    : {}),
   codeFactory: () => "123456",
   challengeCooldownMs: 0,
   mailer: { async deliver() {} },

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { entityIdSchema } from "./common";
 import {
+  type RemoteConnectionRequest,
   remoteDevicePairingSchema,
   remoteHostSchema,
   type remotePairingChallengeSchema,
@@ -18,6 +19,12 @@ export const remoteDesktopStateSchema = z
 
 export const remoteDesktopEnableInputSchema = z.object({ enabled: z.boolean() }).strict();
 export const remoteDesktopRevokeInputSchema = z.object({ pairingId: entityIdSchema }).strict();
+export const remoteDesktopConnectionDecisionSchema = z
+  .object({
+    requestId: entityIdSchema,
+    decision: z.enum(["approve", "reject"]),
+  })
+  .strict();
 
 export type RemoteDesktopState = z.infer<typeof remoteDesktopStateSchema>;
 
@@ -27,6 +34,10 @@ export interface RemoteDesktopBridge {
     input: z.input<typeof remoteDesktopEnableInputSchema>,
   ): Promise<RemoteDesktopState>;
   createRemotePairingChallenge(): Promise<z.infer<typeof remotePairingChallengeSchema>>;
+  listRemoteConnectionRequests(): Promise<RemoteConnectionRequest[]>;
+  decideRemoteConnectionRequest(
+    input: z.infer<typeof remoteDesktopConnectionDecisionSchema>,
+  ): Promise<RemoteConnectionRequest>;
   revokeRemotePairing(
     input: z.input<typeof remoteDesktopRevokeInputSchema>,
   ): Promise<z.infer<typeof remoteDevicePairingSchema>>;

@@ -5,14 +5,19 @@ import {
   type RemoteHostRegistrationInput,
   remoteDesktopStateSchema,
 } from "@openerx/contracts";
-import { generateRemoteDeviceKeyPair } from "@openerx/remote-protocol";
+import {
+  generateRemoteDeviceKeyPair,
+  verifyRemoteConnectionRequestProof,
+} from "@openerx/remote-protocol";
 import type { AccountSessionManager } from "./account-session-manager";
 import type { AppServiceSupervisor } from "./app-service-supervisor";
 import { RemoteKeyVault } from "./credential-vault";
+import { RemoteAuthorizationRefresh } from "./remote-authorization-refresh";
 import { RemoteDesktopClient } from "./remote-desktop-client";
 
 export class RemoteDesktopController {
   readonly #client: RemoteDesktopClient | null;
+  readonly #authorizationRefresh: RemoteAuthorizationRefresh;
 
   constructor(
     private readonly supervisor: AppServiceSupervisor,
@@ -23,6 +28,10 @@ export class RemoteDesktopController {
     private readonly appVersion: string,
   ) {
     this.#client = platformUrl ? new RemoteDesktopClient(platformUrl) : null;
+    this.#authorizationRefresh = new RemoteAuthorizationRefresh(
+      () => this.accounts.authorization(this.platformUrl as string),
+      (authorization) => this.supervisor.updateRemoteAuthorization(authorization),
+    );
   }
 
   async state(): Promise<RemoteDesktopState> {
@@ -50,17 +59,20 @@ export class RemoteDesktopController {
   }
 
   async setEnabled(enabled: boolean): Promise<RemoteDesktopState> {
+    if (!enabled) this.#authorizationRefresh.stop();
     const client = this.#requireClient();
     const accessToken = await this.accounts.accessToken();
     const host = this.#hostRegistration(enabled);
     await client.registerHost(accessToken, host);
     if (enabled) {
       const keyPair = await this.#loadOrCreateKeyPair();
+      const authorization = await this.accounts.authorization(this.platformUrl as string);
       await this.supervisor.configureRemote({
-        authorization: await this.accounts.authorization(this.platformUrl as string),
+        authorization,
         host,
         hostPrivateKey: keyPair.privateKey,
       });
+      this.#authorizationRefresh.start(authorization);
     } else {
       await this.supervisor.disableRemote();
     }
@@ -83,20 +95,62 @@ export class RemoteDesktopController {
     return await this.#requireClient().revokePairing(await this.accounts.accessToken(), pairingId);
   }
 
+  async listConnectionRequests() {
+    if (!this.#client || this.accounts.state().status !== "signed_in") return [];
+    const requests = await this.#client.listConnectionRequests(await this.accounts.accessToken());
+    return requests.filter((request) => request.hostDeviceId === this.device.deviceId);
+  }
+
+  async decideConnectionRequest(input: { requestId: string; decision: "approve" | "reject" }) {
+    const client = this.#requireClient();
+    if (input.decision === "reject")
+      return await client.decideConnectionRequest(await this.accounts.accessToken(), {
+        requestId: input.requestId,
+        decision: "reject",
+      });
+    const request = (await this.listConnectionRequests()).find(
+      (value) => value.requestId === input.requestId,
+    );
+    if (!request || request.accountId !== this.accounts.state().account?.accountId)
+      throw new Error("REMOTE_CONNECTION_REQUEST_NOT_FOUND");
+    if (
+      !verifyRemoteConnectionRequestProof(
+        {
+          requestId: request.requestId,
+          accountId: request.accountId,
+          hostDeviceId: request.hostDeviceId,
+          controllerDeviceId: request.controllerDevice.deviceId,
+          controllerPublicKey: request.controllerPublicKey,
+        },
+        request.proof,
+      )
+    )
+      throw new Error("REMOTE_CONNECTION_PROOF_INVALID");
+    const keys = await this.#loadOrCreateKeyPair();
+    return await client.decideConnectionRequest(await this.accounts.accessToken(), {
+      requestId: input.requestId,
+      decision: "approve",
+      hostPublicKey: keys.publicKey,
+    });
+  }
+
   async resume(): Promise<void> {
     if (!this.#client || !this.platformUrl || this.accounts.state().status !== "signed_in") return;
     const keyPair = await this.#keyVault().load();
     if (!keyPair) return;
     const state = await this.state();
     if (!state.enabled) return;
+    const authorization = await this.accounts.authorization(this.platformUrl);
     await this.supervisor.configureRemote({
-      authorization: await this.accounts.authorization(this.platformUrl),
+      authorization,
       host: this.#hostRegistration(true),
       hostPrivateKey: keyPair.privateKey,
     });
+    this.#authorizationRefresh.start(authorization);
   }
 
   async disableLocally(): Promise<void> {
+    this.#authorizationRefresh.stop();
     await this.supervisor.disableRemote();
   }
 

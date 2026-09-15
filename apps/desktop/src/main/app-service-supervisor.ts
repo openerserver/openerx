@@ -305,6 +305,18 @@ export class AppServiceSupervisor {
     this.#mainPort?.postMessage({ kind: "remote-connector.disable" });
   }
 
+  updateRemoteAuthorization(authorization: AppServiceAuthorization): void {
+    const configuration = this.#remoteConfiguration;
+    if (
+      !configuration ||
+      configuration.authorization.accountId !== authorization.accountId ||
+      configuration.authorization.platformBaseUrl !== authorization.platformBaseUrl
+    )
+      return;
+    this.#remoteConfiguration = { ...configuration, authorization };
+    this.#mainPort?.postMessage({ kind: "remote-connector.authorization", authorization });
+  }
+
   #spawn(): void {
     mkdirSync(this.#profileDirectory, { recursive: true });
     const appNonce = randomBytes(32).toString("hex");

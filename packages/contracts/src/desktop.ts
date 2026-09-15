@@ -160,6 +160,8 @@ export const ipcChannels = Object.freeze({
   remoteState: "remote:state:get",
   remoteEnable: "remote:enabled:set",
   remotePairingChallenge: "remote:pairing-challenge:create",
+  remoteConnectionRequests: "remote:connection-requests:list",
+  remoteConnectionDecision: "remote:connection-requests:decide",
   remotePairingRevoke: "remote:pairing:revoke",
   releaseUpdateState: "release:update:state",
   releaseUpdateCheck: "release:update:check",

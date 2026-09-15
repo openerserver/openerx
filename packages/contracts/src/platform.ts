@@ -34,6 +34,9 @@ import type {
   PushSubscription,
   RemoteCommand,
   RemoteCommandReceipt,
+  RemoteConnectionDecisionInput,
+  RemoteConnectionRequest,
+  RemoteConnectionRequestInput,
   RemoteDevicePairing,
   RemoteEventCursor,
   RemoteEventPublishInput,
@@ -187,6 +190,16 @@ export interface RemoteControlServicePort {
     input: { hostDeviceId: string; hostPublicKey: string },
   ): RemotePairingChallenge;
   acceptPairing(principal: AccessPrincipal, input: RemotePairingAcceptInput): RemoteDevicePairing;
+  createConnectionRequest(
+    principal: AccessPrincipal,
+    input: RemoteConnectionRequestInput,
+    controllerDevice: DeviceDescriptor,
+  ): RemoteConnectionRequest;
+  listConnectionRequests(principal: AccessPrincipal): RemoteConnectionRequest[];
+  decideConnectionRequest(
+    principal: AccessPrincipal,
+    input: RemoteConnectionDecisionInput,
+  ): RemoteConnectionRequest;
   listPairings(principal: AccessPrincipal): RemoteDevicePairing[];
   revokePairing(principal: AccessPrincipal, pairingId: string): RemoteDevicePairing;
   submitCommand(principal: AccessPrincipal, command: RemoteCommand): RemoteCommandReceipt;

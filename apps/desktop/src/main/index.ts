@@ -98,6 +98,7 @@ import {
   projectListInputSchema,
   projectUpdateInputSchema,
   releaseUpdateStateSchema,
+  remoteDesktopConnectionDecisionSchema,
   remoteDesktopEnableInputSchema,
   remoteDesktopRevokeInputSchema,
   skillApprovePermissionsInputSchema,
@@ -504,6 +505,14 @@ function registerIpcHandlers(
   ipcMain.handle(ipcChannels.remotePairingChallenge, async (event) => {
     assertTrustedIpcSender(event);
     return await remote.createPairingChallenge();
+  });
+  ipcMain.handle(ipcChannels.remoteConnectionRequests, async (event) => {
+    assertTrustedIpcSender(event);
+    return await remote.listConnectionRequests();
+  });
+  ipcMain.handle(ipcChannels.remoteConnectionDecision, async (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    return await remote.decideConnectionRequest(remoteDesktopConnectionDecisionSchema.parse(input));
   });
   ipcMain.handle(ipcChannels.remotePairingRevoke, async (event, input: unknown) => {
     assertTrustedIpcSender(event);

@@ -1,10 +1,12 @@
 import path from "node:path";
 import {
+  type AppServiceAuthorization,
   type RemoteApplyCommandRequestFrame,
   type RemoteApplyCommandResponseFrame,
   type RemoteCommand,
   type RemoteCommandPayload,
   remoteApplyCommandResponseFrameSchema,
+  remoteConnectorAuthorizationFrameSchema,
   remoteConnectorBootstrapSchema,
   remoteConnectorConfigureFrameSchema,
   remoteConnectorDisableFrameSchema,
@@ -32,6 +34,8 @@ parentPort.once("message", (bootstrapEvent) => {
   const pendingRevisions = new Map<string, PendingRequest<number>>();
   const pendingCommands = new Map<string, PendingRequest<RemoteApplyCommandResponseFrame>>();
   let connector: RemoteHostConnector | null = null;
+  let transport: HttpRemoteGatewayTransport | null = null;
+  let authorization: AppServiceAuthorization | null = null;
   let runController: AbortController | null = null;
 
   const requestRevision = (conversationId: string | null): Promise<number> => {
@@ -76,6 +80,8 @@ parentPort.once("message", (bootstrapEvent) => {
     runController = null;
     const previous = connector;
     connector = null;
+    transport = null;
+    authorization = null;
     if (!previous) return;
     await previous.stop();
     previous.close();
@@ -104,10 +110,23 @@ parentPort.once("message", (bootstrapEvent) => {
       await stopConnector();
       return;
     }
+    const authorizationUpdate = remoteConnectorAuthorizationFrameSchema.safeParse(event.data);
+    if (authorizationUpdate.success) {
+      const next = authorizationUpdate.data.authorization;
+      if (
+        authorization?.accountId === next.accountId &&
+        authorization.platformBaseUrl === next.platformBaseUrl
+      ) {
+        authorization = next;
+        transport?.updateAccessToken(next.accessToken);
+      }
+      return;
+    }
     const configuration = remoteConnectorConfigureFrameSchema.safeParse(event.data);
     if (configuration.success) {
       await stopConnector();
-      const transport = new HttpRemoteGatewayTransport(
+      authorization = configuration.data.authorization;
+      transport = new HttpRemoteGatewayTransport(
         configuration.data.authorization.platformBaseUrl,
         configuration.data.authorization.accessToken,
       );

@@ -300,6 +300,8 @@ function createBridge(): DesktopBridge {
     }),
     setRemoteEnabled: vi.fn(),
     createRemotePairingChallenge: vi.fn(),
+    listRemoteConnectionRequests: vi.fn().mockResolvedValue([]),
+    decideRemoteConnectionRequest: vi.fn(),
     revokeRemotePairing: vi.fn(),
     listModels: vi.fn().mockResolvedValue([thinkingModel]),
     getUsage: vi.fn(),

@@ -2,10 +2,14 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   type AccessPrincipal,
+  type DeviceDescriptor,
   type PushSubscription,
   pushSubscriptionSchema,
   type RemoteCommand,
   type RemoteCommandReceipt,
+  type RemoteConnectionDecisionInput,
+  type RemoteConnectionRequest,
+  type RemoteConnectionRequestInput,
   type RemoteControlServicePort,
   type RemoteDevicePairing,
   type RemoteEventCursor,
@@ -18,6 +22,7 @@ import {
   type RemotePushEnvelope,
   remoteCommandReceiptSchema,
   remoteCommandSchema,
+  remoteConnectionRequestSchema,
   remoteDevicePairingSchema,
   remoteEventCursorSchema,
   remoteHostSchema,
@@ -25,7 +30,11 @@ import {
   remoteProductEventSchema,
   remotePushEnvelopeSchema,
 } from "@openerx/contracts";
-import { verifyRemoteCommand, verifyRemotePairingProof } from "@openerx/remote-protocol";
+import {
+  verifyRemoteCommand,
+  verifyRemoteConnectionRequestProof,
+  verifyRemotePairingProof,
+} from "@openerx/remote-protocol";
 
 type SqlRow = Record<string, unknown>;
 
@@ -34,6 +43,7 @@ interface GatewayOptions {
   idFactory?: () => string;
   nonceFactory?: () => string;
   pairingChallengeTtlMs?: number;
+  connectionRequestTtlMs?: number;
   pairingTtlMs?: number;
   commandMaxTtlMs?: number;
   eventMaxTtlMs?: number;
@@ -56,6 +66,7 @@ export class RemoteControlGateway implements RemoteControlServicePort {
   readonly #idFactory: () => string;
   readonly #nonceFactory: () => string;
   readonly #pairingChallengeTtlMs: number;
+  readonly #connectionRequestTtlMs: number;
   readonly #pairingTtlMs: number;
   readonly #commandMaxTtlMs: number;
   readonly #eventMaxTtlMs: number;
@@ -66,6 +77,7 @@ export class RemoteControlGateway implements RemoteControlServicePort {
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#nonceFactory = options.nonceFactory ?? (() => randomBytes(32).toString("base64url"));
     this.#pairingChallengeTtlMs = options.pairingChallengeTtlMs ?? 2 * 60_000;
+    this.#connectionRequestTtlMs = options.connectionRequestTtlMs ?? 5 * 60_000;
     this.#pairingTtlMs = options.pairingTtlMs ?? 90 * 24 * 60 * 60_000;
     this.#commandMaxTtlMs = options.commandMaxTtlMs ?? 2 * 60_000;
     this.#eventMaxTtlMs = options.eventMaxTtlMs ?? 24 * 60 * 60_000;
@@ -106,7 +118,14 @@ export class RemoteControlGateway implements RemoteControlServicePort {
         revision,
         now,
       );
-    if (!input.remoteEnabled) this.#expirePendingCommands(input.hostDeviceId, "REMOTE_DISABLED");
+    if (!input.remoteEnabled) {
+      this.#expirePendingCommands(input.hostDeviceId, "REMOTE_DISABLED");
+      this.#database
+        .prepare(
+          "UPDATE remote_connection_requests SET status = 'expired', resolved_at = ? WHERE account_id = ? AND host_device_id = ? AND status = 'pending'",
+        )
+        .run(now, principal.accountId, input.hostDeviceId);
+    }
     this.#audit(principal, "host.register", input.hostDeviceId, "OK");
     return this.#host(principal.accountId, input.hostDeviceId);
   }
@@ -185,6 +204,8 @@ export class RemoteControlGateway implements RemoteControlServicePort {
         .get(input.challengeId) as SqlRow | undefined;
       if (!row) error("REMOTE_PAIRING_CHALLENGE_NOT_FOUND");
       if (String(row.account_id) !== principal.accountId) error("ACCOUNT_SCOPE_VIOLATION");
+      if (!this.#host(principal.accountId, String(row.host_device_id)).remoteEnabled)
+        error("REMOTE_DISABLED");
       if (row.consumed_at !== null) error("REMOTE_PAIRING_CHALLENGE_REPLAYED");
       if (Date.parse(String(row.expires_at)) <= this.#now().getTime()) {
         error("REMOTE_PAIRING_CHALLENGE_EXPIRED");
@@ -201,42 +222,150 @@ export class RemoteControlGateway implements RemoteControlServicePort {
       ) {
         error("REMOTE_PAIRING_PROOF_INVALID");
       }
+      const pairing = this.#createPairing(
+        principal.accountId,
+        String(row.host_device_id),
+        input.controllerDeviceId,
+        input.controllerPublicKey,
+        String(row.host_public_key),
+      );
       const createdAt = this.#now();
-      const pairing = remoteDevicePairingSchema.parse({
-        version: 1,
-        pairingId: this.#idFactory(),
-        accountId: principal.accountId,
-        controllerDeviceId: input.controllerDeviceId,
-        hostDeviceId: row.host_device_id,
-        controllerPublicKey: input.controllerPublicKey,
-        hostPublicKey: row.host_public_key,
-        status: "active",
-        createdAt: createdAt.toISOString(),
-        expiresAt: new Date(createdAt.getTime() + this.#pairingTtlMs).toISOString(),
-        revokedAt: null,
-      });
-      this.#database
-        .prepare(
-          `INSERT INTO remote_pairings
-           (pairing_id, account_id, controller_device_id, host_device_id, controller_public_key,
-            host_public_key, status, created_at, expires_at, revoked_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)`,
-        )
-        .run(
-          pairing.pairingId,
-          pairing.accountId,
-          pairing.controllerDeviceId,
-          pairing.hostDeviceId,
-          pairing.controllerPublicKey,
-          pairing.hostPublicKey,
-          pairing.createdAt,
-          pairing.expiresAt,
-        );
       this.#database
         .prepare("UPDATE remote_pairing_challenges SET consumed_at = ? WHERE challenge_id = ?")
         .run(createdAt.toISOString(), input.challengeId);
       this.#audit(principal, "pairing.accept", pairing.pairingId, "ACTIVE");
       return pairing;
+    });
+  }
+
+  createConnectionRequest(
+    principal: AccessPrincipal,
+    input: RemoteConnectionRequestInput,
+    controllerDevice: DeviceDescriptor,
+  ): RemoteConnectionRequest {
+    if (
+      input.controllerDeviceId !== principal.deviceId ||
+      controllerDevice.deviceId !== principal.deviceId
+    )
+      error("REMOTE_CONTROLLER_DEVICE_MISMATCH");
+    if (controllerDevice.platform !== "ios" && controllerDevice.platform !== "android")
+      error("REMOTE_CONTROLLER_PLATFORM_UNSUPPORTED");
+    if (input.hostDeviceId === principal.deviceId) error("REMOTE_DISTINCT_DEVICES_REQUIRED");
+    const host = this.#host(principal.accountId, input.hostDeviceId);
+    if (!host.remoteEnabled) error("REMOTE_DISABLED");
+    if (
+      !verifyRemoteConnectionRequestProof({ ...input, accountId: principal.accountId }, input.proof)
+    )
+      error("REMOTE_CONNECTION_PROOF_INVALID");
+    this.#expireConnectionRequests();
+    return this.#transaction(() => {
+      const existing = this.#database
+        .prepare("SELECT * FROM remote_connection_requests WHERE request_id = ?")
+        .get(input.requestId) as SqlRow | undefined;
+      if (existing) {
+        const request = this.#parseConnectionRequest(existing);
+        if (
+          request.accountId !== principal.accountId ||
+          request.hostDeviceId !== input.hostDeviceId ||
+          request.controllerDevice.deviceId !== principal.deviceId ||
+          request.controllerPublicKey !== input.controllerPublicKey ||
+          request.proof !== input.proof
+        )
+          error("REMOTE_CONNECTION_REQUEST_CONFLICT");
+        return request;
+      }
+      const pending = this.#database
+        .prepare(
+          "SELECT * FROM remote_connection_requests WHERE account_id = ? AND controller_device_id = ? AND host_device_id = ? AND status = 'pending'",
+        )
+        .get(principal.accountId, principal.deviceId, input.hostDeviceId) as SqlRow | undefined;
+      if (pending) {
+        const request = this.#parseConnectionRequest(pending);
+        if (request.controllerPublicKey !== input.controllerPublicKey)
+          error("REMOTE_CONNECTION_REQUEST_PENDING");
+        return request;
+      }
+      const pairing = this.listPairings(principal).find(
+        (value) =>
+          value.status === "active" &&
+          value.controllerDeviceId === principal.deviceId &&
+          value.hostDeviceId === input.hostDeviceId &&
+          value.controllerPublicKey === input.controllerPublicKey,
+      );
+      const now = this.#now();
+      const request = remoteConnectionRequestSchema.parse({
+        version: 1,
+        requestId: input.requestId,
+        accountId: principal.accountId,
+        hostDeviceId: input.hostDeviceId,
+        controllerDevice,
+        controllerPublicKey: input.controllerPublicKey,
+        proof: input.proof,
+        status: pairing ? "approved" : "pending",
+        pairingId: pairing?.pairingId ?? null,
+        createdAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + this.#connectionRequestTtlMs).toISOString(),
+        resolvedAt: pairing ? now.toISOString() : null,
+      });
+      this.#saveConnectionRequest(request);
+      this.#audit(
+        principal,
+        "connection.request",
+        request.requestId,
+        pairing ? "ALREADY_PAIRED" : "PENDING",
+      );
+      return request;
+    });
+  }
+
+  listConnectionRequests(principal: AccessPrincipal): RemoteConnectionRequest[] {
+    this.#expireConnectionRequests();
+    return (
+      this.#database
+        .prepare(
+          "SELECT * FROM remote_connection_requests WHERE account_id = ? AND (host_device_id = ? OR controller_device_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 100",
+        )
+        .all(principal.accountId, principal.deviceId, principal.deviceId) as SqlRow[]
+    ).map((row) => this.#parseConnectionRequest(row));
+  }
+
+  decideConnectionRequest(
+    principal: AccessPrincipal,
+    input: RemoteConnectionDecisionInput,
+  ): RemoteConnectionRequest {
+    this.#expireConnectionRequests();
+    return this.#transaction(() => {
+      const row = this.#database
+        .prepare("SELECT * FROM remote_connection_requests WHERE request_id = ?")
+        .get(input.requestId) as SqlRow | undefined;
+      if (!row) error("REMOTE_CONNECTION_REQUEST_NOT_FOUND");
+      const request = this.#parseConnectionRequest(row);
+      if (request.accountId !== principal.accountId) error("ACCOUNT_SCOPE_VIOLATION");
+      if (request.hostDeviceId !== principal.deviceId) error("REMOTE_HOST_DEVICE_MISMATCH");
+      const desiredStatus = input.decision === "approve" ? "approved" : "rejected";
+      if (request.status === desiredStatus) return request;
+      if (request.status !== "pending") error("REMOTE_CONNECTION_REQUEST_RESOLVED");
+      if (!this.#host(principal.accountId, request.hostDeviceId).remoteEnabled)
+        error("REMOTE_DISABLED");
+      const pairing =
+        input.decision === "approve"
+          ? this.#createPairing(
+              principal.accountId,
+              request.hostDeviceId,
+              request.controllerDevice.deviceId,
+              request.controllerPublicKey,
+              input.hostPublicKey,
+            )
+          : null;
+      const resolved = remoteConnectionRequestSchema.parse({
+        ...request,
+        status: desiredStatus,
+        pairingId: pairing?.pairingId ?? null,
+        resolvedAt: this.#now().toISOString(),
+      });
+      this.#saveConnectionRequest(resolved);
+      this.#audit(principal, "connection.decide", request.requestId, desiredStatus.toUpperCase());
+      return resolved;
     });
   }
 
@@ -595,6 +724,83 @@ export class RemoteControlGateway implements RemoteControlServicePort {
     return this.#database.prepare("SELECT * FROM remote_audit ORDER BY id").all() as SqlRow[];
   }
 
+  #createPairing(
+    accountId: string,
+    hostDeviceId: string,
+    controllerDeviceId: string,
+    controllerPublicKey: string,
+    hostPublicKey: string,
+  ): RemoteDevicePairing {
+    const createdAt = this.#now();
+    const pairing = remoteDevicePairingSchema.parse({
+      version: 1,
+      pairingId: this.#idFactory(),
+      accountId: accountId,
+      controllerDeviceId: controllerDeviceId,
+      hostDeviceId: hostDeviceId,
+      controllerPublicKey: controllerPublicKey,
+      hostPublicKey: hostPublicKey,
+      status: "active",
+      createdAt: createdAt.toISOString(),
+      expiresAt: new Date(createdAt.getTime() + this.#pairingTtlMs).toISOString(),
+      revokedAt: null,
+    });
+    this.#database
+      .prepare(
+        `INSERT INTO remote_pairings
+         (pairing_id, account_id, controller_device_id, host_device_id, controller_public_key,
+          host_public_key, status, created_at, expires_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)`,
+      )
+      .run(
+        pairing.pairingId,
+        pairing.accountId,
+        pairing.controllerDeviceId,
+        pairing.hostDeviceId,
+        pairing.controllerPublicKey,
+        pairing.hostPublicKey,
+        pairing.createdAt,
+        pairing.expiresAt,
+      );
+    return pairing;
+  }
+
+  #saveConnectionRequest(request: RemoteConnectionRequest): void {
+    this.#database
+      .prepare(`INSERT INTO remote_connection_requests
+      (request_id, account_id, host_device_id, controller_device_id, status, created_at, expires_at, resolved_at, request_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(request_id) DO UPDATE SET status = excluded.status, resolved_at = excluded.resolved_at, request_json = excluded.request_json`)
+      .run(
+        request.requestId,
+        request.accountId,
+        request.hostDeviceId,
+        request.controllerDevice.deviceId,
+        request.status,
+        request.createdAt,
+        request.expiresAt,
+        request.resolvedAt,
+        JSON.stringify(request),
+      );
+  }
+
+  #parseConnectionRequest(row: SqlRow): RemoteConnectionRequest {
+    return remoteConnectionRequestSchema.parse({
+      ...JSON.parse(String(row.request_json)),
+      status: row.status,
+      resolvedAt: row.resolved_at,
+    });
+  }
+
+  #expireConnectionRequests(): void {
+    const now = this.#now().toISOString();
+    this.#database
+      .prepare(
+        "UPDATE remote_connection_requests SET status = 'expired', resolved_at = ? WHERE status = 'pending' AND expires_at <= ?",
+      )
+      .run(now, now);
+  }
+
   #migrate(): void {
     this.#database.exec(`
       PRAGMA foreign_keys = ON;
@@ -616,6 +822,13 @@ export class RemoteControlGateway implements RemoteControlServicePort {
         status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_remote_pairings_account ON remote_pairings(account_id);
+      CREATE TABLE IF NOT EXISTS remote_connection_requests (
+        request_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, host_device_id TEXT NOT NULL,
+        controller_device_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL, resolved_at TEXT, request_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_remote_connection_requests_devices
+        ON remote_connection_requests(account_id, host_device_id, controller_device_id, status);
       CREATE TABLE IF NOT EXISTS remote_commands (
         command_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, pairing_id TEXT NOT NULL,
         controller_device_id TEXT NOT NULL, host_device_id TEXT NOT NULL, session_key TEXT NOT NULL,

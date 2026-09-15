@@ -3,6 +3,7 @@ import type { ChatEvent, RemoteProductEvent } from "@openerx/contracts";
 const eventKind: Partial<Record<ChatEvent["type"], RemoteProductEvent["kind"]>> = {
   "conversation.created": "conversation.updated",
   "conversation.updated": "conversation.updated",
+  "message.accepted": "conversation.updated",
   "message.delta": "message.delta",
   "message.completed": "message.completed",
   "message.cancelling": "message.cancelling",
@@ -47,7 +48,25 @@ export function projectChatEventForRemote(event: ChatEvent): {
       sequence: event.sequence,
       ...(event.payload.conversation === undefined
         ? {}
-        : { conversationRevision: event.payload.conversation.revision }),
+        : {
+            conversationRevision: event.payload.conversation.revision,
+            title: event.payload.conversation.title,
+            projectId: event.payload.conversation.projectId,
+          }),
+      ...(event.payload.message === undefined
+        ? {}
+        : {
+            message: {
+              id: event.payload.message.id,
+              role: event.payload.message.role,
+              text: event.payload.message.parts.map((part) => part.text).join(""),
+              status: event.payload.message.status,
+              cancellationRequested: event.payload.message.cancellationRequestedAt !== null,
+              ...(event.payload.message.errorCode
+                ? { reason: event.payload.message.errorCode }
+                : {}),
+            },
+          }),
       ...(event.payload.delta === undefined ? {} : { delta: event.payload.delta }),
       ...(event.payload.reason === undefined ? {} : { reason: event.payload.reason }),
       ...(event.payload.workItem === undefined
@@ -72,6 +91,8 @@ export function projectChatEventForRemote(event: ChatEvent): {
             actions: event.payload.permission.actions,
             payloadDigest: event.payload.permission.payloadDigest,
             expiresAt: event.payload.permission.expiresAt,
+            permissionStatus: event.payload.permission.status,
+            permissionReason: event.payload.permission.reason,
           }),
       ...(reconciliation.length === 0 ? {} : { reconciliation }),
     },

@@ -20,7 +20,7 @@ import {
   remotePairingProof,
   signRemoteCommand,
 } from "@openerx/remote-protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -159,6 +159,102 @@ function setup() {
 }
 
 describe("RemoteHostConnector", () => {
+  it.each([true, false])(
+    "publishes an encrypted command outcome for mobile recovery (success=%s)",
+    async (ok) => {
+      const state = setup();
+      const command = state.makeCommand({
+        kind: "session.prompt",
+        text: "private phone prompt",
+        clientOperationId: "phone-result-0001",
+      });
+      state.gateway.submitCommand(state.controllerPrincipal, command);
+      const published = vi.spyOn(state.transport, "publishEvent");
+      const connector = new RemoteHostConnector({
+        databasePath: path.join(state.directory, "connector.sqlite"),
+        host: state.host,
+        hostPrivateKey: state.hostKeys.privateKey,
+        transport: state.transport,
+        now: () => state.nowRef.value,
+        applier: {
+          currentRevision: async () => 4,
+          apply: async () =>
+            ok
+              ? {
+                  kind: "remote.command.result",
+                  requestId: command.commandId,
+                  ok: true,
+                  appliedRevision: 5,
+                  result: {
+                    conversationId: command.conversationId,
+                    userMessageId: "user",
+                    assistantMessageId: "assistant",
+                  },
+                }
+              : {
+                  kind: "remote.command.result",
+                  requestId: command.commandId,
+                  ok: false,
+                  currentRevision: 4,
+                  errorCode: "BYOK_API_KEY_REQUIRED",
+                },
+        },
+      });
+      await connector.start();
+      await connector.tick();
+      const encrypted = published.mock.calls[0]?.[0].event;
+      expect(encrypted).toBeDefined();
+      if (!encrypted) throw new Error("outcome missing");
+      expect(JSON.stringify(encrypted)).not.toContain("private phone prompt");
+      const payload = decryptRemoteObject(
+        encrypted.encryptedPayload,
+        state.controllerKeys.privateKey,
+        state.hostKeys.publicKey,
+        `event:${encrypted.eventId}:${state.pairing.pairingId}`,
+      );
+      expect(payload).toMatchObject({
+        commandId: command.commandId,
+        commandStatus: ok ? "applied" : "rejected",
+      });
+      expect(payload).toMatchObject(
+        ok
+          ? { userMessage: { text: "private phone prompt" }, assistantMessageId: "assistant" }
+          : { reason: "BYOK_API_KEY_REQUIRED" },
+      );
+      connector.close();
+      state.gateway.close();
+    },
+  );
+
+  it("accepts the first command when desktop approval arrives between pairing refresh and command delivery", async () => {
+    const state = setup();
+    const command = state.makeCommand({ kind: "session.steer", text: "开始连接后的操作" });
+    state.gateway.submitCommand(state.controllerPrincipal, command);
+    vi.spyOn(state.transport, "listPairings").mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const apply = vi.fn(
+      async (): Promise<RemoteApplyCommandResponseFrame> => ({
+        kind: "remote.command.result",
+        requestId: command.commandId,
+        ok: true,
+        appliedRevision: 5,
+      }),
+    );
+    const connector = new RemoteHostConnector({
+      databasePath: path.join(state.directory, "connector.sqlite"),
+      host: state.host,
+      hostPrivateKey: state.hostKeys.privateKey,
+      transport: state.transport,
+      now: () => state.nowRef.value,
+      applier: { currentRevision: async () => 4, apply },
+    });
+    await connector.start();
+    await connector.tick();
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(state.gateway.submitCommand(state.controllerPrincipal, command).status).toBe("applied");
+    connector.close();
+    state.gateway.close();
+  });
+
   it("decrypts and applies a valid command once across Relay redelivery", async () => {
     const state = setup();
     const remoteCommand = state.makeCommand({ kind: "session.steer", text: "先运行测试" });
@@ -272,10 +368,12 @@ describe("RemoteHostConnector", () => {
     });
     await connector.start();
     await connector.tick();
-    const [event] = state.gateway.listEvents(state.controllerPrincipal, {
-      hostDeviceId: state.host.hostDeviceId,
-      afterCursor: null,
-    });
+    const event = state.gateway
+      .listEvents(state.controllerPrincipal, {
+        hostDeviceId: state.host.hostDeviceId,
+        afterCursor: null,
+      })
+      .find((event) => event.kind === "review.available");
     expect(event).toMatchObject({ kind: "review.available" });
     if (!event) throw new Error("reconciliation event missing");
     expect(
@@ -346,10 +444,12 @@ describe("RemoteHostConnector", () => {
     });
     await connector.start();
     await connector.tick();
-    const [event] = state.gateway.listEvents(state.controllerPrincipal, {
-      hostDeviceId: state.host.hostDeviceId,
-      afterCursor: null,
-    });
+    const event = state.gateway
+      .listEvents(state.controllerPrincipal, {
+        hostDeviceId: state.host.hostDeviceId,
+        afterCursor: null,
+      })
+      .find((event) => event.kind === "project.snapshot");
     expect(event).toMatchObject({ kind: "project.snapshot", conversationId: null });
     if (!event) throw new Error("project snapshot missing");
     const decrypted = decryptRemoteObject(

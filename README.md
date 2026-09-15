@@ -36,13 +36,17 @@ M8/M9 外部 Beta 与发布门禁阶段。DeepSeek V4 真实 API、Provider usag
 
 ```bash
 npm ci
+npm run dev:desktop
 npm run dev:v2
 npm run dev:deepseek
 npm run test:deepseek -- "只回答：连接成功"
 npm run check:v2
 ```
 
-`check:v2` 会依次执行依赖边界、lint、类型检查、单元/夹具测试和 Electron 生产打包。M0 的决策记录位于 [`docs/v2/adr/`](docs/v2/adr/README.md)。
+日常桌面调试使用 `dev:desktop`，复用固定构建目录；需要本地平台服务时使用 `dev:v2`。
+`check:v2` 会依次执行依赖边界、lint、类型检查、单元/夹具测试和 Electron 生产打包。
+旧调试产物可用 `npm run clean:desktop` 预览清理范围，具体规则见 [Desktop 开发说明](apps/desktop/README.md)。
+M0 的决策记录位于 [`docs/v2/adr/`](docs/v2/adr/README.md)。
 
 ## 许可证
 

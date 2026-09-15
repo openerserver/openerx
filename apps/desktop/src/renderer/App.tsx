@@ -73,7 +73,6 @@ import {
   PawPrint,
   PencilSimple,
   Plus,
-  QrCode,
   Receipt,
   ShieldWarning,
   SidebarSimple,
@@ -87,7 +86,6 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import QRCode from "qrcode";
 import { type ReactNode, type RefObject, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
@@ -124,6 +122,8 @@ import {
   ProjectSidebar,
   useProject,
 } from "./projects";
+import { RemoteConnectionNotice, RemoteConnectionRequests } from "./RemoteConnections";
+import { RemotePairingPanel } from "./RemotePairingPanel";
 import { withUiTimeout } from "./ui-timeout";
 import { WorkspaceLocation, WorkspaceSection } from "./WorkspaceContext";
 import { WorkItemWorkspaceEdits } from "./WorkspaceEdits";
@@ -5556,44 +5556,25 @@ function DiagnosticsSettings(): React.JSX.Element {
 
 function RemoteSettings(): React.JSX.Element {
   const queryClient = useQueryClient();
+  const [showQr, setShowQr] = useState(false);
   const remote = useQuery({
     queryKey: ["remote", "state"],
     queryFn: () => window.openerx.getRemoteState(),
     retry: false,
+    refetchInterval: (query) => (query.state.data?.enabled ? 3_000 : false),
   });
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const enable = useMutation({
     mutationFn: (enabled: boolean) => window.openerx.setRemoteEnabled({ enabled }),
     onSuccess: (state) => {
       queryClient.setQueryData(["remote", "state"], state);
-      if (!state.enabled) setQrDataUrl(null);
+      if (!state.enabled) setShowQr(false);
+      void queryClient.invalidateQueries({ queryKey: ["remote", "connection-requests"] });
     },
-  });
-  const challenge = useMutation({
-    mutationFn: () => window.openerx.createRemotePairingChallenge(),
   });
   const revoke = useMutation({
     mutationFn: (pairingId: string) => window.openerx.revokeRemotePairing({ pairingId }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["remote", "state"] }),
   });
-
-  useEffect(() => {
-    const value = challenge.data;
-    if (!value) return;
-    const pairingUrl = `openerx://remote/pair?payload=${encodeURIComponent(JSON.stringify(value))}`;
-    let active = true;
-    void QRCode.toDataURL(pairingUrl, {
-      width: 220,
-      margin: 1,
-      errorCorrectionLevel: "M",
-      color: { dark: "#232823", light: "#ffffff" },
-    }).then((dataUrl) => {
-      if (active) setQrDataUrl(dataUrl);
-    });
-    return () => {
-      active = false;
-    };
-  }, [challenge.data]);
 
   const state = remote.data;
   const activePairings = state?.pairings.filter(({ status }) => status === "active") ?? [];
@@ -5620,21 +5601,22 @@ function RemoteSettings(): React.JSX.Element {
           </span>
           <span>{state.host?.displayName}</span>
           <span>{activePairings.length} 台手机已配对</span>
-          <button type="button" onClick={() => challenge.mutate()} disabled={challenge.isPending}>
-            <QrCode size={16} /> 新建配对码
-          </button>
         </div>
       ) : null}
-      {challenge.data && qrDataUrl ? (
-        <div className="remote-pairing-panel">
-          <img src={qrDataUrl} alt="openerx Remote 一次性配对二维码" />
-          <div>
-            <strong>用已登录同一账户的手机扫描</strong>
-            <p>二维码不含访问令牌，只含一次性挑战、公钥和到期时间。</p>
-            <span>到期：{new Date(challenge.data.expiresAt).toLocaleString()}</span>
-            <code>{challenge.data.challengeId}</code>
+      {state?.enabled ? (
+        <>
+          <RemoteConnectionRequests />
+          <div className="settings-actions">
+            <button
+              type="button"
+              onClick={() => setShowQr((value) => !value)}
+              aria-expanded={showQr}
+            >
+              {showQr ? "收起二维码" : "使用二维码快捷配对"}
+            </button>
           </div>
-        </div>
+          {showQr ? <RemotePairingPanel /> : null}
+        </>
       ) : null}
       {activePairings.map((pairing) => (
         <div className="device-card" key={pairing.pairingId}>
@@ -5654,10 +5636,9 @@ function RemoteSettings(): React.JSX.Element {
           </button>
         </div>
       ))}
-      {remote.error || enable.error || challenge.error || revoke.error || state?.reason ? (
+      {remote.error || enable.error || revoke.error || state?.reason ? (
         <p className="inline-error">
-          {(remote.error ?? enable.error ?? challenge.error ?? revoke.error)?.message ??
-            state?.reason}
+          {(remote.error ?? enable.error ?? revoke.error)?.message ?? state?.reason}
         </p>
       ) : null}
     </section>
@@ -8379,6 +8360,12 @@ function AppShell(): React.JSX.Element {
         <AssistantCompanion onOpen={() => navigate("/assistant")} />
       ) : null}
       <DesktopControlBar />
+      <RemoteConnectionNotice
+        hidden={
+          location.pathname === "/settings/account" &&
+          [null, "account"].includes(new URLSearchParams(location.search).get("section"))
+        }
+      />
       {automaticMemoryNotice ? (
         <aside className="memory-created-notice" role="status" aria-live="polite">
           <Brain size={21} aria-hidden="true" />

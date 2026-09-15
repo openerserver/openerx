@@ -6,6 +6,15 @@ import { Platform } from "react-native";
 
 const sessionKey = "openerx.remote.session.v1";
 const deviceKey = "openerx.remote.device.v1";
+let sessionRevision = 0;
+let sessionWrites = Promise.resolve();
+const refreshes = new Map<string, Promise<MobileSession>>();
+
+function writeSession(operation: () => Promise<void>): Promise<void> {
+  const write = sessionWrites.then(operation);
+  sessionWrites = write.catch(() => undefined);
+  return write;
+}
 
 export interface MobileSession {
   account: AccountIdentity;
@@ -44,7 +53,10 @@ function fromGrant(grant: DeviceSessionGrant): MobileSession {
 
 export async function saveSession(grantInput: DeviceSessionGrant): Promise<MobileSession> {
   const session = fromGrant(deviceSessionGrantSchema.parse(grantInput));
-  await SecureStore.setItemAsync(sessionKey, JSON.stringify(session), secureOptions);
+  sessionRevision += 1;
+  await writeSession(() =>
+    SecureStore.setItemAsync(sessionKey, JSON.stringify(session), secureOptions),
+  );
   return session;
 }
 
@@ -54,13 +66,21 @@ export async function loadSession(): Promise<MobileSession | null> {
 }
 
 export async function clearSession(): Promise<void> {
-  await SecureStore.deleteItemAsync(sessionKey, secureOptions);
+  sessionRevision += 1;
+  await writeSession(() => SecureStore.deleteItemAsync(sessionKey, secureOptions));
 }
 
-export async function refreshSession(
-  baseUrl: string,
-  session: MobileSession,
-): Promise<MobileSession> {
+export function refreshSession(baseUrl: string, session: MobileSession): Promise<MobileSession> {
+  const key = `${sessionRevision}:${session.sessionId}:${session.refreshCredential}`;
+  const pending = refreshes.get(key);
+  if (pending) return pending;
+  const result = rotateSession(baseUrl, session).finally(() => refreshes.delete(key));
+  refreshes.set(key, result);
+  return result;
+}
+
+async function rotateSession(baseUrl: string, session: MobileSession): Promise<MobileSession> {
+  const revision = sessionRevision;
   const response = await fetch(
     `${baseUrl.replace(/\/$/u, "")}/api/v2/account/sessions/${encodeURIComponent(session.sessionId)}/refresh`,
     {
@@ -71,5 +91,12 @@ export async function refreshSession(
   );
   const value = (await response.json()) as unknown;
   if (!response.ok) throw new Error("SESSION_REFRESH_FAILED");
-  return await saveSession(deviceSessionGrantSchema.parse(value));
+  const next = fromGrant(deviceSessionGrantSchema.parse(value));
+  if (next.sessionId !== session.sessionId || next.account.accountId !== session.account.accountId)
+    throw new Error("SESSION_REFRESH_SCOPE_VIOLATION");
+  await writeSession(async () => {
+    if (revision !== sessionRevision) throw new Error("SESSION_CHANGED");
+    await SecureStore.setItemAsync(sessionKey, JSON.stringify(next), secureOptions);
+  });
+  return next;
 }

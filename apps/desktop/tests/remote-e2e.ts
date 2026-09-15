@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
   RemoteCommand,
   RemoteCommandPayload,
+  RemoteConnectionRequest,
   RemoteDevicePairing,
   RemoteHost,
   RemoteProductEvent,
@@ -16,6 +17,7 @@ import {
   decryptRemoteObject,
   encryptRemotePayload,
   generateRemoteDeviceKeyPair,
+  remoteConnectionRequestProof,
   remotePairingProof,
   signRemoteCommand,
 } from "@openerx/remote-protocol";
@@ -25,7 +27,10 @@ const desktopDirectory = path.resolve(import.meta.dirname, "../..");
 const mainEntry = path.join(desktopDirectory, ".vite", "build", "main.js");
 const platformEntry = path.join(desktopDirectory, ".vite", "build", "platform-alpha-test.mjs");
 const profileDirectory = mkdtempSync(path.join(tmpdir(), "openerx-remote-e2e-"));
-const platform = fork(platformEntry, [], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+const platform = fork(platformEntry, [], {
+  stdio: ["ignore", "pipe", "pipe", "ipc"],
+  env: { ...process.env, OPENERX_E2E_ACCESS_TOKEN_TTL_MS: "45000" },
+});
 platform.stderr?.pipe(process.stderr);
 const platformUrl = await new Promise<string>((resolve, reject) => {
   const timeout = setTimeout(() => reject(new Error("Platform Alpha readiness timed out")), 10_000);
@@ -171,6 +176,10 @@ function remoteCommand(input: {
 
 let application: Awaited<ReturnType<typeof electron.launch>> | undefined;
 try {
+  writeFileSync(
+    path.join(profileDirectory, "model-service.json"),
+    JSON.stringify({ mode: "hosted", byok: null, updatedAt: new Date().toISOString() }),
+  );
   application = await electron.launch({
     args: [mainEntry],
     cwd: desktopDirectory,
@@ -184,19 +193,23 @@ try {
   });
   const page = await application.firstWindow();
   await page.waitForLoadState("domcontentloaded");
-  await page.getByRole("link", { name: "设置" }).click();
-  await page.getByLabel("邮箱").fill("remote-e2e@example.com");
+  await page.getByRole("link", { name: "设置", exact: true }).click();
+  await page.getByRole("textbox", { name: "邮箱", exact: true }).fill("remote-e2e@example.com");
   await page.getByRole("button", { name: "发送验证码" }).click();
   await page.getByLabel("六位验证码").fill("123456");
   await page.getByRole("button", { name: "验证并登录" }).click();
   await page.getByLabel("账户状态").getByText("已登录", { exact: true }).waitFor();
+  const initialSessionVersion = await page.evaluate(
+    async () => (await window.openerx.getAccountState()).session?.sessionVersion,
+  );
 
   const mobile = await mobileSession("remote-e2e@example.com");
   await fund(mobile.accessToken);
-  const remoteState = await page.evaluate(
-    async () => await window.openerx.setRemoteEnabled({ enabled: true }),
-  );
+  const remotePanel = page.getByRole("region", { name: "手机远程控制", exact: true });
+  await remotePanel.getByRole("button", { name: "开启 Remote", exact: true }).click();
+  const remoteState = await page.evaluate(async () => await window.openerx.getRemoteState());
   assert.equal(remoteState.enabled, true);
+  assert.equal(await remotePanel.getByRole("img").count(), 0);
   const challenge = await page.evaluate(
     async () => await window.openerx.createRemotePairingChallenge(),
   );
@@ -223,22 +236,66 @@ try {
   const controllerDeviceId = deviceList.value.find(({ device }) => device.platform === "ios")
     ?.device.deviceId;
   assert.ok(controllerDeviceId);
-  const accepted = await json<RemoteDevicePairing>("/api/v2/remote/pairings", mobile.accessToken, {
-    method: "POST",
-    body: JSON.stringify({
-      challengeId: challenge.challengeId,
-      oneTimeNonce: challenge.oneTimeNonce,
-      controllerDeviceId,
-      controllerPublicKey: controllerKeys.publicKey,
-      proof: remotePairingProof(
-        challenge.challengeId,
-        challenge.oneTimeNonce,
+  const qrAccepted = await json<RemoteDevicePairing>(
+    "/api/v2/remote/pairings",
+    mobile.accessToken,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        challengeId: challenge.challengeId,
+        oneTimeNonce: challenge.oneTimeNonce,
         controllerDeviceId,
-        controllerKeys.privateKey,
-      ),
-    }),
+        controllerPublicKey: controllerKeys.publicKey,
+        proof: remotePairingProof(
+          challenge.challengeId,
+          challenge.oneTimeNonce,
+          controllerDeviceId,
+          controllerKeys.privateKey,
+        ),
+      }),
+    },
+  );
+  assert.equal(qrAccepted.response.status, 200, JSON.stringify(qrAccepted.value));
+  await json(`/api/v2/remote/pairings/${qrAccepted.value.pairingId}`, mobile.accessToken, {
+    method: "DELETE",
   });
-  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.value));
+  const requestInput = {
+    requestId: crypto.randomUUID(),
+    hostDeviceId: challenge.hostDeviceId,
+    controllerDeviceId,
+    controllerPublicKey: controllerKeys.publicKey,
+  };
+  const request = await json<RemoteConnectionRequest>(
+    "/api/v2/remote/connection-requests",
+    mobile.accessToken,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...requestInput,
+        proof: remoteConnectionRequestProof(
+          { ...requestInput, accountId: mobile.account.accountId },
+          controllerKeys.privateKey,
+        ),
+      }),
+    },
+  );
+  assert.equal(request.value.status, "pending");
+  const beforeApproval = await json<RemoteDevicePairing[]>(
+    "/api/v2/remote/pairings",
+    mobile.accessToken,
+  );
+  assert.equal(beforeApproval.value.filter(({ status }) => status === "active").length, 0);
+  const inbox = page.getByRole("region", { name: "手机连接申请", exact: true });
+  await inbox.getByText("Remote E2E iPhone", { exact: true }).waitFor();
+  await inbox.getByRole("button", { name: "允许此手机", exact: true }).click();
+  await inbox.getByText("Remote E2E iPhone", { exact: true }).waitFor({ state: "hidden" });
+  const approvedPairings = await json<RemoteDevicePairing[]>(
+    "/api/v2/remote/pairings",
+    mobile.accessToken,
+  );
+  const pairing = approvedPairings.value.find(({ status }) => status === "active");
+  assert.ok(pairing);
+  const accepted = { value: pairing };
 
   let host: RemoteHost | undefined;
   for (let index = 0; index < 30; index += 1) {
@@ -293,7 +350,10 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   assert.ok(decrypted.some(({ envelope }) => envelope.kind === "conversation.updated"));
-  assert.ok(decrypted.some(({ payload }) => String(payload.delta ?? "").includes("Remote E2E")));
+  assert.ok(
+    decrypted.some(({ payload }) => String(payload.delta ?? "").includes("Remote E2E")),
+    JSON.stringify(decrypted.map(({ envelope, payload }) => ({ kind: envelope.kind, payload }))),
+  );
   assert.ok(decrypted.some(({ envelope }) => envelope.kind === "message.completed"));
 
   const replay = await json("/api/v2/remote/commands", mobile.accessToken, {
@@ -304,6 +364,53 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1_500));
   const charges = await json<unknown[]>("/api/v2/billing/charges", mobile.accessToken);
   assert.equal(charges.value.length, 1);
+
+  await page.waitForFunction(
+    async (initial) => {
+      const state = await window.openerx.getAccountState();
+      return (state.session?.sessionVersion ?? 0) > (initial ?? 0);
+    },
+    initialSessionVersion,
+    { timeout: 30_000 },
+  );
+  const afterRenewal = remoteCommand({
+    payload: { kind: "project.list", includeArchived: false },
+    host: host as RemoteHost,
+    pairing: accepted.value,
+    accountId: mobile.account.accountId,
+    controllerDeviceId,
+    controllerPrivateKey: controllerKeys.privateKey,
+    sequence: 2,
+  });
+  const resubmitted = await json("/api/v2/remote/commands", mobile.accessToken, {
+    method: "POST",
+    body: JSON.stringify(afterRenewal),
+  });
+  assert.equal(resubmitted.response.status, 200);
+  let renewedCommandExecuted = false;
+  for (let index = 0; index < 40; index += 1) {
+    const events = await json<RemoteProductEvent[]>(
+      `/api/v2/remote/events?hostDeviceId=${host?.hostDeviceId}&limit=100`,
+      mobile.accessToken,
+    );
+    const snapshot = events.value.find(({ kind }) => kind === "project.snapshot");
+    if (snapshot) {
+      const payload = decryptRemoteObject<Record<string, unknown>>(
+        snapshot.encryptedPayload,
+        controllerKeys.privateKey,
+        accepted.value.hostPublicKey,
+        `event:${snapshot.eventId}:${accepted.value.pairingId}`,
+      );
+      assert.equal(payload.kind, "project.snapshot");
+      renewedCommandExecuted = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  assert.ok(
+    renewedCommandExecuted,
+    "Remote commands must continue after the desktop session rotates its access token",
+  );
 
   const keyPath = path.join(
     profileDirectory,
@@ -324,7 +431,7 @@ try {
   await page.evaluate(async () => await window.openerx.setRemoteEnabled({ enabled: false }));
 
   console.log(
-    "E2E_REMOTE_OK same-account-pairing-e2ee-start-cursor-replay-single-charge-revoke-disable-key-vault",
+    "E2E_REMOTE_OK desktop-consent-optional-qr-e2ee-start-token-renewal-cursor-replay-single-charge-revoke-disable-key-vault",
   );
 } finally {
   await application?.close().catch(() => undefined);

@@ -5,6 +5,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import {
   type RemoteCommand,
   type RemoteCommandPayload,
+  type RemoteConnectionRequestInput,
   remoteCommandPayloadSchema,
   remoteCommandSchema,
 } from "@openerx/contracts";
@@ -138,6 +139,45 @@ export function remotePairingProof(
     canonicalJson({ challengeId, controllerDeviceId, oneTimeNonce, version: 1 }),
   );
   return base64Url(ed25519.sign(message, fromBase64Url(privateKey.signingSecret)));
+}
+
+type ConnectionProofInput = Omit<RemoteConnectionRequestInput, "proof"> & { accountId: string };
+
+function connectionProofMessage(input: ConnectionProofInput): Uint8Array {
+  return textEncoder.encode(
+    canonicalJson({
+      purpose: "openerx.remote.connection-request",
+      version: 1,
+      requestId: input.requestId,
+      accountId: input.accountId,
+      hostDeviceId: input.hostDeviceId,
+      controllerDeviceId: input.controllerDeviceId,
+      controllerPublicKey: input.controllerPublicKey,
+    }),
+  );
+}
+
+export function remoteConnectionRequestProof(
+  input: ConnectionProofInput,
+  privateKeyValue: string,
+): string {
+  const privateKey = parsePrivateKey(privateKeyValue);
+  return base64Url(
+    ed25519.sign(connectionProofMessage(input), fromBase64Url(privateKey.signingSecret)),
+  );
+}
+
+export function verifyRemoteConnectionRequestProof(
+  input: ConnectionProofInput,
+  proof: string,
+): boolean {
+  const publicKey = parsePublicKey(input.controllerPublicKey);
+  return ed25519.verify(
+    fromBase64Url(proof),
+    connectionProofMessage(input),
+    fromBase64Url(publicKey.signing),
+    { zip215: false },
+  );
 }
 
 export function verifyRemotePairingProof(

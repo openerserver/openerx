@@ -8,12 +8,15 @@ import {
   pushSubscriptionSchema,
   type RemoteCommand,
   type RemoteCommandReceipt,
+  type RemoteConnectionRequest,
+  type RemoteConnectionRequestInput,
   type RemoteDevicePairing,
   type RemoteEventCursor,
   type RemoteHost,
   type RemotePairingAcceptInput,
   type RemoteProductEvent,
   remoteCommandReceiptSchema,
+  remoteConnectionRequestSchema,
   remoteDevicePairingSchema,
   remoteEventCursorSchema,
   remoteHostSchema,
@@ -21,7 +24,10 @@ import {
 } from "@openerx/contracts";
 
 export class MobileApi {
-  constructor(readonly baseUrl: string) {}
+  constructor(
+    readonly baseUrl: string,
+    private readonly authorize?: (token: string, rejected: boolean) => Promise<string>,
+  ) {}
 
   requestCode(email: string): Promise<EmailChallenge> {
     return this.#request("POST", "/api/v2/account/challenges", undefined, { email }, (value) =>
@@ -58,6 +64,21 @@ export class MobileApi {
   acceptPairing(token: string, input: RemotePairingAcceptInput): Promise<RemoteDevicePairing> {
     return this.#request("POST", "/api/v2/remote/pairings", token, input, (value) =>
       remoteDevicePairingSchema.parse(value),
+    );
+  }
+
+  requestConnection(
+    token: string,
+    input: RemoteConnectionRequestInput,
+  ): Promise<RemoteConnectionRequest> {
+    return this.#request("POST", "/api/v2/remote/connection-requests", token, input, (value) =>
+      remoteConnectionRequestSchema.parse(value),
+    );
+  }
+
+  listConnectionRequests(token: string): Promise<RemoteConnectionRequest[]> {
+    return this.#request("GET", "/api/v2/remote/connection-requests", token, undefined, (value) =>
+      remoteConnectionRequestSchema.array().parse(value),
     );
   }
 
@@ -117,15 +138,33 @@ export class MobileApi {
     body: unknown,
     parse: (value: unknown) => T,
   ): Promise<T> {
-    const response = await fetch(new URL(pathname, this.baseUrl), {
-      method,
-      headers: {
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    const value = (await response.json()) as unknown;
+    const send = (accessToken: string | undefined): Promise<Response> =>
+      fetch(new URL(pathname, this.baseUrl), {
+        method,
+        headers: {
+          ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    let accessToken = token && this.authorize ? await this.authorize(token, false) : token;
+    let response = await send(accessToken);
+    let value = (await response.json()) as unknown;
+    const errorCode =
+      (value as { error?: { message?: string }; message?: string })?.error?.message ??
+      (value as { message?: string })?.message;
+    if (
+      accessToken &&
+      this.authorize &&
+      response.status === 401 &&
+      ["ACCESS_TOKEN_INVALID", "ACCESS_TOKEN_EXPIRED", "ACCESS_TOKEN_SUPERSEDED"].includes(
+        errorCode ?? "",
+      )
+    ) {
+      accessToken = await this.authorize(accessToken, true);
+      response = await send(accessToken);
+      value = await response.json();
+    }
     if (!response.ok) {
       const candidate = value as { error?: { message?: string }; message?: string };
       throw new Error(
