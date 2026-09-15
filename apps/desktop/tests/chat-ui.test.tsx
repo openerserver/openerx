@@ -3794,7 +3794,7 @@ describe("M1 chat renderer", () => {
     );
     expect(
       await screen.findByText(
-        "系统设置已打开；授权后返回即可重新检测。如系统要求，请重启 openerx。",
+        "已向系统申请权限并打开设置，请开启对应开关。授权后返回即可重新检测；如系统要求，请重启 openerx。",
       ),
     ).toBeTruthy();
   });
@@ -3827,10 +3827,11 @@ describe("M1 chat renderer", () => {
       const dialog = await screen.findByRole("dialog", { name });
       expect(
         within(dialog).getByText(
-          "点击下方按钮，在“系统设置 → 隐私与安全性”中为 openerx 开启相应权限。",
+          "点击下方按钮，openerx 会先向系统申请权限，再打开“系统设置 → 隐私与安全性”。",
         ),
       ).toBeTruthy();
-      expect(within(dialog).getByText(/请点击“\+”添加当前应用/)).toBeTruthy();
+      expect(within(dialog).getByText(/系统会将 openerx 加入权限列表/)).toBeTruthy();
+      expect(within(dialog).queryByText(/请点击“\+”添加当前应用/)).toBeNull();
       if (capability === "browser")
         expect(within(dialog).getByLabelText("默认浏览器模式")).toBeTruthy();
       expect(bridge.requestDesktopNativePermission).not.toHaveBeenCalled();

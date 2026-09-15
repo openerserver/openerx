@@ -150,6 +150,7 @@ const config: ForgeConfig = {
     appCopyright: "Copyright © 2026 openerx",
     executableName: "openerx",
     extendInfo: {
+      NSScreenCaptureUsageDescription: "openerx 在您请求桌面读取时使用录屏权限。",
       NSAppleEventsUsageDescription:
         "openerx 仅在您逐次批准桌面操作后，使用系统自动化控制您指定的应用。",
     },
@@ -181,6 +182,17 @@ const config: ForgeConfig = {
         { recursive: true },
       );
       if (["darwin", "mas"].includes(platform)) {
+        execFileSync(
+          process.execPath,
+          [
+            path.join(desktopDirectory, "scripts", "build-macos-screen-permission.mjs"),
+            "--output",
+            path.join(buildPath, "native", "openerx-screen-permission.node"),
+            "--arch",
+            arch,
+          ],
+          { stdio: "inherit" },
+        );
         execFileSync(
           process.execPath,
           [

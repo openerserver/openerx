@@ -1,7 +1,7 @@
 {
   "name": "@openerx/desktop",
   "productName": "openerx",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "private": true,
   "description": "openerx (personal AI workspace) Electron desktop client",
   "main": ".vite/build/main.js",

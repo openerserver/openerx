@@ -27,6 +27,7 @@ run(
     "--maxWorkers=2",
     "tests/browser-settings-panel.test.tsx",
     "tests/desktop-tool-availability.test.ts",
+    "tests/desktop-native-permissions.test.ts",
     "tests/desktop-control-ui.test.tsx",
     "tests/model-connection.test.ts",
     "tests/mac-signing.test.ts",

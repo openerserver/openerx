@@ -2,6 +2,8 @@ declare const __OPENERX_BUILD_INFO__: { version: string; buildId: string };
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { requestDesktopNativePermission } from "./desktop-native-permissions";
+import { requestMacScreenCapture } from "./macos-screen-permission";
 import { defaultWorkspaceDirectory as resolveDefaultWorkspaceDirectory } from "@openerx/app-service/default-workspace";
 import {
   acceptBillingTermsInputSchema,
@@ -298,45 +300,15 @@ function registerIpcHandlers(
   ipcMain.handle(ipcChannels.desktopNativePermissionRequest, async (event, raw: unknown) => {
     assertTrustedIpcSender(event);
     const input = desktopNativePermissionRequestSchema.parse(raw);
-    if (process.platform !== "darwin") {
-      return desktopNativePermissionResultSchema.parse({
-        permission: input.permission,
-        status: "unavailable",
-        reason: "DESKTOP_PLATFORM_UNSUPPORTED",
-        settingsOpened: false,
-      });
-    }
-    if (input.permission === "screen_capture") {
-      if (systemPreferences.getMediaAccessStatus("screen") === "granted") {
-        return desktopNativePermissionResultSchema.parse({
-          permission: input.permission,
-          status: "granted",
-          reason: null,
-          settingsOpened: false,
-        });
-      }
-      await shell.openExternal(
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-      );
-      return desktopNativePermissionResultSchema.parse({
-        permission: input.permission,
-        status: "authorization_required",
-        reason: "DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED",
-        settingsOpened: true,
-      });
-    }
-    const trusted = systemPreferences.isTrustedAccessibilityClient(true);
-    if (!trusted) {
-      await shell.openExternal(
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-      );
-    }
-    return desktopNativePermissionResultSchema.parse({
-      permission: input.permission,
-      status: trusted ? "granted" : "authorization_required",
-      reason: trusted ? null : "DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED",
-      settingsOpened: !trusted,
-    });
+    return desktopNativePermissionResultSchema.parse(
+      await requestDesktopNativePermission(input.permission, {
+        platform: process.platform,
+        screenCaptureStatus: () => systemPreferences.getMediaAccessStatus("screen"),
+        requestScreenCapture: requestMacScreenCapture,
+        accessibilityTrusted: (prompt) => systemPreferences.isTrustedAccessibilityClient(prompt),
+        openSettings: (url) => shell.openExternal(url),
+      }),
+    );
   });
   ipcMain.handle(ipcChannels.browserConnectionState, async (event) => {
     assertTrustedIpcSender(event);
