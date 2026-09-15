@@ -81,6 +81,68 @@ describe("workspace write change evidence", () => {
     expect(changes.diffs).toHaveLength(0);
   });
 
+  it("keeps deletion and creation separate when an inode is reused", ({ skip }) => {
+    const root = temporaryRoot();
+    writeFileSync(path.join(root.rootPath, "deleted.txt"), "same contents\n");
+    const baseline = captureWorkspaceWriteBaseline([root]);
+    unlinkSync(path.join(root.rootPath, "deleted.txt"));
+    writeFileSync(path.join(root.rootPath, "created.txt"), "same contents\n");
+    const replacement = captureWorkspaceWriteBaseline([root]).roots[0]?.entries.get("created.txt");
+    const previous = baseline.roots[0]?.entries.get("deleted.txt");
+    if (!previous || !replacement) throw new Error("Snapshot fixture missing");
+    if (replacement.birthtimeNs === null) return skip();
+    // Model inode reuse deterministically, including distinct births within one millisecond.
+    previous.inodeKey = replacement.inodeKey;
+    previous.birthtimeNs = String(BigInt(replacement.birthtimeNs) - 1n);
+
+    const changes = collectWorkspaceWriteChanges(baseline);
+    expect(changes.manifest.map(({ kind, relativePath }) => [kind, relativePath])).toEqual([
+      ["created", "created.txt"],
+      ["deleted", "deleted.txt"],
+    ]);
+    expect(changes.diffs).toHaveLength(2);
+  });
+
+  it("requires matching contents when birth time cannot distinguish inode generations", () => {
+    const root = temporaryRoot();
+    writeFileSync(path.join(root.rootPath, "deleted.txt"), "deleted\n");
+    const baseline = captureWorkspaceWriteBaseline([root]);
+    unlinkSync(path.join(root.rootPath, "deleted.txt"));
+    writeFileSync(path.join(root.rootPath, "created.txt"), "created\n");
+    const replacement = captureWorkspaceWriteBaseline([root]).roots[0]?.entries.get("created.txt");
+    const previous = baseline.roots[0]?.entries.get("deleted.txt");
+    if (!previous || !replacement) throw new Error("Snapshot fixture missing");
+    previous.inodeKey = replacement.inodeKey;
+    previous.birthtimeNs = null;
+
+    expect(
+      collectWorkspaceWriteChanges(baseline).manifest.map(({ kind, relativePath }) => [
+        kind,
+        relativePath,
+      ]),
+    ).toEqual([
+      ["created", "created.txt"],
+      ["deleted", "deleted.txt"],
+    ]);
+  });
+
+  it("still recognizes a rename when the same file is edited afterwards", ({ skip }) => {
+    const root = temporaryRoot();
+    writeFileSync(path.join(root.rootPath, "before.txt"), "before\n");
+    const baseline = captureWorkspaceWriteBaseline([root]);
+    if (baseline.roots[0]?.entries.get("before.txt")?.birthtimeNs === null) return skip();
+    renameSync(path.join(root.rootPath, "before.txt"), path.join(root.rootPath, "after.txt"));
+    writeFileSync(path.join(root.rootPath, "after.txt"), "after\n");
+
+    expect(collectWorkspaceWriteChanges(baseline).manifest).toEqual([
+      expect.objectContaining({
+        kind: "renamed",
+        previousRelativePath: "before.txt",
+        relativePath: "after.txt",
+      }),
+    ]);
+  });
+
   it("excludes .git at every depth from change evidence", () => {
     const root = temporaryRoot();
     mkdirSync(path.join(root.rootPath, ".git"));

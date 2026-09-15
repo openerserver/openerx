@@ -24,10 +24,12 @@ import {
   automationUpdateInputSchema,
   billingStatementRequestSchema,
   browserComputerUseSessionControlInputSchema,
+  browserConnectionStateSchema,
+  browserExtensionSetupSchema,
+  browserModeSchema,
   browserSessionDescriptorSchema,
   byokModelRef,
   byokProviderIdSchema,
-  byokProviderPresets,
   chatActivateBranchInputSchema,
   chatArchiveInputSchema,
   chatCommandEnvelopeSchema,
@@ -43,6 +45,7 @@ import {
   chatSelectThinkingLevelInputSchema,
   chatSendInputSchema,
   chatStopInputSchema,
+  configuredByokProviders,
   conversationMemorySettingsGetInputSchema,
   conversationMemorySettingsUpdateInputSchema,
   conversationMoveToProjectInputSchema,
@@ -333,6 +336,20 @@ function registerIpcHandlers(
       settingsOpened: !trusted,
     });
   });
+  ipcMain.handle(ipcChannels.browserConnectionState, async (event) => {
+    assertTrustedIpcSender(event);
+    return browserConnectionStateSchema.parse(await supervisor.getBrowserConnectionState());
+  });
+  ipcMain.handle(ipcChannels.browserModeUpdate, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    return browserConnectionStateSchema.parse(
+      await supervisor.updateBrowserMode(browserModeSchema.parse(raw)),
+    );
+  });
+  ipcMain.handle(ipcChannels.browserExtensionPrepare, async (event) => {
+    assertTrustedIpcSender(event);
+    return browserExtensionSetupSchema.parse(await supervisor.prepareBrowserExtension());
+  });
   ipcMain.handle(ipcChannels.browserComputerUseSessions, (event) => {
     assertTrustedIpcSender(event);
     return browserSessionDescriptorSchema
@@ -523,7 +540,7 @@ function registerIpcHandlers(
   ipcMain.handle(ipcChannels.modelList, async (event) => {
     assertTrustedIpcSender(event);
     const settings = await modelSettings.state();
-    const presetModels = byokProviderPresets.flatMap((provider) =>
+    const presetModels = configuredByokProviders(settings.providerModels).flatMap((provider) =>
       provider.models.map((model) => ({
         modelRef: byokModelRef(provider.id, model.id),
         displayName: `${provider.label} · ${model.label}`,

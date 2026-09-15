@@ -15,7 +15,8 @@ npm run package:v2
 ```
 
 日常调试使用 `dev:desktop`，复用已安装的 Electron 和固定的 `apps/desktop/.vite/` 目录。
-界面修改由 Vite 热更新；需要重启时仍使用同一条命令。macOS 原生辅助程序在 Forge 清空旧构建后生成到固定位置。
+界面修改由 Vite 热更新；需要重启时仍使用同一条命令。macOS 原生辅助程序随开发服务器启动生成到固定的
+`apps/desktop/.native-build/`，不受 Forge 清理 `.vite/` 缓存影响。
 `dev:v2` / `dev:deepseek` 还会启动本地平台服务，适合需要平台模型的联调。
 
 只有验证安装包、签名或打包后行为时才运行 `package:v2` / `check:v2`。打包前退出正在使用旧包的应用，

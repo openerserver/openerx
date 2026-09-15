@@ -205,7 +205,11 @@ func nativeWindow(processId: pid_t, windowId: CGWindowID) throws -> NativeWindow
 
 func application(_ processId: pid_t) throws -> AXUIElement {
   guard AXIsProcessTrusted() else { try fail("BROWSER_BRIDGE_AUTHORIZATION_REQUIRED") }
-  return AXUIElementCreateApplication(processId)
+  let app = AXUIElementCreateApplication(processId)
+  // Chromium exposes page nodes on demand to accessibility clients.
+  // Request that tree before observing a newly created browser window.
+  _ = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+  return app
 }
 
 func applicationWindows(_ app: AXUIElement) -> [AXUIElement] {

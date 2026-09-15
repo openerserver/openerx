@@ -200,6 +200,24 @@ const snapshot: ConversationSnapshot = {
 
 function createBridge(): DesktopBridge {
   return {
+    getBrowserConnectionState: vi.fn().mockResolvedValue({
+      mode: "auto",
+      extensionConnected: false,
+      authorizedTabs: [],
+      extensionDirectory: "/tmp/browser-extension",
+      fullCdpEnabled: false,
+    }),
+    updateBrowserMode: vi.fn().mockImplementation(async (mode) => ({
+      mode,
+      extensionConnected: false,
+      authorizedTabs: [],
+      extensionDirectory: "/tmp/browser-extension",
+      fullCdpEnabled: false,
+    })),
+    prepareBrowserExtension: vi.fn().mockResolvedValue({
+      pairingCode: "http://127.0.0.1:12345#test",
+      extensionDirectory: "/tmp/browser-extension",
+    }),
     getModelServiceSettings: vi.fn().mockResolvedValue({
       mode: "byok",
       byok: {
@@ -589,6 +607,7 @@ describe("M1 chat renderer", () => {
     renderApp(bridge, `/chat/${conversationId}`);
 
     expect(await screen.findByText("第一段")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "加入队列" })).toBeTruthy();
     await waitFor(() => expect(listener).toBeTypeOf("function"));
     const assistant = document.querySelector<HTMLElement>(".message-assistant");
     expect(assistant?.getAttribute("aria-busy")).toBe("true");
@@ -1682,6 +1701,41 @@ describe("M1 chat renderer", () => {
     await waitFor(() => expect(screen.queryByText("已生成长期记忆")).toBeNull());
   });
 
+  it("keeps memory search focused when typing immediately after opening settings", async () => {
+    cleanup();
+    const animationFrames: FrameRequestCallback[] = [];
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => animationFrames.push(callback));
+    try {
+      const bridge = createBridge();
+      renderApp(bridge, "/settings/account");
+      const user = userEvent.setup();
+
+      await user.click(await screen.findByRole("button", { name: "记忆" }));
+      const search = await screen.findByLabelText<HTMLInputElement>("搜索记忆");
+      await user.type(search, "类");
+      // Navigation can finish painting after the user has already started typing.
+      act(() => {
+        while (animationFrames.length > 0) animationFrames.shift()?.(performance.now());
+      });
+      expect(document.activeElement).toBe(search);
+      await user.keyboard("型检查");
+
+      expect(search.value).toBe("类型检查");
+      await waitFor(() =>
+        expect(bridge.listMemories).toHaveBeenLastCalledWith({
+          status: "active",
+          limit: 100,
+          query: "类型检查",
+        }),
+      );
+    } finally {
+      cleanup();
+      requestAnimationFrame.mockRestore();
+    }
+  });
+
   it("searches, edits, filters, and clears saved memories by category", async () => {
     cleanup();
     const bridge = createBridge();
@@ -1865,6 +1919,72 @@ describe("M1 chat renderer", () => {
     );
   });
 
+  it("adds a provider model and includes it in testing and saving", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.testByokConnection).mockResolvedValue({
+      ok: true,
+      latencyMs: 12,
+      reportedModel: "new-model",
+    });
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "模型" }));
+    await user.selectOptions(await screen.findByLabelText("运行模式"), "byok");
+    const card = within(screen.getByRole("article", { name: "DeepSeek 配置" }));
+    await user.type(card.getByLabelText("新增模型 ID"), "new-model");
+    await user.click(card.getByRole("button", { name: "添加模型" }));
+    expect(card.getByRole("option", { name: "new-model" })).toBeTruthy();
+    await user.type(card.getByLabelText("DeepSeek API Key"), "provider-test-key");
+    await user.click(card.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByText(/连接成功 · 12 ms/)).toBeTruthy();
+    expect(bridge.testByokConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        byok: expect.objectContaining({ modelId: "new-model" }),
+        providerApiKeys: { deepseek: "provider-test-key" },
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "保存全部并启用" }));
+    expect(bridge.updateModelServiceSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerModels: { deepseek: [expect.objectContaining({ modelId: "new-model" })] },
+      }),
+    );
+  });
+
+  it("tests and saves a custom compatible endpoint with its own key", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.testByokConnection).mockResolvedValue({
+      ok: true,
+      latencyMs: 23,
+      reportedModel: "custom-model",
+    });
+    renderApp(bridge, "/settings/account");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "模型" }));
+    await user.selectOptions(await screen.findByLabelText("运行模式"), "byok");
+    await user.click(screen.getByText("自定义 OpenAI-compatible 接口"));
+    await user.clear(screen.getByLabelText("Base URL"));
+    await user.type(screen.getByLabelText("Base URL"), "https://custom.example.com/v1");
+    await user.type(screen.getByLabelText("API Key", { exact: true }), "custom-test-key");
+    await user.clear(screen.getByLabelText("模型 ID"));
+    await user.type(screen.getByLabelText("模型 ID"), "custom-model");
+    const expected = expect.objectContaining({
+      mode: "byok",
+      apiKey: "custom-test-key",
+      byok: expect.objectContaining({
+        baseUrl: "https://custom.example.com/v1",
+        modelId: "custom-model",
+      }),
+    });
+    await user.click(screen.getByRole("button", { name: "测试自定义接口" }));
+    expect(await screen.findByText("连接成功 · 23 ms")).toBeTruthy();
+    expect(bridge.testByokConnection).toHaveBeenCalledWith(expected);
+    await user.click(screen.getByRole("button", { name: "保存自定义接口并启用" }));
+    expect(bridge.updateModelServiceSettings).toHaveBeenCalledWith(expected);
+  });
+
   it("requires an explicit backup action before replacing unreadable model keys", async () => {
     cleanup();
     const bridge = createBridge();
@@ -1884,6 +2004,10 @@ describe("M1 chat renderer", () => {
     expect((recovery as HTMLButtonElement).disabled).toBe(true);
     expect(
       (screen.getByRole("button", { name: "保存全部并启用" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(screen.getByText("自定义 OpenAI-compatible 接口"));
+    expect(
+      (screen.getByRole("button", { name: "保存自定义接口并启用" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(bridge.updateModelServiceSettings).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText("DeepSeek API Key"), "synthetic-replacement-key");
@@ -2905,6 +3029,37 @@ describe("M1 chat renderer", () => {
     expect(await within(dialog).findByText(/已连接附加目录 fixture-project/u)).toBeTruthy();
   });
 
+  it("dismisses the conversation menu on outside clicks and preserves menu interactions", async () => {
+    cleanup();
+    renderApp(createBridge(), `/chat/${conversationId}`);
+    const user = userEvent.setup();
+    const trigger = await screen.findByRole("button", { name: "更多操作" });
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("menu", { name: "对话操作" }));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await user.click(await screen.findByText("生成代码块和表格"));
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    await user.click(trigger);
+    await user.click(document.body);
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+
+    await user.click(trigger);
+    await user.click(trigger);
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "重命名" }));
+    expect(screen.queryByRole("menu", { name: "对话操作" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "对话标题" })).toBeTruthy();
+  });
+
   it("announces copy, archive and branch-creating regeneration results", async () => {
     cleanup();
     const bridge = createBridge();
@@ -2936,40 +3091,46 @@ describe("M1 chat renderer", () => {
     expect(await screen.findByText("对话已归档。")).toBeTruthy();
   });
 
-  it("edits a user message with a send action instead of exposing branch creation", async () => {
-    cleanup();
-    const bridge = createBridge();
-    vi.mocked(bridge.editMessage).mockResolvedValue({
-      conversationId,
-      branchId,
-      userMessageId,
-      assistantMessageId,
-    });
-    renderApp(bridge, `/chat/${conversationId}`);
-    const user = userEvent.setup();
+  it.each(["生成代码块和表格", "修改后的问题"])(
+    "resends a user message from the editor: %s",
+    async (resendText) => {
+      cleanup();
+      const bridge = createBridge();
+      vi.mocked(bridge.editMessage).mockResolvedValue({
+        conversationId,
+        branchId,
+        userMessageId,
+        assistantMessageId,
+      });
+      renderApp(bridge, `/chat/${conversationId}`);
+      const user = userEvent.setup();
 
-    const message = await screen.findByText("生成代码块和表格");
-    const card = message.closest<HTMLElement>(".message-user");
-    if (!card) throw new Error("User message card missing");
+      const message = await screen.findByText("生成代码块和表格");
+      const card = message.closest<HTMLElement>(".message-user");
+      if (!card) throw new Error("User message card missing");
 
-    await user.click(within(card).getByRole("button", { name: "编辑消息" }));
-    const editor = within(card).getByRole("textbox", { name: "编辑消息内容" });
-    const send = within(card).getByRole("button", { name: "发送" });
-    expect((send as HTMLButtonElement).disabled).toBe(true);
-    expect(card.textContent).not.toContain("新建分支");
+      await user.click(within(card).getByRole("button", { name: "编辑消息" }));
+      const editor = within(card).getByRole("textbox", { name: "编辑消息内容" });
+      const send = within(card).getByRole("button", { name: "发送" });
+      expect((send as HTMLButtonElement).disabled).toBe(false);
+      expect(card.textContent).not.toContain("新建分支");
 
-    await user.clear(editor);
-    await user.type(editor, "修改后的问题");
-    await user.click(send);
+      if (resendText !== "生成代码块和表格") {
+        await user.clear(editor);
+        expect((send as HTMLButtonElement).disabled).toBe(true);
+        await user.type(editor, resendText);
+      }
+      await user.click(send);
 
-    expect(bridge.editMessage).toHaveBeenCalledWith({
-      conversationId,
-      messageId: userMessageId,
-      text: "修改后的问题",
-      idempotencyKey: expect.stringMatching(/^edit-/u),
-    });
-    expect(await screen.findByText("已提交修改，正在从这里重新生成回复。")).toBeTruthy();
-  });
+      expect(bridge.editMessage).toHaveBeenCalledWith({
+        conversationId,
+        messageId: userMessageId,
+        text: resendText,
+        idempotencyKey: expect.stringMatching(/^edit-/u),
+      });
+      expect(await screen.findByText("已重新发送，正在从这里重新生成回复。")).toBeTruthy();
+    },
+  );
 
   it("uses the fixed-workbench hierarchy for completed replies", async () => {
     cleanup();
@@ -3670,6 +3831,8 @@ describe("M1 chat renderer", () => {
         ),
       ).toBeTruthy();
       expect(within(dialog).getByText(/请点击“\+”添加当前应用/)).toBeTruthy();
+      if (capability === "browser")
+        expect(within(dialog).getByLabelText("默认浏览器模式")).toBeTruthy();
       expect(bridge.requestDesktopNativePermission).not.toHaveBeenCalled();
       await user.click(within(dialog).getByRole("button", { name: "打开屏幕录制设置" }));
       expect(bridge.requestDesktopNativePermission).toHaveBeenLastCalledWith({

@@ -1,0 +1,66 @@
+.remote-control-row,
+.remote-toggle-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.remote-control-row {
+  padding-block: 18px;
+  border-block: 1px solid var(--workspace-border, #e3e4e0);
+}
+.remote-control-row p {
+  margin: 6px 0 0;
+}
+.remote-toggle-control {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.settings-account-page .remote-settings .remote-control-switch {
+  width: 42px;
+  min-width: 42px;
+  height: 26px;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: #8a8d88;
+}
+.settings-account-page .remote-settings .remote-control-switch[aria-checked="true"] {
+  background: #347650;
+}
+.remote-control-switch > span {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+}
+.remote-control-switch[aria-checked="true"] > span {
+  transform: translateX(16px);
+}
+.remote-control-switch:disabled {
+  opacity: 0.45;
+}
+.remote-setup-notice,
+.remote-connection-guide {
+  padding: 16px;
+  border: 1px solid var(--workspace-border, #e3e4e0);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.remote-setup-notice p {
+  margin: 0;
+}
+.remote-connection-guide ol {
+  padding-left: 20px;
+  margin: 10px 0;
+}
+@media (max-width: 640px) {
+  .remote-control-row {
+    flex-wrap: wrap;
+  }
+  .remote-settings .remote-pairing-panel {
+    grid-template-columns: 1fr;
+  }
+}

@@ -39,6 +39,7 @@ import type {
 import {
   type ByokProviderId,
   byokProviderPresets,
+  configuredByokProviders,
   defaultByokModelConfiguration,
   defaultByokModelRef,
   isByokModelRef,
@@ -101,6 +102,7 @@ import remarkGfm from "remark-gfm";
 import { AccountAccess } from "./AccountAccess";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
+import { BrowserSettingsPanel } from "./BrowserSettingsPanel";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   ConversationDeleteButton,
@@ -122,8 +124,8 @@ import {
   ProjectSidebar,
   useProject,
 } from "./projects";
-import { RemoteConnectionNotice, RemoteConnectionRequests } from "./RemoteConnections";
-import { RemotePairingPanel } from "./RemotePairingPanel";
+import { RemoteConnectionNotice } from "./RemoteConnections";
+import { RemoteSettings } from "./RemoteSettings";
 import { withUiTimeout } from "./ui-timeout";
 import { WorkspaceLocation, WorkspaceSection } from "./WorkspaceContext";
 import { WorkItemWorkspaceEdits } from "./WorkspaceEdits";
@@ -454,6 +456,7 @@ function userFacingError(error: unknown, fallback: string): string {
   if (modelMessage) return modelMessage;
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (
+    message.includes("safeStorage.decrypt") ||
     message.includes("OS_CREDENTIAL_DECRYPT_FAILED") ||
     message.includes("OS_CREDENTIAL_DATA_INVALID")
   ) {
@@ -1143,6 +1146,12 @@ function Composer({
     },
   });
   const selectedSkill = skills.data?.find(({ id }) => id === skillInstallationId);
+  const hasActiveReply =
+    conversationSnapshot?.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        ["pending", "streaming", "cancelling"].includes(message.status),
+    ) ?? false;
 
   return (
     <form
@@ -1448,13 +1457,13 @@ function Composer({
         <button
           type="submit"
           className="primary-action"
-          aria-label="发送"
+          aria-label={hasActiveReply ? "加入队列" : "发送"}
           disabled={
             !draft.trim() || send.isPending || sendingBlockedByModel || isImportingAttachments
           }
         >
           <PaperPlaneTilt size={17} weight="fill" />
-          <span>{send.isPending ? "发送中…" : "发送"}</span>
+          <span>{send.isPending ? "发送中…" : hasActiveReply ? "加入队列" : "发送"}</span>
           <kbd>↵</kbd>
         </button>
       </div>
@@ -2566,7 +2575,7 @@ function MessageCard({
       }),
     onSuccess: async () => {
       setEditing(false);
-      setActionNotice("已提交修改，正在从这里重新生成回复。");
+      setActionNotice("已重新发送，正在从这里重新生成回复。");
       await queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
     },
   });
@@ -2697,7 +2706,7 @@ function MessageCard({
             className="edit-message"
             onSubmit={(event) => {
               event.preventDefault();
-              if (editText.trim()) edit.mutate();
+              if (editText.trim() && !edit.isPending) edit.mutate();
             }}
           >
             <textarea
@@ -2711,10 +2720,7 @@ function MessageCard({
               <button type="button" onClick={() => setEditing(false)}>
                 取消
               </button>
-              <button
-                type="submit"
-                disabled={!editText.trim() || editText.trim() === text.trim() || edit.isPending}
-              >
+              <button type="submit" disabled={!editText.trim() || edit.isPending}>
                 {edit.isPending ? "正在发送…" : "发送"}
               </button>
             </div>
@@ -3030,6 +3036,7 @@ function trustedBrowserUrl(value: unknown): string | null {
 function browserApplicationLabel(value: unknown): string {
   if (typeof value !== "string") return "系统默认浏览器";
   const applicationId = value.toLocaleLowerCase();
+  if (applicationId === "openerx.managed-chromium") return "UWA 独立浏览器";
   if (applicationId.includes("edge")) return "Microsoft Edge";
   if (applicationId.includes("chrome")) return "Google Chrome";
   if (applicationId.includes("firefox")) return "Mozilla Firefox";
@@ -3696,6 +3703,21 @@ function ConversationToolbar({
   useEffect(() => setSelectedBranchId(conversation.activeBranchId), [conversation.activeBranchId]);
   useEffect(() => {
     if (moreOpen) menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [moreOpen]);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (
+        menuRef.current?.contains(event.target) ||
+        moreButtonRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setMoreOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress, true);
   }, [moreOpen]);
   useEffect(() => {
     if (renaming) window.requestAnimationFrame(() => renameInputRef.current?.focus());
@@ -4923,6 +4945,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     mode: "byok",
     byok: defaultByokModelConfiguration(),
   });
+  const [newModelIds, setNewModelIds] = useState<Partial<Record<ByokProviderId, string>>>({});
   const [providerKeys, setProviderKeys] = useState<Partial<Record<ByokProviderId, string>>>({});
   const [testModelIds, setTestModelIds] = useState<Record<ByokProviderId, string>>(() =>
     byokProviderPresets.reduce(
@@ -4939,6 +4962,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
     setDraft((current) => ({
       mode: settings.data.mode,
       byok: settings.data.byok ?? current.byok,
+      providerModels: settings.data.providerModels,
     }));
   }, [settings.data]);
   const save = useMutation({
@@ -5012,6 +5036,14 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       }));
     },
   });
+  const customTest = useMutation({
+    mutationFn: () =>
+      window.openerx.testByokConnection({
+        mode: "byok",
+        byok: draft.byok,
+        ...(draft.apiKey?.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+      }),
+  });
   const clearKey = useMutation({
     mutationFn: (providerId?: ByokProviderId) => window.openerx.clearByokApiKey(providerId),
     onSuccess: (value, providerId) => {
@@ -5068,7 +5100,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
         <>
           <fieldset className="model-provider-grid">
             <legend className="visually-hidden">国内模型厂商</legend>
-            {byokProviderPresets.map((provider) => {
+            {configuredByokProviders(draft.providerModels).map((provider) => {
               const selectedModel =
                 provider.models.find(({ id }) => id === testModelIds[provider.id]) ??
                 provider.models[0];
@@ -5084,7 +5116,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
                   <div className="model-provider-heading">
                     <div>
                       <h3>{provider.label}</h3>
-                      <small>{provider.models.length} 个预置模型</small>
+                      <small>{provider.models.length} 个模型</small>
                     </div>
                     <span className={configured ? "is-configured" : undefined}>
                       {configured ? "已配置" : "未配置"}
@@ -5128,6 +5160,61 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
                       </option>
                     ))}
                   </select>
+                  <label htmlFor={`provider-new-model-${provider.id}`}>新增模型 ID</label>
+                  <input
+                    id={`provider-new-model-${provider.id}`}
+                    value={newModelIds[provider.id] ?? ""}
+                    placeholder="填写服务商提供的模型 ID"
+                    onChange={(event) =>
+                      setNewModelIds((current) => ({
+                        ...current,
+                        [provider.id]: event.target.value,
+                      }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    disabled={!newModelIds[provider.id]?.trim()}
+                    onClick={() => {
+                      const modelId = newModelIds[provider.id]?.trim();
+                      if (!modelId) return;
+                      if (
+                        modelId.length > 120 ||
+                        provider.models.some((model) => model.configuration.modelId === modelId)
+                      ) {
+                        setProviderTestFeedback((current) => ({
+                          ...current,
+                          [provider.id]: {
+                            status: "error",
+                            message: "模型 ID 已存在或超过 120 个字符。",
+                          },
+                        }));
+                        return;
+                      }
+                      const template = provider.models[0]!.configuration;
+                      const { baseUrl: _baseUrl, ...configuration } = template;
+                      setDraft((current) => ({
+                        ...current,
+                        providerModels: {
+                          ...current.providerModels,
+                          [provider.id]: [
+                            ...(current.providerModels?.[provider.id] ?? []),
+                            { ...configuration, modelId, displayName: modelId },
+                          ],
+                        },
+                      }));
+                      setTestModelIds((current) => ({
+                        ...current,
+                        [provider.id]: `custom-${encodeURIComponent(modelId)}`,
+                      }));
+                      setNewModelIds((current) => ({ ...current, [provider.id]: "" }));
+                      setNotice(
+                        "模型已添加到草稿；点击“保存全部并启用”后可在任务中选择。参数沿用该服务商首个预置模型。",
+                      );
+                    }}
+                  >
+                    添加模型
+                  </button>
                   {selectedModel ? (
                     <p className="model-provider-meta">
                       {selectedModel.configuration.contextWindow.toLocaleString()} Token 上下文 ·
@@ -5300,6 +5387,36 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
                 />
                 支持推理
               </label>
+              <div className="toolbar-actions">
+                <button
+                  type="button"
+                  onClick={() => customTest.mutate()}
+                  disabled={customTest.isPending || save.isPending}
+                >
+                  {customTest.isPending ? "测试中…" : "测试自定义接口"}
+                </button>
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => save.mutate(false)}
+                  disabled={save.isPending || customTest.isPending || unreadableCredentials}
+                >
+                  保存自定义接口并启用
+                </button>
+              </div>
+              {customTest.data ? (
+                <p className="inline-success" role="status">
+                  连接成功 · {customTest.data.latencyMs} ms
+                </p>
+              ) : null}
+              {customTest.error ? (
+                <p className="inline-error" role="alert">
+                  {userFacingError(
+                    customTest.error,
+                    "连接失败，请检查接口地址、API Key 和模型 ID。",
+                  )}
+                </p>
+              ) : null}
               {settings.data?.credentialConfigured ? (
                 <div className="toolbar-actions">
                   <button
@@ -5548,97 +5665,6 @@ function DiagnosticsSettings(): React.JSX.Element {
               exportPersonalData.error
             )?.message
           }
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-function RemoteSettings(): React.JSX.Element {
-  const queryClient = useQueryClient();
-  const [showQr, setShowQr] = useState(false);
-  const remote = useQuery({
-    queryKey: ["remote", "state"],
-    queryFn: () => window.openerx.getRemoteState(),
-    retry: false,
-    refetchInterval: (query) => (query.state.data?.enabled ? 3_000 : false),
-  });
-  const enable = useMutation({
-    mutationFn: (enabled: boolean) => window.openerx.setRemoteEnabled({ enabled }),
-    onSuccess: (state) => {
-      queryClient.setQueryData(["remote", "state"], state);
-      if (!state.enabled) setShowQr(false);
-      void queryClient.invalidateQueries({ queryKey: ["remote", "connection-requests"] });
-    },
-  });
-  const revoke = useMutation({
-    mutationFn: (pairingId: string) => window.openerx.revokeRemotePairing({ pairingId }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["remote", "state"] }),
-  });
-
-  const state = remote.data;
-  const activePairings = state?.pairings.filter(({ status }) => status === "active") ?? [];
-  return (
-    <section className="settings-card settings-stack remote-settings" aria-label="手机远程控制">
-      <div className="settings-heading">
-        <div>
-          <h2>手机远程控制</h2>
-          <p>手机是控制面；Pi、文件、工具和权限判断仍只在这台电脑运行。</p>
-        </div>
-        <button
-          type="button"
-          className={state?.enabled ? "danger-action" : "primary-action"}
-          disabled={enable.isPending || remote.isPending || state?.available === false}
-          onClick={() => enable.mutate(!state?.enabled)}
-        >
-          {state?.enabled ? "关闭 Remote" : "开启 Remote"}
-        </button>
-      </div>
-      {state?.enabled ? (
-        <div className="remote-status-row">
-          <span className={`remote-presence presence-${state.host?.presence ?? "offline"}`}>
-            {state.host?.presence ?? "offline"}
-          </span>
-          <span>{state.host?.displayName}</span>
-          <span>{activePairings.length} 台手机已配对</span>
-        </div>
-      ) : null}
-      {state?.enabled ? (
-        <>
-          <RemoteConnectionRequests />
-          <div className="settings-actions">
-            <button
-              type="button"
-              onClick={() => setShowQr((value) => !value)}
-              aria-expanded={showQr}
-            >
-              {showQr ? "收起二维码" : "使用二维码快捷配对"}
-            </button>
-          </div>
-          {showQr ? <RemotePairingPanel /> : null}
-        </>
-      ) : null}
-      {activePairings.map((pairing) => (
-        <div className="device-card" key={pairing.pairingId}>
-          <div>
-            <strong>
-              <DeviceMobile size={16} /> 控制设备 {pairing.controllerDeviceId.slice(0, 8)}
-            </strong>
-            <span>创建于 {new Date(pairing.createdAt).toLocaleString()}</span>
-            <span>到期于 {new Date(pairing.expiresAt).toLocaleString()}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => revoke.mutate(pairing.pairingId)}
-            disabled={revoke.isPending}
-          >
-            撤销配对
-          </button>
-        </div>
-      ))}
-      {remote.error || enable.error || revoke.error || state?.reason ? (
-        <p className="inline-error">
-          {(remote.error ?? enable.error ?? revoke.error)?.message ?? state?.reason}
         </p>
       ) : null}
     </section>
@@ -6132,6 +6158,7 @@ function MemorySettingsPanel(): React.JSX.Element {
 }
 
 type AccountSettingsSection =
+  | "remote"
   | "account"
   | "billing"
   | "appearance"
@@ -6144,6 +6171,7 @@ type AccountSettingsSection =
 
 const accountSettingsSectionLabels: Record<AccountSettingsSection, string> = {
   account: "账户",
+  remote: "远程连接",
   billing: "费用与账单",
   appearance: "外观",
   model: "模型",
@@ -6156,7 +6184,8 @@ const accountSettingsSectionLabels: Record<AccountSettingsSection, string> = {
 
 function requestedSettingsSection(search: string): AccountSettingsSection | null {
   const value = new URLSearchParams(search).get("section");
-  return value === "account" ||
+  return value === "remote" ||
+    value === "account" ||
     value === "billing" ||
     value === "appearance" ||
     value === "model" ||
@@ -6382,12 +6411,14 @@ function AccountSettings({
           <div className="settings-nav-scroll">
             {settingsSectionMatches("account") ||
             settingsSectionMatches("appearance") ||
-            settingsSectionMatches("billing") ? (
+            settingsSectionMatches("billing") ||
+            settingsSectionMatches("remote") ? (
               <section className="settings-nav-group">
                 <p>个人</p>
                 {renderSettingsNavButton("account", <UserCircle size={18} />)}
                 {renderSettingsNavButton("appearance", <Sun size={18} />)}
                 {renderSettingsNavButton("billing", <Receipt size={18} />)}
+                {renderSettingsNavButton("remote", <DeviceMobile size={18} />)}
               </section>
             ) : null}
             {settingsSectionMatches("model") ||
@@ -6453,6 +6484,14 @@ function AccountSettings({
               </NavLink>
             </section>
           ) : null}
+          {activeSection === "remote" ? (
+            <div className="settings-section-panel" id="remote-section" tabIndex={-1}>
+              <RemoteSettings
+                key={state?.account?.accountId ?? "signed-out"}
+                accountId={signedIn ? (state?.account?.accountId ?? null) : null}
+              />
+            </div>
+          ) : null}
           {activeSection === "appearance" ? (
             <div className="settings-section-panel" id="appearance-section" tabIndex={-1}>
               <ThemeSettings value={themePreference} onChange={onThemeChange} />
@@ -6483,7 +6522,6 @@ function AccountSettings({
           ) : null}
           {activeSection === "account" && state?.status === "signed_in" && state.session ? (
             <>
-              <RemoteSettings />
               <section className="settings-card settings-stack" aria-label="设备会话">
                 <div className="settings-heading">
                   <div>
@@ -7469,6 +7507,8 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 <strong>{selectedRow.status}</strong>
               </div>
             </div>
+
+            {selectedRow.capability === "browser" ? <BrowserSettingsPanel /> : null}
 
             {selectedRow.capability === "web.search" ? (
               <section className="tool-settings-section" aria-label="本地 Web Search">

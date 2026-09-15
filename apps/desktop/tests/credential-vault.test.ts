@@ -7,6 +7,7 @@ import {
   byokModelRef,
   type DeviceSession,
   defaultByokModelConfiguration,
+  isByokModelRef,
 } from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -113,6 +114,35 @@ describe("ToolCredentialVault", () => {
 });
 
 describe("ModelServiceSettingsStore", () => {
+  it("persists added provider models and executes with the provider credential", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-added-model-"));
+    temporaryDirectories.push(directory);
+    const vault = new ToolCredentialVault(path.join(directory, "keys.bin"), new TestProtector());
+    const file = path.join(directory, "settings.json");
+    const store = new ModelServiceSettingsStore(file, vault, async () => ["93.184.216.34"]);
+    const { baseUrl: _url, ...model } = defaultByokModelConfiguration();
+    await store.update({
+      mode: "byok",
+      byok: defaultByokModelConfiguration(),
+      providerApiKeys: { deepseek: "provider-secret" },
+      providerModels: { deepseek: [{ ...model, modelId: "new/model", displayName: "New model" }] },
+    });
+    const reopened = new ModelServiceSettingsStore(file, vault, async () => ["93.184.216.34"]);
+    const ref = byokModelRef("deepseek", `custom-${encodeURIComponent("new/model")}`);
+    expect(isByokModelRef(ref)).toBe(true);
+    await expect(reopened.execution(ref)).resolves.toMatchObject({
+      modelId: "new/model",
+      apiKey: "provider-secret",
+      baseUrl: "https://api.deepseek.com",
+    });
+    await reopened.update({ mode: "byok", byok: defaultByokModelConfiguration() });
+    expect((await reopened.state()).providerModels?.deepseek).toHaveLength(1);
+    await expect(reopened.execution(byokModelRef("deepseek", "custom-missing"))).rejects.toThrow(
+      "BYOK_MODEL_NOT_FOUND",
+    );
+    expect(await readFile(file, "utf8")).not.toContain("provider-secret");
+  });
+
   it("reports unreadable keys and requires explicit recovery with an exact encrypted backup", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
     temporaryDirectories.push(directory);

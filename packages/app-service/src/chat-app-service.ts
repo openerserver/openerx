@@ -56,7 +56,10 @@ export class ChatAppService {
   readonly #memories: MemoryRepository | null;
   readonly #projects: ProjectRepository | null;
   readonly #remoteApplications = new Map<string, Promise<RemoteApplyCommandResponseFrame>>();
+  readonly #branchTails = new Map<string, Promise<void>>();
+  readonly #releaseGeneration = new Map<string, () => void>();
   #closed = false;
+  #closePromise: Promise<void> | null = null;
 
   constructor(
     repository: ChatRepository,
@@ -104,14 +107,18 @@ export class ChatAppService {
     return recovered;
   }
 
-  close(): void {
+  close(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
     this.#closed = true;
+    for (const release of this.#releaseGeneration.values()) release();
+    this.#releaseGeneration.clear();
     this.#repository.close();
     this.#files?.close();
-    void this.#tools?.close();
+    this.#closePromise = this.#tools?.close() ?? Promise.resolve();
     this.#remote?.close();
     this.#skills?.close();
     this.#memories?.close();
+    return this.#closePromise;
   }
 
   onEvent(listener: (event: ChatEvent) => void): () => void {
@@ -787,7 +794,33 @@ export class ChatAppService {
     const selectedAuthorization = usesByok ? undefined : authorization;
     const selectedByok = usesByok ? byok : undefined;
     const generationId = randomUUID();
+    const branchId = draft.receipt.branchId;
+    const previous = this.#branchTails.get(branchId);
+    let release!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#branchTails.set(branchId, finished);
+    this.#releaseGeneration.set(generationId, () => {
+      release();
+      if (this.#branchTails.get(branchId) === finished) this.#branchTails.delete(branchId);
+    });
+    if (previous) await previous;
+    if (this.#closed) return;
     try {
+      if (
+        this.#repository.message(draft.receipt.assistantMessageId).cancellationRequestedAt !== null
+      ) {
+        const event = this.#repository.appendPiEvent(draft.receipt.assistantMessageId, {
+          eventId: randomUUID(),
+          sequence: 1,
+          occurredAt: new Date().toISOString(),
+          type: "stopped",
+        });
+        this.#forgetGeneration(generationId);
+        if (event) this.#emit(event);
+        return;
+      }
       const history = this.#repository.piHistory(draft.receipt.assistantMessageId);
       if (selectedSkillInstallationId) {
         const selected = skillMounts.find(
@@ -1224,6 +1257,8 @@ export class ChatAppService {
   }
 
   #forgetGeneration(generationId: string): void {
+    this.#releaseGeneration.get(generationId)?.();
+    this.#releaseGeneration.delete(generationId);
     const messageId = this.#messageByGeneration.get(generationId);
     this.#messageByGeneration.delete(generationId);
     this.#conversationByGeneration.delete(generationId);

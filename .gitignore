@@ -39,3 +39,6 @@ npm-debug.log*
 /v1-backup/opencode-fork/.copilot-token.json
 /v1-backup/tmp/
 /v1-backup/test-results/
+
+# Native development helpers must survive Forge clearing .vite.
+/apps/desktop/.native-build/

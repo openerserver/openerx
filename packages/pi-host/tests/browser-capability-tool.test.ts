@@ -35,7 +35,7 @@ describe("BCU-003 Pi browser projection", () => {
   it("projects the semantic V2 tool without selector, DOM or script fields", async () => {
     const { browser, frames } = fixture(true);
     const schema = JSON.stringify(browser.parameters);
-    expect(browser.label).toBe("Use system browser");
+    expect(browser.label).toBe("Use browser");
     expect(browser.parameters).toMatchObject({ type: "object", anyOf: expect.any(Array) });
     expect(schema).toContain("elementRef");
     expect(schema).toContain("observationId");

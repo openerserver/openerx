@@ -9,8 +9,8 @@ export default defineConfig({
     {
       name: "openerx-development-browser-helper",
       configureServer() {
-        // Forge clears .vite before starting this server. Build the fixed-path
-        // helper afterwards so development can use it without packaging an app.
+        // Prepare the native helper for development without packaging an app.
+        // Its fixed .native-build path survives Forge clearing the .vite cache.
         execFileSync(
           process.execPath,
           [fileURLToPath(new URL("./scripts/build-macos-browser-helper.mjs", import.meta.url))],
@@ -23,6 +23,7 @@ export default defineConfig({
     exclude: ["@openerx/contracts"],
   },
   server: {
+    headers: { "Cache-Control": "no-store" },
     watch: {
       ignored: ["**/out/**"],
     },
