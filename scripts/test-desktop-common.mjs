@@ -29,6 +29,7 @@ run(
     "tests/desktop-tool-availability.test.ts",
     "tests/desktop-control-ui.test.tsx",
     "tests/model-connection.test.ts",
+    "tests/mac-signing.test.ts",
     "tests/credential-vault.test.ts",
     "tests/remote-settings.test.tsx",
     "tests/remote-connections.test.tsx",

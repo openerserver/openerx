@@ -12,6 +12,7 @@ import { VitePlugin } from "@electron-forge/plugin-vite";
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { releaseUpdateConfigurationSchema } from "@openerx/contracts";
 import { signWindowsFile, verifyWindowsFile } from "./scripts/windows-signing.mjs";
+import { resolveMacSigningIdentity } from "./scripts/mac-signing.mjs";
 
 const releaseMode = process.env.OPENERX_RELEASE_MODE === "1";
 const windowsStoreBuild =
@@ -85,9 +86,8 @@ function updateConfiguration() {
 
 function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
   if (process.platform === "darwin") {
-    const configuredIdentity = process.env.OPENERX_MAC_SIGN_IDENTITY?.trim();
-    if (!releaseMode && !configuredIdentity) return {};
-    const identity = configuredIdentity || requiredEnvironment("OPENERX_MAC_SIGN_IDENTITY");
+    const identity = resolveMacSigningIdentity();
+    if (!identity) return {};
     const osxSign = {
       identity,
       ignore: (filePath: string) => /\.(?:asar|bin|dat|pak)$/iu.test(filePath),
