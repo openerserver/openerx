@@ -53,13 +53,13 @@ const listener = await listenOnEphemeralPort(
 );
 const api = new MobileApi(listener.baseUrl);
 const challenge = await api.requestCode("mobile-content@example.test");
-const desktop = await api.verifyCode(challenge.challengeId, "123456", {
+let desktop = await api.verifyCode(challenge.challengeId, "123456", {
   deviceId: randomUUID(),
   name: "附件与历史测试电脑",
   platform: "darwin",
   arch: "arm64",
 });
-const principal = identity.authenticate(desktop.accessToken);
+let principal = identity.authenticate(desktop.accessToken);
 const authorization = {
   accountId: desktop.account.accountId,
   accessToken: desktop.accessToken,
@@ -142,6 +142,7 @@ for (let index = 0; index < 55; index++) {
 }
 await sync.syncOnce(authorization);
 const keys = generateRemoteDeviceKeyPair();
+const transport = new HttpRemoteGatewayTransport(listener.baseUrl, desktop.accessToken);
 const connector = new RemoteHostConnector({
   databasePath: path.join(directory, "connector.sqlite"),
   host: {
@@ -154,7 +155,7 @@ const connector = new RemoteHostConnector({
     remoteEnabled: true,
   },
   hostPrivateKey: keys.privateKey,
-  transport: new HttpRemoteGatewayTransport(listener.baseUrl, desktop.accessToken),
+  transport,
   applier: {
     currentRevision: (id) => service.prepareRemoteRevision(id, authorization),
     apply: (command, payload) => service.applyRemoteCommand(command, payload, authorization),
@@ -179,6 +180,13 @@ const timer = setInterval(async () => {
   if (ticking) return;
   ticking = true;
   try {
+    if (Date.parse(desktop.accessTokenExpiresAt) - Date.now() < 30_000) {
+      desktop = identity.refresh(desktop.session.sessionId, desktop.refreshCredential);
+      principal = identity.authenticate(desktop.accessToken);
+      authorization.accessToken = desktop.accessToken;
+      authorization.accessTokenExpiresAt = desktop.accessTokenExpiresAt;
+      transport.updateAccessToken(desktop.accessToken);
+    }
     for (const request of remote.listConnectionRequests(principal)) {
       if (request.status === "pending")
         remote.decideConnectionRequest(principal, {
@@ -188,10 +196,31 @@ const timer = setInterval(async () => {
         });
     }
     await connector.tick();
+  } catch (error) {
+    console.error(
+      "MOBILE_FIXTURE_TICK_RETRY",
+      error instanceof Error ? error.message : "UNAVAILABLE",
+    );
   } finally {
     ticking = false;
   }
 }, 500);
+// Fixture-only fault injection, through stdin: presence degraded / presence online / presence offline.
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (data: string) => {
+  const match = /^presence (online|degraded|offline)$/u.exec(data.trim());
+  if (!match) return;
+  const current = remote
+    .listHosts(principal)
+    .find((host) => host.hostDeviceId === principal.deviceId);
+  if (!current) return;
+  remote.updatePresence(principal, {
+    hostDeviceId: current.hostDeviceId,
+    presence: match[1] as "online" | "degraded" | "offline",
+    revision: current.revision,
+  });
+  console.log("MOBILE_FIXTURE_PRESENCE", match[1]);
+});
 writeFileSync(
   path.join(directory, "手机附件验收.txt"),
   "手机上传验证：订单 A-101，数量 7，总价 12345 元。\n",

@@ -28,6 +28,7 @@ import {
   type SyncPullResult,
   syncPullResultSchema,
 } from "@openerx/contracts";
+import { fetchMobileJson } from "./http";
 
 export class MobileApi {
   constructor(
@@ -184,22 +185,25 @@ export class MobileApi {
     parse: (value: unknown) => T,
   ): Promise<T> {
     const binary = body instanceof Uint8Array;
-    const send = (accessToken: string | undefined): Promise<Response> =>
-      fetch(new URL(pathname, this.baseUrl), {
-        method,
-        headers: {
-          ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+    const send = (accessToken: string | undefined) =>
+      fetchMobileJson(
+        new URL(pathname, this.baseUrl),
+        {
+          method,
+          headers: {
+            ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+            ...(body === undefined
+              ? {}
+              : { "content-type": binary ? "application/octet-stream" : "application/json" }),
+          },
           ...(body === undefined
             ? {}
-            : { "content-type": binary ? "application/octet-stream" : "application/json" }),
+            : { body: binary ? body.slice().buffer : JSON.stringify(body) }),
         },
-        ...(body === undefined
-          ? {}
-          : { body: binary ? body.slice().buffer : JSON.stringify(body) }),
-      });
+        binary ? 120_000 : 15_000,
+      );
     let accessToken = token && this.authorize ? await this.authorize(token, false) : token;
-    let response = await send(accessToken);
-    let value = (await response.json()) as unknown;
+    let { response, value } = await send(accessToken);
     const errorCode =
       (value as { error?: { message?: string }; message?: string })?.error?.message ??
       (value as { message?: string })?.message;
@@ -212,8 +216,7 @@ export class MobileApi {
       )
     ) {
       accessToken = await this.authorize(accessToken, true);
-      response = await send(accessToken);
-      value = await response.json();
+      ({ response, value } = await send(accessToken));
     }
     if (!response.ok) {
       const candidate = value as { error?: { message?: string }; message?: string };

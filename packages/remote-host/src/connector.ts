@@ -24,6 +24,7 @@ type SqlRow = Record<string, unknown>;
 
 export interface RemoteGatewayTransport {
   registerHost(input: RemoteHostRegistrationInput): Promise<RemoteHost>;
+  listHosts(): Promise<RemoteHost[]>;
   updatePresence(input: {
     hostDeviceId: string;
     presence: "online" | "degraded" | "offline";
@@ -76,6 +77,7 @@ export class RemoteHostConnector {
   #hostState: RemoteHost | null = null;
   #pairings = new Map<string, RemoteDevicePairing>();
   #running = false;
+  #presenceUncertain = false;
 
   constructor(options: RemoteHostConnectorOptions) {
     this.#database = new DatabaseSync(options.databasePath);
@@ -92,53 +94,39 @@ export class RemoteHostConnector {
   async start(): Promise<RemoteHost> {
     if (this.#running && this.#hostState) return this.#hostState;
     this.#hostState = await this.#transport.registerHost(this.#host);
-    this.#hostState = await this.#transport.updatePresence({
-      hostDeviceId: this.#host.hostDeviceId,
-      presence: "online",
-      revision: this.#hostState.revision,
-    });
+    await this.#updatePresence("online");
     this.#running = true;
     await this.refreshPairings();
     return this.#hostState;
   }
 
   async run(signal: AbortSignal): Promise<void> {
-    await this.start();
     try {
       while (!signal.aborted) {
         try {
           await this.tick();
-          if (this.#hostState?.presence === "degraded") {
-            this.#hostState = await this.#transport.updatePresence({
-              hostDeviceId: this.#host.hostDeviceId,
-              presence: "online",
-              revision: this.#hostState.revision,
-            });
-          }
+          if (this.#hostState?.presence === "degraded" || this.#presenceUncertain)
+            await this.#updatePresence("online");
         } catch {
           if (this.#hostState?.presence === "online") {
             try {
-              this.#hostState = await this.#transport.updatePresence({
-                hostDeviceId: this.#host.hostDeviceId,
-                presence: "degraded",
-                revision: this.#hostState.revision,
-              });
+              await this.#updatePresence("degraded");
             } catch {
               // The next outbound retry is the recovery path while the Relay is unreachable.
             }
           }
         }
-        await new Promise<void>((resolve) => {
-          const timeout = setTimeout(resolve, this.#pollIntervalMs);
-          signal.addEventListener(
-            "abort",
-            () => {
+        if (!signal.aborted)
+          await new Promise<void>((resolve) => {
+            const done = () => {
               clearTimeout(timeout);
+              signal.removeEventListener("abort", done);
               resolve();
-            },
-            { once: true },
-          );
-        });
+            };
+            const timeout = setTimeout(done, this.#pollIntervalMs);
+            signal.addEventListener("abort", done, { once: true });
+            if (signal.aborted) done();
+          });
       }
     } finally {
       await this.stop();
@@ -151,6 +139,32 @@ export class RemoteHostConnector {
     const commands = await this.#transport.pullCommands(this.#host.hostDeviceId, 20);
     for (const command of commands) await this.#process(command);
     return commands.length;
+  }
+
+  async #updatePresence(presence: "online" | "degraded" | "offline"): Promise<void> {
+    if (!this.#hostState) return;
+    this.#presenceUncertain = true;
+    const update = () =>
+      this.#transport.updatePresence({
+        hostDeviceId: this.#host.hostDeviceId,
+        presence,
+        revision: this.#hostState?.revision ?? 0,
+      });
+    try {
+      this.#hostState = await update();
+    } catch (error) {
+      if (errorCode(error) !== "REMOTE_HOST_REVISION_CONFLICT") throw error;
+      // A presence write may reach the Gateway even when its response is lost.
+      // Read the authoritative revision; registration would accidentally re-enable a disabled host.
+      const current = (await this.#transport.listHosts()).find(
+        (host) => host.hostDeviceId === this.#host.hostDeviceId,
+      );
+      if (!current) throw new Error("REMOTE_HOST_NOT_FOUND");
+      this.#hostState = current;
+      if (!current.remoteEnabled && presence !== "offline") throw new Error("REMOTE_DISABLED");
+      if (current.presence !== presence) this.#hostState = await update();
+    }
+    this.#presenceUncertain = false;
   }
 
   async refreshPairings(): Promise<RemoteDevicePairing[]> {
@@ -211,13 +225,9 @@ export class RemoteHostConnector {
     this.#running = false;
     if (this.#hostState) {
       try {
-        this.#hostState = await this.#transport.updatePresence({
-          hostDeviceId: this.#host.hostDeviceId,
-          presence: "offline",
-          revision: this.#hostState.revision,
-        });
+        await this.#updatePresence("offline");
       } catch {
-        // Gateway expiry is authoritative if the final offline update cannot be delivered.
+        // A disconnected network can prevent delivery of the final offline update.
       }
     }
   }
@@ -275,7 +285,15 @@ export class RemoteHostConnector {
       await this.#reject(command, "REMOTE_COMMAND_KIND_MISMATCH", existing);
       return;
     }
-    const currentRevision = await this.#applier.currentRevision(command.conversationId);
+    let currentRevision: number;
+    try {
+      currentRevision = await this.#applier.currentRevision(command.conversationId);
+    } catch (caught) {
+      if (existing) throw caught;
+      // No command was applied. Report a task-level failure without declaring a network outage.
+      await this.#reject(command, errorCode(caught), existing);
+      return;
+    }
     if (currentRevision !== command.baseRevision) {
       await this.#reject(
         command,

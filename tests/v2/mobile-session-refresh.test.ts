@@ -53,6 +53,24 @@ afterEach(() => {
 });
 
 describe("mobile session maintenance", () => {
+  it("releases a stalled credential rotation so the next foreground poll can recover", async () => {
+    const initial = grant();
+    const session = await saveSession(initial);
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValueOnce(Response.json(initial));
+    vi.stubGlobal("fetch", fetcher);
+    const first = expect(refreshSession("https://platform.example", session)).rejects.toThrow(
+      "REMOTE_REQUEST_TIMEOUT",
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    await first;
+    expect((await refreshSession("https://platform.example", session)).sessionId).toBe(
+      session.sessionId,
+    );
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
   it("shares one credential rotation between background maintenance and an API retry", async () => {
     const initial = grant();
     const session = await saveSession(initial);

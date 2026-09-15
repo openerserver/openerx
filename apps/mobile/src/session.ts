@@ -3,6 +3,7 @@ import { deviceSessionGrantSchema } from "@openerx/contracts";
 import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
+import { fetchMobileJson } from "./http";
 
 const sessionKey = "openerx.remote.session.v1";
 const deviceKey = "openerx.remote.device.v1";
@@ -81,7 +82,7 @@ export function refreshSession(baseUrl: string, session: MobileSession): Promise
 
 async function rotateSession(baseUrl: string, session: MobileSession): Promise<MobileSession> {
   const revision = sessionRevision;
-  const response = await fetch(
+  const { response, value } = await fetchMobileJson(
     `${baseUrl.replace(/\/$/u, "")}/api/v2/account/sessions/${encodeURIComponent(session.sessionId)}/refresh`,
     {
       method: "POST",
@@ -89,7 +90,6 @@ async function rotateSession(baseUrl: string, session: MobileSession): Promise<M
       body: JSON.stringify({ refreshCredential: session.refreshCredential }),
     },
   );
-  const value = (await response.json()) as unknown;
   if (!response.ok) {
     const code = (value as { error?: { code?: string } })?.error?.code;
     throw new Error(code?.startsWith("DEVICE_SESSION_") ? code : "SESSION_REFRESH_FAILED");

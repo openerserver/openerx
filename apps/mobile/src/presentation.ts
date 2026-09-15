@@ -1,7 +1,8 @@
-import type { Branch } from "@openerx/contracts";
+import type { Branch, RemoteHost } from "@openerx/contracts";
 import type { DecryptedRemoteEvent } from "./remote-controller";
 
 const errorMessages: Record<string, string> = {
+  REMOTE_REQUEST_TIMEOUT: "连接暂时没有响应，正在重新检查。已保存的任务仍可查看。",
   REMOTE_ATTACHMENT_UNSUPPORTED: "这台电脑的版本尚不支持手机附件，请更新电脑上的 openerx 后重试。",
   FILE_UNSUPPORTED: "暂不支持此文件格式，请选择文档、文本或 PNG/JPEG/GIF/WebP 图片。",
   FILE_TOO_LARGE: "附件合计不能超过 50 MB，请减少文件后重试。",
@@ -87,6 +88,35 @@ export function taskStatusLabel(status: TaskStatus): string {
     failed: "未完成",
     stopped: "已停止",
   }[status];
+}
+
+// The Gateway accepts commands while degraded; only offline/disabled/revoked blocks access.
+export function isRemoteHostReachable(host: RemoteHost | null): boolean {
+  return Boolean(
+    host?.remoteEnabled && (host.presence === "online" || host.presence === "degraded"),
+  );
+}
+
+export function hostPresenceLabel(host: RemoteHost): string {
+  if (!host.remoteEnabled) return "远程连接已关闭";
+  return { online: "在线", degraded: "连接不稳定", offline: "离线", revoked: "已撤销" }[
+    host.presence
+  ];
+}
+
+export function taskConnectionLabel(
+  host: RemoteHost | null,
+  paired: boolean,
+  task?: MobileTask,
+): string {
+  if (!host) return "请先选择电脑";
+  if (!isRemoteHostReachable(host)) return `电脑${hostPresenceLabel(host)}`;
+  if (!paired) return "尚未授权，请先申请连接";
+  if (host.presence === "degraded") return "连接不稳定，正在自动重试";
+  if (task?.archivedAt) return "已连接 · 已归档任务";
+  if (task?.viewingBranchId && task.viewingBranchId !== task.activeBranchId)
+    return "已连接 · 历史分支";
+  return task ? taskStatusLabel(task.status) : "已连接 · 使用电脑上的模型";
 }
 
 export function mergeRemoteEvents(

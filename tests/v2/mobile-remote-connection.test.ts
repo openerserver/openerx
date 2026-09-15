@@ -1,4 +1,4 @@
-import type { RemoteConnectionRequest, RemoteDevicePairing } from "@openerx/contracts";
+import type { RemoteConnectionRequest, RemoteDevicePairing, RemoteHost } from "@openerx/contracts";
 import {
   generateRemoteDeviceKeyPair,
   verifyRemoteConnectionRequestProof,
@@ -85,6 +85,59 @@ function setup() {
 }
 
 describe("mobile connection authorization", () => {
+  it.each(["online", "degraded", "offline", "revoked"] as const)(
+    "uses Gateway reachability rules when a paired host is %s",
+    async (presence) => {
+      const state = setup();
+      const request = await state.controller.requestConnection(state.hostDeviceId);
+      const pairing: RemoteDevicePairing = {
+        version: 1,
+        pairingId: crypto.randomUUID(),
+        accountId: state.accountId,
+        controllerDeviceId: state.controllerDeviceId,
+        hostDeviceId: state.hostDeviceId,
+        controllerPublicKey: request.controllerPublicKey,
+        hostPublicKey: generateRemoteDeviceKeyPair().publicKey,
+        status: "active",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        revokedAt: null,
+      };
+      const host: RemoteHost = {
+        version: 1,
+        accountId: state.accountId,
+        hostDeviceId: state.hostDeviceId,
+        displayName: "电脑",
+        platform: "darwin",
+        arch: "arm64",
+        appVersion: "2.0.5",
+        capabilities: ["task.start"],
+        remoteEnabled: true,
+        presence,
+        revision: 1,
+        presenceChangedAt: new Date().toISOString(),
+      };
+      const submit = vi.fn().mockResolvedValue({ status: "submitted" });
+      Object.assign(state.api, { submitCommand: submit });
+      const sending = state.controller.send(
+        host,
+        pairing,
+        {
+          kind: "task.start",
+          text: "验证连接",
+          clientOperationId: "connection-recovery-test",
+        },
+        { conversationId: null, baseRevision: 0 },
+      );
+      if (presence === "online" || presence === "degraded") {
+        await expect(sending).resolves.toMatchObject({ status: "submitted" });
+        expect(submit).toHaveBeenCalledOnce();
+      } else {
+        await expect(sending).rejects.toThrow("REMOTE_HOST_OFFLINE");
+        expect(submit).not.toHaveBeenCalled();
+      }
+    },
+  );
   it("signs a connection request for this account, phone and target computer", async () => {
     const state = setup();
     const request = await state.controller.requestConnection(state.hostDeviceId);

@@ -22,6 +22,7 @@ import {
 import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 import type { MobileApi } from "./mobile-api";
+import { isRemoteHostReachable } from "./presentation";
 import type { MobileSession } from "./session";
 
 const keyPairKey = "openerx.remote.controller-key.v1";
@@ -98,7 +99,7 @@ export class RemoteController {
       baseRevision: number;
     },
   ): Promise<RemoteCommandReceipt> {
-    if (!host.remoteEnabled || host.presence !== "online") throw new Error("REMOTE_HOST_OFFLINE");
+    if (!isRemoteHostReachable(host)) throw new Error("REMOTE_HOST_OFFLINE");
     if (pairing.status !== "active") throw new Error("REMOTE_PAIRING_NOT_ACTIVE");
     const commandId = Crypto.randomUUID();
     const issuedAt = new Date();

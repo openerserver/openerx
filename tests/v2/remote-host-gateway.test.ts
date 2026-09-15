@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getEventListeners } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,7 +24,11 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const directories: string[] = [];
-afterEach(() => {
+const recoveryCleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of recoveryCleanups.splice(0)) await close();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
@@ -84,6 +89,9 @@ function setup() {
     replay: RemoteCommand | null = null;
     registerHost(input: RemoteHostRegistrationInput) {
       return Promise.resolve(gateway.registerHost(hostPrincipal, input));
+    }
+    listHosts() {
+      return Promise.resolve(gateway.listHosts(hostPrincipal));
     }
     updatePresence(input: {
       hostDeviceId: string;
@@ -148,6 +156,7 @@ function setup() {
     gateway,
     accountId,
     controllerPrincipal,
+    hostPrincipal,
     hostKeys,
     controllerKeys,
     pairing,
@@ -157,6 +166,119 @@ function setup() {
     makeCommand,
   };
 }
+
+function recoveryFixture() {
+  vi.useFakeTimers();
+  const state = setup();
+  const apply = vi.fn();
+  const currentRevision = vi.fn().mockResolvedValue(4);
+  const connector = new RemoteHostConnector({
+    databasePath: path.join(state.directory, "connector.sqlite"),
+    host: state.host,
+    hostPrivateKey: state.hostKeys.privateKey,
+    transport: state.transport,
+    now: () => state.nowRef.value,
+    applier: { currentRevision, apply },
+  });
+  const controller = new AbortController();
+  let running: Promise<void> | null = null;
+  recoveryCleanups.push(async () => {
+    controller.abort();
+    await running;
+    connector.close();
+    state.gateway.close();
+  });
+  return {
+    ...state,
+    connector,
+    controller,
+    apply,
+    currentRevision,
+    run: () => {
+      running ??= connector.run(controller.signal);
+    },
+    presence: () => state.gateway.listHosts(state.controllerPrincipal)[0]?.presence,
+  };
+}
+
+describe("RemoteHostConnector connection recovery", () => {
+  it("retries a temporary startup failure without requiring the user to toggle Remote", async () => {
+    const state = recoveryFixture();
+    const register = vi
+      .spyOn(state.transport, "registerHost")
+      .mockRejectedValueOnce(new Error("NETWORK_UNAVAILABLE"));
+    state.run();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(register).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(state.presence()).toBe("online");
+  });
+
+  it("recovers when a degraded presence write reaches the Gateway but its response is lost", async () => {
+    const state = recoveryFixture();
+    vi.spyOn(state.transport, "pullCommands").mockRejectedValueOnce(
+      new Error("NETWORK_UNAVAILABLE"),
+    );
+    const original = state.transport.updatePresence.bind(state.transport);
+    vi.spyOn(state.transport, "updatePresence").mockImplementation(async (input) => {
+      const result = await original(input);
+      if (input.presence === "degraded") throw new Error("REMOTE_REQUEST_TIMEOUT");
+      return result;
+    });
+    const discovery = vi.spyOn(state.transport, "listHosts");
+    state.run();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.presence()).toBe("degraded");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(discovery).toHaveBeenCalledOnce();
+    expect(state.presence()).toBe("online");
+  });
+
+  it("never re-registers or re-enables a host disabled during recovery", async () => {
+    const state = recoveryFixture();
+    vi.spyOn(state.transport, "pullCommands").mockRejectedValueOnce(
+      new Error("NETWORK_UNAVAILABLE"),
+    );
+    const register = vi.spyOn(state.transport, "registerHost");
+    state.run();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.presence()).toBe("degraded");
+    state.gateway.registerHost(state.hostPrincipal, { ...state.host, remoteEnabled: false });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(state.presence()).toBe("offline");
+    expect(register).toHaveBeenCalledOnce();
+    expect(state.gateway.listHosts(state.controllerPrincipal)[0]?.remoteEnabled).toBe(false);
+  });
+
+  it("reports a new command's revision lookup failure without claiming the host disconnected", async () => {
+    const state = recoveryFixture();
+    const command = state.makeCommand({
+      kind: "session.prompt",
+      text: "继续任务",
+      clientOperationId: "revision-timeout-test",
+    });
+    state.gateway.submitCommand(state.controllerPrincipal, command);
+    state.currentRevision.mockRejectedValueOnce(new Error("REMOTE_REVISION_TIMEOUT"));
+    state.run();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.presence()).toBe("online");
+    expect(state.apply).not.toHaveBeenCalled();
+    expect(state.gateway.submitCommand(state.controllerPrincipal, command)).toMatchObject({
+      status: "rejected",
+      resultCode: "REMOTE_REVISION_TIMEOUT",
+    });
+  });
+
+  it("does not accumulate abort listeners during foreground polling", async () => {
+    const state = recoveryFixture();
+    state.run();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getEventListeners(state.controller.signal, "abort")).toHaveLength(1);
+    state.controller.abort();
+    expect(getEventListeners(state.controller.signal, "abort")).toHaveLength(0);
+  });
+});
 
 describe("RemoteHostConnector", () => {
   it.each([true, false])(

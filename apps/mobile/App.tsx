@@ -41,11 +41,13 @@ import { MobileApi } from "./src/mobile-api";
 import { attachmentChecksum, pickAttachments, readAttachment } from "./src/native-attachments";
 import { nativeHistoryStorage } from "./src/native-history-storage";
 import {
+  hostPresenceLabel,
+  isRemoteHostReachable,
   type MobileTask,
   mergeRemoteEvents,
   mobileErrorMessage,
   pendingAttention,
-  taskStatusLabel,
+  taskConnectionLabel,
 } from "./src/presentation";
 import { type DecryptedRemoteEvent, RemoteController } from "./src/remote-controller";
 import {
@@ -266,11 +268,15 @@ function HostCard({
             </Text>
           </View>
           <View
-            style={[styles.statusDot, host.presence === "online" ? styles.statusOnline : null]}
+            style={[
+              styles.statusDot,
+              host.presence === "online" ? styles.statusOnline : null,
+              host.presence === "degraded" ? styles.statusDegraded : null,
+            ]}
           />
         </View>
         <View style={styles.chipRow}>
-          <Text style={styles.chip}>{host.presence === "online" ? "在线" : "离线"}</Text>
+          <Text style={styles.chip}>{hostPresenceLabel(host)}</Text>
           <Text style={styles.chip}>
             {paired
               ? host.presence === "online"
@@ -294,7 +300,7 @@ function HostCard({
             ? "正在申请…"
             : !host.remoteEnabled
               ? "电脑未开启远程连接"
-              : host.presence !== "online"
+              : !isRemoteHostReachable(host)
                 ? "电脑离线"
                 : paired
                   ? "进入任务"
@@ -307,7 +313,7 @@ function HostCard({
         disabled={
           busy ||
           !host.remoteEnabled ||
-          host.presence !== "online" ||
+          !isRemoteHostReachable(host) ||
           (!paired && request?.status === "pending")
         }
         onPress={onConnect}
@@ -526,11 +532,7 @@ function TasksScreen({
   const running = Boolean(activeMessageId);
   const selectedProject = projects.find((project) => project.projectId === selectedProjectId);
   const canControl = Boolean(
-    host?.presence === "online" &&
-      host.remoteEnabled &&
-      pairing &&
-      !historicalBranch &&
-      !task?.archivedAt,
+    isRemoteHostReachable(host) && pairing && !historicalBranch && !task?.archivedAt,
   );
   useEffect(() => {
     if (previousConversation.current !== conversationId) {
@@ -608,13 +610,7 @@ function TasksScreen({
           <Text numberOfLines={1} style={styles.sectionTitle}>
             {host?.displayName ?? "请先连接电脑"}
           </Text>
-          <Text style={styles.cardMeta}>
-            {!canControl
-              ? "电脑未连接"
-              : task
-                ? taskStatusLabel(task.status)
-                : "已连接 · 使用电脑上的模型"}
-          </Text>
+          <Text style={styles.cardMeta}>{taskConnectionLabel(host, Boolean(pairing), task)}</Text>
         </View>
         {!keyboardVisible ? (
           <PrimaryButton
@@ -1338,7 +1334,7 @@ function RemoteApp({
           current ??
           nextHosts.find(
             (host) =>
-              host.presence === "online" &&
+              isRemoteHostReachable(host) &&
               nextPairings.some(
                 (pairing) =>
                   pairing.hostDeviceId === host.hostDeviceId && pairing.status === "active",
@@ -1357,7 +1353,13 @@ function RemoteApp({
   useEffect(() => {
     void refresh();
     const interval = setInterval(() => void refresh(), 3_000);
-    return () => clearInterval(interval);
+    const foreground = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refresh();
+    });
+    return () => {
+      clearInterval(interval);
+      foreground.remove();
+    };
   }, [refresh]);
   useEffect(() => {
     if (previousHost.current !== selectedHostId) {
@@ -1462,9 +1464,13 @@ function RemoteApp({
     };
     void pull();
     const interval = setInterval(() => void pull(), 1_500);
+    const foreground = AppState.addEventListener("change", (state) => {
+      if (state === "active") void pull();
+    });
     return () => {
       active = false;
       clearInterval(interval);
+      foreground.remove();
     };
   }, [api, controller, pairings, selectedHostId, selectedPairing, session.accessToken]);
   const waitForResult = (commandId: string): Promise<DecryptedRemoteEvent> =>
@@ -1532,7 +1538,7 @@ function RemoteApp({
     }
   };
   useEffect(() => {
-    if (!controller || !selectedHost || selectedHost.presence !== "online" || !selectedPairing)
+    if (!controller || !selectedHost || !isRemoteHostReachable(selectedHost) || !selectedPairing)
       return;
     void controller
       .send(
@@ -1914,6 +1920,7 @@ const styles = StyleSheet.create({
   },
   hostIconText: { color: "#b7f397", fontSize: 18 },
   statusDot: { width: 8, height: 8, borderRadius: 99, backgroundColor: "#6b716b" },
+  statusDegraded: { backgroundColor: "#e2b95b" },
   statusOnline: {
     backgroundColor: "#8fd16c",
     shadowColor: "#8fd16c",

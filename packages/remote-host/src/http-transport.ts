@@ -21,6 +21,7 @@ export class HttpRemoteGatewayTransport implements RemoteGatewayTransport {
     private readonly baseUrl: string,
     private accessToken: string,
     private readonly fetchImplementation: typeof fetch = fetch,
+    private readonly requestTimeoutMs = 15_000,
   ) {}
 
   updateAccessToken(accessToken: string): void {
@@ -30,6 +31,12 @@ export class HttpRemoteGatewayTransport implements RemoteGatewayTransport {
   registerHost(input: RemoteHostRegistrationInput): Promise<RemoteHost> {
     return this.#request("POST", "/api/v2/remote/hosts", input, (value) =>
       remoteHostSchema.parse(value),
+    );
+  }
+
+  listHosts(): Promise<RemoteHost[]> {
+    return this.#request("GET", "/api/v2/remote/hosts", undefined, (value) =>
+      remoteHostSchema.array().parse(value),
     );
   }
 
@@ -85,21 +92,38 @@ export class HttpRemoteGatewayTransport implements RemoteGatewayTransport {
     body: unknown,
     parse: (value: unknown) => T,
   ): Promise<T> {
-    const response = await this.fetchImplementation(new URL(pathname, this.baseUrl), {
-      method,
-      headers: {
-        authorization: `Bearer ${this.accessToken}`,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    const data = (await response.json()) as unknown;
-    if (!response.ok) {
-      const candidate = data as { error?: { message?: string }; message?: string };
-      throw new Error(
-        candidate.error?.message ?? candidate.message ?? `REMOTE_HTTP_${response.status}`,
-      );
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error("REMOTE_REQUEST_TIMEOUT"));
+            controller.abort();
+          }, this.requestTimeoutMs);
+        }),
+        (async () => {
+          const response = await this.fetchImplementation(new URL(pathname, this.baseUrl), {
+            method,
+            signal: controller.signal,
+            headers: {
+              authorization: `Bearer ${this.accessToken}`,
+              ...(body === undefined ? {} : { "content-type": "application/json" }),
+            },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          });
+          const data = (await response.json()) as unknown;
+          if (!response.ok) {
+            const candidate = data as { error?: { message?: string }; message?: string };
+            throw new Error(
+              candidate.error?.message ?? candidate.message ?? `REMOTE_HTTP_${response.status}`,
+            );
+          }
+          return parse(data);
+        })(),
+      ]);
+    } finally {
+      clearTimeout(timeout);
     }
-    return parse(data);
   }
 }
