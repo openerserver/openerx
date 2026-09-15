@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => JSON.parse(readFileSync(path.join(root, file), "utf8"));
@@ -20,6 +21,15 @@ if (action === "bump") {
 else if (!["sync", "check"].includes(action)) throw new Error("Use check, sync, bump or set");
 if (!/^\d+\.\d+\.\d+$/u.test(version) || version === "0.0.0") throw new Error("PRODUCT_VERSION_REQUIRED");
 const checking = action === "check";
+// A version-only change may refresh the already-reviewed package overlay, but
+// must never bless other package edits or reset the complete parity baseline.
+const parityPath = "config/desktop-parity.json";
+const desktopPackage = "core/apps/desktop/package.json";
+const digest = (file) => createHash("sha256").update(readFileSync(path.join(root, file), "utf8").replaceAll("\r\n", "\n")).digest("hex");
+const parity = !checking && existsSync(path.join(root, parityPath)) ? read(parityPath) : null;
+const packageOverlay = parity?.files?.["apps/desktop/package.json"];
+if (parity && (!packageOverlay?.reason || packageOverlay.core !== digest(desktopPackage)))
+  throw new Error("Review desktop package changes before updating the product version");
 const update = (file, mutate) => {
   const value = read(file), before = JSON.stringify(value);
   mutate(value);
@@ -62,5 +72,9 @@ const serverVersion = path.join(root, "services/central-auth/buildinfo/version.t
 if (existsSync(serverVersion)) {
   if (checking && readFileSync(serverVersion, "utf8").trim() !== version) throw new Error("PRODUCT_VERSION_DRIFT: server");
   if (!checking) writeFileSync(serverVersion, `${version}\n`);
+}
+if (parity) {
+  packageOverlay.core = digest(desktopPackage);
+  write(parityPath, parity);
 }
 console.log(`Product version ${version}: ${checking ? "verified" : "synchronized"}`);

@@ -49,7 +49,7 @@
     "version:check": "node scripts/product-version.mjs check",
     "version:bump": "node scripts/product-version.mjs bump",
     "version:sync": "node scripts/product-version.mjs sync",
-    "test:version": "node --test apps/desktop/tests/build-info.test.mjs",
+    "test:version": "node --test apps/desktop/tests/build-info.test.mjs tests/product-version.test.mjs",
     "predev:desktop": "npm run version:check",
     "prebuild:v2": "npm run version:check",
     "prepackage:v2": "npm run version:check"
