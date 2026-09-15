@@ -57,3 +57,18 @@
 本修复同步进入 UWA 的 `openerx-advanced/core`。公共 profile 初始化接受版本固定目录名；默认仍为 `OpenerX`，UWA 传入既有的 `OpenerX-Enterprise`。两个目录均加入重编译、多次重启、离线刷新及已撤销登录的数据库和模型配置保留回归。
 
 仓库 `AGENTS.md` 已要求共通桌面修复同时检查、修复和验证两个版本；公共回归入口增加账号会话、数据保留及远程请求超时测试。`npm run test:desktop-common` 在 openerx 通过 15 个桌面测试文件（106 项）与 9 个公共执行测试文件（60 项），同时通过 5 个包的类型检查。UWA 的独立账号、数据与应用验证详见该仓库 `docs/DESKTOP_DATA_PERSISTENCE_20260915.md`。
+
+### 最终应用与桌面复验
+
+双版本修改提交后重新生成固定位置的应用，替代首轮验收包：
+
+| 版本 | 最终构建 | 构建源码修订 |
+| --- | --- | --- |
+| openerx 2.0.5 | `20260915T130840Z` | `a204ea4f92ceaeb02a05781b35e79d4af82958e8`（clean） |
+| UWA 2.1.2 | `20260915T131116Z` | outer `7ae57f7044bd86d54c408286e875d3234fd5237e`，core `6cbfd602`（clean） |
+
+两边打包、fuses 和本机签名状态检查完成，仍为 `LOCAL UNSIGNED` 的本机产物。openerx 最终包从桌面启动后，旧会话正文、项目和模型设置可读；数据库及配置比对结果与上文相同，原始结果为本机证据目录中的 `paired-personal-data-comparison.json`。
+
+UWA 在用户解锁后，于 21:45:02、21:46:36、21:46:58（Asia/Shanghai）连续三次从桌面启动，后台服务均在约 0.4 秒 ready。旧会话正文与后续消息、项目、模型设置均保留，账号设置显示“已登录”。UWA 的 72 个数据库表中 71 表完全一致，另一个表仅有内置 skill 的启动维护字段变化。
+
+UWA 首次桌面验收曾出现启动超时，本轮未复现；没有新增启动代码修复，原因尚未确认。完整经过及原始证据位置见 [UWA 双版本验收记录](../../../../openerx-advanced/docs/DESKTOP_DATA_PERSISTENCE_20260915.md)。
