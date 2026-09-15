@@ -196,10 +196,21 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
   remotePort.on("message", async (event) => {
     const revisionRequest = remoteRevisionRequestFrameSchema.safeParse(event.data);
     if (revisionRequest.success) {
+      let revision = service.currentRemoteRevision(revisionRequest.data.conversationId);
+      if (remoteAuthorization) {
+        try {
+          revision = await service.prepareRemoteRevision(
+            revisionRequest.data.conversationId,
+            remoteAuthorization,
+          );
+        } catch {
+          /* Keep the local revision; unavailable synchronization cannot grant execution. */
+        }
+      }
       remotePort.postMessage({
         kind: "remote.revision.response",
         requestId: revisionRequest.data.requestId,
-        revision: service.currentRemoteRevision(revisionRequest.data.conversationId),
+        revision,
       });
       return;
     }

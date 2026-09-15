@@ -502,7 +502,18 @@ export class ChatAppService {
   }
 
   currentRemoteRevision(conversationId: string | null): number {
-    return this.#repository.conversationRevision(conversationId);
+    return this.#safeConversationRevision(conversationId);
+  }
+
+  async prepareRemoteRevision(
+    conversationId: string | null,
+    authorization: AppServiceAuthorization,
+  ): Promise<number> {
+    // A phone can open history made on another desktop. Restore idle conversations before
+    // checking the command revision; never replace a currently executing local generation.
+    if (conversationId && ![...this.#conversationByGeneration.values()].includes(conversationId))
+      await this.#sync?.syncOnce(authorization);
+    return this.currentRemoteRevision(conversationId);
   }
 
   async applyRemoteCommand(
@@ -621,6 +632,15 @@ export class ChatAppService {
           : previousModel;
         if (modelRef && isByokModelRef(modelRef) && !context.byok)
           throw new Error("BYOK_API_KEY_REQUIRED");
+        const attachments = payload.attachments ?? [];
+        const sync = this.#sync;
+        if (attachments.length && !sync) throw new Error("SYNC_SERVICE_UNAVAILABLE");
+        const imported =
+          attachments.length && sync
+            ? await this.#requiredFiles().importRemoteAttachments(attachments, (objectId) =>
+                sync.downloadObject(objectId, context.authorization ?? authorization),
+              )
+            : [];
         const draft = this.#repository.createGeneration({
           conversationId: command.conversationId,
           text: payload.text,
@@ -633,7 +653,7 @@ export class ChatAppService {
           context.authorization ?? authorization,
           this.#skills?.mounts("default") ?? [],
           undefined,
-          [],
+          imported.map((file) => file.id),
           payload.executionMode === "attended" ? "remote_attended" : "remote_unattended",
           {
             pairingId: command.pairingId,

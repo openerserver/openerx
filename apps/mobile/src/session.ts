@@ -90,7 +90,10 @@ async function rotateSession(baseUrl: string, session: MobileSession): Promise<M
     },
   );
   const value = (await response.json()) as unknown;
-  if (!response.ok) throw new Error("SESSION_REFRESH_FAILED");
+  if (!response.ok) {
+    const code = (value as { error?: { code?: string } })?.error?.code;
+    throw new Error(code?.startsWith("DEVICE_SESSION_") ? code : "SESSION_REFRESH_FAILED");
+  }
   const next = fromGrant(deviceSessionGrantSchema.parse(value));
   if (next.sessionId !== session.sessionId || next.account.accountId !== session.account.accountId)
     throw new Error("SESSION_REFRESH_SCOPE_VIOLATION");

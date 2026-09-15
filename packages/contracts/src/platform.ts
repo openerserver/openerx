@@ -84,7 +84,7 @@ export interface IdentityServicePort {
 
 export interface AccountSyncServicePort {
   push(principal: SyncPrincipal, operation: SyncOperation): SyncPushResult;
-  pull(principal: SyncPrincipal, cursor: string | null): SyncPullResult;
+  pull(principal: SyncPrincipal, cursor: string | null, limit?: number): SyncPullResult;
   listConflicts(principal: SyncPrincipal): SyncConflict[];
   resolveConflict(principal: SyncPrincipal, conflictId: string): SyncConflict;
   deleteAccountData(principal: SyncPrincipal): CloudDataDeletionResult;

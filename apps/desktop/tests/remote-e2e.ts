@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +11,8 @@ import type {
   RemoteDevicePairing,
   RemoteHost,
   RemoteProductEvent,
+  SyncChange,
+  SyncPullResult,
 } from "@openerx/contracts";
 import {
   commandCipherContext,
@@ -213,7 +215,7 @@ try {
   const remoteState = await page.evaluate(async () => await window.openerx.getRemoteState());
   assert.equal(remoteState.enabled, true);
   assert.equal(remoteState.available, true);
-  assert.equal(await remotePanel.getByRole("img").count(), 0);
+  assert.equal(await remotePanel.getByAltText("远程连接一次性配对二维码").count(), 0);
   const challenge = await page.evaluate(
     async () => await window.openerx.createRemotePairingChallenge(),
   );
@@ -314,11 +316,39 @@ try {
     await page.screenshot({ path: process.env.OPENERX_E2E_SCREENSHOT_PATH });
   }
 
+  const attachmentBytes = new TextEncoder().encode(
+    "REMOTE_ATTACHMENT_CONTENT: invoice A-101, quantity 7.",
+  );
+  const attachment = {
+    objectId: crypto.randomUUID(),
+    sizeBytes: attachmentBytes.length,
+    checksumSha256: createHash("sha256").update(attachmentBytes).digest("hex"),
+    mediaType: "text/plain",
+  };
+  const uploadIntent = await json<{ token: string }>(
+    "/api/v2/objects/upload-intents",
+    mobile.accessToken,
+    { method: "POST", body: JSON.stringify(attachment) },
+  );
+  assert.equal(uploadIntent.response.status, 200);
+  const uploaded = await fetch(
+    `${platformUrl}/api/v2/objects/transfers/${uploadIntent.value.token}`,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${mobile.accessToken}`,
+        "content-type": "application/octet-stream",
+      },
+      body: attachmentBytes,
+    },
+  );
+  assert.equal(uploaded.status, 200);
   const command = remoteCommand({
     payload: {
       kind: "task.start",
       text: "从手机完成一次 Remote E2E 任务",
       clientOperationId: "remote-e2e-operation",
+      attachments: [{ ...attachment, displayName: "phone-invoice.txt" }],
     },
     host: host as RemoteHost,
     pairing: accepted.value,
@@ -364,6 +394,35 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   assert.ok(decrypted.some(({ envelope }) => envelope.kind === "conversation.updated"));
+  const historyObjects = new Map<string, SyncChange>();
+  let historyCursor: string | null = null;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    for (;;) {
+      const historyQuery = new URLSearchParams({ limit: "200" });
+      if (historyCursor) historyQuery.set("cursor", historyCursor);
+      const pull = await json<SyncPullResult>(
+        `/api/v2/sync/pull?${historyQuery}`,
+        mobile.accessToken,
+      );
+      assert.equal(pull.response.status, 200);
+      for (const change of pull.value.changes)
+        historyObjects.set(`${change.objectType}:${change.objectId}`, change);
+      historyCursor = pull.value.nextCursor;
+      if (!pull.value.changes.length) break;
+    }
+    if ([...historyObjects.values()].some((entry) => entry.objectType === "attachment")) break;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  const restored = [...historyObjects.values()].find((entry) => entry.objectType === "attachment");
+  assert.ok(restored?.payload?.messageId, "The attachment must belong to the exact user turn");
+  const fileRecord = [...historyObjects.values()].find(
+    (entry) => entry.objectType === "personal_file",
+  );
+  assert.equal(fileRecord?.payload?.displayName, "phone-invoice.txt");
+  assert.ok(fileRecord?.payload?.parsedText?.toString().includes("REMOTE_ATTACHMENT_CONTENT"));
+  const restoredMessage = historyObjects.get(`message:${restored?.payload?.messageId}`);
+  assert.equal(restoredMessage?.payload?.role, "user");
+  assert.ok(JSON.stringify(restoredMessage?.payload?.parts).includes("Remote E2E"));
   assert.ok(
     decrypted.some(({ payload }) => String(payload.delta ?? "").includes("Remote E2E")),
     JSON.stringify(decrypted.map(({ envelope, payload }) => ({ kind: envelope.kind, payload }))),
@@ -447,7 +506,7 @@ try {
   assert.equal(await page.getByAltText("远程连接一次性配对二维码").count(), 0);
 
   console.log(
-    "E2E_REMOTE_OK desktop-consent-optional-qr-e2ee-start-token-renewal-cursor-replay-single-charge-revoke-disable-key-vault",
+    "E2E_REMOTE_OK desktop-consent-optional-qr-e2ee-attachment-import-account-history-start-token-renewal-cursor-replay-single-charge-revoke-disable-key-vault",
   );
 } finally {
   await application?.close().catch(() => undefined);

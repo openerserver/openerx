@@ -1,4 +1,8 @@
 import {
+  type CloudObjectDescriptor,
+  type CloudObjectIntentInput,
+  cloudObjectDescriptorSchema,
+  cloudObjectTransferIntentSchema,
   type DeviceDescriptor,
   type DeviceSessionGrant,
   deviceSessionGrantSchema,
@@ -21,6 +25,8 @@ import {
   remoteEventCursorSchema,
   remoteHostSchema,
   remoteProductEventSchema,
+  type SyncPullResult,
+  syncPullResultSchema,
 } from "@openerx/contracts";
 
 export class MobileApi {
@@ -131,6 +137,45 @@ export class MobileApi {
     );
   }
 
+  pullHistory(token: string, cursor: string | null): Promise<SyncPullResult> {
+    const query = new URLSearchParams({ limit: "200" });
+    if (cursor) query.set("cursor", cursor);
+    return this.#request("GET", `/api/v2/sync/pull?${query}`, token, undefined, (value) =>
+      syncPullResultSchema.parse(value),
+    );
+  }
+
+  async uploadObject(
+    token: string,
+    input: CloudObjectIntentInput,
+    bytes: Uint8Array,
+  ): Promise<CloudObjectDescriptor> {
+    const intent = await this.#request(
+      "POST",
+      "/api/v2/objects/upload-intents",
+      token,
+      input,
+      (value) => cloudObjectTransferIntentSchema.parse(value),
+    );
+    if (intent.objectId !== input.objectId || intent.operation !== "upload")
+      throw new Error("OBJECT_INTENT_INVALID");
+    const descriptor = await this.#request(
+      "PUT",
+      `/api/v2/objects/transfers/${intent.token}`,
+      token,
+      bytes,
+      (value) => cloudObjectDescriptorSchema.parse(value),
+    );
+    if (
+      descriptor.objectId !== input.objectId ||
+      descriptor.checksumSha256 !== input.checksumSha256 ||
+      descriptor.sizeBytes !== input.sizeBytes ||
+      descriptor.mediaType !== input.mediaType
+    )
+      throw new Error("OBJECT_UPLOAD_MISMATCH");
+    return descriptor;
+  }
+
   async #request<T>(
     method: string,
     pathname: string,
@@ -138,14 +183,19 @@ export class MobileApi {
     body: unknown,
     parse: (value: unknown) => T,
   ): Promise<T> {
+    const binary = body instanceof Uint8Array;
     const send = (accessToken: string | undefined): Promise<Response> =>
       fetch(new URL(pathname, this.baseUrl), {
         method,
         headers: {
           ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          ...(body === undefined
+            ? {}
+            : { "content-type": binary ? "application/octet-stream" : "application/json" }),
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(body === undefined
+          ? {}
+          : { body: binary ? body.slice().buffer : JSON.stringify(body) }),
       });
     let accessToken = token && this.authorize ? await this.authorize(token, false) : token;
     let response = await send(accessToken);

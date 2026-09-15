@@ -284,7 +284,10 @@ export class AccountSyncService {
     });
   }
 
-  pull(principal: SyncPrincipal, afterCursor: string | null): SyncPullResult {
+  pull(principal: SyncPrincipal, afterCursor: string | null, limit?: number): SyncPullResult {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 500)) {
+      throw new Error("SYNC_PAGE_LIMIT_INVALID");
+    }
     const after = cursorSequence(afterCursor);
     const current = this.#currentCursor(principal.accountId);
     if (after > current) throw new Error("SYNC_CURSOR_AHEAD");
@@ -292,11 +295,14 @@ export class AccountSyncService {
       .prepare(
         `SELECT * FROM sync_changes
          WHERE account_id = ? AND cursor_sequence > ?
-         ORDER BY cursor_sequence ASC`,
+         ORDER BY cursor_sequence ASC LIMIT ?`,
       )
-      .all(principal.accountId, after) as SqlRow[];
+      .all(principal.accountId, after, limit ?? -1) as SqlRow[];
     const changes = rows.map((row) => this.#change(row));
-    return syncPullResultSchema.parse({ changes, nextCursor: cursor(current) });
+    return syncPullResultSchema.parse({
+      changes,
+      nextCursor: changes.at(-1)?.cursor ?? cursor(current),
+    });
   }
 
   listConflicts(principal: SyncPrincipal): SyncConflict[] {

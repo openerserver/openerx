@@ -189,6 +189,13 @@ export class SyncCoordinator {
     return await this.syncOnce(authorization);
   }
 
+  async downloadObject(
+    objectId: string,
+    authorization: AppServiceAuthorization,
+  ): Promise<Uint8Array> {
+    return await this.#transport.downloadObject(objectId, authorization);
+  }
+
   async syncOnce(authorization: AppServiceAuthorization): Promise<SyncStatus> {
     if (this.#active) {
       this.#rerunRequested = true;

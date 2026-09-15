@@ -14,7 +14,7 @@
     "package": "node scripts/clean-test-build.mjs && electron-forge package",
     "make": "node scripts/clean-test-build.mjs && electron-forge make",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=2 --exclude tests/build-info.test.mjs && node --test tests/build-info.test.mjs",
     "test:e2e:account": "node scripts/e2e-account.mjs",
     "test:e2e:account-access": "vite build --config vite.platform-alpha-test.config.mts --logLevel error && node scripts/e2e-account-access.mjs",
     "test:e2e:byok-default": "vite build --config vite.pi-host-test.config.mts --logLevel error && node scripts/e2e-byok-default.mjs",

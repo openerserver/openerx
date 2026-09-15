@@ -1,6 +1,17 @@
+import type { Branch } from "@openerx/contracts";
 import type { DecryptedRemoteEvent } from "./remote-controller";
 
 const errorMessages: Record<string, string> = {
+  REMOTE_ATTACHMENT_UNSUPPORTED: "这台电脑的版本尚不支持手机附件，请更新电脑上的 openerx 后重试。",
+  FILE_UNSUPPORTED: "暂不支持此文件格式，请选择文档、文本或 PNG/JPEG/GIF/WebP 图片。",
+  FILE_TOO_LARGE: "附件合计不能超过 50 MB，请减少文件后重试。",
+  FILE_COUNT_LIMIT: "每次最多添加 10 个附件。",
+  FILE_CHANGED: "文件在选择后发生了变化，请移除后重新选择。",
+  OBJECT_CHECKSUM_MISMATCH: "附件校验失败，请重新选择并上传。",
+  OBJECT_SIZE_MISMATCH: "附件大小不一致，请重新上传。",
+  OBJECT_MEDIA_TYPE_MISMATCH: "附件格式不匹配，请重新选择文件。",
+  OBJECT_NOT_FOUND: "附件已失效，请重新选择并上传。",
+  CAMERA_PERMISSION_REQUIRED: "需要相机权限才能拍照，请在系统设置中允许访问相机。",
   CHALLENGE_CODE_INVALID: "验证码不正确，请重新输入。",
   CHALLENGE_EXPIRED: "验证码已过期，请重新发送。",
   CHALLENGE_NOT_FOUND: "验证码已失效，请重新发送。",
@@ -40,11 +51,12 @@ export function mobileErrorMessage(error: unknown): string {
 export type TaskStatus = "running" | "waiting" | "completed" | "failed" | "stopped";
 export interface MobileMessage {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   text: string;
   status: TaskStatus;
   reason?: string;
   cancellationRequested?: boolean;
+  updatedAt?: string;
 }
 export interface MobileTask {
   id: string;
@@ -54,6 +66,17 @@ export interface MobileTask {
   status: TaskStatus;
   messages: MobileMessage[];
   activeMessageId: string | null;
+  revision?: number;
+  archivedAt?: string | null;
+  branches?: Branch[];
+  activeBranchId?: string;
+  viewingBranchId?: string;
+  attachments?: Array<{
+    id: string;
+    messageId: string | null;
+    displayName: string;
+    sizeBytes: number;
+  }>;
 }
 
 export function taskStatusLabel(status: TaskStatus): string {
@@ -82,8 +105,19 @@ function messageStatus(value: unknown): TaskStatus {
   return "running";
 }
 
-export function remoteTasks(events: DecryptedRemoteEvent[]): MobileTask[] {
-  const tasks = new Map<string, MobileTask>();
+export function remoteTasks(
+  events: DecryptedRemoteEvent[],
+  initial: MobileTask[] = [],
+): MobileTask[] {
+  const tasks = new Map<string, MobileTask>(
+    initial.map((task) => [
+      task.id,
+      {
+        ...task,
+        messages: task.messages.map((message) => ({ ...message })),
+      },
+    ]),
+  );
   for (const { envelope, payload } of events) {
     const id = envelope.conversationId;
     if (!id) continue;
@@ -96,8 +130,12 @@ export function remoteTasks(events: DecryptedRemoteEvent[]): MobileTask[] {
       messages: [],
       activeMessageId: null,
     };
-    if (typeof payload.title === "string") task.title = payload.title;
-    task.updatedAt = envelope.occurredAt;
+    if (typeof payload.title === "string" && envelope.occurredAt >= task.updatedAt)
+      task.title = payload.title;
+    task.updatedAt = task.updatedAt > envelope.occurredAt ? task.updatedAt : envelope.occurredAt;
+    task.hostDeviceId = envelope.hostDeviceId;
+    if (typeof payload.conversationRevision === "number")
+      task.revision = Math.max(task.revision ?? 0, payload.conversationRevision);
     const user = payload.userMessage as { id?: string; text?: string } | undefined;
     if (user?.id && typeof user.text === "string" && !task.messages.some((m) => m.id === user.id)) {
       const message: MobileMessage = {
@@ -134,6 +172,14 @@ export function remoteTasks(events: DecryptedRemoteEvent[]): MobileTask[] {
         };
         task.messages.push(message);
       }
+      if (
+        message.updatedAt &&
+        (envelope.occurredAt <= message.updatedAt ||
+          (message.status !== "running" && envelope.kind === "message.delta"))
+      ) {
+        tasks.set(id, task);
+        continue;
+      }
       if (typeof snapshot?.text === "string") message.text = snapshot.text;
       else if (envelope.kind === "message.delta" && typeof payload.delta === "string")
         message.text += payload.delta;
@@ -160,6 +206,18 @@ export function remoteTasks(events: DecryptedRemoteEvent[]): MobileTask[] {
       task.activeMessageId = lastAssistant.status === "running" ? lastAssistant.id : null;
     }
     tasks.set(id, task);
+  }
+  for (const task of tasks.values()) {
+    const assistant = task.messages.filter((message) => message.role === "assistant").at(-1);
+    if (assistant) {
+      if (assistant.status !== "running" || task.status !== "waiting")
+        task.status = assistant.status;
+      task.activeMessageId =
+        assistant.status === "running" &&
+        (!task.viewingBranchId || task.viewingBranchId === task.activeBranchId)
+          ? assistant.id
+          : null;
+    }
   }
   return [...tasks.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

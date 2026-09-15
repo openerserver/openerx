@@ -545,7 +545,11 @@ export function createPlatformAlphaServer(services: PlatformAlphaServices): Serv
         send(
           response,
           200,
-          services.sync.pull(syncPrincipal(principal), url.searchParams.get("cursor")),
+          services.sync.pull(
+            syncPrincipal(principal),
+            url.searchParams.get("cursor"),
+            url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+          ),
         );
         return;
       }

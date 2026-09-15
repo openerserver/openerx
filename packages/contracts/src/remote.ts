@@ -1,6 +1,25 @@
 import { z } from "zod";
 import { deviceDescriptorSchema } from "./account";
 import { entityIdSchema, timestampSchema } from "./common";
+import {
+  cloudObjectIntentInputSchema,
+  maxPastedAttachmentBytes,
+  pastedFileInputSchema,
+} from "./file";
+
+export const remoteAttachmentSchema = cloudObjectIntentInputSchema
+  .extend({
+    displayName: pastedFileInputSchema.shape.displayName,
+  })
+  .strict();
+export const remoteAttachmentsSchema = z
+  .array(remoteAttachmentSchema)
+  .max(10)
+  .refine(
+    (files) => files.reduce((total, file) => total + file.sizeBytes, 0) <= maxPastedAttachmentBytes,
+    "FILE_TOO_LARGE",
+  );
+export type RemoteAttachment = z.infer<typeof remoteAttachmentSchema>;
 
 export const remoteOpaqueSchema = z
   .string()
@@ -316,6 +335,7 @@ export const remoteTaskStartPayloadSchema = z
     clientOperationId: z.string().min(8).max(200),
     executionMode: z.enum(["attended", "unattended"]).optional(),
     projectId: entityIdSchema.nullable().optional(),
+    attachments: remoteAttachmentsSchema.optional(),
   })
   .strict();
 
@@ -325,6 +345,7 @@ export const remoteSessionPromptPayloadSchema = z
     text: z.string().trim().min(1).max(100_000),
     clientOperationId: z.string().min(8).max(200),
     executionMode: z.enum(["attended", "unattended"]).optional(),
+    attachments: remoteAttachmentsSchema.optional(),
   })
   .strict();
 

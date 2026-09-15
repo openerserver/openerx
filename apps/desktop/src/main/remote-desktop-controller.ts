@@ -176,6 +176,7 @@ export class RemoteDesktopController {
       appVersion: this.appVersion,
       capabilities: [
         "task.start",
+        "attachment.upload",
         "project.list",
         "project.start",
         "session.control",

@@ -29,13 +29,22 @@ import {
   TextInput,
   View,
 } from "react-native";
+import {
+  MobileAttachmentUploader,
+  type PendingAttachment,
+  type UploadStatus,
+  validateAttachmentBatch,
+} from "./src/attachments";
+import { emptyHistory, historyTasks, MobileHistorySync } from "./src/history";
+import { HistoryPanel } from "./src/history-panel";
 import { MobileApi } from "./src/mobile-api";
+import { attachmentChecksum, pickAttachments, readAttachment } from "./src/native-attachments";
+import { nativeHistoryStorage } from "./src/native-history-storage";
 import {
   type MobileTask,
   mergeRemoteEvents,
   mobileErrorMessage,
   pendingAttention,
-  remoteTasks,
   taskStatusLabel,
 } from "./src/presentation";
 import { type DecryptedRemoteEvent, RemoteController } from "./src/remote-controller";
@@ -457,6 +466,12 @@ function TasksScreen({
   onRefreshProjects,
   onSelectProject,
   onOpenTask,
+  uploader,
+  historySyncing,
+  historySyncedAt,
+  historyError,
+  onRefreshHistory,
+  onSelectBranch,
 }: {
   host: RemoteHost | null;
   pairing: RemoteDevicePairing | null;
@@ -470,33 +485,103 @@ function TasksScreen({
   onRefreshProjects: () => Promise<void>;
   onSelectProject: (id: string | null) => void;
   onOpenTask: (id: string) => void;
+  uploader: MobileAttachmentUploader;
+  historySyncing: boolean;
+  historySyncedAt: string | null;
+  historyError: string | null;
+  onRefreshHistory: () => void;
+  onSelectBranch: (conversationId: string, branchId: string) => void;
 }): React.JSX.Element {
-  const [text, setText] = useState("");
+  const [drafts, setDrafts] = useState<
+    Record<string, { text: string; files: PendingAttachment[] }>
+  >({});
+  const draftKey = conversationId ?? "new";
+  const { text, files } = drafts[draftKey] ?? { text: "", files: [] };
+  const setText = (value: string) =>
+    setDrafts((current) => ({
+      ...current,
+      [draftKey]: { text: value, files: current[draftKey]?.files ?? [] },
+    }));
+  const setFiles = (value: PendingAttachment[]) =>
+    setDrafts((current) => ({
+      ...current,
+      [draftKey]: { files: value, text: current[draftKey]?.text ?? "" },
+    }));
+  const [uploads, setUploads] = useState<Record<string, UploadStatus>>({});
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [showAttachmentPicker, setShowAttachmentPicker] = useState(false);
+  const [messageLimit, setMessageLimit] = useState(100);
+  const previousConversation = useRef(conversationId);
   const [busy, setBusy] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const scroll = useRef<ScrollView>(null);
   const nearBottom = useRef(true);
   const task = tasks.find((value) => value.id === conversationId);
+  const historicalBranch = Boolean(
+    task?.viewingBranchId && task.viewingBranchId !== task.activeBranchId,
+  );
   const activeMessageId = task?.activeMessageId ?? null;
   const running = Boolean(activeMessageId);
   const selectedProject = projects.find((project) => project.projectId === selectedProjectId);
-  const canControl = Boolean(host?.presence === "online" && host.remoteEnabled && pairing);
+  const canControl = Boolean(
+    host?.presence === "online" &&
+      host.remoteEnabled &&
+      pairing &&
+      !historicalBranch &&
+      !task?.archivedAt,
+  );
+  useEffect(() => {
+    if (previousConversation.current !== conversationId) {
+      previousConversation.current = conversationId;
+      setMessageLimit(100);
+      setAttachmentError(null);
+    }
+  }, [conversationId]);
+  const choose = async (source: "files" | "photos" | "camera") => {
+    if (busy || picking || running) return;
+    setPicking(true);
+    setAttachmentError(null);
+    setShowAttachmentPicker(false);
+    try {
+      const selected = await pickAttachments(source);
+      validateAttachmentBatch([...files, ...selected]);
+      setFiles([...files, ...selected]);
+    } catch (error) {
+      setAttachmentError(mobileErrorMessage(error));
+    } finally {
+      setPicking(false);
+    }
+  };
   const invoke = async (payload: RemoteCommandPayload): Promise<void> => {
     if (busy) return;
     setBusy(true);
+    setAttachmentError(null);
     try {
+      if ((payload.kind === "task.start" || payload.kind === "session.prompt") && files.length) {
+        if (!host?.capabilities.includes("attachment.upload"))
+          throw new Error("REMOTE_ATTACHMENT_UNSUPPORTED");
+        const attachments = await uploader.upload(files, (id, status) =>
+          setUploads((current) => ({ ...current, [id]: status })),
+        );
+        payload = { ...payload, attachments };
+      }
       await onCommand(payload);
-      setText("");
-    } catch {
-      /* The parent keeps the draft and displays an actionable error. */
+      if (payload.kind !== "session.abort") setText("");
+      if (payload.kind === "task.start" || payload.kind === "session.prompt") {
+        uploader.forget(files);
+        setFiles([]);
+      }
+    } catch (error) {
+      setAttachmentError(mobileErrorMessage(error));
     } finally {
       setBusy(false);
     }
   };
   const send = (): void => {
     const prompt = text.trim();
-    if (!prompt || !canControl || busy) return;
+    if (!prompt || !canControl || busy || picking || (running && files.length > 0)) return;
     void invoke(
       running
         ? { kind: "session.steer", text: prompt }
@@ -533,7 +618,7 @@ function TasksScreen({
         </View>
         {!keyboardVisible ? (
           <PrimaryButton
-            label="最近任务"
+            label="历史任务"
             tone="neutral"
             onPress={() => {
               nearBottom.current = false;
@@ -548,7 +633,6 @@ function TasksScreen({
           disabled={busy}
           onPress={() => {
             onNewTask();
-            setText("");
             setShowHistory(false);
           }}
         />
@@ -571,39 +655,23 @@ function TasksScreen({
             scroll.current?.scrollToEnd({ animated: true });
         }}
       >
-        {showHistory && !keyboardVisible ? (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>最近任务</Text>
-            {tasks.length === 0 ? (
-              <Text style={styles.cardMeta}>这里会保留最近收到的电脑任务。</Text>
-            ) : (
-              tasks.map((item) => (
-                <Pressable
-                  key={item.id}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: item.id === conversationId }}
-                  style={styles.historyRow}
-                  onPress={() => {
-                    onOpenTask(item.id);
-                    setShowHistory(false);
-                  }}
-                >
-                  <Text numberOfLines={2} style={styles.cardTitle}>
-                    {item.title}
-                  </Text>
-                  <Text style={styles.cardMeta}>
-                    {taskStatusLabel(item.status)} ·{" "}
-                    {new Date(item.updatedAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </Text>
-                </Pressable>
-              ))
-            )}
-          </View>
+        {showHistory ? (
+          <HistoryPanel
+            tasks={tasks}
+            selectedId={conversationId}
+            syncing={historySyncing}
+            syncedAt={historySyncedAt}
+            error={historyError}
+            onRefresh={onRefreshHistory}
+            onOpen={(id) => {
+              if (!busy && !picking) {
+                onOpenTask(id);
+                setShowHistory(false);
+              }
+            }}
+          />
         ) : null}
-        {!conversationId ? (
+        {showHistory ? null : !conversationId ? (
           <>
             <View style={styles.emptyTask}>
               <Text style={styles.pageTitle}>想让电脑做什么？</Text>
@@ -666,7 +734,41 @@ function TasksScreen({
         ) : (
           <>
             <Text style={styles.sectionTitle}>{task?.title ?? "正在获取任务…"}</Text>
-            {task?.messages.map((message) => (
+            {(task?.branches?.length ?? 0) > 1 ? (
+              <View style={styles.card}>
+                <Text style={styles.cardMeta}>对话分支</Text>
+                {task?.branches?.map((branch) => (
+                  <PrimaryButton
+                    key={branch.id}
+                    label={`${branch.label}${branch.id === task.activeBranchId ? " · 当前" : ""}`}
+                    tone={branch.id === task.viewingBranchId ? "accent" : "neutral"}
+                    disabled={busy}
+                    onPress={() => onSelectBranch(task.id, branch.id)}
+                  />
+                ))}
+              </View>
+            ) : null}
+            {historicalBranch ? (
+              <Text style={styles.pageCopy}>正在查看历史分支，切回当前分支后可继续任务。</Text>
+            ) : null}
+            {task?.archivedAt ? (
+              <Text style={styles.pageCopy}>此任务已归档，可在电脑上恢复后继续。</Text>
+            ) : null}
+            {(task?.messages.length ?? 0) > messageLimit ? (
+              <PrimaryButton
+                label="加载更早的消息"
+                tone="neutral"
+                onPress={() => setMessageLimit((value) => value + 100)}
+              />
+            ) : null}
+            {task?.attachments
+              ?.filter((attachment) => !attachment.messageId)
+              .map((attachment) => (
+                <Text key={attachment.id} style={styles.cardMeta}>
+                  附件 · {attachment.displayName}
+                </Text>
+              ))}
+            {task?.messages.slice(-messageLimit).map((message) => (
               <View
                 key={message.id}
                 style={[styles.messageBubble, message.role === "user" ? styles.userBubble : null]}
@@ -684,6 +786,13 @@ function TasksScreen({
                 {message.status === "failed" ? (
                   <Text style={styles.error}>{mobileErrorMessage(message.reason)}</Text>
                 ) : null}
+                {task.attachments
+                  ?.filter((attachment) => attachment.messageId === message.id)
+                  .map((attachment) => (
+                    <Text key={attachment.id} style={styles.cardMeta}>
+                      附件 · {attachment.displayName} · {Math.ceil(attachment.sizeBytes / 1024)} KB
+                    </Text>
+                  ))}
                 {message.status === "stopped" ? (
                   <Text style={styles.cardMeta}>已停止，可以继续发送要求。</Text>
                 ) : null}
@@ -695,55 +804,116 @@ function TasksScreen({
           </>
         )}
       </ScrollView>
-      <View style={styles.composer}>
-        <TextInput
-          accessibilityLabel="任务输入"
-          multiline
-          editable={!busy}
-          value={text}
-          onChangeText={setText}
-          placeholder={
-            running ? "补充当前任务的要求…" : conversationId ? "继续提问或说明…" : "描述任务目标…"
-          }
-          placeholderTextColor="#929c92"
-          style={[styles.input, styles.promptInput]}
-        />
-        <View style={styles.composerActions}>
-          <View style={styles.flex}>
-            <PrimaryButton
-              label={
-                busy ? "等待电脑确认…" : running ? "补充要求" : conversationId ? "发送" : "开始任务"
-              }
-              disabled={busy || !canControl || !text.trim()}
-              onPress={send}
-            />
-          </View>
-          {running ? (
-            <>
-              <PrimaryButton
-                label="排队发送"
-                tone="neutral"
-                disabled={busy || !canControl || !text.trim()}
-                onPress={() => void invoke({ kind: "session.follow_up", text: text.trim() })}
-              />
-              <PrimaryButton
-                label="停止"
-                tone="danger"
-                disabled={busy || !canControl}
-                onPress={() =>
-                  void invoke({
-                    kind: "session.abort",
-                    assistantMessageId: activeMessageId as string,
-                  })
+      {!showHistory ? (
+        <View style={styles.composer}>
+          {files.map((file) => (
+            <View key={file.id} style={styles.sectionHeader}>
+              <Text numberOfLines={1} style={[styles.cardMeta, styles.flex]}>
+                {file.displayName} · {Math.ceil(file.sizeBytes / 1024)} KB ·{" "}
+                {
+                  {
+                    pending: "待发送",
+                    reading: "读取中",
+                    uploading: "上传中",
+                    uploaded: "已上传",
+                    failed: "上传失败，可重试",
+                  }[uploads[file.id] ?? "pending"]
                 }
+              </Text>
+              <PrimaryButton
+                label="移除"
+                tone="neutral"
+                disabled={busy || picking}
+                onPress={() => {
+                  uploader.forget([file]);
+                  setFiles(files.filter((item) => item.id !== file.id));
+                }}
               />
-            </>
+            </View>
+          ))}
+          {attachmentError ? (
+            <Text accessibilityRole="alert" style={styles.error}>
+              {attachmentError}
+            </Text>
+          ) : null}
+          <PrimaryButton
+            label={picking ? "正在选择…" : "添加附件"}
+            tone="neutral"
+            disabled={busy || picking || running || historicalBranch || Boolean(task?.archivedAt)}
+            onPress={() => setShowAttachmentPicker((value) => !value)}
+          />
+          {showAttachmentPicker ? (
+            <View style={styles.composerActions}>
+              <PrimaryButton label="选择文件" tone="neutral" onPress={() => void choose("files")} />
+              <PrimaryButton
+                label="选择照片"
+                tone="neutral"
+                onPress={() => void choose("photos")}
+              />
+              <PrimaryButton label="拍照" tone="neutral" onPress={() => void choose("camera")} />
+            </View>
+          ) : null}
+          <TextInput
+            accessibilityLabel="任务输入"
+            multiline
+            editable={!busy}
+            value={text}
+            onChangeText={setText}
+            placeholder={
+              running ? "补充当前任务的要求…" : conversationId ? "继续提问或说明…" : "描述任务目标…"
+            }
+            placeholderTextColor="#929c92"
+            style={[styles.input, styles.promptInput]}
+          />
+          <View style={styles.composerActions}>
+            <View style={styles.flex}>
+              <PrimaryButton
+                label={
+                  busy
+                    ? "等待电脑确认…"
+                    : running
+                      ? "补充要求"
+                      : conversationId
+                        ? "发送"
+                        : "开始任务"
+                }
+                disabled={
+                  busy || picking || !canControl || !text.trim() || (running && files.length > 0)
+                }
+                onPress={send}
+              />
+            </View>
+            {running ? (
+              <>
+                <PrimaryButton
+                  label="排队发送"
+                  tone="neutral"
+                  disabled={busy || picking || !canControl || !text.trim() || files.length > 0}
+                  onPress={() => void invoke({ kind: "session.follow_up", text: text.trim() })}
+                />
+                <PrimaryButton
+                  label="停止"
+                  tone="danger"
+                  disabled={busy || !canControl}
+                  onPress={() =>
+                    void invoke({
+                      kind: "session.abort",
+                      assistantMessageId: activeMessageId as string,
+                    })
+                  }
+                />
+              </>
+            ) : null}
+          </View>
+          {!keyboardVisible ? (
+            <Text style={styles.sectionHint}>
+              {running
+                ? "当前回复结束后可添加附件。"
+                : "附件会随任务发送到电脑；支持文档、图片，合计不超过 50 MB。"}
+            </Text>
           ) : null}
         </View>
-        {!keyboardVisible ? (
-          <Text style={styles.sectionHint}>暂支持文字任务；需要文件时，请先在电脑中添加。</Text>
-        ) : null}
-      </View>
+      ) : null}
     </View>
   );
 }
@@ -1054,6 +1224,67 @@ function RemoteApp({
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const latestSession = useRef(session);
+  latestSession.current = session;
+  const latestSignOut = useRef(onSignOut);
+  latestSignOut.current = onSignOut;
+  const [history, setHistory] = useState(() => emptyHistory(session.account.accountId));
+  const [historySyncing, setHistorySyncing] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const historySync = useRef<MobileHistorySync | null>(null);
+  const refreshHistory = useRef<() => Promise<void>>(async () => undefined);
+  const [selectedBranches, setSelectedBranches] = useState<Record<string, string>>({});
+  const uploader = useMemo(
+    () =>
+      new MobileAttachmentUploader(
+        api,
+        session.account.accountId,
+        () => latestSession.current.accessToken,
+        readAttachment,
+        attachmentChecksum,
+      ),
+    [api, session.account.accountId],
+  );
+  useEffect(() => {
+    let active = true;
+    const sync = new MobileHistorySync(
+      session.account.accountId,
+      (cursor) => api.pullHistory(latestSession.current.accessToken, cursor),
+      nativeHistoryStorage(session.account.accountId),
+      (state) => {
+        if (active) setHistory(state);
+      },
+    );
+    historySync.current = sync;
+    const run = async () => {
+      if (!active) return;
+      setHistorySyncing(true);
+      try {
+        await sync.sync();
+        if (active) setHistoryError(null);
+      } catch (error) {
+        if (active && error instanceof Error && error.message.startsWith("DEVICE_SESSION_")) {
+          await sync.clear();
+          await latestSignOut.current();
+        } else if (active)
+          setHistoryError(`历史同步未完成，显示已保存内容。${mobileErrorMessage(error)}`);
+      } finally {
+        if (active) setHistorySyncing(false);
+      }
+    };
+    refreshHistory.current = run;
+    void run();
+    const timer = setInterval(() => void run(), 5_000);
+    const foreground = AppState.addEventListener("change", (state) => {
+      if (state === "active") void run();
+    });
+    return () => {
+      active = false;
+      sync.close();
+      clearInterval(timer);
+      foreground.remove();
+    };
+  }, [api, session.account.accountId]);
   const pending = useRef(
     new Map<string, { finish: (event: DecryptedRemoteEvent) => void; cancel: () => void }>(),
   );
@@ -1131,7 +1362,6 @@ function RemoteApp({
   useEffect(() => {
     if (previousHost.current !== selectedHostId) {
       previousHost.current = selectedHostId;
-      setConversationId(null);
       setSelectedProjectId(null);
     }
   }, [selectedHostId]);
@@ -1276,10 +1506,15 @@ function RemoteApp({
       const revision = eventCache.current.reduce(
         (latest, event) =>
           event.envelope.conversationId === target &&
+          event.envelope.hostDeviceId === selectedHost.hostDeviceId &&
           typeof event.payload.conversationRevision === "number"
             ? Math.max(latest, event.payload.conversationRevision)
             : latest,
-        0,
+        target
+          ? Number(
+              historySync.current?.state.objects[`conversation:${target}`]?.payload?.revision ?? 0,
+            )
+          : 0,
       );
       const receipt = await controller.send(selectedHost, selectedPairing, payload, {
         conversationId: target,
@@ -1290,6 +1525,7 @@ function RemoteApp({
       const outcome = await waitForResult(receipt.commandId);
       if (payload.kind === "task.start" && outcome.envelope.conversationId)
         setConversationId(outcome.envelope.conversationId);
+      void refreshHistory.current();
     } catch (caught) {
       setError(mobileErrorMessage(caught));
       throw caught;
@@ -1312,7 +1548,15 @@ function RemoteApp({
     () => events.filter((event) => event.envelope.hostDeviceId === selectedHostId),
     [events, selectedHostId],
   );
-  const tasks = useMemo(() => remoteTasks(hostEvents), [hostEvents]);
+  const tasks = useMemo(
+    () => historyTasks(history, hostEvents, selectedBranches),
+    [history, hostEvents, selectedBranches],
+  );
+  useEffect(() => {
+    if (!conversationId) return;
+    const record = history.objects[`conversation:${conversationId}`];
+    if (record?.tombstone || record?.payload?.deletedAt) setConversationId(null);
+  }, [history, conversationId]);
   const decide = async (
     event: DecryptedRemoteEvent,
     decision: "once" | "session" | "deny",
@@ -1389,7 +1633,7 @@ function RemoteApp({
               }}
             />
           ) : null}
-          {tab === "tasks" ? (
+          <View style={[styles.flex, tab !== "tasks" ? { display: "none" } : null]}>
             <TasksScreen
               key={`${selectedHostId}:${conversationId}`}
               host={selectedHost}
@@ -1407,8 +1651,16 @@ function RemoteApp({
                 setConversationId(null);
               }}
               onOpenTask={openTask}
+              uploader={uploader}
+              historySyncing={historySyncing}
+              historySyncedAt={history.syncedAt}
+              historyError={historyError}
+              onRefreshHistory={() => void refreshHistory.current()}
+              onSelectBranch={(id, branchId) =>
+                setSelectedBranches((current) => ({ ...current, [id]: branchId }))
+              }
             />
-          ) : null}
+          </View>
           {tab === "inbox" ? (
             <InboxScreen
               events={hostEvents}
@@ -1418,7 +1670,14 @@ function RemoteApp({
             />
           ) : null}
           {tab === "settings" ? (
-            <SettingsScreen api={api} session={session} onSignOut={onSignOut} />
+            <SettingsScreen
+              api={api}
+              session={session}
+              onSignOut={async () => {
+                await historySync.current?.clear();
+                await onSignOut();
+              }}
+            />
           ) : null}
         </View>
         {error || connectionError ? (
@@ -1513,10 +1772,16 @@ export default function App(): React.JSX.Element {
               ? stored
               : await refreshSession(baseUrl, stored);
           if (active) acceptSession(next);
-        } catch {
+        } catch (error) {
           if (active) {
-            await clearSession();
-            acceptSession(null);
+            if (error instanceof Error && error.message.startsWith("DEVICE_SESSION_")) {
+              await nativeHistoryStorage(stored.account.accountId).clear();
+              await clearSession();
+              acceptSession(null);
+            } else {
+              // Network loss must not discard the account identity needed for cached history.
+              acceptSession(stored);
+            }
           }
         }
       })

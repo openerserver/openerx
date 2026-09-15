@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import path from "node:path";
 import type {
@@ -10,13 +11,18 @@ import type {
   OfficeArtifactWriteInput,
   PersonalFile,
   PiImageInput,
+  RemoteAttachment,
   SupportedFileFormat,
   SyncChange,
   SyncConflict,
   SyncConflictResolution,
   SyncOperation,
 } from "@openerx/contracts";
-import { fileImportDataInputSchema, maxPastedAttachmentBytes } from "@openerx/contracts";
+import {
+  fileImportDataInputSchema,
+  maxPastedAttachmentBytes,
+  remoteAttachmentsSchema,
+} from "@openerx/contracts";
 import type { FileRepository, WorkspaceArtifactLink } from "@openerx/storage";
 import { ContentStore } from "./content-store";
 import { FileServiceError, fileErrorCode } from "./errors";
@@ -104,6 +110,32 @@ export class FileAppService {
       imported.push(parsed);
     }
     return imported;
+  }
+
+  async importRemoteAttachments(
+    input: RemoteAttachment[],
+    download: (objectId: string) => Promise<Uint8Array>,
+  ): Promise<PersonalFile[]> {
+    const attachments = remoteAttachmentsSchema.parse(input);
+    if (!attachments.length) return [];
+    // Validate the whole batch before changing the conversation or starting the model.
+    for (const attachment of attachments) {
+      this.#assertSize(attachment.sizeBytes);
+      if (detectFileFormat(attachment.displayName).mediaType !== attachment.mediaType)
+        throw new Error("OBJECT_MEDIA_TYPE_MISMATCH");
+    }
+    const files = [];
+    for (const attachment of attachments) {
+      const bytes = await download(attachment.objectId);
+      if (bytes.byteLength !== attachment.sizeBytes) throw new Error("OBJECT_SIZE_MISMATCH");
+      if (createHash("sha256").update(bytes).digest("hex") !== attachment.checksumSha256)
+        throw new Error("OBJECT_CHECKSUM_MISMATCH");
+      files.push({
+        displayName: attachment.displayName,
+        bytesBase64: Buffer.from(bytes).toString("base64"),
+      });
+    }
+    return await this.importData({ files });
   }
 
   listFiles(conversationId?: string | null): PersonalFile[] {
