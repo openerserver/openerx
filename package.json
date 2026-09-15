@@ -1,6 +1,6 @@
 {
   "name": "openerx-v2",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "private": true,
   "license": "Apache-2.0",
   "description": "openerx (personal AI workspace) personal AI desktop client",
@@ -45,7 +45,14 @@
     "check:v2": "npm run check:boundaries:v2 && npm run check:builtin-skills:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2 && npm run verify:release-artifacts --workspace @openerx/desktop && npm run verify:native-signature --workspace @openerx/desktop",
     "update:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs --write",
     "test:desktop-common": "node scripts/test-desktop-common.mjs",
-    "test:desktop-parity": "node --test tests/desktop-parity.test.mjs"
+    "test:desktop-parity": "node --test tests/desktop-parity.test.mjs",
+    "version:check": "node scripts/product-version.mjs check",
+    "version:bump": "node scripts/product-version.mjs bump",
+    "version:sync": "node scripts/product-version.mjs sync",
+    "test:version": "node --test apps/desktop/tests/build-info.test.mjs",
+    "predev:desktop": "npm run version:check",
+    "prebuild:v2": "npm run version:check",
+    "prepackage:v2": "npm run version:check"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.84.4",

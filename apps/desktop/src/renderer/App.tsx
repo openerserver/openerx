@@ -1,3 +1,6 @@
+import { AppVersion, type VersionInfo } from "@openerx/desktop-ui/version";
+declare const __OPENERX_BUILD_INFO__: VersionInfo | undefined;
+const appBuildInfo = typeof __OPENERX_BUILD_INFO__ === "undefined" ? undefined : __OPENERX_BUILD_INFO__;
 import type {
   Artifact,
   Attachment,
@@ -5514,7 +5517,7 @@ function ReleaseUpdateSettings(): React.JSX.Element {
         </span>
       </div>
       <div className="release-update-summary">
-        <span>当前版本 {state?.currentVersion ?? "—"}</span>
+        <span>当前版本 {appBuildInfo?.version ?? state?.currentVersion ?? "—"}</span>
         <span>通道 {state?.channel ?? "—"}</span>
         {state?.availableVersion ? <strong>可用版本 {state.availableVersion}</strong> : null}
         {state?.progressPercentage !== null && state?.progressPercentage !== undefined ? (
@@ -6444,6 +6447,7 @@ function AccountSettings({
               <p className="settings-search-empty">没有匹配的设置</p>
             ) : null}
           </div>
+          <AppVersion info={appBuildInfo} />
         </nav>
         <section
           className="settings-section-content"

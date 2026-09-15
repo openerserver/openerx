@@ -3,7 +3,7 @@
   "publisher": "CN=6533DE8D-63EF-414A-A709-7316D9261511",
   "publisherDisplayName": "openerx",
   "displayName": "openerx",
-  "version": "2.0.3.0",
+  "version": "2.0.4.0",
   "description": "openerx 桌面 AI 工作助手",
   "executable": "openerx.exe",
   "minVersion": "10.0.22000.0",

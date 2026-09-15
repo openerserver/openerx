@@ -1,3 +1,4 @@
+import { buildInfo } from "./vite.build-info";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -137,6 +138,8 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
 
 const config: ForgeConfig = {
   packagerConfig: {
+    appVersion: buildInfo.version,
+    buildVersion: buildInfo.nativeBuildNumber,
     asar: {
       unpack:
         "**/{*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1,openerx-desktop-helper.exe}",
@@ -171,6 +174,7 @@ const config: ForgeConfig = {
       }
     },
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
+      writeFileSync(path.join(buildPath, "build-info.json"), JSON.stringify(buildInfo, null, 2) + "\n");
       cpSync(
         path.join(desktopDirectory, "browser-extension"),
         path.join(buildPath, "browser-extension"),

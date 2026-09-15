@@ -10527,3 +10527,7 @@ summary:focus-visible {
     flex: 0 0 auto;
   }
 }
+
+.settings-version { display: grid; gap: 5px; padding: 14px 16px; border-top: 1px solid var(--border); font-size: 11px; overflow-wrap: anywhere; }
+.settings-version strong { font-size: 12px; }
+.settings-version button { padding: 0; width: fit-content; border: 0; background: transparent; color: inherit; font-size: 11px; cursor: pointer; text-decoration: underline; }

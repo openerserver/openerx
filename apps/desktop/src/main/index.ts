@@ -1,3 +1,4 @@
+declare const __OPENERX_BUILD_INFO__: { version: string; buildId: string };
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -203,6 +204,7 @@ if (e2eApplicationName && !/^openerx CX110 D3 [A-Za-z0-9_-]{1,64}$/u.test(e2eApp
 app.name = e2eApplicationName || "UWA";
 
 function configureApplicationMenu(): void {
+  app.setAboutPanelOptions({ applicationVersion: __OPENERX_BUILD_INFO__.version, version: __OPENERX_BUILD_INFO__.buildId });
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
