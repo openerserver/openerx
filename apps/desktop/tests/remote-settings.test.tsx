@@ -8,7 +8,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RemoteSettings } from "../src/renderer/RemoteSettings";
 
-const qrCode = vi.hoisted(() => ({ toDataURL: vi.fn<(text: string) => Promise<string>>() }));
+const qrCode = vi.hoisted(() => ({ toString: vi.fn<(text: string) => Promise<string>>() }));
 vi.mock("qrcode", () => ({ default: qrCode }));
 const accountId = "11111111-1111-4111-8111-111111111111";
 const disabledState: RemoteDesktopState = {
@@ -63,7 +63,7 @@ function mount(state = disabledState, signedIn = true) {
     configurable: true,
     value: bridge as unknown as DesktopBridge,
   });
-  qrCode.toDataURL.mockResolvedValue("data:image/png;base64,cXI=");
+  qrCode.toString.mockResolvedValue("<svg></svg>");
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
   render(
@@ -128,26 +128,26 @@ describe("Remote settings", () => {
     await user.click(toggle);
     expect(await screen.findByText("在线")).toBeTruthy();
     expect(bridge.setRemoteEnabled).toHaveBeenCalledWith({ enabled: true });
-    await user.click(screen.getByRole("button", { name: "添加设备" }));
-    expect(await screen.findByAltText("远程连接一次性配对二维码")).toBeTruthy();
-    expect(qrCode.toDataURL.mock.calls[0]?.[0]).toContain("openerx://remote/pair?payload=");
+    expect(bridge.createRemotePairingChallenge).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "使用二维码快捷配对" }));
+    expect(await screen.findByAltText("openerx Remote 一次性配对二维码")).toBeTruthy();
+    expect(qrCode.toString.mock.calls[0]?.[0]).toContain("openerx://remote/pair?payload=");
     await user.click(toggle);
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
-    expect(screen.queryByAltText("远程连接一次性配对二维码")).toBeNull();
-    expect(screen.queryByRole("button", { name: "添加设备" })).toBeNull();
+    expect(screen.queryByAltText("openerx Remote 一次性配对二维码")).toBeNull();
+    expect(screen.queryByRole("button", { name: "重新生成二维码" })).toBeNull();
   });
 
   it("removes expired QR codes and allows a new challenge", async () => {
     const bridge = mount(enabledState);
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "添加设备" }));
-    await screen.findByAltText("远程连接一次性配对二维码");
+    await userEvent.setup().click(await screen.findByRole("button", { name: "使用二维码快捷配对" }));
+    await screen.findByAltText("openerx Remote 一次性配对二维码");
     vi.useFakeTimers();
     // Re-render the effect with a fresh challenge under the fake clock.
     const challenge = pairingChallenge(new Date(Date.now() + 1_000).toISOString());
     bridge.createRemotePairingChallenge.mockResolvedValue(challenge);
     await act(async () => {
-      screen.getByRole("button", { name: "添加设备" }).click();
+      screen.getByRole("button", { name: "重新生成二维码" }).click();
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10);
@@ -155,14 +155,19 @@ describe("Remote settings", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(screen.queryByAltText("远程连接一次性配对二维码")).toBeNull();
-    expect(screen.getByText("配对码已过期，请点击“添加设备”生成新码。")).toBeTruthy();
+    expect(screen.queryByAltText("openerx Remote 一次性配对二维码")).toBeNull();
+    expect(screen.getByText("二维码已过期")).toBeTruthy();
   });
 
   it("handles QR rendering failure without an unhandled rejection", async () => {
-    mount(enabledState);
-    qrCode.toDataURL.mockRejectedValue(new Error("QR render failed"));
-    await userEvent.setup().click(await screen.findByRole("button", { name: "添加设备" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("配对二维码生成失败");
+    const bridge = mount();
+    qrCode.toString.mockRejectedValue(new Error("QR render failed"));
+    await waitFor(() =>
+      expect((screen.getByRole("switch") as HTMLButtonElement).disabled).toBe(false),
+    );
+    await userEvent.setup().click(screen.getByRole("switch"));
+    expect(bridge.setRemoteEnabled).toHaveBeenCalledWith({ enabled: true });
+    await userEvent.setup().click(screen.getByRole("button", { name: "使用二维码快捷配对" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("无法生成配对二维码");
   });
 });

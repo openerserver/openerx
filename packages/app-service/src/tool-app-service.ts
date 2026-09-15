@@ -1067,7 +1067,12 @@ export class ToolAppService {
         browserAvailable
           ? "available"
           : hostAvailability.missingPermissions?.openerx_browser?.length ||
-              hostAvailability.unavailableReasons.openerx_browser?.includes("PERMISSION_REQUIRED")
+              hostAvailability.unavailableReasons.openerx_browser?.includes(
+                "PERMISSION_REQUIRED",
+              ) ||
+              hostAvailability.unavailableReasons.openerx_browser?.includes(
+                "AUTHORIZATION_REQUIRED",
+              )
             ? "authorization_required"
             : "unavailable",
         browserAvailable

@@ -257,6 +257,7 @@ export class ElectronToolCapabilityHost {
     return desktopHostToolAvailability({
       platform,
       browserAvailable,
+      browserMode: this.#browserSettings.mode,
       screenCaptureStatus,
       accessibilityTrusted,
       automationAvailable,

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type BrokeredBashEnvironmentPolicy,
@@ -60,8 +61,8 @@ describe("brokered Bash environment policy", () => {
       { SAFE_HOST: "included", UNLISTED: "absent" },
     );
     expect(core).toMatchObject({
-      PATH: "/usr/bin:/bin",
-      HOME: "/tmp/openerx-runner/home",
+      PATH: runtime.pathEntries.join(path.delimiter),
+      HOME: path.join(runtime.runnerTempRoot, "home"),
       SAFE_HOST: "set-wins",
       CUSTOM: "value",
       OPENERX_RUNNER: "brokered-bash",

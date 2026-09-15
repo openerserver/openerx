@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { desktopHostToolAvailability } from "../src/main/desktop-tool-availability";
 
 describe("desktopHostToolAvailability", () => {
+  it("guides an unconnected Chrome bridge without requesting unrelated OS permissions", () => {
+    const readiness = desktopHostToolAvailability({
+      platform: "darwin", browserAvailable: false, browserMode: "connected_chrome",
+      screenCaptureStatus: "denied", accessibilityTrusted: false, automationAvailable: true,
+    });
+    expect(readiness.unavailableReasons.openerx_browser).toBe("BROWSER_BRIDGE_AUTHORIZATION_REQUIRED");
+    expect(readiness.missingPermissions?.openerx_browser).toBeUndefined();
+    expect(readiness.missingPermissions?.openerx_desktop).toEqual(["screen_capture", "accessibility"]);
+  });
+
   it("advertises Windows only after its own helper/interactive-session probe succeeds", () => {
     const probe = {
       platform: "win32" as const,

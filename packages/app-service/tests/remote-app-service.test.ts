@@ -42,6 +42,7 @@ afterEach(async () => {
 class RemotePiHostClient implements PiHostClient {
   readonly prompts: PiPromptFrame[] = [];
   readonly controls: PiSessionControlFrame[] = [];
+  listener: ((frame: PiHostEventFrame) => void) | null = null;
   toolRequest:
     | ((
         frame: PiToolRequestFrame,
@@ -52,15 +53,17 @@ class RemotePiHostClient implements PiHostClient {
     this.prompts.push(frame);
     return Promise.resolve();
   }
-  abort(_generationId: string): Promise<void> {
+  abort(generationId: string): Promise<void> {
+    this.listener?.({ kind: "pi.product-event", generationId, eventId: randomUUID(), sequence: 1, occurredAt: new Date().toISOString(), type: "stopped" });
     return Promise.resolve();
   }
   control(frame: PiSessionControlFrame): Promise<void> {
     this.controls.push(frame);
     return Promise.resolve();
   }
-  onEvent(_listener: (frame: PiHostEventFrame) => void): () => void {
-    return () => undefined;
+  onEvent(listener: (frame: PiHostEventFrame) => void): () => void {
+    this.listener = listener;
+    return () => { this.listener = null; };
   }
   onFileToolRequest(_listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void {
     return () => undefined;

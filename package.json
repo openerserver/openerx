@@ -43,7 +43,9 @@
     "release:manifest:v2": "vite build --config scripts/m9/vite.release-manifest.config.mts --logLevel error && node .vite/release-tools/release-manifest.mjs",
     "verify:package:v2": "npm run verify:fuses --workspace @openerx/desktop",
     "check:v2": "npm run check:boundaries:v2 && npm run check:builtin-skills:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2 && npm run build:v2 && npm run verify:package:v2 && npm run verify:release-artifacts --workspace @openerx/desktop && npm run verify:native-signature --workspace @openerx/desktop",
-    "update:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs --write"
+    "update:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs --write",
+    "test:desktop-common": "node scripts/test-desktop-common.mjs",
+    "test:desktop-parity": "node --test tests/desktop-parity.test.mjs"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.84.4",

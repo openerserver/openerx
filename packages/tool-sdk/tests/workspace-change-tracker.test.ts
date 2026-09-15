@@ -175,9 +175,13 @@ describe("workspace write change evidence", () => {
         "baseline",
       ],
     ]) {
-      const result = spawnSync("/usr/bin/git", ["-C", root.rootPath, ...args], {
-        encoding: "utf8",
-      });
+      const result = spawnSync(
+        process.platform === "win32" ? "git.exe" : "/usr/bin/git",
+        ["-C", root.rootPath, ...args],
+        {
+          encoding: "utf8",
+        },
+      );
       expect(result.status, result.stderr).toBe(0);
     }
     writeFileSync(tracked, "user-dirty\n");

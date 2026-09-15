@@ -1,0 +1,51 @@
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+const vitest = path.join(path.dirname(require.resolve("vitest/package.json")), "vitest.mjs");
+const tsc = path.join(path.dirname(require.resolve("typescript/package.json")), "bin/tsc");
+function run(entry, args, cwd = root) {
+  const result = spawnSync(process.execPath, [entry, ...args], { cwd, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+for (const project of [
+  "apps/desktop",
+  "packages/app-service",
+  "packages/pi-host",
+  "packages/remote-host",
+  "packages/remote-protocol",
+])
+  run(tsc, ["--noEmit", "-p", `${project}/tsconfig.json`]);
+run(
+  vitest,
+  [
+    "run",
+    "--maxWorkers=2",
+    "tests/browser-settings-panel.test.tsx",
+    "tests/desktop-tool-availability.test.ts",
+    "tests/desktop-control-ui.test.tsx",
+    "tests/model-connection.test.ts",
+    "tests/credential-vault.test.ts",
+    "tests/remote-settings.test.tsx",
+    "tests/remote-connections.test.tsx",
+    "tests/remote-authorization-refresh.test.ts",
+  ],
+  path.join(root, "apps/desktop"),
+);
+run(vitest, [
+  "run",
+  "--maxWorkers=2",
+  "--testTimeout=30000",
+  "packages/app-service/tests/remote-app-service.test.ts",
+  "packages/pi-host/tests/agent-session.test.ts",
+  "packages/tool-sdk/tests/workspace-change-tracker.test.ts",
+  "services/remote-control-gateway/tests/connection-requests.test.ts",
+  "services/remote-control-gateway/tests/remote-control-gateway.test.ts",
+  "tests/v2/remote-connection-http.test.ts",
+  "tests/v2/remote-host-gateway.test.ts",
+]);
+console.log("Common desktop regressions passed.");

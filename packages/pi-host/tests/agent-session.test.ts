@@ -285,6 +285,150 @@ describe("Pi AgentSession composition", () => {
     });
   });
 
+  it("stops an active stream without draining queued steer or follow-up model rounds", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-host-queued-abort-"));
+    temporaryDirectories.push(root);
+    type ObservedFrame = { kind: string; [key: string]: unknown };
+    class FakePort extends EventEmitter {
+      readonly sent: ObservedFrame[] = [];
+      postMessage(frame: ObservedFrame): void {
+        this.sent.push(frame);
+        this.emit("sent", frame);
+      }
+      start(): void {}
+      waitFor(predicate: (frame: ObservedFrame) => boolean): Promise<ObservedFrame> {
+        const existing = this.sent.find(predicate);
+        if (existing) return Promise.resolve(existing);
+        return new Promise((resolve, reject) => {
+          const received = (frame: ObservedFrame) => {
+            if (!predicate(frame)) return;
+            clearTimeout(timer);
+            this.removeListener("sent", received);
+            resolve(frame);
+          };
+          const timer = setTimeout(() => {
+            this.removeListener("sent", received);
+            reject(new Error("Pi stream/control did not settle within 1500 ms"));
+          }, 1500);
+          this.on("sent", received);
+        });
+      }
+    }
+    const parentPort = new EventEmitter();
+    const piPort = new FakePort();
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const faux = fauxProvider({ tokensPerSecond: 200, tokenSize: { min: 4, max: 4 } });
+    modelRuntime.registerNativeProvider(faux.provider);
+    let modelCalls = 0;
+    faux.setResponses([
+      () => {
+        modelCalls += 1;
+        return fauxAssistantMessage("active streaming output ".repeat(100));
+      },
+      () => {
+        modelCalls += 1;
+        return fauxAssistantMessage("QUEUED_STEERING_MUST_NOT_START");
+      },
+      () => {
+        modelCalls += 1;
+        return fauxAssistantMessage("QUEUED_FOLLOW_UP_MUST_NOT_START");
+      },
+    ]);
+    startPiHostProcess(parentPort as unknown as Electron.ParentPort, {
+      modelRuntime,
+      model: faux.getModel(),
+    });
+    parentPort.emit("message", {
+      data: {
+        kind: "pi-host.bootstrap",
+        contractVersion: piHostContractVersion,
+        nonce: "f".repeat(64),
+        profileDirectory: root,
+      },
+      ports: [piPort],
+    });
+    const generationId = randomUUID();
+    const control = (action: "steer" | "follow_up" | "abort", text?: string) => {
+      const requestId = randomUUID();
+      piPort.emit("message", {
+        data: {
+          kind: "pi.session.control",
+          requestId,
+          generationId,
+          action,
+          ...(text === undefined ? {} : { text }),
+        },
+      });
+      return piPort.waitFor(
+        (frame) => frame.kind === "pi.session.control-result" && frame.requestId === requestId,
+      );
+    };
+    try {
+      piPort.emit("message", {
+        data: {
+          kind: "pi.session.prompt",
+          generationId,
+          conversationId: randomUUID(),
+          branchId: randomUUID(),
+          assistantMessageId: randomUUID(),
+          history: [{ role: "user", text: "Start a stream so I can interrupt it." }],
+        },
+      });
+      await piPort.waitFor(
+        (frame) =>
+          frame.kind === "pi.product-event" &&
+          frame.generationId === generationId &&
+          frame.type === "delta",
+      );
+      await expect(control("steer", "Queued steering before stop.")).resolves.toMatchObject({
+        ok: true,
+      });
+      await expect(control("follow_up", "Queued follow-up before stop.")).resolves.toMatchObject({
+        ok: true,
+      });
+      expect(modelCalls).toBe(1);
+
+      // These arrive while abort is still settling. They must not refill the
+      // queues after Stop has cleared them and before its ACK is posted.
+      const abortResult = control("abort");
+      const lateSteer = control("steer", "Must be refused after Stop.");
+      const lateFollowUp = control("follow_up", "Must also be refused after Stop.");
+      await expect(abortResult).resolves.toMatchObject({ ok: true });
+      await expect(lateSteer).resolves.toMatchObject({
+        ok: false,
+        errorCode: "PI_GENERATION_NOT_ACTIVE",
+      });
+      await expect(lateFollowUp).resolves.toMatchObject({
+        ok: false,
+        errorCode: "PI_GENERATION_NOT_ACTIVE",
+      });
+      await piPort.waitFor(
+        (frame) =>
+          frame.kind === "pi.product-event" &&
+          frame.generationId === generationId &&
+          frame.type === "stopped",
+      );
+      const settledFrameCount = piPort.sent.length;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(piPort.sent).toHaveLength(settledFrameCount);
+      expect(modelCalls).toBe(1);
+      expect(
+        piPort.sent.filter(
+          (frame) => frame.kind === "pi.activity-event" && frame.type === "model.started",
+        ),
+      ).toHaveLength(1);
+      expect(
+        piPort.sent.filter(
+          (frame) => frame.kind === "pi.product-event" && frame.type !== "delta",
+        ),
+      ).toEqual([expect.objectContaining({ generationId, type: "stopped" })]);
+      expect(JSON.stringify(piPort.sent)).not.toContain("QUEUED_");
+    } finally {
+      piPort.emit("close");
+      parentPort.removeAllListeners();
+    }
+  });
+
   it("places prompt-frame images into the Pi user message content", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-host-vision-"));
     temporaryDirectories.push(root);

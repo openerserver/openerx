@@ -126,7 +126,7 @@ function gitStatus(rootPath: string): {
   dirtyPaths: Set<string>;
 } {
   const result = spawnSync(
-    "/usr/bin/git",
+    process.platform === "win32" ? "git.exe" : "/usr/bin/git",
     [
       "-c",
       "core.fsmonitor=false",
@@ -142,10 +142,11 @@ function gitStatus(rootPath: string): {
       timeout: 10_000,
       maxBuffer: 5_000_000,
       env: {
-        PATH: "/usr/bin:/bin",
-        HOME: "/dev/null",
+        PATH: process.platform === "win32" ? process.env.PATH : "/usr/bin:/bin",
+        ...(process.platform === "win32" ? { SystemRoot: process.env.SystemRoot } : {}),
+        HOME: process.platform === "win32" ? "NUL" : "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
         GIT_OPTIONAL_LOCKS: "0",
       },
     },

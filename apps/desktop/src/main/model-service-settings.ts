@@ -229,8 +229,16 @@ export class ModelServiceSettingsStore {
   async execution(modelRef?: string): Promise<AppServiceByokConfiguration | undefined> {
     const state = await this.state();
     if (state.mode !== "byok") return undefined;
+    // The custom entry must use its exact configured model, including when a
+    // preset provider key is also available. Explicit unknown models cannot fall back.
+    if (modelRef === "platform/byok" || (!modelRef && state.credentialConfigured && state.byok)) {
+      if (!state.byok || !state.credentialConfigured) return undefined;
+      await assertSafeResolvedHost(state.byok.baseUrl, this.resolver);
+      return { ...state.byok, apiKey: await this.credentials.resolve(credentialRef) };
+    }
     const requested = modelRef ? resolveByokModelPreset(modelRef, state.providerModels) : null;
     if (modelRef?.includes(".custom-") && !requested) throw new Error("BYOK_MODEL_NOT_FOUND");
+    if (modelRef && !requested) return undefined;
     const storedProvider = matchingProvider(state.byok);
     const selectedProvider =
       requested?.provider ??

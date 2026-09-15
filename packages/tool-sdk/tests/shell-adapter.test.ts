@@ -102,56 +102,66 @@ describe("ShellToolAdapter", () => {
     });
   });
 
-  it("runs argv without a shell inside the approved workspace", async () => {
-    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
-    directories.push(workspace);
-    const adapter = new ShellToolAdapter([workspace]);
-    const result = await adapter.execute(
-      {
-        operation: "shell_execute",
-        cwd: workspace,
-        command: process.execPath,
-        args: ["-e", "process.stdout.write('tool-ok')"],
-        timeoutMs: 10_000,
-        background: false,
-        allowNetwork: false,
-        idempotencyKey: "shell-command-0001",
-      },
-      context(),
-    );
-    expect(result.summary).toContain("tool-ok");
-    expect(result.data).toMatchObject({ state: "completed", exitCode: 0 });
-    await adapter.stopAll();
-  }, 20_000);
-
-  it("retains failed command output as a typed failure result", async () => {
-    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-failure-"));
-    directories.push(workspace);
-    const adapter = new ShellToolAdapter([workspace]);
-    try {
-      await adapter.execute(
+  it.runIf(process.platform === "darwin" || codexWindowsSandboxReady())(
+    "runs argv without a shell inside the approved workspace",
+    async () => {
+      const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
+      directories.push(workspace);
+      const adapter = new ShellToolAdapter([workspace]);
+      const result = await adapter.execute(
         {
           operation: "shell_execute",
           cwd: workspace,
           command: process.execPath,
-          args: ["-e", "process.stderr.write('failure-output'); process.exit(3)"],
+          args: ["-e", "process.stdout.write('tool-ok')"],
           timeoutMs: 10_000,
           background: false,
           allowNetwork: false,
-          idempotencyKey: "shell-command-failure-0001",
+          idempotencyKey: "shell-command-0001",
         },
         context(),
       );
-      throw new Error("expected shell failure");
-    } catch (error) {
-      expect(error).toBeInstanceOf(ToolAdapterError);
-      expect((error as ToolAdapterError).code).toBe("SHELL_EXIT_3");
-      expect((error as ToolAdapterError).result).toMatchObject({
-        content: [{ type: "text", text: "failure-output" }],
-        data: { exitCode: 3, state: "failed" },
-      });
-    }
-  }, 20_000);
+      expect(result.summary).toContain("tool-ok");
+      expect(result.data).toMatchObject({ state: "completed", exitCode: 0 });
+      await adapter.stopAll();
+    },
+    20_000,
+  );
+
+  it.runIf(process.platform === "darwin" || codexWindowsSandboxReady())(
+    "retains failed command output as a typed failure result",
+    async () => {
+      const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-failure-"));
+      directories.push(workspace);
+      const adapter = new ShellToolAdapter([workspace]);
+      try {
+        await adapter.execute(
+          {
+            operation: "shell_execute",
+            cwd: workspace,
+            command: process.execPath,
+            args: ["-e", "process.stderr.write('failure-output'); process.exit(3)"],
+            timeoutMs: 10_000,
+            background: false,
+            allowNetwork: false,
+            idempotencyKey: "shell-command-failure-0001",
+          },
+          context(),
+        );
+        throw new Error("expected shell failure");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ToolAdapterError);
+        expect((error as ToolAdapterError).code).toBe("SHELL_EXIT_3");
+        expect((error as ToolAdapterError).result).toMatchObject({
+          content: [{ type: "text", text: "failure-output" }],
+          data: { exitCode: 3, state: "failed" },
+        });
+      } finally {
+        await adapter.stopAll();
+      }
+    },
+    20_000,
+  );
 
   it("rejects cwd escape and refuses execution when no native sandbox exists", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));

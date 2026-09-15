@@ -15,7 +15,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RemoteControlGateway } from "../src";
 
 const temporaryDirectories: string[] = [];
+const gateways = new Set<RemoteControlGateway>();
 afterEach(() => {
+  for (const gateway of gateways) gateway.close();
+  gateways.clear();
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -33,6 +36,7 @@ function setup(nowRef = { value: new Date("2026-08-26T08:00:00.000Z") }) {
   temporaryDirectories.push(directory);
   const databasePath = path.join(directory, "remote.sqlite");
   const gateway = new RemoteControlGateway(databasePath, { now: () => nowRef.value });
+  gateways.add(gateway);
   const accountId = randomUUID();
   const hostDeviceId = randomUUID();
   const controllerDeviceId = randomUUID();
@@ -271,6 +275,7 @@ describe("RemoteControlGateway", () => {
     const pending = command(state, 1);
     state.gateway.submitCommand(state.controllerPrincipal, pending);
     state.gateway.close();
+    gateways.delete(state.gateway);
 
     const restarted = new RemoteControlGateway(state.databasePath, {
       now: () => state.nowRef.value,

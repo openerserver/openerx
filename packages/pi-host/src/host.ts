@@ -1037,7 +1037,7 @@ export function startPiHostProcess(
       }
       const state = active.get(frame.generationId);
       let result: unknown;
-      if (!state) {
+      if (!state || (state.abortRequested && frame.action !== "abort")) {
         result = {
           kind: "pi.session.control-result",
           requestId: frame.requestId,
@@ -1062,6 +1062,10 @@ export function startPiHostProcess(
           else if (frame.action === "follow_up") await state.session.followUp(frame.text ?? "");
           else {
             state.abortRequested = true;
+            // AgentSession.abort stops the current model run but leaves its
+            // steering/follow-up queues intact. Clear them first so Stop cannot
+            // launch another queued run while waiting for the session to idle.
+            state.session.clearQueue();
             await state.session.abort();
           }
           result = { kind: "pi.session.control-result", requestId: frame.requestId, ok: true };
@@ -1143,7 +1147,10 @@ export function startPiHostProcess(
       const state = active.get(request.data.generationId);
       if (!state) return;
       state.abortRequested = true;
-      if (state.session) void state.session.abort();
+      if (state.session) {
+        state.session.clearQueue();
+        void state.session.abort();
+      }
     });
     port.once("close", () => {
       for (const pending of pendingFileTools.values()) {
@@ -1159,7 +1166,10 @@ export function startPiHostProcess(
       pendingCapabilityTools.clear();
       for (const state of active.values()) {
         state.abortRequested = true;
-        if (state.session) void state.session.abort();
+        if (state.session) {
+          state.session.clearQueue();
+          void state.session.abort();
+        }
       }
     });
     port.start();

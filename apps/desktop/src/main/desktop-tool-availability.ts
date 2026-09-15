@@ -1,4 +1,4 @@
-import type { HostToolAvailability } from "@openerx/contracts";
+import type { BrowserMode, HostToolAvailability } from "@openerx/contracts";
 
 export type ScreenCaptureStatus =
   | "granted"
@@ -10,6 +10,7 @@ export type ScreenCaptureStatus =
 export interface DesktopToolAvailabilityProbe {
   platform: NodeJS.Platform;
   browserAvailable: boolean;
+  browserMode?: BrowserMode;
   screenCaptureStatus: ScreenCaptureStatus;
   accessibilityTrusted: boolean;
   automationAvailable: boolean;
@@ -33,7 +34,9 @@ export function desktopHostToolAvailability(
     ];
     if (permissions.length) {
       missingPermissions.openerx_desktop = permissions;
-      if (!probe.browserAvailable) missingPermissions.openerx_browser = permissions;
+      if (!probe.browserAvailable && probe.browserMode !== "connected_chrome") {
+        missingPermissions.openerx_browser = permissions;
+      }
     }
   }
   const availability: HostToolAvailability = {
@@ -43,7 +46,9 @@ export function desktopHostToolAvailability(
   };
 
   if (probe.browserAvailable) availableToolNames.push("openerx_browser");
-  else if (probe.platform === "darwin") {
+  else if (probe.browserMode === "connected_chrome") {
+    unavailableReasons.openerx_browser = "BROWSER_BRIDGE_AUTHORIZATION_REQUIRED";
+  } else if (probe.platform === "darwin") {
     unavailableReasons.openerx_browser =
       probe.screenCaptureStatus !== "granted"
         ? probe.screenCaptureStatus === "unknown"

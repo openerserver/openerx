@@ -1,11 +1,11 @@
 import "./RemoteSettings.css";
 import type { RemoteDesktopState } from "@openerx/contracts";
-import { ArrowClockwise, Desktop, DeviceMobile, QrCode } from "@phosphor-icons/react";
+import { ArrowClockwise, Desktop, DeviceMobile } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import QRCode from "qrcode";
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useState } from "react";
 import { RemoteConnectionRequests } from "./RemoteConnections";
+import { Link } from "react-router-dom";
+import { RemotePairingPanel } from "./RemotePairingPanel";
 
 function remoteErrorMessage(reason: string): string {
   if (/AUTHENTICATION_REQUIRED|ACCESS_TOKEN|SESSION_REVOKED|SESSION_EXPIRED/.test(reason)) {
@@ -38,6 +38,7 @@ const presenceLabels = {
 
 export function RemoteSettings({ accountId }: { accountId: string | null }): React.JSX.Element {
   const queryClient = useQueryClient();
+  const [showQr, setShowQr] = useState(false);
   const queryKey = ["remote", "state", accountId];
   const remote = useQuery({
     queryKey,
@@ -46,26 +47,14 @@ export function RemoteSettings({ accountId }: { accountId: string | null }): Rea
     retry: false,
     refetchInterval: (query) => (query.state.data?.enabled ? 5_000 : false),
   });
-  const [qr, setQr] = useState<{ challengeId: string; dataUrl: string } | null>(null);
-  const [qrError, setQrError] = useState(false);
-  const [expired, setExpired] = useState(false);
-  const challenge = useMutation({
-    mutationFn: () => window.openerx.createRemotePairingChallenge(),
-    onMutate: () => {
-      setQr(null);
-      setQrError(false);
-    },
-  });
   const enable = useMutation({
     mutationFn: (enabled: boolean) => window.openerx.setRemoteEnabled({ enabled }),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey });
-      challenge.reset();
-      setQr(null);
-      setQrError(false);
     },
     onSuccess: (state: RemoteDesktopState) => {
       queryClient.setQueryData(queryKey, state);
+      if (!state.enabled) setShowQr(false);
       void queryClient.invalidateQueries({ queryKey: ["remote", "connection-requests"] });
     },
     onError: () => queryClient.invalidateQueries({ queryKey }),
@@ -77,44 +66,11 @@ export function RemoteSettings({ accountId }: { accountId: string | null }): Rea
   const state = remote.data;
   const enabled = Boolean(state?.enabled);
   const activePairings = state?.pairings.filter(({ status }) => status === "active") ?? [];
-  const busy = enable.isPending || challenge.isPending || revoke.isPending;
-
-  useEffect(() => {
-    const value = challenge.data;
-    setQr(null);
-    setQrError(false);
-    if (!value || !enabled) return;
-    const remaining = Date.parse(value.expiresAt) - Date.now();
-    setExpired(remaining <= 0);
-    if (remaining <= 0) return;
-    let active = true;
-    const timer = setTimeout(() => {
-      setExpired(true);
-      setQr(null);
-    }, remaining);
-    const pairingUrl = `openerx://remote/pair?payload=${encodeURIComponent(JSON.stringify(value))}`;
-    void QRCode.toDataURL(pairingUrl, {
-      width: 220,
-      margin: 1,
-      errorCorrectionLevel: "M",
-      color: { dark: "#232823", light: "#ffffff" },
-    }).then(
-      (dataUrl) => {
-        if (active) setQr({ challengeId: value.challengeId, dataUrl });
-      },
-      () => {
-        if (active) setQrError(true);
-      },
-    );
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [challenge.data, enabled]);
+  const busy = enable.isPending || revoke.isPending;
 
   const reason = !accountId
     ? "AUTHENTICATION_REQUIRED"
-    : ((remote.error ?? enable.error ?? challenge.error ?? revoke.error)?.message ?? state?.reason);
+    : ((remote.error ?? enable.error ?? revoke.error)?.message ?? state?.reason);
   const presence = state?.host?.presence ?? "offline";
   return (
     <section className="settings-card settings-stack remote-settings" aria-label="手机远程控制">
@@ -128,10 +84,7 @@ export function RemoteSettings({ accountId }: { accountId: string | null }): Rea
             type="button"
             onClick={() => {
               enable.reset();
-              challenge.reset();
               revoke.reset();
-              setQr(null);
-              setQrError(false);
               void remote.refetch();
             }}
             disabled={busy || remote.isFetching}
@@ -187,33 +140,17 @@ export function RemoteSettings({ accountId }: { accountId: string | null }): Rea
           <strong>{state?.host?.displayName ?? "这台电脑"}</strong>
           <span className={`remote-presence presence-${presence}`}>{presenceLabels[presence]}</span>
           <span>{activePairings.length} 台手机已配对</span>
-          <button
-            type="button"
-            onClick={() => challenge.mutate()}
-            disabled={busy || !state?.available || Boolean(remote.error)}
-          >
-            <QrCode size={16} /> {challenge.isPending ? "正在生成…" : "添加设备"}
-          </button>
         </div>
       ) : null}
-      {enabled ? <RemoteConnectionRequests /> : null}
-      {enabled && challenge.data && !challenge.isPending ? (
-        expired ? (
-          <p className="remote-setup-notice" role="status">
-            配对码已过期，请点击“添加设备”生成新码。
-          </p>
-        ) : qr?.challengeId === challenge.data.challengeId ? (
-          <div className="remote-pairing-panel">
-            <img src={qr.dataUrl} alt="远程连接一次性配对二维码" />
-            <div>
-              <strong>用手机客户端 扫码连接</strong>
-              <p>在手机上登录同一账户，扫描二维码并确认连接。</p>
-              <span>有效期至 {new Date(challenge.data.expiresAt).toLocaleTimeString()}</span>
-            </div>
-          </div>
-        ) : null
+      {accountId && enabled && state?.available && !remote.error ? (
+        <>
+          <RemoteConnectionRequests />
+          <button type="button" onClick={() => setShowQr((value) => !value)} aria-expanded={showQr}>
+            {showQr ? "收起二维码" : "使用二维码快捷配对"}
+          </button>
+          {showQr ? <RemotePairingPanel key={accountId} /> : null}
+        </>
       ) : null}
-      {qrError ? <p role="alert">配对二维码生成失败，请点击“添加设备”重试。</p> : null}
       {activePairings.map((pairing) => (
         <div className="device-card" key={pairing.pairingId}>
           <div>
@@ -231,7 +168,7 @@ export function RemoteSettings({ accountId }: { accountId: string | null }): Rea
         <strong>连接手机</strong>
         <ol>
           <li>在这台电脑上登录账户，开启远程控制。</li>
-          <li>在手机上登录同一账户并申请连接，在电脑上允许；也可点击“添加设备”扫码配对。</li>
+          <li>在手机上登录同一账户并申请连接，在电脑上允许；也可展开二维码扫码配对。</li>
           <li>保持这台电脑联网、处于唤醒状态，并让桌面应用持续运行。</li>
         </ol>
         <p>远程指令仍遵循这台电脑上的工具权限和审批设置。可随时关闭远程控制或撤销设备配对。</p>

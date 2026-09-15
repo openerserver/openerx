@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ShellToolAdapter, WorkspaceToolAdapter } from "../src";
+import { codexWindowsSandboxReady, ShellToolAdapter, WorkspaceToolAdapter } from "../src";
 
 const directories: string[] = [];
 
@@ -371,7 +371,11 @@ describe("WorkspaceToolAdapter", () => {
 
   it("denies traversal, symlink reads, stale patches, and subprocess filesystem escape", async () => {
     const { adapter, chat, repository, grant, context, workspace, outside } = fixture();
-    symlinkSync(path.join(outside, "secret.txt"), path.join(workspace, "secret-link"));
+    symlinkSync(
+      outside,
+      path.join(workspace, "secret-link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     await expect(
       adapter.execute(
         {
@@ -390,14 +394,14 @@ describe("WorkspaceToolAdapter", () => {
         {
           operation: "workspace_read",
           workspaceGrantId: grant.id,
-          relativePath: "secret-link",
+          relativePath: "secret-link/secret.txt",
           startLine: 1,
           maxLines: 20,
           idempotencyKey: "workspace-symlink-0001",
         },
         context,
       ),
-    ).rejects.toThrow("WORKSPACE_SYMLINK_DENIED");
+    ).rejects.toThrow("WORKSPACE_SYMLINK_ESCAPE");
     await expect(
       adapter.execute(
         {
@@ -461,9 +465,26 @@ describe("WorkspaceToolAdapter", () => {
       },
       context,
     );
-    await expect(execution).rejects.toThrow(
-      process.platform === "darwin" ? /SHELL_EXIT_/u : "SHELL_OS_SANDBOX_UNAVAILABLE",
-    );
+    try {
+      if (process.platform === "win32" && codexWindowsSandboxReady()) {
+        // Windows workspaceWrite is a write/network boundary, not a read sandbox.
+        // Keep this explicit so release documentation cannot promise read isolation.
+        await expect(execution).resolves.toMatchObject({
+          summary: expect.stringContaining("outside-secret"),
+          data: { isolation: "codex-windows-restricted-token" },
+        });
+      } else {
+        await expect(execution).rejects.toThrow(
+          process.platform === "darwin"
+            ? /SHELL_EXIT_/u
+            : process.platform === "win32"
+              ? "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE"
+              : "SHELL_OS_SANDBOX_UNAVAILABLE",
+        );
+      }
+    } finally {
+      await shell.stopAll();
+    }
     chat.close();
     repository.close();
   });

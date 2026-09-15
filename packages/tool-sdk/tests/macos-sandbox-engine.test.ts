@@ -177,6 +177,7 @@ describe("MacOSSandboxExecEngine contract", () => {
     await expect(
       new MacOSSandboxExecEngine({
         platform: "darwin",
+        sandboxExecutable: process.execPath,
         bashExecutable: "/missing/openerx-bash",
       }).probe(),
     ).resolves.toMatchObject({
@@ -186,7 +187,8 @@ describe("MacOSSandboxExecEngine contract", () => {
     await expect(
       new MacOSSandboxExecEngine({
         platform: "darwin",
-        sandboxExecutable: "/usr/bin/true",
+        sandboxExecutable: process.execPath,
+        bashExecutable: process.execPath,
       }).probe(),
     ).resolves.toMatchObject({
       available: false,
