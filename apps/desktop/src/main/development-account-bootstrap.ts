@@ -24,7 +24,9 @@ export async function initializeAccountSession(
   developmentBootstrap: DevelopmentAccountBootstrap | null,
 ): Promise<AccountState> {
   const initial = await session.initialize();
-  if (!developmentBootstrap || initial.status === "signed_in") return initial;
+  // Automatic development login is only for a fresh profile. A failed refresh
+  // must not switch an existing user's data to the configured development account.
+  if (!developmentBootstrap || initial.status !== "signed_out" || initial.account) return initial;
   const bootstrap = normalizedBootstrap(developmentBootstrap);
   const challenge = await session.requestCode(bootstrap.email);
   return await session.verifyCode(challenge.challengeId, bootstrap.code);

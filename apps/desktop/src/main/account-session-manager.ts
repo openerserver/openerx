@@ -9,12 +9,32 @@ import {
   type EmailChallenge,
   emailChallengeSchema,
 } from "@openerx/contracts";
-import type { PersistedDeviceCredential } from "./credential-vault";
+import {
+  isUnreadableCredentialError,
+  type PersistedAccountProfile,
+  type PersistedDeviceCredential,
+} from "./credential-vault";
 
 export interface CredentialVaultPort {
   save(input: Omit<PersistedDeviceCredential, "version">): Promise<void>;
   load(): Promise<PersistedDeviceCredential | null>;
+  loadProfile(): Promise<PersistedAccountProfile | null>;
+  clearSession(): Promise<void>;
   clear(): Promise<void>;
+}
+
+function isRejectedSession(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    [
+      "DEVICE_SESSION_NOT_FOUND",
+      "DEVICE_SESSION_REVOKED",
+      "REFRESH_CREDENTIAL_INVALID",
+      "REFRESH_REPLAY_REVOKED",
+      "PLATFORM_HTTP_401",
+      "PLATFORM_HTTP_403",
+    ].includes(error.message)
+  );
 }
 
 export interface IdentityTransport {
@@ -138,17 +158,52 @@ export class AccountSessionManager {
   }
 
   async initialize(): Promise<AccountState> {
-    const persisted = await this.#vault.load();
+    this.#active = null;
+    this.#state = accountStateSchema.parse({
+      status: "signed_out",
+      account: null,
+      session: null,
+      reason: null,
+    });
+    let persisted: PersistedDeviceCredential | null;
+    try {
+      persisted = await this.#vault.load();
+    } catch (error) {
+      const unavailable =
+        error instanceof Error && error.message === "OS_CREDENTIAL_STORE_UNAVAILABLE";
+      if (!unavailable && !isUnreadableCredentialError(error)) throw error;
+      const profile = await this.#vault.loadProfile();
+      // Without a known profile, stop instead of silently opening an empty database.
+      if (!profile) throw error;
+      this.#state = accountStateSchema.parse({
+        status: unavailable ? "unavailable" : "reauth_required",
+        account: profile.account,
+        session: profile.session,
+        reason: error instanceof Error ? error.message : "SESSION_REFRESH_FAILED",
+      });
+      return this.state();
+    }
+    const profile = persisted ?? (await this.#vault.loadProfile());
     if (!this.#transport) {
       this.#state = accountStateSchema.parse({
         status: "unavailable",
-        account: persisted?.account ?? null,
-        session: persisted?.session ?? null,
+        account: profile?.account ?? null,
+        session: profile?.session ?? null,
         reason: "PLATFORM_ENDPOINT_NOT_CONFIGURED",
       });
       return this.state();
     }
-    if (!persisted) return this.state();
+    if (!persisted) {
+      if (profile) {
+        this.#state = accountStateSchema.parse({
+          status: "reauth_required",
+          account: profile.account,
+          session: profile.session,
+          reason: "AUTHENTICATION_REQUIRED",
+        });
+      }
+      return this.state();
+    }
     try {
       const grant = await this.#transport.refresh(
         persisted.session.sessionId,
@@ -156,10 +211,13 @@ export class AccountSessionManager {
       );
       await this.#activate(grant);
     } catch (error) {
-      await this.#vault.clear();
+      const rejected = isRejectedSession(error);
+      // Network failures and unavailable OS storage do not invalidate a credential.
+      // A rejected credential is discarded, but its offline profile survives restarts.
+      if (rejected) await this.#vault.clearSession();
       this.#active = null;
       this.#state = accountStateSchema.parse({
-        status: "reauth_required",
+        status: rejected ? "reauth_required" : "unavailable",
         account: persisted.account,
         session: persisted.session,
         reason: error instanceof Error ? error.message : "SESSION_REFRESH_FAILED",

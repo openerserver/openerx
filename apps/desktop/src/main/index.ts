@@ -167,6 +167,7 @@ import {
 } from "./background-lifecycle";
 import { DeviceCredentialVault, ToolCredentialVault } from "./credential-vault";
 import { requestDesktopNativePermission } from "./desktop-native-permissions";
+import { accountProfileDirectory, configureDesktopProfile } from "./desktop-profile";
 import { initializeAccountSession } from "./development-account-bootstrap";
 import { loadOrCreateDeviceDescriptor } from "./device-identity";
 import { HtmlPreviewRegistry } from "./html-preview";
@@ -259,14 +260,7 @@ if (started) {
   app.quit();
 }
 
-const e2eProfileDirectory =
-  process.env.OPENERX_E2E === "1" ? process.env.OPENERX_E2E_PROFILE_DIR : undefined;
-if (e2eProfileDirectory) {
-  app.setPath("userData", path.resolve(e2eProfileDirectory));
-} else {
-  // Keep existing installations on their original profile directory after the product rename.
-  app.setPath("userData", path.join(app.getPath("appData"), "OpenerX"));
-}
+configureDesktopProfile(app);
 
 // Select the profile before Electron derives the single-instance identity.
 const primaryInstance = app.requestSingleInstanceLock();
@@ -455,7 +449,7 @@ function registerIpcHandlers(
     if (state.account) {
       htmlPreviews.clear();
       await supervisor.switchProfile(
-        path.join(baseProfileDirectory, "accounts", state.account.accountId),
+        accountProfileDirectory(baseProfileDirectory, state.account),
         state.account.accountId,
       );
       await remote.resume();
@@ -1486,9 +1480,7 @@ app.whenReady().then(async () => {
       ? "pi-host-test.js"
       : "pi-host.js";
   const accountState = accounts.state();
-  const activeProfileDirectory = accountState.account
-    ? path.join(profileDirectory, "accounts", accountState.account.accountId)
-    : profileDirectory;
+  const activeProfileDirectory = accountProfileDirectory(profileDirectory, accountState.account);
   supervisor = new AppServiceSupervisor(
     activeProfileDirectory,
     piHostEntry,

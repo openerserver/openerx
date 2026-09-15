@@ -6,7 +6,10 @@ import {
   type CredentialVaultPort,
   type IdentityTransport,
 } from "../src/main/account-session-manager";
-import type { PersistedDeviceCredential } from "../src/main/credential-vault";
+import type {
+  PersistedAccountProfile,
+  PersistedDeviceCredential,
+} from "../src/main/credential-vault";
 import { initializeAccountSession } from "../src/main/development-account-bootstrap";
 
 function grant(): DeviceSessionGrant {
@@ -40,16 +43,26 @@ function grant(): DeviceSessionGrant {
 
 function setup(persisted: PersistedDeviceCredential | null = null) {
   let saved = persisted;
+  let profile: PersistedAccountProfile | null = persisted
+    ? { version: 1, account: persisted.account, session: persisted.session }
+    : null;
   const save = vi.fn(async (next: Omit<PersistedDeviceCredential, "version">) => {
     saved = { version: 1, ...next };
+    profile = { version: 1, account: next.account, session: next.session };
   });
   const clear = vi.fn(async () => {
+    saved = null;
+    profile = null;
+  });
+  const clearSession = vi.fn(async () => {
     saved = null;
   });
   const vault: CredentialVaultPort = {
     save,
     clear,
-    load: async () => saved,
+    clearSession,
+    load: vi.fn(async () => saved),
+    loadProfile: async () => profile,
   };
   const nextGrant = grant();
   const transport: IdentityTransport = {
@@ -69,7 +82,13 @@ function setup(persisted: PersistedDeviceCredential | null = null) {
     transport,
     device: nextGrant.session.device,
   });
-  return { manager, transport, vault, nextGrant, save, clear };
+  const restart = (nextTransport: IdentityTransport | null = transport) =>
+    new AccountSessionManager({
+      vault,
+      transport: nextTransport,
+      device: nextGrant.session.device,
+    });
+  return { manager, transport, vault, nextGrant, save, clear, clearSession, restart };
 }
 
 describe("AccountSessionManager", () => {
@@ -152,6 +171,27 @@ describe("AccountSessionManager", () => {
     expect(transport.verifyChallenge).toHaveBeenCalled();
   });
 
+  it.each(["fetch failed", "REFRESH_REPLAY_REVOKED"])(
+    "does not replace an existing account with the development default after %s",
+    async (reason) => {
+      const initial = grant();
+      const fixture = setup({
+        version: 1,
+        account: initial.account,
+        session: initial.session,
+        refreshCredential: initial.refreshCredential,
+      });
+      vi.mocked(fixture.transport.refresh).mockRejectedValue(new Error(reason));
+      const state = await initializeAccountSession(fixture.manager, {
+        email: "different-dev@openerx.local",
+        code: "123456",
+      });
+      expect(state.account).toEqual(initial.account);
+      expect(fixture.transport.requestChallenge).not.toHaveBeenCalled();
+      expect(fixture.transport.verifyChallenge).not.toHaveBeenCalled();
+    },
+  );
+
   it("shares one refresh when concurrent requests need a new access token", async () => {
     const { manager, transport } = setup();
     const expired = {
@@ -208,7 +248,103 @@ describe("AccountSessionManager", () => {
       status: "reauth_required",
       reason: "REFRESH_REPLAY_REVOKED",
     });
-    expect(failed.clear).toHaveBeenCalled();
+    expect(failed.clearSession).toHaveBeenCalledOnce();
+    expect(failed.clear).not.toHaveBeenCalled();
+    for (let restart = 0; restart < 2; restart++) {
+      const reopened = failed.restart();
+      expect(await reopened.initialize()).toMatchObject({
+        status: "reauth_required",
+        account: initial.account,
+      });
+      await expect(reopened.accessToken()).rejects.toThrow("AUTHENTICATION_REQUIRED");
+    }
+    expect(await failed.restart(null).initialize()).toMatchObject({
+      status: "unavailable",
+      account: initial.account,
+    });
+    expect(failed.transport.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["fetch failed", "PLATFORM_HTTP_503", "OS_CREDENTIAL_STORE_UNAVAILABLE"])(
+    "retains the same profile and credential across offline restarts after %s",
+    async (reason) => {
+      const initial = grant();
+      const persisted = {
+        version: 1 as const,
+        account: initial.account,
+        session: initial.session,
+        refreshCredential: initial.refreshCredential,
+      };
+      const fixture = setup(persisted);
+      vi.mocked(fixture.transport.refresh).mockRejectedValue(new Error(reason));
+      for (let restart = 0; restart < 2; restart++) {
+        const reopened = fixture.restart();
+        expect(await reopened.initialize()).toMatchObject({
+          status: "unavailable",
+          account: initial.account,
+          reason,
+        });
+        await expect(reopened.accessToken()).rejects.toThrow("AUTHENTICATION_REQUIRED");
+      }
+      expect(fixture.clear).not.toHaveBeenCalled();
+      expect(fixture.clearSession).not.toHaveBeenCalled();
+      expect(await fixture.vault.load()).toEqual(persisted);
+      vi.mocked(fixture.transport.refresh).mockResolvedValue(initial);
+      expect(await fixture.restart().initialize()).toMatchObject({
+        status: "signed_in",
+        account: initial.account,
+      });
+    },
+  );
+
+  it.each([
+    "OS_CREDENTIAL_STORE_UNAVAILABLE",
+    "OS_CREDENTIAL_DECRYPT_FAILED",
+    "OS_CREDENTIAL_DATA_INVALID",
+  ])(
+    "opens the saved offline profile without replacing unreadable credentials after %s",
+    async (reason) => {
+      const initial = grant();
+      const fixture = setup({
+        version: 1,
+        account: initial.account,
+        session: initial.session,
+        refreshCredential: initial.refreshCredential,
+      });
+      vi.mocked(fixture.vault.load).mockRejectedValue(new Error(reason));
+      const reopened = fixture.restart();
+      expect(await reopened.initialize()).toMatchObject({ account: initial.account, reason });
+      await expect(reopened.accessToken()).rejects.toThrow("AUTHENTICATION_REQUIRED");
+      expect(fixture.clear).not.toHaveBeenCalled();
+      expect(fixture.clearSession).not.toHaveBeenCalled();
+      expect(fixture.save).not.toHaveBeenCalled();
+      expect(fixture.transport.refresh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not silently select an empty local profile when an old vault cannot be read", async () => {
+    const fixture = setup();
+    vi.mocked(fixture.vault.load).mockRejectedValue(new Error("OS_CREDENTIAL_DECRYPT_FAILED"));
+    await expect(fixture.manager.initialize()).rejects.toThrow("OS_CREDENTIAL_DECRYPT_FAILED");
+    expect(fixture.clear).not.toHaveBeenCalled();
+  });
+
+  it("clears the profile selection only on explicit sign out", async () => {
+    const initial = grant();
+    const fixture = setup({
+      version: 1,
+      account: initial.account,
+      session: initial.session,
+      refreshCredential: initial.refreshCredential,
+    });
+    vi.mocked(fixture.transport.refresh).mockRejectedValue(new Error("DEVICE_SESSION_REVOKED"));
+    await fixture.manager.initialize();
+    await fixture.manager.signOut();
+    expect(await fixture.restart().initialize()).toMatchObject({
+      status: "signed_out",
+      account: null,
+    });
+    expect(await fixture.vault.loadProfile()).toBeNull();
   });
 
   it("revokes the current device and removes local credentials", async () => {

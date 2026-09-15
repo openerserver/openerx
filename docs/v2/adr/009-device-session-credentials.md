@@ -22,6 +22,16 @@
    operations show an authentication-required state.
 6. Device identity is not hardware fingerprinting. It is a generated identifier plus user-visible
    platform metadata and last-active/revoked timestamps.
+7. Offline profile selection survives session expiry, revocation and OS credential-store failures.
+   `device-session.bin.profile.json` contains only the last account/device-session metadata, uses
+   atomic writes with owner-only permissions, and never authorizes network requests. Existing
+   encrypted sessions backfill it before refresh. A transient refresh failure retains the encrypted
+   credential; an explicitly rejected session removes only the credential. Explicit sign-out clears
+   both the credential and the selection, while leaving the account database intact.
+8. Development bootstrap signs in automatically only for a fresh, signed-out profile. It never
+   replaces an existing account after a refresh failure. Desktop and Chromium session storage use
+   the stable `OpenerX` directory under OS app data, independently of executable path, display name,
+   version or build output.
 
 ## Implementation status
 

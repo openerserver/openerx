@@ -94,6 +94,53 @@ describe("DeviceCredentialVault", () => {
     );
     await expect(vault.save(fixture())).rejects.toThrow("OS_CREDENTIAL_STORE_UNAVAILABLE");
   });
+
+  it("keeps offline account selection after session rejection, across new vault instances", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-vault-profile-"));
+    temporaryDirectories.push(directory);
+    const file = path.join(directory, "device-session.bin");
+    const protector = new TestProtector();
+    const credential = fixture();
+    const vault = new DeviceCredentialVault(file, protector);
+    await vault.save(credential);
+    await vault.clearSession();
+    const reopened = new DeviceCredentialVault(file, protector);
+    expect(await reopened.load()).toBeNull();
+    expect(await reopened.loadProfile()).toEqual({
+      version: 1,
+      account: credential.account,
+      session: credential.session,
+    });
+    const metadata = await readFile(`${file}.profile.json`, "utf8");
+    expect(metadata).not.toContain(credential.refreshCredential);
+    expect(metadata).not.toMatch(/refreshCredential|accessToken/);
+    expect((await stat(`${file}.profile.json`)).mode & 0o777).toBe(0o600);
+    await reopened.clear();
+    expect(await new DeviceCredentialVault(file, protector).loadProfile()).toBeNull();
+  });
+
+  it("backfills profile metadata from an existing encrypted session before upgrading", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-vault-upgrade-"));
+    temporaryDirectories.push(directory);
+    const file = path.join(directory, "device-session.bin");
+    const protector = new TestProtector();
+    const credential = { version: 1, ...fixture() };
+    const original = await protector.encrypt(JSON.stringify(credential));
+    await writeFile(file, original);
+    const vault = new DeviceCredentialVault(file, protector);
+    expect(await vault.loadProfile()).toBeNull();
+    expect(await vault.load()).toEqual(credential);
+    expect(await vault.loadProfile()).toEqual({
+      version: 1,
+      account: credential.account,
+      session: credential.session,
+    });
+    expect(await readFile(file)).toEqual(original);
+    const unavailable = new DeviceCredentialVault(file, new TestProtector(false));
+    await expect(unavailable.load()).rejects.toThrow("OS_CREDENTIAL_STORE_UNAVAILABLE");
+    expect(await unavailable.loadProfile()).toEqual(await vault.loadProfile());
+    expect(await readFile(file)).toEqual(original);
+  });
 });
 
 describe("ToolCredentialVault", () => {

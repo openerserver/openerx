@@ -34,6 +34,33 @@ export interface PersistedDeviceCredential {
   refreshCredential: string;
 }
 
+const persistedAccountProfileSchema = z
+  .object({
+    version: z.literal(1),
+    account: accountIdentitySchema,
+    session: deviceSessionSchema,
+  })
+  .strict()
+  .refine((profile) => profile.account.accountId === profile.session.accountId);
+
+// This selects offline local data only. It never grants cloud access.
+export type PersistedAccountProfile = z.infer<typeof persistedAccountProfileSchema>;
+
+async function writePrivateFile(filePath: string, bytes: Buffer | string): Promise<void> {
+  const directory = path.dirname(filePath);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${randomBytes(8).toString("hex")}.tmp`,
+  );
+  try {
+    await writeFile(temporaryPath, bytes, { mode: 0o600, flag: "wx" });
+    await rename(temporaryPath, filePath);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
 export class ElectronSafeStorageProtector implements CredentialProtector {
   async isAvailable(): Promise<boolean> {
     return await safeStorage.isAsyncEncryptionAvailable();
@@ -69,6 +96,7 @@ export function isUnreadableCredentialError(error: unknown): boolean {
 
 export class DeviceCredentialVault {
   readonly #filePath: string;
+  readonly #profilePath: string;
   readonly #protector: CredentialProtector;
 
   constructor(
@@ -76,6 +104,7 @@ export class DeviceCredentialVault {
     protector: CredentialProtector = new ElectronSafeStorageProtector(),
   ) {
     this.#filePath = filePath;
+    this.#profilePath = `${filePath}.profile.json`;
     this.#protector = protector;
   }
 
@@ -83,18 +112,8 @@ export class DeviceCredentialVault {
     if (!(await this.#protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
     const credential = persistedDeviceCredentialSchema.parse({ version: 1, ...input });
     const encrypted = await this.#protector.encrypt(JSON.stringify(credential));
-    const directory = path.dirname(this.#filePath);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const temporaryPath = path.join(
-      directory,
-      `.${path.basename(this.#filePath)}.${randomBytes(8).toString("hex")}.tmp`,
-    );
-    try {
-      await writeFile(temporaryPath, encrypted, { mode: 0o600, flag: "wx" });
-      await rename(temporaryPath, this.#filePath);
-    } finally {
-      await rm(temporaryPath, { force: true });
-    }
+    await writePrivateFile(this.#filePath, encrypted);
+    await this.#saveProfile(credential);
   }
 
   async load(): Promise<PersistedDeviceCredential | null> {
@@ -107,7 +126,14 @@ export class DeviceCredentialVault {
     }
     if (!(await this.#protector.isAvailable())) throw new Error("OS_CREDENTIAL_STORE_UNAVAILABLE");
     const decrypted = await this.#protector.decrypt(encrypted);
-    const credential = persistedDeviceCredentialSchema.parse(JSON.parse(decrypted.result));
+    let credential: PersistedDeviceCredential;
+    try {
+      credential = persistedDeviceCredentialSchema.parse(JSON.parse(decrypted.result));
+    } catch {
+      throw new Error("OS_CREDENTIAL_DATA_INVALID");
+    }
+    // Backfill previous installations before a refresh can invalidate their session.
+    await this.#saveProfile(credential);
     if (decrypted.shouldReEncrypt) {
       await this.save({
         account: credential.account,
@@ -119,7 +145,32 @@ export class DeviceCredentialVault {
   }
 
   async clear(): Promise<void> {
+    await this.clearSession();
+    await rm(this.#profilePath, { force: true });
+  }
+
+  async clearSession(): Promise<void> {
     await rm(this.#filePath, { force: true });
+  }
+
+  async loadProfile(): Promise<PersistedAccountProfile | null> {
+    try {
+      return persistedAccountProfileSchema.parse(
+        JSON.parse(await readFile(this.#profilePath, "utf8")),
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async #saveProfile(credential: PersistedDeviceCredential): Promise<void> {
+    const profile = persistedAccountProfileSchema.parse({
+      version: 1,
+      account: credential.account,
+      session: credential.session,
+    });
+    await writePrivateFile(this.#profilePath, JSON.stringify(profile));
   }
 }
 
