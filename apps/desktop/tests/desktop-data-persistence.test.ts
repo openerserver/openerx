@@ -56,9 +56,14 @@ function fixtureGrant(): DeviceSessionGrant {
 }
 
 describe("desktop update data retention", () => {
-  it.each(["fetch failed", "REFRESH_REPLAY_REVOKED"])(
-    "retains chats, projects and model settings through rebuilds and repeated restarts after %s",
-    async (reason) => {
+  it.each([
+    ["OpenerX", "fetch failed"],
+    ["OpenerX", "REFRESH_REPLAY_REVOKED"],
+    ["OpenerX-Enterprise", "fetch failed"],
+    ["OpenerX-Enterprise", "REFRESH_REPLAY_REVOKED"],
+  ])(
+    "retains %s chats, projects and model settings through rebuilds and repeated restarts after %s",
+    async (profileDirectoryName, reason) => {
       const root = mkdtempSync(path.join(tmpdir(), "openerx-update-retention-"));
       directories.push(root);
       const appData = path.join(root, "Application Support");
@@ -69,7 +74,8 @@ describe("desktop update data retention", () => {
           paths[name] = value;
         },
       };
-      const base = configureDesktopProfile(application, {});
+      const base = configureDesktopProfile(application, {}, profileDirectoryName);
+      expect(base).toBe(path.join(appData, profileDirectoryName));
       const grant = fixtureGrant();
       const profile = accountProfileDirectory(base, grant.account);
       mkdirSync(profile, { recursive: true });
@@ -132,7 +138,7 @@ describe("desktop update data retention", () => {
         mkdirSync(output, { recursive: true });
         writeFileSync(path.join(output, "app.fixture"), String(update));
         rmSync(output, { recursive: true });
-        const reopenedBase = configureDesktopProfile(application, {});
+        const reopenedBase = configureDesktopProfile(application, {}, profileDirectoryName);
         expect(reopenedBase).toBe(base);
         expect(paths).toEqual({ userData: base, sessionData: base });
         const account = new AccountSessionManager({

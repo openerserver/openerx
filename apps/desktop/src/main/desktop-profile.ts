@@ -9,6 +9,7 @@ interface ProfilePaths {
 export function configureDesktopProfile(
   app: ProfilePaths,
   environment: NodeJS.ProcessEnv = process.env,
+  profileDirectoryName = "OpenerX",
 ): string {
   const testDirectory =
     environment.OPENERX_E2E === "1" ? environment.OPENERX_E2E_PROFILE_DIR : undefined;
@@ -16,7 +17,7 @@ export function configureDesktopProfile(
   // Keep the original on-disk name for existing installations.
   const directory = testDirectory
     ? path.resolve(testDirectory)
-    : path.join(app.getPath("appData"), "OpenerX");
+    : path.join(app.getPath("appData"), profileDirectoryName);
   app.setPath("userData", directory);
   app.setPath("sessionData", directory);
   return directory;

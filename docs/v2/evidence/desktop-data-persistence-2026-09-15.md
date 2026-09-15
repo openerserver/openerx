@@ -51,3 +51,9 @@
 `/Users/wanglei/Downloads/phones-cloud/openerx/.codex-temp/data-persistence-20260915/`
 
 包含 `desktop-tests.log`、`package.log`、`personal-data-before.json`、`personal-data-after.json`、`personal-data-comparison.json` 和 `database-before-update/`。备份仅在本机保存，不进入 Git。
+
+## 双版本交付补充
+
+本修复同步进入 UWA 的 `openerx-advanced/core`。公共 profile 初始化接受版本固定目录名；默认仍为 `OpenerX`，UWA 传入既有的 `OpenerX-Enterprise`。两个目录均加入重编译、多次重启、离线刷新及已撤销登录的数据库和模型配置保留回归。
+
+仓库 `AGENTS.md` 已要求共通桌面修复同时检查、修复和验证两个版本；公共回归入口增加账号会话、数据保留及远程请求超时测试。`npm run test:desktop-common` 在 openerx 通过 15 个桌面测试文件（106 项）与 9 个公共执行测试文件（60 项），同时通过 5 个包的类型检查。UWA 的独立账号、数据与应用验证详见该仓库 `docs/DESKTOP_DATA_PERSISTENCE_20260915.md`。
