@@ -181,3 +181,15 @@ describe("M2 Remote foundation contracts", () => {
     ).toThrow();
   });
 });
+
+
+it("remote prompt commands preserve valid thinking levels and reject invalid or running-control fields", () => {
+  for (const kind of ["task.start", "session.prompt"]) {
+    for (const thinkingLevel of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+      expect(remoteCommandPayloadSchema.parse({ kind, text: "hello", clientOperationId: "thinking-selection", thinkingLevel })).toMatchObject({ thinkingLevel });
+    }
+    for (const thinkingLevel of [null, "", "ultra", 3])
+      expect(remoteCommandPayloadSchema.safeParse({ kind, text: "hello", clientOperationId: "thinking-selection", thinkingLevel }).success).toBe(false);
+  }
+  expect(remoteCommandPayloadSchema.safeParse({ kind: "session.steer", text: "hello", thinkingLevel: "high" }).success).toBe(false);
+});

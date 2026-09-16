@@ -50,6 +50,7 @@ run(vitest, [
   "--maxWorkers=2",
   "--testTimeout=30000",
   "packages/app-service/tests/remote-app-service.test.ts",
+  "packages/contracts/tests/remote.test.ts",
   "packages/app-service/tests/tool-app-service.test.ts",
   "packages/remote-host/tests/http-transport.test.ts",
   "packages/pi-host/tests/agent-session.test.ts",

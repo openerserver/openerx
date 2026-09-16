@@ -176,7 +176,7 @@ describe("ChatAppService remote Pi mapping", () => {
       displayName: "Desktop model",
       contextWindow: 32_000,
       maxOutputTokens: 1_000,
-      capabilities: { imageInput: false, functionCalling: true, reasoning: false },
+      capabilities: { imageInput: false, functionCalling: true, reasoning: true },
     };
     const context = vi.fn().mockResolvedValue({ authorization, byok });
     const service = new ChatAppService(
@@ -195,6 +195,7 @@ describe("ChatAppService remote Pi mapping", () => {
       kind: "task.start" as const,
       text: "phone task",
       clientOperationId: "mobile-byok-0001",
+      thinkingLevel: "high" as const,
     };
     const command = remoteCommand(payload, {
       conversationId: null,
@@ -203,7 +204,7 @@ describe("ChatAppService remote Pi mapping", () => {
     });
     const result = await service.applyRemoteCommand(command, payload, authorization);
     expect(result.ok).toBe(true);
-    expect(pi.prompts[0]).toMatchObject({ selectedModelRef: "platform/byok", byok });
+    expect(pi.prompts[0]).toMatchObject({ selectedModelRef: "platform/byok", thinkingLevel: "high", byok });
     expect(pi.prompts[0]).not.toHaveProperty("accessToken");
     expect(JSON.stringify(result)).not.toContain(byok.apiKey);
     await service.applyRemoteCommand(command, payload, authorization);
@@ -224,6 +225,7 @@ describe("ChatAppService remote Pi mapping", () => {
       kind: "session.prompt" as const,
       text: "continue",
       clientOperationId: "mobile-byok-0002",
+      thinkingLevel: "off" as const,
     };
     await service.applyRemoteCommand(
       remoteCommand(next, {
@@ -236,7 +238,9 @@ describe("ChatAppService remote Pi mapping", () => {
     );
     expect(context).toHaveBeenLastCalledWith("platform/byok");
     expect(pi.prompts).toHaveLength(2);
-    expect(pi.prompts.at(-1)).toMatchObject({ selectedModelRef: "platform/byok", byok });
+    expect(pi.prompts.at(-1)).toMatchObject({ selectedModelRef: "platform/byok", thinkingLevel: "off", byok });
+    expect(chat.getConversation(conversationId).conversation.thinkingLevel).toBe("off");
+    expect(chat.thinkingLevelForMessage(pi.prompts[0]!.assistantMessageId)).toBe("high");
     service.close();
   });
 

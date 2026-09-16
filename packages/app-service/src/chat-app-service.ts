@@ -646,6 +646,7 @@ export class ChatAppService {
           text: payload.text,
           idempotencyKey: command.commandId,
           ...(modelRef ? { modelRef } : {}),
+          ...(payload.thinkingLevel !== undefined ? { thinkingLevel: payload.thinkingLevel } : {}),
           ...(payload.kind === "task.start" ? { projectId: payload.projectId ?? null } : {}),
         });
         await this.#launch(
@@ -662,6 +663,11 @@ export class ChatAppService {
           },
           context.byok,
         );
+        if (draft.created && payload.thinkingLevel !== undefined &&
+          this.#repository.getConversation(draft.receipt.conversationId).conversation.thinkingLevel !== payload.thinkingLevel) {
+          const selection = this.#repository.selectConversationThinkingLevel(draft.receipt.conversationId, payload.thinkingLevel);
+          this.#emit(selection.event);
+        }
         await this.#syncIfAuthorized(authorization);
         return draft.receipt;
       }

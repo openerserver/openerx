@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { thinkingLevelSchema } from "./model";
 import { deviceDescriptorSchema } from "./account";
 import { entityIdSchema, timestampSchema } from "./common";
 import {
@@ -334,6 +335,7 @@ export const remoteTaskStartPayloadSchema = z
     text: z.string().trim().min(1).max(100_000),
     clientOperationId: z.string().min(8).max(200),
     executionMode: z.enum(["attended", "unattended"]).optional(),
+    thinkingLevel: thinkingLevelSchema.optional(),
     projectId: entityIdSchema.nullable().optional(),
     attachments: remoteAttachmentsSchema.optional(),
   })
@@ -345,6 +347,7 @@ export const remoteSessionPromptPayloadSchema = z
     text: z.string().trim().min(1).max(100_000),
     clientOperationId: z.string().min(8).max(200),
     executionMode: z.enum(["attended", "unattended"]).optional(),
+    thinkingLevel: thinkingLevelSchema.optional(),
     attachments: remoteAttachmentsSchema.optional(),
   })
   .strict();
