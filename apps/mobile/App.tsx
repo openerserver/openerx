@@ -66,11 +66,13 @@ const baseUrl = process.env.EXPO_PUBLIC_OPENERX_PLATFORM_URL?.replace(/\/$/u, ""
 
 function PrimaryButton({
   label,
+  symbol,
   onPress,
   disabled = false,
   tone = "accent",
 }: {
   label: string;
+  symbol?: string;
   onPress: () => void;
   disabled?: boolean;
   tone?: "accent" | "neutral" | "danger";
@@ -78,18 +80,23 @@ function PrimaryButton({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={label}
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
+        symbol ? styles.composerButton : null,
         tone === "accent" ? styles.buttonAccent : null,
         tone === "danger" ? styles.buttonDanger : null,
         pressed ? styles.buttonPressed : null,
         disabled ? styles.buttonDisabled : null,
       ]}
     >
-      <Text style={tone === "accent" ? styles.buttonAccentText : styles.buttonText}>{label}</Text>
+      <Text style={[
+        tone === "accent" ? styles.buttonAccentText : styles.buttonText,
+        symbol ? styles.composerSymbol : null,
+      ]}>{symbol ?? label}</Text>
     </Pressable>
   );
 }
@@ -832,12 +839,6 @@ function TasksScreen({
               {attachmentError}
             </Text>
           ) : null}
-          <PrimaryButton
-            label={picking ? "正在选择…" : "添加附件"}
-            tone="neutral"
-            disabled={busy || picking || running || historicalBranch || Boolean(task?.archivedAt)}
-            onPress={() => setShowAttachmentPicker((value) => !value)}
-          />
           {showAttachmentPicker ? (
             <View style={styles.composerActions}>
               <PrimaryButton label="选择文件" tone="neutral" onPress={() => void choose("files")} />
@@ -849,46 +850,38 @@ function TasksScreen({
               <PrimaryButton label="拍照" tone="neutral" onPress={() => void choose("camera")} />
             </View>
           ) : null}
-          <ComposerInput
-            key={draftKey}
-            accessibilityLabel="任务输入"
-            editable={!busy}
-            value={text}
-            onChangeText={setText}
-            placeholder={
-              running ? "补充当前任务的要求…" : conversationId ? "继续提问或说明…" : "描述任务目标…"
-            }
-            placeholderTextColor="#929c92"
-            style={styles.input}
-          />
-          <View style={styles.composerActions}>
-            <View style={styles.flex}>
-              <PrimaryButton
-                label={
-                  busy
-                    ? "等待电脑确认…"
-                    : running
-                      ? "补充要求"
-                      : conversationId
-                        ? "发送"
-                        : "开始任务"
-                }
-                disabled={
-                  busy || picking || !canControl || !text.trim() || (running && files.length > 0)
-                }
-                onPress={send}
-              />
-            </View>
+          <View style={styles.composerRow}>
+            <PrimaryButton
+              label={picking ? "正在选择…" : "添加附件"}
+              symbol="+"
+              tone="neutral"
+              disabled={busy || picking || running || historicalBranch || Boolean(task?.archivedAt)}
+              onPress={() => setShowAttachmentPicker((value) => !value)}
+            />
+            <ComposerInput
+              key={draftKey}
+              accessibilityLabel="任务输入"
+              editable={!busy}
+              value={text}
+              onChangeText={setText}
+              placeholder={
+                running ? "补充当前任务的要求…" : conversationId ? "继续提问或说明…" : "描述任务目标…"
+              }
+              placeholderTextColor="#929c92"
+              style={[styles.input, styles.composerInput]}
+            />
             {running ? (
               <>
                 <PrimaryButton
                   label="排队发送"
+                  symbol="⇥"
                   tone="neutral"
                   disabled={busy || picking || !canControl || !text.trim() || files.length > 0}
                   onPress={() => void invoke({ kind: "session.follow_up", text: text.trim() })}
                 />
                 <PrimaryButton
                   label="停止"
+                  symbol="■"
                   tone="danger"
                   disabled={busy || !canControl}
                   onPress={() =>
@@ -900,6 +893,22 @@ function TasksScreen({
                 />
               </>
             ) : null}
+            <PrimaryButton
+              symbol="↑"
+              label={
+                busy
+                  ? "等待电脑确认…"
+                  : running
+                    ? "补充要求"
+                    : conversationId
+                      ? "发送"
+                      : "开始任务"
+              }
+              disabled={
+                busy || picking || !canControl || !text.trim() || (running && files.length > 0)
+              }
+              onPress={send}
+            />
           </View>
           {!keyboardVisible ? (
             <Text style={styles.sectionHint}>
@@ -1870,6 +1879,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#151815",
   },
   composerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  composerRow: { flexDirection: "row", alignItems: "flex-end", gap: 4 },
+  composerInput: { flex: 1, minWidth: 0, paddingHorizontal: 8 },
+  composerButton: { width: 44, height: 44, flexShrink: 0, paddingHorizontal: 0, borderRadius: 22 },
+  composerSymbol: { fontSize: 22, lineHeight: 26, includeFontPadding: false },
   messageBubble: { borderRadius: 14, padding: 14, gap: 8, backgroundColor: "#1b201b" },
   userBubble: { backgroundColor: "#263320" },
   messageAuthor: { color: "#b7d6a7", fontSize: 12, fontWeight: "700" },
