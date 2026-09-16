@@ -54,7 +54,14 @@ class RemotePiHostClient implements PiHostClient {
     return Promise.resolve();
   }
   abort(generationId: string): Promise<void> {
-    this.listener?.({ kind: "pi.product-event", generationId, eventId: randomUUID(), sequence: 1, occurredAt: new Date().toISOString(), type: "stopped" });
+    this.listener?.({
+      kind: "pi.product-event",
+      generationId,
+      eventId: randomUUID(),
+      sequence: 1,
+      occurredAt: new Date().toISOString(),
+      type: "stopped",
+    });
     return Promise.resolve();
   }
   control(frame: PiSessionControlFrame): Promise<void> {
@@ -63,7 +70,9 @@ class RemotePiHostClient implements PiHostClient {
   }
   onEvent(listener: (frame: PiHostEventFrame) => void): () => void {
     this.listener = listener;
-    return () => { this.listener = null; };
+    return () => {
+      this.listener = null;
+    };
   }
   onFileToolRequest(_listener: (frame: PiFileToolRequestFrame) => Promise<unknown>): () => void {
     return () => undefined;
@@ -528,102 +537,212 @@ describe("ChatAppService remote Pi mapping", () => {
     service.close();
   });
 
-  it("allows only the originating Remote controller to resolve its Bash approval", async () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-app-"));
-    directories.push(directory);
-    const databasePath = path.join(directory, "profile.sqlite");
-    const chat = new ChatRepository(databasePath);
-    const toolFixture = toolEnabledService(directory, chat);
-    const remote = new RemoteRepository(databasePath);
-    const pi = new RemotePiHostClient();
-    const service = trackedService(chat, pi, null, null, toolFixture.service, remote);
-    const seed = chat.createGeneration({
-      text: "seed attended Remote",
-      idempotencyKey: "remote-approval-seed-0001",
-    });
-    const grant = toolFixture.service.grantWorkspace({
-      rootPath: toolFixture.workspace,
-      conversationId: seed.receipt.conversationId,
-      access: "read_write",
-      allowNetwork: false,
-      expiresAt: null,
-    });
-    const authority = {
-      pairingId: randomUUID(),
-      controllerDeviceId: randomUUID(),
-      hostDeviceId: randomUUID(),
-    };
-    const promptPayload = {
-      kind: "session.prompt" as const,
-      text: "write after approval",
-      clientOperationId: "mobile-approval-prompt-0001",
-      executionMode: "attended" as const,
-    };
-    const promptCommand = remoteCommand(promptPayload, {
-      conversationId: seed.receipt.conversationId,
-      generationId: null,
-      baseRevision: service.currentRemoteRevision(seed.receipt.conversationId),
-      authority,
-    });
-    await service.applyRemoteCommand(promptCommand, promptPayload, authorization);
-    const prompt = pi.prompts.at(-1);
-    const execution = prompt?.workspace?.execution;
-    if (!prompt || !execution || !pi.toolRequest) throw new Error("Remote tool context missing");
+  it.each(["once", "session", "full_access"] as const)(
+    "applies Remote %s approval without biometrics and keeps its conversation scope",
+    async (decision) => {
+      const directory = mkdtempSync(path.join(tmpdir(), "openerx-remote-app-"));
+      directories.push(directory);
+      const databasePath = path.join(directory, "profile.sqlite");
+      const chat = new ChatRepository(databasePath);
+      const toolFixture = toolEnabledService(directory, chat);
+      const remote = new RemoteRepository(databasePath);
+      const pi = new RemotePiHostClient();
+      const service = trackedService(chat, pi, null, null, toolFixture.service, remote);
+      const seed = chat.createGeneration({
+        text: "seed attended Remote",
+        idempotencyKey: "remote-approval-seed-0001",
+      });
+      const grant = toolFixture.service.grantWorkspace({
+        rootPath: toolFixture.workspace,
+        conversationId: seed.receipt.conversationId,
+        access: "read_write",
+        allowNetwork: false,
+        expiresAt: null,
+      });
+      const authority = {
+        pairingId: randomUUID(),
+        controllerDeviceId: randomUUID(),
+        hostDeviceId: randomUUID(),
+      };
+      const promptPayload = {
+        kind: "session.prompt" as const,
+        text: "write after approval",
+        clientOperationId: "mobile-approval-prompt-0001",
+        executionMode: "attended" as const,
+      };
+      const promptCommand = remoteCommand(promptPayload, {
+        conversationId: seed.receipt.conversationId,
+        generationId: null,
+        baseRevision: service.currentRemoteRevision(seed.receipt.conversationId),
+        authority,
+      });
+      await service.applyRemoteCommand(promptCommand, promptPayload, authorization);
+      const prompt = pi.prompts.at(-1);
+      const execution = prompt?.workspace?.execution;
+      if (!prompt || !execution || !pi.toolRequest) throw new Error("Remote tool context missing");
 
-    const toolExecution = pi.toolRequest({
-      kind: "pi.tool.request",
-      requestId: randomUUID(),
-      generationId: prompt.generationId,
-      conversationId: prompt.conversationId,
-      branchId: prompt.branchId,
-      assistantMessageId: prompt.assistantMessageId,
-      piToolCallId: "remote-attended-bash-0001",
-      toolName: "bash",
-      operation: {
-        operation: "shell_command_execute",
-        idempotencyKey: "remote-attended-bash-effect-0001",
-        ...execution,
-        shell: "bash",
-        command: "printf approved > result.txt",
-        timeoutMs: 120_000,
-      },
-    });
-    await vi.waitFor(() => expect(toolFixture.tools.listPermissions("pending")).toHaveLength(1));
-    const permission = toolFixture.tools.listPermissions("pending")[0];
-    if (!permission) throw new Error("Remote permission missing");
-    const decisionPayload = {
-      kind: "permission.decide" as const,
-      attentionRequestId: permission.id,
-      permissionRequestId: permission.id,
-      payloadDigest: permission.payloadDigest,
-      decision: "once" as const,
-      deviceUnlocked: true,
-      biometricVerified: true,
-      reauthenticatedAt: new Date().toISOString(),
-    };
-    const wrongController = remoteCommand(decisionPayload, {
-      conversationId: prompt.conversationId,
-      generationId: prompt.generationId,
-      baseRevision: service.currentRemoteRevision(prompt.conversationId),
-      authority: { ...authority, controllerDeviceId: randomUUID() },
-    });
-    expect(
-      await service.applyRemoteCommand(wrongController, decisionPayload, authorization),
-    ).toMatchObject({ ok: false, errorCode: "REMOTE_PERMISSION_CONTROLLER_MISMATCH" });
-    expect(toolFixture.tools.permission(permission.id).status).toBe("pending");
+      const toolExecution = pi.toolRequest({
+        kind: "pi.tool.request",
+        requestId: randomUUID(),
+        generationId: prompt.generationId,
+        conversationId: prompt.conversationId,
+        branchId: prompt.branchId,
+        assistantMessageId: prompt.assistantMessageId,
+        piToolCallId: "remote-attended-bash-0001",
+        toolName: "bash",
+        operation: {
+          operation: "shell_command_execute",
+          idempotencyKey: "remote-attended-bash-effect-0001",
+          ...execution,
+          shell: "bash",
+          command: "printf approved > result.txt",
+          timeoutMs: 120_000,
+        },
+      });
+      await vi.waitFor(() => expect(toolFixture.tools.listPermissions("pending")).toHaveLength(1));
+      const permission = toolFixture.tools.listPermissions("pending")[0];
+      if (!permission) throw new Error("Remote permission missing");
+      const decisionPayload = {
+        kind: "permission.decide" as const,
+        attentionRequestId: permission.id,
+        permissionRequestId: permission.id,
+        payloadDigest: permission.payloadDigest,
+        decision,
+        deviceUnlocked: true,
+        biometricVerified: false,
+        reauthenticatedAt: new Date().toISOString(),
+      };
+      const wrongController = remoteCommand(decisionPayload, {
+        conversationId: prompt.conversationId,
+        generationId: prompt.generationId,
+        baseRevision: service.currentRemoteRevision(prompt.conversationId),
+        authority: { ...authority, controllerDeviceId: randomUUID() },
+      });
+      expect(
+        await service.applyRemoteCommand(wrongController, decisionPayload, authorization),
+      ).toMatchObject({ ok: false, errorCode: "REMOTE_PERMISSION_CONTROLLER_MISMATCH" });
+      expect(toolFixture.tools.permission(permission.id).status).toBe("pending");
 
-    const correctController = remoteCommand(decisionPayload, {
-      conversationId: prompt.conversationId,
-      generationId: prompt.generationId,
-      baseRevision: service.currentRemoteRevision(prompt.conversationId),
-      authority,
-    });
-    expect(
-      await service.applyRemoteCommand(correctController, decisionPayload, authorization),
-    ).toMatchObject({ ok: true });
-    await expect(toolExecution).resolves.toMatchObject({ sideEffectCommitted: false });
-    expect(toolFixture.tools.permission(permission.id).status).toBe("approved");
-    expect(grant.id).toBe(execution.activeExecutionGrantId);
-    service.close();
-  });
+      const decide = (payload: RemoteCommandPayload, conversationId = prompt.conversationId) =>
+        service.applyRemoteCommand(
+          remoteCommand(payload, {
+            conversationId,
+            generationId: prompt.generationId,
+            baseRevision: service.currentRemoteRevision(conversationId),
+            authority,
+          }),
+          payload,
+          authorization,
+        );
+      const other = chat.createGeneration({ text: "unrelated", idempotencyKey: randomUUID() });
+      expect(await decide(decisionPayload, other.receipt.conversationId)).toMatchObject({
+        ok: false,
+        errorCode: "REMOTE_PERMISSION_SCOPE_VIOLATION",
+      });
+      expect(
+        await decide({
+          ...decisionPayload,
+          decision: "full_access",
+          payloadDigest: "b".repeat(64),
+        }),
+      ).toMatchObject({
+        ok: false,
+        errorCode: "PERMISSION_PAYLOAD_CHANGED",
+      });
+      expect(
+        await decide({
+          ...decisionPayload,
+          reauthenticatedAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+      ).toMatchObject({
+        ok: false,
+        errorCode: "REMOTE_REAUTHENTICATION_EXPIRED",
+      });
+      expect(toolFixture.tools.permissionMode(prompt.conversationId).mode).toBe("ask");
+
+      const correctController = remoteCommand(decisionPayload, {
+        conversationId: prompt.conversationId,
+        generationId: prompt.generationId,
+        baseRevision: service.currentRemoteRevision(prompt.conversationId),
+        authority,
+      });
+      expect(
+        await service.applyRemoteCommand(correctController, decisionPayload, authorization),
+      ).toMatchObject({ ok: true });
+      await expect(toolExecution).resolves.toMatchObject({ sideEffectCommitted: false });
+      expect(toolFixture.tools.permission(permission.id).status).toBe("approved");
+      expect(toolFixture.tools.permissionMode(other.receipt.conversationId).mode).toBe("ask");
+      expect(toolFixture.tools.permissionMode(prompt.conversationId).mode).toBe(
+        decision === "full_access" ? "full_access" : "ask",
+      );
+      if (decision !== "once") {
+        const next = pi.toolRequest({
+          kind: "pi.tool.request",
+          requestId: randomUUID(),
+          generationId: prompt.generationId,
+          conversationId: prompt.conversationId,
+          branchId: prompt.branchId,
+          assistantMessageId: prompt.assistantMessageId,
+          piToolCallId: "remote-attended-bash-0002",
+          toolName: "bash",
+          operation: {
+            operation: "shell_command_execute",
+            idempotencyKey: randomUUID(),
+            ...execution,
+            shell: "bash",
+            command: "printf continued > next.txt",
+            timeoutMs: 120_000,
+          },
+        });
+        await expect(next).resolves.toMatchObject({ sideEffectCommitted: false });
+        expect(toolFixture.tools.listPermissions("pending")).toHaveLength(0);
+      }
+      if (decision === "once") {
+        for (const highRiskDecision of ["once", "deny", "full_access"] as const) {
+          const call = toolFixture.tools.createToolCall({
+            runId: permission.runId,
+            piCallRef: randomUUID(),
+            toolName: "desktop",
+            source: "openerx",
+            risk: "L5",
+            idempotencyKey: randomUUID(),
+            inputSummary: "submit",
+            targetSummary: "fixture",
+          });
+          const high = toolFixture.tools.createPermission({
+            workItemId: permission.workItemId,
+            runId: permission.runId,
+            toolCallId: call.toolCall.id,
+            capability: "desktop",
+            risk: "L5",
+            resourceType: "application",
+            resource: "fixture",
+            actions: ["high_impact"],
+            reason: "Synthetic L5 approval",
+            payloadDigest: "c".repeat(64),
+          });
+          const highPayload = {
+            ...decisionPayload,
+            attentionRequestId: high.id,
+            permissionRequestId: high.id,
+            payloadDigest: high.payloadDigest,
+            decision: highRiskDecision,
+            deviceUnlocked: highRiskDecision !== "deny",
+          };
+          expect(
+            await decide({ ...highPayload, decision: "session", deviceUnlocked: true }),
+          ).toMatchObject({
+            ok: false,
+            errorCode: "REMOTE_PERMISSION_DECISION_NOT_ALLOWED",
+          });
+          expect(await decide(highPayload)).toMatchObject({ ok: true });
+          expect(toolFixture.tools.permission(high.id).status).toBe(
+            highRiskDecision === "deny" ? "denied" : "approved",
+          );
+        }
+      }
+      expect(grant.id).toBe(execution.activeExecutionGrantId);
+      service.close();
+    },
+  );
 });

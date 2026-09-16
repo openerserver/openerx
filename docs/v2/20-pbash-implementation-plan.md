@@ -185,10 +185,11 @@ PBASH-004A 的实现与复现证据见
       `BrokeredBashExecutionContext`、operation digest、Pi Host 回传匹配和审计结果。
 - [x] `remote_unattended + workspace_write` 在合同层只能使用 `isolated_change_set`；Remote 同时强制
       `environment-core-v1 + network-deny-v1`，不能选择新 Workspace、额外根或网络。
-- [x] `remote_attended + workspace_write` 的每个 Bash 调用使用 L3 per-call 审批；生成审批的 message/run
-      绑定原 `pairingId + controllerDeviceId + hostDeviceId`，其他控制器即使同会话也不能解除等待。
-- [x] Remote 审批继续校验 permission ID、attention ID、payload digest、会话、设备解锁、新鲜重认证和
-      L5 生物识别；审批不能改变 grant、命令、timeout 或 policy。
+- [x] `remote_attended + workspace_write` 的 Bash 调用默认使用 L3 per-call 审批；用户选择本会话允许后，
+      同会话、同资源与动作的后续调用复用该 Scope。仅有 WorkspaceGrant 仍不能跳过首次审批。
+      生成审批的 message/run 绑定原 `pairingId + controllerDeviceId + hostDeviceId`，其他控制器不能解除等待。
+- [x] Remote 审批继续校验 permission ID、attention ID、payload digest、会话、设备解锁及决定时间；
+      手机点击允许不触发生物识别。完全允许仅对当前会话生效；审批不能改变 grant、命令、timeout 或 policy。
 - [x] Gateway 的 command ID、pairing idempotency key、base revision、session sequence 和 TTL，与
       Connector/App Service durable replay 共同覆盖至少一次投递；同键不同 payload 稳定拒绝。
 - [x] SQLite v15 为所有 Tool side-effect journal 保存 operation digest；完成结果、执行中 attempt 和

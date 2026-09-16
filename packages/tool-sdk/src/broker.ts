@@ -150,15 +150,18 @@ export class CapabilityBroker {
     const requiresApproval =
       !hasFullAccess &&
       requirement.approval !== "automatic" &&
-      (requirement.approval === "per_call" ||
-        !this.#repository
-          .activeScopes(requirement.capability)
-          .some(
-            (scope) =>
-              (scope.conversationId === null ||
-                scope.conversationId === projection.conversationId) &&
-              scopeAllows(scope, requirement),
-          ));
+      !this.#repository.activeScopes(requirement.capability).some(
+        (scope) =>
+          (scope.conversationId === null || scope.conversationId === projection.conversationId) &&
+          // A workspace grant alone must not skip the first attended approval.
+          // Only an explicit, matching session decision covers later L0-L3 calls.
+          (requirement.approval !== "per_call" ||
+            (scope.sessionOnly &&
+              scope.conversationId === projection.conversationId &&
+              requirement.risk !== "L4" &&
+              requirement.risk !== "L5")) &&
+          scopeAllows(scope, requirement),
+      );
     if (requiresApproval) {
       const permission = this.#repository.createPermission({
         workItemId: projection.workItemId,

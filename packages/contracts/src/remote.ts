@@ -419,9 +419,11 @@ export const remotePermissionDecisionPayloadSchema = z
     attentionRequestId: entityIdSchema,
     permissionRequestId: entityIdSchema,
     payloadDigest: z.string().regex(/^[a-f0-9]{64}$/),
-    decision: z.enum(["once", "session", "deny"]),
+    decision: z.enum(["once", "session", "full_access", "deny"]),
     deviceUnlocked: z.boolean(),
     biometricVerified: z.boolean(),
+    // Retained wire names for compatibility; a foreground approval does not
+    // require biometric authentication. This is the time of the user's decision.
     reauthenticatedAt: timestampSchema,
   })
   .strict();

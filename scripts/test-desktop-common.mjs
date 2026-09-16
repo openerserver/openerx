@@ -53,6 +53,7 @@ run(vitest, [
   "packages/app-service/tests/tool-app-service.test.ts",
   "packages/remote-host/tests/http-transport.test.ts",
   "packages/pi-host/tests/agent-session.test.ts",
+  "packages/tool-sdk/tests/broker.test.ts",
   "packages/tool-sdk/tests/workspace-change-tracker.test.ts",
   "packages/tool-sdk/tests/mcp-adapter.test.ts",
   "services/remote-control-gateway/tests/connection-requests.test.ts",

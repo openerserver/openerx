@@ -8,7 +8,6 @@ import {
 } from "@openerx/contracts";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Crypto from "expo-crypto";
-import * as LocalAuthentication from "expo-local-authentication";
 import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -922,7 +921,10 @@ function InboxScreen({
 }: {
   events: DecryptedRemoteEvent[];
   tasks: MobileTask[];
-  onDecision: (event: DecryptedRemoteEvent, decision: "once" | "session" | "deny") => Promise<void>;
+  onDecision: (
+    event: DecryptedRemoteEvent,
+    decision: "once" | "session" | "full_access" | "deny",
+  ) => Promise<void>;
   onOpenTask: (id: string) => void;
 }): React.JSX.Element {
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -949,7 +951,10 @@ function InboxScreen({
       )
       .reverse(),
   ];
-  const decide = async (item: DecryptedRemoteEvent, decision: "once" | "session" | "deny") => {
+  const decide = async (
+    item: DecryptedRemoteEvent,
+    decision: "once" | "session" | "full_access" | "deny",
+  ) => {
     if (busyId) return;
     setBusyId(item.envelope.eventId);
     try {
@@ -1014,22 +1019,36 @@ function InboxScreen({
             {permission ? (
               <>
                 <Text style={styles.cardMeta}>
-                  仅允许当前请求的操作；新的文件和系统权限仍需在电脑上设置。
+                  “本会话允许”记住相同范围的操作；“完全允许”在当前会话中不再逐次询问。
                 </Text>
-                {item.payload.risk === "L5" ? (
-                  <Text style={styles.cardMeta}>此操作需要身份验证，且只能逐次授权。</Text>
-                ) : null}
                 <View style={styles.chipRow}>
                   <PrimaryButton
                     label={busyId === item.envelope.eventId ? "正在提交…" : "本次允许"}
                     disabled={Boolean(busyId)}
                     onPress={() => void decide(item, "once")}
                   />
+                  {["L0", "L1", "L2", "L3"].includes(String(item.payload.risk)) ? (
+                    <PrimaryButton
+                      label="本会话允许"
+                      disabled={Boolean(busyId)}
+                      tone="neutral"
+                      onPress={() => void decide(item, "session")}
+                    />
+                  ) : null}
                   <PrimaryButton
-                    label="此任务内允许"
-                    disabled={Boolean(busyId) || item.payload.risk === "L5"}
+                    label="完全允许"
+                    disabled={Boolean(busyId)}
                     tone="neutral"
-                    onPress={() => void decide(item, "session")}
+                    onPress={() =>
+                      Alert.alert(
+                        "完全允许当前会话",
+                        "允许当前待审批操作，并在此会话中不再逐次询问。可在电脑输入框恢复请求审批。",
+                        [
+                          { text: "取消", style: "cancel" },
+                          { text: "完全允许", onPress: () => void decide(item, "full_access") },
+                        ],
+                      )
+                    }
                   />
                   <PrimaryButton
                     label="拒绝"
@@ -1565,18 +1584,8 @@ function RemoteApp({
   }, [history, conversationId]);
   const decide = async (
     event: DecryptedRemoteEvent,
-    decision: "once" | "session" | "deny",
+    decision: "once" | "session" | "full_access" | "deny",
   ): Promise<void> => {
-    const risk = String(event.payload.risk ?? "L1");
-    let biometricVerified = false;
-    if ((decision !== "deny" || risk === "L5") && Number(risk.slice(1)) >= 3) {
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: "确认远程审批",
-        cancelLabel: "取消",
-      });
-      if (!result.success) throw new Error("REMOTE_REAUTHENTICATION_REQUIRED");
-      biometricVerified = true;
-    }
     await command(
       {
         kind: "permission.decide",
@@ -1585,7 +1594,7 @@ function RemoteApp({
         payloadDigest: String(event.payload.payloadDigest),
         decision,
         deviceUnlocked: true,
-        biometricVerified,
+        biometricVerified: false,
         reauthenticatedAt: new Date().toISOString(),
       },
       event.envelope.conversationId,

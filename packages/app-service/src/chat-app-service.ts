@@ -709,17 +709,32 @@ export class ChatAppService {
           throw new Error("REMOTE_PERMISSION_CONTROLLER_MISMATCH");
         }
         const risk = Number(permission.risk.slice(1));
-        if (risk >= 3 && !payload.deviceUnlocked) throw new Error("REMOTE_DEVICE_UNLOCK_REQUIRED");
+        if (payload.decision !== "deny" && risk >= 3 && !payload.deviceUnlocked) {
+          throw new Error("REMOTE_DEVICE_UNLOCK_REQUIRED");
+        }
         const reauthenticatedAt = Date.parse(payload.reauthenticatedAt);
         const age = Date.now() - reauthenticatedAt;
         if (reauthenticatedAt > Date.now() + 15_000 || age > 60_000) {
           throw new Error("REMOTE_REAUTHENTICATION_EXPIRED");
         }
-        if (permission.risk === "L5" && !payload.biometricVerified) {
-          throw new Error("REMOTE_BIOMETRIC_REQUIRED");
-        }
-        if (permission.risk === "L5" && payload.decision === "session") {
+        if (
+          (permission.risk === "L4" || permission.risk === "L5") &&
+          payload.decision === "session"
+        ) {
           throw new Error("REMOTE_PERMISSION_DECISION_NOT_ALLOWED");
+        }
+        if (payload.decision === "full_access") {
+          // Validate the reviewed request before enabling the conversation scope.
+          // setPermissionMode also releases tools already waiting in this conversation.
+          if (permission.status !== "pending") throw new Error("PERMISSION_ALREADY_RESOLVED");
+          if (permission.payloadDigest !== payload.payloadDigest) {
+            throw new Error("PERMISSION_PAYLOAD_CHANGED");
+          }
+          if (Date.parse(permission.expiresAt) <= Date.now()) throw new Error("PERMISSION_EXPIRED");
+          return this.#requiredTools().setPermissionMode({
+            conversationId: workItem.conversationId,
+            mode: "full_access",
+          });
         }
         return this.#requiredTools().resolvePermission({
           permissionRequestId: payload.permissionRequestId,

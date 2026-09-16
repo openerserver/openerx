@@ -55,7 +55,7 @@ The current invariants are:
 | MCP credentials leak into Renderer, Pi or SQLite | Main-owned OS-encrypted vault and opaque credential references | Tool vault, Bridge and MCP reconnect/clear tests in M5 |
 | Remote exposes a desktop listener | supervised Connector makes outbound TLS/WSS connections only; no localhost/public Remote server | socket scan and packaged-host E2E in M6 |
 | Forged/replayed/expired Remote command controls Pi twice | same-account pairing, device signatures, E2EE, TTL, sequence, baseRevision and host idempotency | mutation, replay, reorder and duplicate E2E in M6 |
-| Lost/revoked phone continues approval or event access | protected device key, biometric gates, immediate pairing/session revocation and short-lived encrypted resources | lost-device/revocation E2E in M6 |
+| Lost/revoked phone continues approval or event access | protected device key, unlocked foreground approval, controller/task-bound authorization, immediate pairing/session revocation and short-lived encrypted resources | lost-device/revocation E2E in M6 |
 | Relay or push leaks content | Relay routes ciphertext only; push uses opaque IDs; redacted metadata logs | ciphertext/log/push canary tests in M6 |
 | Duplicate event/retry creates repeated state or charge | stable IDs, sequence checks and idempotency keys | contract tests from M1; billing tests in M3 |
 | Client forges usage, balance or payment result | cloud Usage/Ledger/Payment services are sole truth | cross-account and replay E2E in M2/M3 |
