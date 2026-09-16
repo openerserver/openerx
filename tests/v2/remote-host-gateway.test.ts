@@ -586,6 +586,75 @@ describe("RemoteHostConnector", () => {
     state.gateway.close();
   });
 
+  it("returns the created project in the encrypted applied receipt without leaking it to the gateway", async () => {
+    const state = setup();
+    const payload = {
+      kind: "project.create" as const,
+      operationId: randomUUID(),
+      name: "手机私有项目",
+      instructions: "项目要求",
+    };
+    const project = {
+      projectId: randomUUID(),
+      name: payload.name,
+      instructions: payload.instructions,
+      pinnedRank: null,
+      archivedAt: null,
+      revision: 1,
+      conversationCount: 0,
+      directories: [],
+    };
+    const { signature: _signature, ...unsigned } = state.makeCommand(payload, 1, 0);
+    const command = signRemoteCommand(
+      { ...unsigned, conversationId: null, generationId: null },
+      state.controllerKeys.privateKey,
+    );
+    state.gateway.submitCommand(state.controllerPrincipal, command);
+    const apply = vi.fn(async () => ({
+      kind: "remote.command.result" as const,
+      requestId: command.commandId,
+      ok: true as const,
+      appliedRevision: 0,
+      result: project,
+    }));
+    const connector = new RemoteHostConnector({
+      databasePath: path.join(state.directory, "connector.sqlite"),
+      host: state.host,
+      hostPrivateKey: state.hostKeys.privateKey,
+      transport: state.transport,
+      now: () => state.nowRef.value,
+      applier: { currentRevision: async () => 0, apply },
+    });
+    try {
+      await connector.start();
+      await connector.tick();
+      const events = state.gateway.listEvents(state.controllerPrincipal, {
+        hostDeviceId: state.host.hostDeviceId,
+        afterCursor: null,
+      });
+      expect(JSON.stringify(events)).not.toContain(payload.name);
+      const decoded = events.map((event) =>
+        decryptRemoteObject(
+          event.encryptedPayload,
+          state.controllerKeys.privateKey,
+          state.hostKeys.publicKey,
+          `event:${event.eventId}:${state.pairing.pairingId}`,
+        ),
+      );
+      expect(decoded).toContainEqual(
+        expect.objectContaining({
+          commandId: command.commandId,
+          commandStatus: "applied",
+          createdProject: project,
+        }),
+      );
+      expect(apply).toHaveBeenCalledTimes(1);
+    } finally {
+      connector.close();
+      state.gateway.close();
+    }
+  });
+
   it("rejects stale base revisions before invoking App Service", async () => {
     const state = setup();
     const remoteCommand = state.makeCommand({

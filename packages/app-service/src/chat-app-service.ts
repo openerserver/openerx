@@ -606,7 +606,9 @@ export class ChatAppService {
       throw new Error("REMOTE_BASE_REVISION_CONFLICT");
     }
     if (
-      (payload.kind === "project.list" || payload.kind === "task.start") &&
+      (payload.kind === "project.list" ||
+        payload.kind === "project.create" ||
+        payload.kind === "task.start") &&
       (command.conversationId !== null || command.generationId !== null)
     ) {
       throw new Error("REMOTE_NEW_TASK_SCOPE_REQUIRED");
@@ -614,6 +616,24 @@ export class ChatAppService {
     switch (payload.kind) {
       case "project.list":
         return this.#requiredProjects().remoteSnapshot(payload.includeArchived);
+      case "project.create": {
+        const project = this.#requiredProjects().createProject({
+          operationId: payload.operationId,
+          name: payload.name,
+          instructions: payload.instructions,
+        });
+        await this.#syncIfAuthorized(authorization);
+        return {
+          projectId: project.id,
+          name: project.name,
+          instructions: project.instructions,
+          pinnedRank: project.pinnedRank,
+          archivedAt: project.archivedAt,
+          revision: project.revision,
+          conversationCount: 0,
+          directories: [],
+        };
+      }
       case "task.start":
       case "session.prompt": {
         const previousModel = command.conversationId

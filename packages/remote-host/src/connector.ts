@@ -336,6 +336,9 @@ export class RemoteHostConnector {
           commandStatus: result.ok ? "applied" : "rejected",
           conversationRevision: result.ok ? result.appliedRevision : result.currentRevision,
           ...(!result.ok ? { reason: result.errorCode } : {}),
+          ...(result.ok && payload.kind === "project.create"
+            ? { createdProject: result.result }
+            : {}),
           ...(result.ok && (payload.kind === "task.start" || payload.kind === "session.prompt")
             ? {
                 userMessage: { id: receipt?.userMessageId, role: "user", text: payload.text },

@@ -5,6 +5,7 @@ import {
   type RemoteHost,
   type RemoteProjectSummary,
   remoteProjectSnapshotPayloadSchema,
+  remoteProjectSummarySchema,
 } from "@openerx/contracts";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Crypto from "expo-crypto";
@@ -35,6 +36,7 @@ import {
   validateAttachmentBatch,
 } from "./src/attachments";
 import { ComposerInput } from "./src/ComposerInput";
+import { ProjectCreator } from "./src/ProjectCreator";
 import { emptyHistory, historyTasks, MobileHistorySync } from "./src/history";
 import { HistoryPanel } from "./src/history-panel";
 import { MobileApi } from "./src/mobile-api";
@@ -682,6 +684,11 @@ function TasksScreen({
                 描述目标，电脑会继续处理。你可以在这里查看结果或补充要求。
               </Text>
             </View>
+            <ProjectCreator
+              disabled={!canControl || busy}
+              hostName={host?.displayName ?? "所选电脑"}
+              onCreate={onCommand}
+            />
             {!keyboardVisible ? (
               <View style={styles.card}>
                 <View style={styles.sectionHeader}>
@@ -1537,7 +1544,9 @@ function RemoteApp({
         throw new Error("REMOTE_HOST_NOT_SELECTED");
       setError(null);
       const target =
-        payload.kind === "task.start" || payload.kind === "project.list" ? null : targetId;
+        payload.kind === "task.start" || payload.kind === "project.list" || payload.kind === "project.create"
+          ? null
+          : targetId;
       const revision = eventCache.current.reduce(
         (latest, event) =>
           event.envelope.conversationId === target &&
@@ -1558,6 +1567,17 @@ function RemoteApp({
       if (receipt.status === "rejected" || receipt.status === "expired")
         throw new Error(receipt.resultCode ?? "REMOTE_COMMAND_FAILED");
       const outcome = await waitForResult(receipt.commandId);
+      if (payload.kind === "project.create") {
+        const project = remoteProjectSummarySchema.parse(outcome.payload.createdProject);
+        setProjectsByHost((current) => ({
+          ...current,
+          [selectedHost.hostDeviceId]: [
+            project,
+            ...(current[selectedHost.hostDeviceId] ?? []).filter((p) => p.projectId !== project.projectId),
+          ],
+        }));
+        if (previousHost.current === selectedHost.hostDeviceId) setSelectedProjectId(project.projectId);
+      }
       if (payload.kind === "task.start" && outcome.envelope.conversationId)
         setConversationId(outcome.envelope.conversationId);
       void refreshHistory.current();

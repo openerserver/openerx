@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { thinkingLevelSchema } from "./model";
 import { deviceDescriptorSchema } from "./account";
 import { entityIdSchema, timestampSchema } from "./common";
 import {
@@ -7,6 +6,8 @@ import {
   maxPastedAttachmentBytes,
   pastedFileInputSchema,
 } from "./file";
+import { thinkingLevelSchema } from "./model";
+import { projectCreateInputSchema } from "./project";
 
 export const remoteAttachmentSchema = cloudObjectIntentInputSchema
   .extend({
@@ -171,6 +172,7 @@ export const remoteDevicePairingSchema = z
 
 export const remoteCommandKindSchema = z.enum([
   "project.list",
+  "project.create",
   "task.start",
   "session.prompt",
   "session.steer",
@@ -364,6 +366,10 @@ export const remoteProjectListPayloadSchema = z
   })
   .strict();
 
+export const remoteProjectCreatePayloadSchema = projectCreateInputSchema
+  .extend({ kind: z.literal("project.create") })
+  .strict();
+
 export const remoteProjectDirectoryStatusSchema = z
   .object({
     projectDirectoryId: entityIdSchema,
@@ -442,6 +448,7 @@ export const remoteAttentionResponsePayloadSchema = z
 
 export const remoteCommandPayloadSchema = z.discriminatedUnion("kind", [
   remoteProjectListPayloadSchema,
+  remoteProjectCreatePayloadSchema,
   remoteTaskStartPayloadSchema,
   remoteSessionPromptPayloadSchema,
   remoteSteerPayloadSchema,

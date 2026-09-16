@@ -178,6 +178,7 @@ export class RemoteDesktopController {
         "task.start",
         "attachment.upload",
         "project.list",
+        "project.create",
         "project.start",
         "session.control",
         "permission.decide",
