@@ -12,10 +12,16 @@ const session = {
   sessionId: "00000000-0000-4000-8000-000000000001",
 };
 describe("desktop control v2 contract", () => {
-  it("keeps the rollout opt-in and requires explicit action-specific fields", () => {
-    expect(windowsDesktopControlEnabled(undefined)).toBe(false);
-    expect(windowsDesktopControlEnabled("true")).toBe(false);
+  it("enables normal launches and retains explicit rollback values", () => {
+    expect(windowsDesktopControlEnabled(undefined)).toBe(true);
+    expect(windowsDesktopControlEnabled("")).toBe(true);
+    expect(windowsDesktopControlEnabled("true")).toBe(true);
     expect(windowsDesktopControlEnabled("1")).toBe(true);
+    expect(windowsDesktopControlEnabled("0")).toBe(false);
+    expect(windowsDesktopControlEnabled("false")).toBe(false);
+    expect(windowsDesktopControlEnabled("FALSE")).toBe(false);
+  });
+  it("requires explicit action-specific fields", () => {
     expect(
       desktopControlOperationSchema.safeParse({ ...session, action: "click", x: 4, y: 5 }).success,
     ).toBe(false);

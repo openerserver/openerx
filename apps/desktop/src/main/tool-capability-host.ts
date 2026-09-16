@@ -251,18 +251,19 @@ export class ElectronToolCapabilityHost {
             (await this.#browserComputerUseDriver.probeAvailability())));
     let windowsDesktopReady = false;
     let windowsDesktopReason: string | undefined;
-    if (
-      this.#windowsDesktop &&
-      windowsDesktopControlEnabled(process.env[DESKTOP_CONTROL_FEATURE_FLAG])
-    ) {
-      try {
-        await this.#windowsDesktop.probe(AbortSignal.timeout(5000));
-        windowsDesktopReady = true;
-      } catch (error) {
-        windowsDesktopReason =
-          error instanceof Error && error.message.startsWith("DESKTOP_")
-            ? error.message
-            : "DESKTOP_HELPER_UNAVAILABLE";
+    if (this.#windowsDesktop) {
+      if (!windowsDesktopControlEnabled(process.env[DESKTOP_CONTROL_FEATURE_FLAG])) {
+        windowsDesktopReason = "DESKTOP_CONTROL_DISABLED";
+      } else {
+        try {
+          await this.#windowsDesktop.probe(AbortSignal.timeout(5000));
+          windowsDesktopReady = true;
+        } catch (error) {
+          windowsDesktopReason =
+            error instanceof Error && error.message.startsWith("DESKTOP_")
+              ? error.message
+              : "DESKTOP_HELPER_UNAVAILABLE";
+        }
       }
     }
     return desktopHostToolAvailability({

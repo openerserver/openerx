@@ -4,7 +4,7 @@
 
 状态：`FOUNDATION IMPLEMENTED / RELEASE BLOCKED`
 日期：2026-09-05
-范围：当前 UWA / OpenERX V2 主线。下文保留设计基线；2026-09-05 已实现首个 Windows x64 版本，默认关闭。实际完成项与验收限制见 [实现记录](evidence/wdc-001-windows-desktop-control-2026-09-05.md)，不得将后续计划视为已交付能力。
+范围：当前 UWA / OpenERX V2 主线。下文保留设计基线；2026-09-05 已实现首个 Windows x64 版本。2026-09-16 起当前源码在普通启动时默认检测并启用原生桌面助手，无需设置开发环境变量；`OPENERX_WINDOWS_DESKTOP_CONTROL=0` 或 `false` 可显式关闭。助手完整性、交互会话和操作授权检查仍然生效。首次实现及历史验收限制见 [实现记录](evidence/wdc-001-windows-desktop-control-2026-09-05.md)，不得将后续计划视为已交付能力；既有安装包需要更新才会采用新的默认行为。
 
 2026-09-08 更新：原辅助程序现已能正常运行，人工辅助前台模式下的真实记事本输入保存、计算器 `1+2=3` 已分别验证。自动前台切换及完整发布验收仍未完成，见 [最新重试记录](evidence/wdc-002-windows-desktop-retry-2026-09-08.md)。
 

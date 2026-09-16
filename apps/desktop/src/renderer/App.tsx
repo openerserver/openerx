@@ -347,7 +347,7 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   DESKTOP_HELPER_INTEGRITY_FAILED: "Windows 桌面助手完整性校验失败",
   DESKTOP_SESSION_LOCKED: "请解锁 Windows 桌面后重试",
   DESKTOP_HELPER_ARCH_UNSUPPORTED: "当前桌面控制仅支持 Windows x64",
-  DESKTOP_CONTROL_DISABLED: "Windows 桌面控制尚未启用",
+  DESKTOP_CONTROL_DISABLED: "Windows 桌面控制已被环境配置禁用",
   DESKTOP_PLATFORM_UNSUPPORTED: "当前桌面平台尚未支持",
   MCP_SERVER_CONFIGURATION_REQUIRED: "需先添加并启用 MCP 服务",
   MCP_OAUTH_AUTHORIZATION_REQUIRED: "至少一个 MCP 服务需要浏览器授权",

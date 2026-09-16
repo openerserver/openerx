@@ -114,7 +114,9 @@ describe("DeviceCredentialVault", () => {
     const metadata = await readFile(`${file}.profile.json`, "utf8");
     expect(metadata).not.toContain(credential.refreshCredential);
     expect(metadata).not.toMatch(/refreshCredential|accessToken/);
-    expect((await stat(`${file}.profile.json`)).mode & 0o777).toBe(0o600);
+    // Windows exposes DOS attributes here, not POSIX owner/group permission bits.
+    if (process.platform !== "win32")
+      expect((await stat(`${file}.profile.json`)).mode & 0o777).toBe(0o600);
     await reopened.clear();
     expect(await new DeviceCredentialVault(file, protector).loadProfile()).toBeNull();
   });
@@ -224,7 +226,8 @@ describe("ModelServiceSettingsStore", () => {
     const backups = (await readdir(directory)).filter((name) => name.endsWith(".bak"));
     expect(backups).toHaveLength(1);
     expect(await readFile(path.join(directory, backups[0]!))).toEqual(original);
-    expect((await stat(path.join(directory, backups[0]!))).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32")
+      expect((await stat(path.join(directory, backups[0]!))).mode & 0o777).toBe(0o600);
     expect((await readFile(filePath)).toString()).not.toContain("new-synthetic");
     expect(await vault.resolve("model-service:byok:deepseek:api-key")).toBe(
       "new-synthetic-deepseek",

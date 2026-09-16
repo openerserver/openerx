@@ -49,4 +49,4 @@ MSIX 清单使用 `packagedClassicApp + mediumIL` 和 `runFullTrust`，完整保
 
 后续认证所需的应用属性、年龄分级、商店说明、截图、隐私政策与测试说明需要据实填写。`runFullTrust` 用于 Electron 桌面运行、本地文件工具和用户授权的桌面自动化；不会授予管理员权限。
 
-当前 Windows 桌面控制仍保留开发开关 `OPENERX_WINDOWS_DESKTOP_CONTROL=1`，Store 开始菜单启动不会自动设置此环境变量。此包未安装运行，原生助手启动、签名覆盖、.NET 临时解包、记事本/计算器前台闭环均须在实际 Store 签名构建上验收。不得以 MSIX 打包或上传成功替代这些检查。
+2026-09-16 起当前源码默认检测 Windows 桌面助手，Store 开始菜单启动无需设置开发开关；`OPENERX_WINDOWS_DESKTOP_CONTROL=0` 或 `false` 可显式关闭。此前已构建或提交的包仍保留旧行为。原生助手启动、签名覆盖、.NET 临时解包、记事本/计算器前台闭环均须在实际 Store 签名构建上验收。不得以 MSIX 打包或上传成功替代这些检查。

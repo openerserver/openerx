@@ -3,7 +3,9 @@ import { z } from "zod";
 export const DESKTOP_CONTROL_VERSION = "desktop_control_v2" as const;
 export const DESKTOP_CONTROL_FEATURE_FLAG = "OPENERX_WINDOWS_DESKTOP_CONTROL";
 export function windowsDesktopControlEnabled(value: string | undefined): boolean {
-  return value === "1";
+  // Normal desktop launches do not inherit a developer opt-in flag. Keep an
+  // explicit rollback switch; native readiness and action permissions still gate use.
+  return value !== "0" && value?.toLowerCase() !== "false";
 }
 
 // Execution ownership is supplied by App Service, never by model tool parameters.
