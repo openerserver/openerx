@@ -151,6 +151,7 @@ describe("Workspace context patch integration", () => {
     const f = await prepared();
     writeFileSync(path.join(f.workspace, "src/run.sh"), "echo old\n");
     chmodSync(path.join(f.workspace, "src/run.sh"), 0o751);
+    const executableMode = statSync(path.join(f.workspace, "src/run.sh")).mode & 0o777;
     writeFileSync(path.join(f.workspace, "src/obsolete.txt"), "obsolete\n");
     await f.read("src/run.sh");
     await f.read("src/obsolete.txt");
@@ -160,7 +161,7 @@ describe("Workspace context patch integration", () => {
     expect(readFileSync(path.join(f.workspace, "src/app.ts"), "utf8")).toContain("value = 2");
     expect(readFileSync(path.join(f.workspace, "src/new/sub/file.txt"), "utf8")).toBe("created\n");
     expect(existsSync(path.join(f.workspace, "src/obsolete.txt"))).toBe(false);
-    expect(statSync(path.join(f.workspace, "src/bin/run.sh")).mode & 0o777).toBe(0o751);
+    expect(statSync(path.join(f.workspace, "src/bin/run.sh")).mode & 0o777).toBe(executableMode);
     const edits = f.repository.workItemDetail(f.context.projection.workItemId).workspaceEdits;
     expect(edits).toHaveLength(1);
     expect(edits[0]?.relativePaths).toHaveLength(4);
@@ -169,7 +170,7 @@ describe("Workspace context patch integration", () => {
     expect(existsSync(path.join(f.workspace, "src/new/sub/file.txt"))).toBe(false);
     expect(readFileSync(path.join(f.workspace, "src/obsolete.txt"), "utf8")).toBe("obsolete\n");
     expect(readFileSync(path.join(f.workspace, "src/run.sh"), "utf8")).toBe("echo old\n");
-    expect(statSync(path.join(f.workspace, "src/run.sh")).mode & 0o777).toBe(0o751);
+    expect(statSync(path.join(f.workspace, "src/run.sh")).mode & 0o777).toBe(executableMode);
     expect(existsSync(path.join(f.workspace, "src/bin/run.sh"))).toBe(false);
     f.close();
   });
@@ -226,7 +227,7 @@ describe("Workspace context patch integration", () => {
     await expect(f.patch("*** Add File: .git/config\n+bad")).rejects.toThrow(
       "WORKSPACE_PATCH_PROTECTED_PATH",
     );
-    symlinkSync(f.outside, path.join(f.workspace, "linked"));
+    symlinkSync(f.outside, path.join(f.workspace, "linked"), process.platform === "win32" ? "junction" : "dir");
     await expect(f.patch("*** Add File: linked/escape.txt\n+bad")).rejects.toThrow(
       "WORKSPACE_SYMLINK_DENIED",
     );

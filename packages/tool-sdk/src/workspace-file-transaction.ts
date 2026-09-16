@@ -97,8 +97,20 @@ export function workspaceFileMatches(target: string, text: string | null, mode?:
   return (
     text !== null &&
     readWorkspaceText(target) === text &&
-    (mode === undefined || (statSync(target).mode & 0o7777) === mode)
+    workspaceFileModeMatches(statSync(target).mode & 0o7777, mode)
   );
+}
+
+export function workspaceFileModeMatches(
+  actual: number | undefined,
+  expected: number | undefined,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (expected === undefined) return true;
+  if (actual === undefined) return false;
+  // Windows chmod only changes the read-only attribute. A requested 0600 is
+  // reported as 0666; still detect a user changing that supported attribute.
+  return platform === "win32" ? (actual & 0o200) === (expected & 0o200) : actual === expected;
 }
 
 /** Preflight every file, recheck before each write, and compensate only our own writes. */

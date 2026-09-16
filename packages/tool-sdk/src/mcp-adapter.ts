@@ -51,7 +51,7 @@ function connectionError(error: unknown): string {
   if (/DISABLED/u.test(message)) return "服务已停用，请先启用后再测试。";
   if (/ENOENT/u.test(message))
     return "找不到启动命令或工作目录，请检查路径以及 Node.js / uv 是否已安装。";
-  if (/EACCES/u.test(message)) return "启动命令或工作目录无法访问，请检查文件权限。";
+  if (/EACCES|EPERM/u.test(message)) return "启动命令或工作目录无法访问，请检查文件权限。";
   if (/timeout|timed out|aborted/iu.test(message))
     return "连接超时，请检查服务是否已启动以及网络是否可达。";
   if (/OAUTH_AUTHORIZATION_REQUIRED/u.test(message)) return "需要先在浏览器中完成 OAuth 授权。";
@@ -473,7 +473,23 @@ export class McpToolAdapter implements ToolAdapter {
         });
         // Drain stderr so a verbose server cannot block on a full pipe. It may contain secrets.
         transport.stderr?.on("data", () => undefined);
-        await withSignal(client.connect(transport, { signal }), signal);
+        // On Windows cross-spawn can emit ENOENT after "spawn"; the SDK then
+        // rejects the handshake with CONNECTION_CLOSED. Retain only its safe
+        // error code so the real startup problem is not lost or leaked.
+        let startupFailure: string | undefined;
+        client.onerror = (error) => {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code && ["ENOENT", "EACCES", "EPERM"].includes(code))
+            startupFailure = `MCP_STDIO_${code}`;
+        };
+        try {
+          await withSignal(client.connect(transport, { signal }), signal);
+        } catch (error) {
+          if (startupFailure) throw new Error(startupFailure);
+          throw error;
+        } finally {
+          client.onerror = undefined;
+        }
       } else {
         let authProvider: AuthProvider | InteractiveMcpOAuthProvider | undefined;
         let oauthProvider: InteractiveMcpOAuthProvider | undefined;

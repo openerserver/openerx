@@ -32,6 +32,7 @@ import {
   reverseMutations,
   type WorkspaceFileMutation,
   workspaceFileMatches,
+  workspaceFileModeMatches,
 } from "./workspace-file-transaction";
 import { applyWorkspaceHunks, parseWorkspacePatch, workspaceUnifiedDiff } from "./workspace-patch";
 
@@ -155,7 +156,7 @@ export class WorkspaceToolAdapter implements ToolAdapter {
     };
     for (const edit of edits) for (const mutation of edit.mutations) keyFor(mutation);
     const matches = (state: State, text: string | null, mode?: number) =>
-      state.text === text && (text === null || mode === undefined || state.mode === mode);
+      state.text === text && (text === null || workspaceFileModeMatches(state.mode, mode));
     const pending = [...edits];
     // Content chains determine order even when multiple writes share a timestamp.
     while (pending.length) {

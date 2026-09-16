@@ -66,6 +66,8 @@ run(vitest, [
   "packages/pi-host/tests/agent-session.test.ts",
   "packages/tool-sdk/tests/broker.test.ts",
   "packages/tool-sdk/tests/workspace-change-tracker.test.ts",
+  "packages/tool-sdk/tests/workspace-file-transaction.test.ts",
+  "packages/tool-sdk/tests/workspace-adapter.test.ts",
   "packages/tool-sdk/tests/mcp-adapter.test.ts",
   "services/remote-control-gateway/tests/connection-requests.test.ts",
   "services/remote-control-gateway/tests/remote-control-gateway.test.ts",

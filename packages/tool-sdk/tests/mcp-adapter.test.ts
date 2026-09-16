@@ -66,33 +66,36 @@ describe("McpToolAdapter", () => {
     }
   });
 
-  it("reports missing commands and disabled services without leaking raw config values", async () => {
-    const adapter = new McpToolAdapter({ resolve: vi.fn(), clear: vi.fn() });
-    const config = {
-      id: serverId,
-      name: "missing",
-      transport: "stdio" as const,
-      command: "/missing/private-secret-mcp",
-      args: [],
-      cwd: "",
-      enabled: true,
-      enabledTools: [],
-    };
-    adapter.register(config);
-    try {
-      const failed = await adapter.testConnection(serverId);
-      expect(failed.connected).toBe(false);
-      expect(failed.error).toContain("找不到");
-      expect(failed.error).not.toContain("private-secret");
-      adapter.register({ ...config, enabled: false });
-      expect(await adapter.testConnection(serverId)).toMatchObject({
-        connected: false,
-        error: expect.stringContaining("停用"),
-      });
-    } finally {
-      await adapter.stopAll();
-    }
-  });
+  it.each(["command", "directory"])(
+    "reports a missing %s and disabled services without leaking raw config values",
+    async (missing) => {
+      const adapter = new McpToolAdapter({ resolve: vi.fn(), clear: vi.fn() });
+      const config = {
+        id: serverId,
+        name: "missing",
+        transport: "stdio" as const,
+        command: missing === "command" ? "/missing/private-secret-mcp" : process.execPath,
+        args: [],
+        cwd: missing === "directory" ? "/missing/private-secret-directory" : "",
+        enabled: true,
+        enabledTools: [],
+      };
+      adapter.register(config);
+      try {
+        const failed = await adapter.testConnection(serverId);
+        expect(failed.connected).toBe(false);
+        expect(failed.error).toContain("找不到");
+        expect(failed.error).not.toContain("private-secret");
+        adapter.register({ ...config, enabled: false });
+        expect(await adapter.testConnection(serverId)).toMatchObject({
+          connected: false,
+          error: expect.stringContaining("停用"),
+        });
+      } finally {
+        await adapter.stopAll();
+      }
+    },
+  );
 
   it("bounds a stalled handshake and cancels an in-flight connection when disabled", async () => {
     const adapter = new McpToolAdapter({ resolve: vi.fn(), clear: vi.fn() });
