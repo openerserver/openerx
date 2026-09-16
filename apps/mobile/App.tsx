@@ -34,6 +34,7 @@ import {
   type UploadStatus,
   validateAttachmentBatch,
 } from "./src/attachments";
+import { ComposerInput } from "./src/ComposerInput";
 import { emptyHistory, historyTasks, MobileHistorySync } from "./src/history";
 import { HistoryPanel } from "./src/history-panel";
 import { MobileApi } from "./src/mobile-api";
@@ -848,9 +849,9 @@ function TasksScreen({
               <PrimaryButton label="拍照" tone="neutral" onPress={() => void choose("camera")} />
             </View>
           ) : null}
-          <TextInput
+          <ComposerInput
+            key={draftKey}
             accessibilityLabel="任务输入"
-            multiline
             editable={!busy}
             value={text}
             onChangeText={setText}
@@ -858,7 +859,7 @@ function TasksScreen({
               running ? "补充当前任务的要求…" : conversationId ? "继续提问或说明…" : "描述任务目标…"
             }
             placeholderTextColor="#929c92"
-            style={[styles.input, styles.promptInput]}
+            style={styles.input}
           />
           <View style={styles.composerActions}>
             <View style={styles.flex}>
@@ -1980,7 +1981,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     paddingVertical: 10,
   },
-  promptInput: { minHeight: 52, maxHeight: 120, paddingTop: 12, textAlignVertical: "top" },
   cameraFrame: { height: 320, borderRadius: 18, overflow: "hidden", backgroundColor: "#050605" },
   scanGuide: {
     position: "absolute",
