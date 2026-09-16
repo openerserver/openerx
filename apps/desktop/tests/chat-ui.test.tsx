@@ -866,6 +866,12 @@ describe("M1 chat renderer", () => {
     async (entry) => {
       cleanup();
       const bridge = createBridge();
+      vi.mocked(bridge.getConversation).mockResolvedValue({
+        ...snapshot,
+        messages: snapshot.messages.map((message) =>
+          message.role === "assistant" ? { ...message, status: "streaming" } : message,
+        ),
+      });
       const workItem: WorkItem = {
         id: crypto.randomUUID(),
         ownerProfileId: "local-default",
@@ -3130,6 +3136,122 @@ describe("M1 chat renderer", () => {
         idempotencyKey: expect.stringMatching(/^edit-/u),
       });
       expect(await screen.findByText("已重新发送，正在从这里重新生成回复。")).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ["failed", "failed", ""],
+    ["failed", "running", "超时前已生成的内容"],
+    ["stopped", "cancelled", ""],
+    ["interrupted", "interrupted", ""],
+    ["completed", "completed", ""],
+    ["failed", null, ""],
+    ["stopped", null, ""],
+  ] as const)(
+    "clears terminal reply indicators for %s with %s activity",
+    async (status, activityStatus, text) => {
+      cleanup();
+      const bridge = createBridge();
+      vi.mocked(bridge.getConversation).mockResolvedValue({
+        ...snapshot,
+        messages: snapshot.messages.map((message) =>
+          message.role === "assistant"
+            ? {
+                ...message,
+                status,
+                errorCode: status === "failed" ? "MODEL_REQUEST_TIMEOUT" : null,
+                parts: [{ id: crypto.randomUUID(), type: "text", text }],
+              }
+            : message,
+        ),
+      });
+      if (activityStatus) {
+        vi.mocked(bridge.listWorkItems).mockResolvedValue([
+          {
+            id: "66666666-6666-4666-8666-666666666666",
+            ownerProfileId: "local-default",
+            conversationId,
+            messageId: assistantMessageId,
+            title: "对话轮次",
+            status: activityStatus,
+            activeRunId: null,
+            createdAt: timestamp,
+            updatedAt: "2026-08-25T09:00:08.000Z",
+            completedAt: "2026-08-25T09:00:08.000Z",
+            revision: 1,
+          },
+        ]);
+      }
+      vi.mocked(bridge.regenerateMessage).mockResolvedValue({
+        conversationId,
+        branchId,
+        userMessageId,
+        assistantMessageId,
+      });
+      renderApp(bridge, `/chat/${conversationId}`);
+      const region = await screen.findByRole("region", { name: "对话消息" });
+      const card = region.querySelector<HTMLElement>(".message-assistant");
+      if (!card) throw new Error("Expected assistant reply");
+      if (activityStatus) {
+        const overview = await within(card).findByRole("button", { name: /用时 8s/ });
+        expect(overview.textContent).not.toContain("进行中");
+        await userEvent.setup().click(overview);
+      }
+      expect(within(card).queryByText("正在思考…")).toBeNull();
+      expect(within(card).queryByRole("button", { name: "停止" })).toBeNull();
+      expect(card.getAttribute("aria-busy")).toBeNull();
+      if (text) expect(within(card).getByText(text)).toBeTruthy();
+      if (status === "failed") {
+        expect(within(card).getByRole("alert").textContent).toBe("模型请求超时，请稍后重试。");
+        await userEvent.setup().click(within(card).getByRole("button", { name: "重试并新建分支" }));
+        expect(bridge.regenerateMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ conversationId, assistantMessageId }),
+        );
+      }
+      cleanup();
+    },
+  );
+
+  it.each([
+    ["pending", "queued"],
+    ["streaming", "running"],
+    ["streaming", "waiting_for_user"],
+    ["streaming", "waiting_for_permission"],
+  ] as const)(
+    "keeps active reply indicators for %s with %s activity",
+    async (status, activityStatus) => {
+      cleanup();
+      const bridge = createBridge();
+      vi.mocked(bridge.getConversation).mockResolvedValue({
+        ...snapshot,
+        messages: snapshot.messages.map((message) =>
+          message.role === "assistant" ? { ...message, status, parts: [] } : message,
+        ),
+      });
+      vi.mocked(bridge.listWorkItems).mockResolvedValue([
+        {
+          id: "66666666-6666-4666-8666-666666666666",
+          ownerProfileId: "local-default",
+          conversationId,
+          messageId: assistantMessageId,
+          title: "对话轮次",
+          status: activityStatus,
+          activeRunId: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          completedAt: null,
+          revision: 1,
+        },
+      ]);
+      renderApp(bridge, `/chat/${conversationId}`);
+      const region = await screen.findByRole("region", { name: "对话消息" });
+      const card = region.querySelector<HTMLElement>(".message-assistant");
+      if (!card) throw new Error("Expected assistant reply");
+      expect(await within(card).findByText("进行中")).toBeTruthy();
+      expect(within(card).getByText("正在思考…")).toBeTruthy();
+      expect(within(card).getByRole("button", { name: "停止" })).toBeTruthy();
+      expect(card.getAttribute("aria-busy")).toBe("true");
+      cleanup();
     },
   );
 

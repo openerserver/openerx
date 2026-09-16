@@ -2624,7 +2624,13 @@ function MessageCard({
   const activityElapsed = primaryActivity
     ? elapsedTime(primaryActivity.createdAt, primaryActivity.completedAt)
     : null;
-  const activityRunning = activities.some((activity) => activity.status !== "completed");
+  const activityRunning =
+    (running || message.status === "cancelling") &&
+    activities.some((activity) =>
+      ["queued", "running", "cancelling", "waiting_for_user", "waiting_for_permission"].includes(
+        activity.status,
+      ),
+    );
 
   const activityAfterPart = (partIndex: number, partCount: number): ReactNode => {
     if (!activitiesOpen || !onOpenBrowserPreview) return null;
@@ -2786,7 +2792,7 @@ function MessageCard({
                   </div>
                 ) : (
                   <div className="markdown-body">
-                    <p className="thinking">正在思考…</p>
+                    {running ? <p className="thinking">正在思考…</p> : null}
                     {activityAfterPart(0, 1)}
                   </div>
                 )}

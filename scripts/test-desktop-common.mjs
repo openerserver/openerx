@@ -32,6 +32,7 @@ run(
     "tests/desktop-native-permissions.test.ts",
     "tests/desktop-control-ui.test.tsx",
     "tests/model-connection.test.ts",
+    "tests/chat-ui.test.tsx",
     "tests/mcp-config.test.ts",
     "tests/mcp-editor.test.tsx",
     "tests/mcp-settings.test.ts",

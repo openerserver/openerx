@@ -45,6 +45,12 @@ function toolResultSafeSummary(message: unknown): { dataKeys: string[]; text: st
 function responseFor(context: Context): AssistantMessage {
   const userMessages = context.messages.filter(({ role }) => role === "user");
   const latestUser = contentText(userMessages.at(-1)?.content);
+  if (latestUser.includes("[PI_TEST_TIMEOUT]")) {
+    return fauxAssistantMessage(
+      latestUser.includes("[PI_TEST_PARTIAL]") ? "超时前已生成的内容。" : "",
+      { stopReason: "error", errorMessage: "MODEL_REQUEST_TIMEOUT" },
+    );
+  }
   let lastUserIndex = -1;
   for (let index = context.messages.length - 1; index >= 0; index -= 1) {
     if (context.messages[index]?.role === "user") {
