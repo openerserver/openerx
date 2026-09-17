@@ -3824,11 +3824,6 @@ function ConversationToolbar({
     },
     onError: () => setSelectedBranchId(conversation.activeBranchId),
   });
-  const usage = useQuery({
-    queryKey: ["usage", "conversation", conversation.id],
-    queryFn: () => window.openerx.getUsage({ conversationId: conversation.id }),
-    retry: false,
-  });
   return (
     <header className="conversation-toolbar">
       <div className="conversation-heading">
@@ -3989,11 +3984,6 @@ function ConversationToolbar({
           </p>
         ) : null}
       </div>
-      {usage.data && usage.data.records > 0 ? (
-        <div className="conversation-usage">
-          {usage.data.records} 次模型调用 · Token {tokenValue(usage.data.totalTokens)}
-        </div>
-      ) : null}
     </header>
   );
 }
