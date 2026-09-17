@@ -8,7 +8,10 @@ import { WorkspaceEdits } from "../src/renderer/WorkspaceEdits";
 
 afterEach(cleanup);
 
-function fixture(status = "completed") {
+function fixture(
+  status = "completed",
+  editStatus: "applied" | "reverted" = "applied",
+) {
   const detail = {
     workItem: { id: "work-1", status },
     run: { id: "run-1", status },
@@ -17,8 +20,8 @@ function fixture(status = "completed") {
       id: `edit-${index}`,
       kind: "change_set",
       relativePaths: [relativePath],
-      status: "applied",
-      canUndo: true,
+      status: editStatus,
+      canUndo: editStatus === "applied",
     })),
   } as unknown as WorkItemDetail;
   const undoWorkspaceEdits = vi.fn(async () => ({
@@ -47,6 +50,12 @@ describe("workspace edit controls", () => {
     const { client, undoWorkspaceEdits, user } = fixture();
     expect(screen.getByRole("region", { name: "文件修改" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "撤销修改：src/app.ts" }));
+    expect(screen.getByRole("alertdialog", { name: "撤销这组文件修改？" })).toBeTruthy();
+    expect(undoWorkspaceEdits).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(undoWorkspaceEdits).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "撤销修改：src/app.ts" }));
+    await user.click(screen.getByRole("button", { name: "确认撤销" }));
     await waitFor(() =>
       expect(undoWorkspaceEdits).toHaveBeenCalledWith({
         workItemId: "work-1",
@@ -60,6 +69,8 @@ describe("workspace edit controls", () => {
         ?.workspaceEdits?.[0]?.status,
     ).toBe("reverted");
     await user.click(screen.getByRole("button", { name: "撤销本轮修改" }));
+    expect(screen.getByRole("alertdialog", { name: "撤销本轮文件修改？" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认撤销" }));
     await waitFor(() =>
       expect(undoWorkspaceEdits).toHaveBeenLastCalledWith({ workItemId: "work-1", runId: "run-1" }),
     );
@@ -72,12 +83,22 @@ describe("workspace edit controls", () => {
     expect(screen.getByText("本轮结束后可撤销已记录的文件修改。")).toBeTruthy();
   });
 
+  it("labels reverted edits as historical output", () => {
+    fixture("completed", "reverted");
+    expect(screen.getAllByText("已撤销")).toHaveLength(2);
+    expect(
+      screen.getAllByText("工作区已恢复到撤销前状态；原始差异仅作为历史输出记录保留。"),
+    ).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /撤销修改/u })).toBeNull();
+  });
+
   it("keeps conflict errors visible without changing the edit status", async () => {
     const { client, undoWorkspaceEdits, user } = fixture();
     undoWorkspaceEdits.mockRejectedValueOnce(
       new Error("WORKSPACE_UNDO_CONTENT_CHANGED: src/app.ts"),
     );
     await user.click(screen.getByRole("button", { name: "撤销本轮修改" }));
+    await user.click(screen.getByRole("button", { name: "确认撤销" }));
     expect((await screen.findByRole("alert")).textContent).toContain("本次未覆盖文件");
     expect(
       client.getQueryData<WorkItemDetail>(["tools", "work-item", "work-1", undefined])

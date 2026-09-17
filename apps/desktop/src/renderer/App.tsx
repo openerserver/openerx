@@ -3309,6 +3309,11 @@ function ToolActivity({
       item.content.type === "command" ? [item.content.toolCallId] : [],
     ) ?? [],
   );
+  const revertedWorkspaceChangeIds = new Set(
+    value?.workspaceEdits
+      ?.filter((edit) => edit.status === "reverted")
+      .map((edit) => edit.id) ?? [],
+  );
   const usageRecords = value?.run.usageRecords ?? [];
   const usageTotal = usageRecords.reduce(
     (total, usage) => ({
@@ -3443,6 +3448,10 @@ function ToolActivity({
                 />
               );
             }
+            const hasRevertedWorkspaceChange = call.resultContent.some(
+              (part) =>
+                part.type === "diff" && revertedWorkspaceChangeIds.has(part.workspaceChangeId),
+            );
             const visibleParts = call.resultContent.filter(
               (part) =>
                 !(part.type === "source" && projectedSources.has(call.id)) &&
@@ -3468,7 +3477,17 @@ function ToolActivity({
                     <pre>{JSON.stringify(call.input, null, 2)}</pre>
                   </details>
                 ) : null}
-                {call.resultSummary ? <p>{call.resultSummary}</p> : null}
+                {call.resultSummary ? (
+                  <p>
+                    {call.resultSummary}
+                    {hasRevertedWorkspaceChange ? " · 当前状态：已撤销" : ""}
+                  </p>
+                ) : null}
+                {hasRevertedWorkspaceChange ? (
+                  <p className="workspace-history-note">
+                    工作区已恢复；此处内容仅作为历史输出记录保留。
+                  </p>
+                ) : null}
                 {visibleParts.map((part, index) => {
                   const key = `${call.id}:${index}`;
                   if (part.type === "image") {
@@ -3491,9 +3510,17 @@ function ToolActivity({
                   }
                   if (part.type === "artifact") return <p key={key}>成果：{part.artifactId}</p>;
                   if (part.type === "diff") {
+                    const reverted = revertedWorkspaceChangeIds.has(part.workspaceChangeId);
                     return (
                       <details key={key}>
-                        <summary>差异：{part.relativePath}</summary>
+                        <summary>
+                          {reverted ? "已撤销 · 历史差异" : "差异"}：{part.relativePath}
+                        </summary>
+                        {reverted ? (
+                          <p className="workspace-history-note">
+                            工作区已恢复；以下内容仅作为历史输出记录保留。
+                          </p>
+                        ) : null}
                         <pre>{part.patch}</pre>
                       </details>
                     );
@@ -3602,13 +3629,28 @@ function ToolActivity({
             );
           }
           if (content.type === "diff") {
+            const reverted = revertedWorkspaceChangeIds.has(content.workspaceChangeId);
             return (
               <section className="run-item-row" key={item.id}>
                 <header>
-                  <strong>文件差异 · {content.relativePath}</strong>
-                  <span>{item.status}</span>
+                  <strong>
+                    {reverted ? "已撤销的文件差异" : "文件差异"} · {content.relativePath}
+                  </strong>
+                  <span>{reverted ? "已撤销" : item.status}</span>
                 </header>
-                <pre>{content.patch}</pre>
+                {reverted ? (
+                  <>
+                    <p className="workspace-history-note">
+                      工作区已恢复；以下内容仅作为历史输出记录保留。
+                    </p>
+                    <details className="workspace-history-diff">
+                      <summary>查看历史差异</summary>
+                      <pre>{content.patch}</pre>
+                    </details>
+                  </>
+                ) : (
+                  <pre>{content.patch}</pre>
+                )}
               </section>
             );
           }

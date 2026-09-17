@@ -3687,6 +3687,17 @@ describe("M1 chat renderer", () => {
       steps: [],
       toolCalls: [],
       permissions: [],
+      workspaceEdits: [
+        {
+          id: "90000000-0000-4000-8000-000000000011",
+          kind: "change_set",
+          workspaceGrantId: "90000000-0000-4000-8000-000000000012",
+          relativePaths: ["src/run.ts"],
+          status: "reverted",
+          canUndo: false,
+          createdAt: timestamp,
+        },
+      ],
       items: [
         {
           id: "90000000-0000-4000-8000-000000000001",
@@ -3804,7 +3815,14 @@ describe("M1 chat renderer", () => {
     if (!activitySummary) throw new Error("Tool activity summary missing");
     await user.click(activitySummary);
     expect(await screen.findByText("执行计划")).toBeTruthy();
-    expect(screen.getByText("文件差异 · src/run.ts")).toBeTruthy();
+    expect(screen.getByText("已撤销的文件差异 · src/run.ts")).toBeTruthy();
+    expect(screen.getAllByText("已撤销").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("工作区已恢复；以下内容仅作为历史输出记录保留。"),
+    ).toBeTruthy();
+    const historicalDiff = screen.getByText("查看历史差异").closest("details");
+    if (!historicalDiff) throw new Error("Historical diff disclosure missing");
+    expect(historicalDiff.open).toBe(false);
     expect(screen.getByText("上下文压缩 · threshold")).toBeTruthy();
     expect(screen.queryByText("PRIVATE_RAW_CHAIN_OF_THOUGHT")).toBeNull();
     await user.selectOptions(screen.getByLabelText("选择要回放的 Run"), historicalRunId);

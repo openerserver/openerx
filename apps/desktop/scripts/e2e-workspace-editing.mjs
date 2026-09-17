@@ -123,6 +123,7 @@ try {
   // A later user edit blocks the entire undo and leaves every current file intact.
   writeFileSync(target, "user changed this\n");
   await edits.getByRole("button", { name: "撤销本轮修改" }).click();
+  await edits.getByRole("button", { name: "确认撤销" }).click();
   await edits.getByRole("alert").filter({ hasText: "本次未覆盖文件" }).waitFor();
   assert.equal(readFileSync(target, "utf8"), "user changed this\n");
   assert.equal(existsSync(path.join(workspace, "docs/notes.md")), true);
@@ -134,6 +135,7 @@ try {
   writeFileSync(target, "export const value = 3;\n");
 
   await edits.getByRole("button", { name: "撤销修改：example.ts", exact: true }).click();
+  await edits.getByRole("button", { name: "确认撤销" }).click();
   await edits.getByRole("status").waitFor();
   assert.equal(readFileSync(target, "utf8"), "export const value = 2;\n");
   await page.evaluate(() => {
@@ -158,6 +160,7 @@ try {
     1,
   );
   await edits.getByRole("button", { name: "撤销本轮修改" }).click();
+  await edits.getByRole("button", { name: "确认撤销" }).click();
   await page.waitForFunction(
     () => document.querySelectorAll(".workspace-edit-reverted").length === 3,
   );

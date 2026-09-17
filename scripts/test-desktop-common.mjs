@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -11,6 +13,17 @@ function run(entry, args, cwd = root) {
   const result = spawnSync(process.execPath, [entry, ...args], { cwd, stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
+}
+for (const relativePath of [
+  "apps/desktop/src/renderer/App.tsx",
+  "apps/desktop/src/renderer/styles.css",
+]) {
+  const source = readFileSync(path.join(root, relativePath), "utf8");
+  assert.equal(
+    source.includes("conversation-usage") || source.includes("次模型调用 · Token"),
+    false,
+    `Conversation header usage display must stay removed: ${relativePath}`,
+  );
 }
 for (const project of [
   "apps/desktop",
@@ -47,6 +60,7 @@ run(
     "tests/remote-settings.test.tsx",
     "tests/remote-connections.test.tsx",
     "tests/remote-authorization-refresh.test.ts",
+    "tests/workspace-edits.test.tsx",
   ],
   path.join(root, "apps/desktop"),
 );

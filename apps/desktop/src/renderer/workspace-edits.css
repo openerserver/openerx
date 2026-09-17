@@ -89,6 +89,14 @@
   margin: 8px 12px 10px;
   opacity: 0.7;
 }
+.workspace-history-note {
+  margin: 8px 0;
+  color: var(--workspace-text-muted, #6d746c);
+  font-size: 12px;
+}
+.workspace-history-diff {
+  margin-top: 8px;
+}
 .workspace-edits > .inline-error {
   margin: 8px 12px 10px;
 }

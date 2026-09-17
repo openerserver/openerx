@@ -2,7 +2,10 @@ import type { WorkItemDetail } from "@openerx/contracts";
 import { ArrowCounterClockwise, FileCode } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ConfirmDialog } from "./ConfirmDialog";
 import "./workspace-edits.css";
+
+type UndoConfirmation = { kind: "run" } | { kind: "edit"; editId: string };
 
 export function WorkItemWorkspaceEdits({
   workItemId,
@@ -34,6 +37,7 @@ function undoError(error: unknown): string {
 export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JSX.Element | null {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState("");
+  const [undoConfirmation, setUndoConfirmation] = useState<UndoConfirmation | null>(null);
   const edits = detail.workspaceEdits ?? [];
   const undoable = edits.filter((edit) => edit.canUndo);
   const completed =
@@ -56,6 +60,7 @@ export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JS
         (current) => (current?.run.id === updated.run.id ? updated : current),
       );
       setNotice(editId ? "已撤销文件修改。" : "已撤销本轮已记录的文件修改。");
+      setUndoConfirmation(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["tools", "work-item", detail.workItem.id] }),
         queryClient.invalidateQueries({ queryKey: ["artifacts"] }),
@@ -64,6 +69,20 @@ export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JS
   });
   if (!edits.length) return null;
   const fileCount = new Set(edits.flatMap(({ relativePaths }) => relativePaths)).size;
+  const confirmationEdit =
+    undoConfirmation?.kind === "edit"
+      ? edits.find((edit) => edit.id === undoConfirmation.editId)
+      : undefined;
+  const confirmationPaths =
+    undoConfirmation?.kind === "edit"
+      ? (confirmationEdit?.relativePaths ?? [])
+      : undoable.flatMap(({ relativePaths }) => relativePaths);
+  const showUndoConfirmation =
+    undoConfirmation?.kind === "run" || Boolean(confirmationEdit);
+  const confirmUndo = () => {
+    if (!undoConfirmation) return;
+    undo.mutate(undoConfirmation.kind === "edit" ? undoConfirmation.editId : undefined);
+  };
   return (
     <section className="workspace-edits" aria-label="文件修改">
       <header className="workspace-edits-header">
@@ -75,7 +94,7 @@ export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JS
           <button
             type="button"
             disabled={!completed || undo.isPending}
-            onClick={() => undo.mutate(undefined)}
+            onClick={() => setUndoConfirmation({ kind: "run" })}
           >
             <ArrowCounterClockwise size={14} aria-hidden="true" />
             撤销本轮修改
@@ -103,7 +122,7 @@ export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JS
                   type="button"
                   disabled={!completed || undo.isPending}
                   aria-label={`撤销修改：${edit.relativePaths.join("、")}`}
-                  onClick={() => undo.mutate(edit.id)}
+                  onClick={() => setUndoConfirmation({ kind: "edit", editId: edit.id })}
                 >
                   <ArrowCounterClockwise size={14} aria-hidden="true" />
                   {undo.isPending && undo.variables === edit.id ? "撤销中…" : "撤销这组修改"}
@@ -116,9 +135,16 @@ export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JS
                 </span>
               )}
             </div>
+            {edit.status === "reverted" ? (
+              <p className="workspace-edit-note">
+                工作区已恢复到撤销前状态；原始差异仅作为历史输出记录保留。
+              </p>
+            ) : null}
             {diffs.length ? (
               <details className="workspace-edit-diffs">
-                <summary>查看差异</summary>
+                <summary>
+                  {edit.status === "reverted" ? "查看已撤销的历史差异" : "查看差异"}
+                </summary>
                 {diffs.map((diff) => (
                   <div key={diff.relativePath}>
                     <strong>{diff.relativePath}</strong>
@@ -141,10 +167,35 @@ export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JS
           {notice}
         </p>
       ) : null}
-      {undo.error ? (
+      {undo.error && !showUndoConfirmation ? (
         <p className="inline-error" role="alert">
           {undoError(undo.error)}
         </p>
+      ) : null}
+      {showUndoConfirmation ? (
+        <ConfirmDialog
+          title={undoConfirmation?.kind === "edit" ? "撤销这组文件修改？" : "撤销本轮文件修改？"}
+          description={
+            undoConfirmation?.kind === "edit"
+              ? "将恢复这组修改之前的文件内容；如果文件已有后续变化，系统会停止并保留当前内容。"
+              : `将恢复本轮 ${undoable.length} 组已记录的文件修改；如果文件已有后续变化，系统会停止并保留当前内容。`
+          }
+          confirmLabel="确认撤销"
+          pending={undo.isPending}
+          onCancel={() => {
+            if (!undo.isPending) setUndoConfirmation(null);
+          }}
+          onConfirm={confirmUndo}
+        >
+          {confirmationPaths.length ? (
+            <p className="confirmation-dialog-target">{confirmationPaths.join("、")}</p>
+          ) : null}
+          {undo.error ? (
+            <p className="inline-error" role="alert">
+              {undoError(undo.error)}
+            </p>
+          ) : null}
+        </ConfirmDialog>
       ) : null}
     </section>
   );
