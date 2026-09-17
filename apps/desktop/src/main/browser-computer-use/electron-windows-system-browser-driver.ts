@@ -181,7 +181,9 @@ export class ElectronWindowsSystemBrowserDriver implements SystemDefaultBrowserD
     try {
       await access(this.helperPath, fsConstants.R_OK);
       await access(this.shellPath, fsConstants.X_OK);
-      parseWindowsDefaultBrowser(await this.#runHelper(["default-browser"], 15_000));
+      // Readiness must finish well before the app-service request timeout. A slow or
+      // misconfigured default browser should not delay the independent desktop helper probe.
+      parseWindowsDefaultBrowser(await this.#runHelper(["default-browser"], 5_000));
       return true;
     } catch (error) {
       debug("probe.failed", { details: errorDetails(error).slice(0, 500) });

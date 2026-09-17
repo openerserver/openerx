@@ -232,40 +232,61 @@ export class ElectronToolCapabilityHost {
               path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
             )
           : false;
-    const browserV2Enabled = browserComputerUseV2Enabled(
-      process.env[BROWSER_COMPUTER_USE_V2_FEATURE_FLAG],
-    );
-    const browserAvailable =
-      !browserV2Enabled ||
-      this.#browserSettings.mode === "auto" ||
-      this.#browserSettings.mode === "managed_chromium" ||
-      (this.#browserSettings.mode === "connected_chrome"
-        ? this.#chromeExtension.grants.connected
-        : (platform === "darwin" &&
-            screenCaptureStatus === "granted" &&
-            accessibilityTrusted &&
-            automationAvailable) ||
-          (platform === "win32" &&
-            automationAvailable &&
-            this.#browserComputerUseDriver instanceof ElectronWindowsSystemBrowserDriver &&
-            (await this.#browserComputerUseDriver.probeAvailability())));
-    let windowsDesktopReady = false;
-    let windowsDesktopReason: string | undefined;
-    if (this.#windowsDesktop) {
+    // Keep the Windows desktop probe independent from browser probing. The system-browser
+    // helper can be slow to start on a fresh Windows profile; serial probes used to let it
+    // consume the entire readiness request timeout before the desktop helper was checked.
+    const browserAvailability = (async (): Promise<boolean> => {
+      try {
+        const browserV2Enabled = browserComputerUseV2Enabled(
+          process.env[BROWSER_COMPUTER_USE_V2_FEATURE_FLAG],
+        );
+        if (!browserV2Enabled) return true;
+        if (
+          this.#browserSettings.mode === "auto" ||
+          this.#browserSettings.mode === "managed_chromium"
+        )
+          return true;
+        if (this.#browserSettings.mode === "connected_chrome")
+          return this.#chromeExtension.grants.connected;
+        if (platform === "darwin")
+          return screenCaptureStatus === "granted" && accessibilityTrusted && automationAvailable;
+        return (
+          platform === "win32" &&
+          automationAvailable &&
+          this.#browserComputerUseDriver instanceof ElectronWindowsSystemBrowserDriver &&
+          (await this.#browserComputerUseDriver.probeAvailability())
+        );
+      } catch {
+        return false;
+      }
+    })();
+    const windowsDesktopAvailability = (async (): Promise<{
+      ready: boolean;
+      reason?: string;
+    }> => {
+      if (!this.#windowsDesktop) return { ready: false };
       if (!windowsDesktopControlEnabled(process.env[DESKTOP_CONTROL_FEATURE_FLAG])) {
-        windowsDesktopReason = "DESKTOP_CONTROL_DISABLED";
-      } else {
-        try {
-          await this.#windowsDesktop.probe(AbortSignal.timeout(5000));
-          windowsDesktopReady = true;
-        } catch (error) {
-          windowsDesktopReason =
+        return { ready: false, reason: "DESKTOP_CONTROL_DISABLED" };
+      }
+      try {
+        await this.#windowsDesktop.probe(AbortSignal.timeout(5000));
+        return { ready: true };
+      } catch (error) {
+        return {
+          ready: false,
+          reason:
             error instanceof Error && error.message.startsWith("DESKTOP_")
               ? error.message
-              : "DESKTOP_HELPER_UNAVAILABLE";
-        }
+              : "DESKTOP_HELPER_UNAVAILABLE",
+        };
       }
-    }
+    })();
+    const [browserAvailable, desktopAvailability] = await Promise.all([
+      browserAvailability,
+      windowsDesktopAvailability,
+    ]);
+    const windowsDesktopReady = desktopAvailability.ready;
+    const windowsDesktopReason = desktopAvailability.reason;
     return desktopHostToolAvailability({
       platform,
       browserAvailable,

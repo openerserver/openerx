@@ -95,7 +95,7 @@ export class MainCapabilityClient {
       const timeout = setTimeout(() => {
         this.#pendingAvailability.delete(requestId);
         reject(new Error("MAIN_CAPABILITY_AVAILABILITY_TIMEOUT"));
-      }, 15_000);
+      }, 30_000);
       this.#pendingAvailability.set(requestId, { resolve, reject, timeout });
       this.port.postMessage({ kind: "main.capability.availability.request", requestId });
     });

@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DESKTOP_CONTROL_FEATURE_FLAG, DESKTOP_CONTROL_VERSION } from "@openerx/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ElectronWindowsSystemBrowserDriver } from "../src/main/browser-computer-use/electron-windows-system-browser-driver";
 import type { ToolCredentialVault } from "../src/main/credential-vault";
 import { WindowsDesktopDriver } from "../src/main/desktop-control/windows-driver";
 import { ElectronToolCapabilityHost } from "../src/main/tool-capability-host";
@@ -64,6 +65,31 @@ describe("Windows desktop startup readiness", () => {
       expect(availability.unavailableReasons.openerx_desktop).toBe(reason);
     },
   );
+
+  it("checks the Windows desktop helper while a browser probe is still pending", async () => {
+    host.close();
+    writeFileSync(path.join(directory, "browser-settings.json"), '{"mode":"os_accessibility"}');
+    host = new ElectronToolCapabilityHost(directory, {} as ToolCredentialVault);
+    let releaseBrowser: ((available: boolean) => void) | undefined;
+    const browserProbe = vi
+      .spyOn(ElectronWindowsSystemBrowserDriver.prototype, "probeAvailability")
+      .mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseBrowser = resolve;
+          }),
+      );
+    const desktopProbe = vi
+      .spyOn(WindowsDesktopDriver.prototype, "probe")
+      .mockImplementation(async () => {
+        releaseBrowser?.(false);
+      });
+
+    const availability = await host.availability();
+    expect(browserProbe).toHaveBeenCalledOnce();
+    expect(desktopProbe).toHaveBeenCalledOnce();
+    expect(availability.availableToolNames).toContain("openerx_desktop");
+  });
 
   it.each(["0", "false"])(
     "honors explicit disable value %s in readiness and execution",

@@ -3817,9 +3817,7 @@ describe("M1 chat renderer", () => {
     expect(await screen.findByText("执行计划")).toBeTruthy();
     expect(screen.getByText("已撤销的文件差异 · src/run.ts")).toBeTruthy();
     expect(screen.getAllByText("已撤销").length).toBeGreaterThan(0);
-    expect(
-      screen.getByText("工作区已恢复；以下内容仅作为历史输出记录保留。"),
-    ).toBeTruthy();
+    expect(screen.getByText("工作区已恢复；以下内容仅作为历史输出记录保留。")).toBeTruthy();
     const historicalDiff = screen.getByText("查看历史差异").closest("details");
     if (!historicalDiff) throw new Error("Historical diff disclosure missing");
     expect(historicalDiff.open).toBe(false);
@@ -4049,6 +4047,7 @@ describe("M1 chat renderer", () => {
       ]);
       await user.click(within(dialog).getByRole("button", { name: "重新检测权限" }));
       expect(await within(dialog).findByText("已启用")).toBeTruthy();
+      expect(await within(dialog).findByText("权限检测已完成。")).toBeTruthy();
       expect(within(dialog).queryByRole("list", { name: "缺少的系统权限" })).toBeNull();
     },
   );

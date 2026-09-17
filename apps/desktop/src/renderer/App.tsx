@@ -334,6 +334,8 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   AUTHENTICATION_REQUIRED: "登录后可使用",
   BROWSER_HOST_UNAVAILABLE: "隔离浏览器 Host 未就绪",
   MAIN_CAPABILITY_UNAVAILABLE: "桌面 Host 未就绪",
+  MAIN_CAPABILITY_AVAILABILITY_TIMEOUT: "桌面 Host 检测超时，请重试或重启应用",
+  APP_SERVICE_START_TIMEOUT: "后台服务启动超时，请重启应用",
   SHELL_OS_SANDBOX_UNAVAILABLE: "当前系统缺少安全 Shell 沙箱",
   SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE: "Codex Windows 安全沙箱尚未就绪",
   WORKSPACE_WRITE_GRANT_REQUIRED: "需先授权一个可写工作区",
@@ -346,6 +348,8 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   DESKTOP_HELPER_UNAVAILABLE: "Windows 桌面助手暂不可用",
   DESKTOP_HELPER_INTEGRITY_FAILED: "Windows 桌面助手完整性校验失败",
   DESKTOP_SESSION_LOCKED: "请解锁 Windows 桌面后重试",
+  DESKTOP_SESSION_STATE_UNAVAILABLE: "无法读取 Windows 桌面会话状态",
+  DESKTOP_NATIVE_TIMEOUT: "Windows 桌面助手响应超时，请重试",
   DESKTOP_HELPER_ARCH_UNSUPPORTED: "当前桌面控制仅支持 Windows x64",
   DESKTOP_CONTROL_DISABLED: "Windows 桌面控制已被环境配置禁用",
   DESKTOP_PLATFORM_UNSUPPORTED: "当前桌面平台尚未支持",
@@ -532,6 +536,15 @@ function userFacingError(error: unknown, fallback: string): string {
   }
   if (message.includes("PI_PROVIDER_FAILURE") || message.includes("MODEL_PROVIDER")) {
     return "模型服务暂时没有响应，请检查网络后重试。";
+  }
+  if (
+    message.includes("MAIN_CAPABILITY_AVAILABILITY_TIMEOUT") ||
+    message.includes("tool.runtime.readiness")
+  ) {
+    return "桌面 Host 检测超时，请重试或重启应用。";
+  }
+  if (message.includes("APP_SERVICE_START_TIMEOUT")) {
+    return "后台服务启动超时，请重启应用。";
   }
   if (message.includes("AUTHENTICATION_REQUIRED")) {
     return "当前处于本机模式；登录后即可使用账户同步。";
@@ -3310,9 +3323,8 @@ function ToolActivity({
     ) ?? [],
   );
   const revertedWorkspaceChangeIds = new Set(
-    value?.workspaceEdits
-      ?.filter((edit) => edit.status === "reverted")
-      .map((edit) => edit.id) ?? [],
+    value?.workspaceEdits?.filter((edit) => edit.status === "reverted").map((edit) => edit.id) ??
+      [],
   );
   const usageRecords = value?.run.usageRecords ?? [];
   const usageTotal = usageRecords.reduce(
@@ -7884,7 +7896,13 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                     disabled={runtimeReadiness.isFetching}
                     onClick={() => {
                       setNativePermissionNotice(null);
-                      void runtimeReadiness.refetch();
+                      void runtimeReadiness.refetch().then(
+                        (result) =>
+                          setNativePermissionNotice(
+                            result.error ? "权限检测失败，请查看下方错误。" : "权限检测已完成。",
+                          ),
+                        () => setNativePermissionNotice("权限检测失败，请稍后重试。"),
+                      );
                     }}
                   >
                     {runtimeReadiness.isFetching ? "正在检测…" : "重新检测权限"}

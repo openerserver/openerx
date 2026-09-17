@@ -783,6 +783,8 @@ function registerIpcHandlers(
           platformConfigured: hosted && Boolean(platformUrl),
         },
       }),
+      undefined,
+      30_000,
     );
   });
 

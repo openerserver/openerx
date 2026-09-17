@@ -1175,12 +1175,16 @@ export class ToolAppService {
   async #safeHostAvailability(): Promise<HostToolAvailability> {
     try {
       return await this.#host.availability();
-    } catch {
+    } catch (error) {
+      const code =
+        error instanceof Error
+          ? error.message.match(/^(?:DESKTOP|MAIN_CAPABILITY)_[A-Z0-9_]+$/u)?.[0]
+          : undefined;
       return {
         availableToolNames: [],
         unavailableReasons: {
           openerx_browser: "MAIN_CAPABILITY_UNAVAILABLE",
-          openerx_desktop: "MAIN_CAPABILITY_UNAVAILABLE",
+          openerx_desktop: code ?? "MAIN_CAPABILITY_UNAVAILABLE",
         },
       };
     }

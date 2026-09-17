@@ -1073,6 +1073,24 @@ describe("ToolAppService", () => {
     await service.close();
   });
 
+  it("preserves bounded desktop availability errors for actionable readiness", async () => {
+    const { chat, service, host } = fixture();
+    try {
+      host.availability.mockRejectedValue(new Error("DESKTOP_HELPER_INTEGRITY_FAILED"));
+      const readiness = await service.listRuntimeReadiness({
+        authenticated: false,
+        platformConfigured: false,
+      });
+      expect(readiness.find(({ capability }) => capability === "desktop")).toMatchObject({
+        status: "unavailable",
+        reason: "DESKTOP_HELPER_INTEGRITY_FAILED",
+      });
+    } finally {
+      chat.close();
+      await service.close();
+    }
+  });
+
   it("preserves both missing system permissions through readiness and clears them after authorization", async () => {
     const { chat, service, host } = fixture();
     try {
