@@ -34,6 +34,7 @@ npm-debug.log*
 /packages/tool-sdk/tests/windows-shell-diagnostic.temp.test.ts
 
 # Archived V1 local state is preserved on disk but is not part of source history.
+/v1-backup/
 /v1-backup/.opencode/state/
 /v1-backup/opencode-fork/.opencode/state/
 /v1-backup/opencode-fork/.copilot-token.json
