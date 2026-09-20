@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterIneligibleMemoryExtractionSources,
   memoryExtractionSystemPrompt,
+  parseMemoryJsonOutput,
 } from "../src/memory-background";
 
 const candidate = (sourceMessageId: string, content: string) => ({
@@ -16,6 +17,27 @@ const candidate = (sourceMessageId: string, content: string) => ({
 });
 
 describe("memory background extraction safety", () => {
+  it.each([
+    '{"candidates":[]}',
+    '  ```json\n{"candidates":[]}\n```  ',
+    '```JSON\r\n{"candidates":[]}\r\n```',
+    '```\n{"candidates":[]}\n```',
+    `{"candidates":[]}${" ".repeat(40_000)}!`,
+  ])("parses bounded model JSON without scanning every possible trailing fence", (value) => {
+    expect(parseMemoryJsonOutput(value, "INVALID_MEMORY")).toEqual({ candidates: [] });
+  });
+
+  it("rejects oversized and malformed model responses before schema validation", () => {
+    for (const value of [
+      `${" ".repeat(65_536)}{"candidates":[]}`,
+      `{"content":"${"x".repeat(65_536)}"}`,
+      `${" ".repeat(40_000)}!`,
+      '```json\n{"candidates":\n```',
+    ]) {
+      expect(() => parseMemoryJsonOutput(value, "INVALID_MEMORY")).toThrow("INVALID_MEMORY");
+    }
+  });
+
   it("documents that memory-control and denial language is not durable memory", () => {
     expect(memoryExtractionSystemPrompt).toContain("Memory-control language");
     expect(memoryExtractionSystemPrompt).toContain('"do not remember this"');

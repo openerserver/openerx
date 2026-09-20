@@ -17,6 +17,8 @@ import { NodeControlledSearchHttpClient } from "./local-web-search-http";
 const BING_SEARCH_PATH = "/search";
 const BING_GLOBAL_ORIGIN = "https://www.bing.com";
 const BING_CHINA_ORIGIN = "https://cn.bing.com";
+const MAX_BING_RESULT_HREF_LENGTH = 16_384;
+const MAX_BING_RESULT_URL_LENGTH = 8_192;
 
 export const BING_HTML_SEARCH_ORIGINS = [BING_GLOBAL_ORIGIN, BING_CHINA_ORIGIN] as const;
 export type BingHtmlSearchOrigin = (typeof BING_HTML_SEARCH_ORIGINS)[number];
@@ -90,8 +92,12 @@ function decodedBingRedirect(value: string): string {
     throw new LocalWebSearchError("LOCAL_SEARCH_RESULT_PARSE_FAILED");
   }
   const encoded = value.slice(2);
-  const withoutPadding = encoded.replace(/=+$/u, "");
+  let end = encoded.length;
+  while (end > 0 && encoded[end - 1] === "=") end -= 1;
+  const withoutPadding = encoded.slice(0, end);
   if (
+    encoded.length - end > 2 ||
+    (end < encoded.length && encoded.length % 4 !== 0) ||
     withoutPadding === "" ||
     !/^[A-Za-z0-9_-]+$/u.test(withoutPadding) ||
     withoutPadding.length % 4 === 1
@@ -112,6 +118,9 @@ function decodedBingRedirect(value: string): string {
 }
 
 export function decodeBingResultUrl(href: string, origin: BingHtmlSearchOrigin): string {
+  if (href.length > MAX_BING_RESULT_HREF_LENGTH) {
+    throw new LocalWebSearchError("LOCAL_SEARCH_SOURCE_URL_INVALID");
+  }
   let parsed: URL;
   try {
     parsed = new URL(href, origin);
@@ -126,6 +135,7 @@ export function decodeBingResultUrl(href: string, origin: BingHtmlSearchOrigin):
   }
   if (
     (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+    parsed.href.length > MAX_BING_RESULT_URL_LENGTH ||
     parsed.username !== "" ||
     parsed.password !== ""
   ) {
@@ -206,7 +216,7 @@ export function parseBingHtmlSearchResponse(
     const excerpt = findFirstElement(item, (element) => element.tagName === "p");
     return {
       title,
-      url: decodeBingResultUrl(href, origin).slice(0, 8_192),
+      url: decodeBingResultUrl(href, origin),
       excerpt: excerpt ? normalizedText(excerpt, 8_000) : "",
       publishedAt: null,
     };

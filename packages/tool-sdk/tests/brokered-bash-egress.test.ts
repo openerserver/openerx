@@ -1,13 +1,13 @@
 import { request as httpRequest } from "node:http";
 import net from "node:net";
-import tls from "node:tls";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BrokeredBashControlledEgressProxy,
   brokeredBashNetworkPolicyDigest,
   isPublicEgressAddress,
   normalizeControlledEgressPolicy,
   resolveControlledEgressTarget,
+  tlsClientHelloServerName,
 } from "../src";
 
 const policy = {
@@ -58,48 +58,77 @@ async function proxyConnect(proxyUrl: string, authority: string): Promise<string
   });
 }
 
+// A deterministic ClientHello tests the SNI gate before any certificate exchange.
+// The cipher/version fields are valid TLS framing; no TLS verification is disabled.
+function clientHello(serverName: string): Buffer {
+  const uint16 = (value: number) => {
+    const bytes = Buffer.alloc(2);
+    bytes.writeUInt16BE(value);
+    return bytes;
+  };
+  const name = Buffer.from(serverName, "ascii");
+  const names = Buffer.concat([
+    uint16(name.length + 3),
+    Buffer.from([0]),
+    uint16(name.length),
+    name,
+  ]);
+  const extension = Buffer.concat([uint16(0), uint16(names.length), names]);
+  const body = Buffer.concat([
+    Buffer.from([3, 3]),
+    Buffer.alloc(32),
+    Buffer.from([0]),
+    uint16(2),
+    Buffer.from([0xc0, 0x2f]),
+    Buffer.from([1, 0]),
+    uint16(extension.length),
+    extension,
+  ]);
+  const header = Buffer.alloc(4);
+  header[0] = 1;
+  header.writeUIntBE(body.length, 1, 3);
+  const handshake = Buffer.concat([header, body]);
+  return Buffer.concat([Buffer.from([22, 3, 1]), uint16(handshake.length), handshake]);
+}
+
 async function proxyTlsRejected(
   proxyUrl: string,
   authority: string,
-  serverName: string,
+  hello: Buffer,
 ): Promise<boolean> {
   const endpoint = new URL(proxyUrl);
   return await new Promise((resolve, reject) => {
     const socket = net.connect(Number(endpoint.port), endpoint.hostname);
     const timeout = setTimeout(() => {
-      socket.destroy();
       reject(new Error("proxy TLS test timed out"));
+      socket.destroy();
     }, 5_000);
     let response = "";
+    let sentHello = false;
     socket.once("connect", () => {
       socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
     });
-    const onData = (chunk: Buffer) => {
-      response += chunk.toString("utf8");
-      if (!response.includes("\r\n\r\n")) return;
-      socket.off("data", onData);
-      if (!response.startsWith("HTTP/1.1 200")) {
-        clearTimeout(timeout);
-        reject(new Error(response));
+    socket.on("data", (chunk: Buffer) => {
+      if (sentHello) {
+        reject(new Error("Unexpected upstream TLS response"));
+        socket.destroy();
         return;
       }
-      const secure = tls.connect({ socket, servername: serverName, rejectUnauthorized: false });
-      secure.once("secureConnect", () => {
-        clearTimeout(timeout);
-        secure.destroy();
-        resolve(false);
-      });
-      secure.once("error", () => {
-        clearTimeout(timeout);
-        resolve(true);
-      });
-      secure.once("close", () => {
-        clearTimeout(timeout);
-        resolve(true);
-      });
-    };
-    socket.on("data", onData);
+      response += chunk.toString("utf8");
+      if (!response.includes("\r\n\r\n")) return;
+      if (!response.startsWith("HTTP/1.1 200")) {
+        reject(new Error(response));
+        socket.destroy();
+        return;
+      }
+      sentHello = true;
+      socket.write(hello);
+    });
     socket.once("error", reject);
+    socket.once("close", () => {
+      clearTimeout(timeout);
+      resolve(sentHello);
+    });
   });
 }
 
@@ -248,11 +277,21 @@ describe("brokered Bash controlled egress", () => {
       { address: "93.184.216.34", family: 4 },
     ]);
     const endpoint = await proxy.start();
+    const hello = clientHello("redirected.invalid");
+    expect(tlsClientHelloServerName(hello)).toBe("redirected.invalid");
+    const originalConnect = net.connect;
+    const connect = vi.spyOn(net, "connect").mockImplementation((...args) => {
+      // Block and count any attempted upstream connection, so an unrelated
+      // network/certificate failure cannot make this rejection test pass.
+      if (typeof args[0] === "object") throw new Error("Unexpected upstream connection");
+      return Reflect.apply(originalConnect, net, args) as net.Socket;
+    });
     try {
-      await expect(
-        proxyTlsRejected(endpoint.url, "example.com:443", "redirected.invalid"),
-      ).resolves.toBe(true);
+      await expect(proxyTlsRejected(endpoint.url, "example.com:443", hello)).resolves.toBe(true);
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(connect).toHaveBeenCalledWith(Number(new URL(endpoint.url).port), "127.0.0.1");
     } finally {
+      connect.mockRestore();
       await proxy.close();
     }
   });

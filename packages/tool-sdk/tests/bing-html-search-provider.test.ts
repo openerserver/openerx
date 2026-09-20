@@ -42,6 +42,37 @@ function resultHtml(href: string): string {
 }
 
 describe("Bing HTML local Web Search Provider", () => {
+  it("accepts canonical padded and unpadded redirect targets", () => {
+    for (const url of [
+      "https://example.com/a",
+      "https://example.com/ab",
+      "https://example.com/abc",
+    ]) {
+      const encoded = Buffer.from(url).toString("base64url");
+      for (const value of [encoded, encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=")]) {
+        expect(decodeBingResultUrl(`/ck/a?u=a1${value}`, "https://www.bing.com")).toBe(url);
+      }
+    }
+  });
+
+  it("rejects malformed padding and oversized URLs without truncating a navigation target", () => {
+    const origin = "https://www.bing.com";
+    const encoded = Buffer.from("https://example.com/").toString("base64url");
+    for (const value of [`${"=".repeat(8_000)}!`, `${encoded}===`, `${encoded}=x`]) {
+      expect(() => decodeBingResultUrl(`/ck/a?u=a1${value}`, origin)).toThrow(
+        "LOCAL_SEARCH_RESULT_PARSE_FAILED",
+      );
+    }
+    const tooLong = `https://example.com/${"x".repeat(8_192)}`;
+    for (const href of [
+      `/${"x".repeat(16_384)}`,
+      tooLong,
+      `/ck/a?u=a1${Buffer.from(tooLong).toString("base64url")}`,
+    ]) {
+      expect(() => decodeBingResultUrl(href, origin)).toThrow("LOCAL_SEARCH_SOURCE_URL_INVALID");
+    }
+  });
+
   it("parses only organic result blocks and decodes Bing redirect targets", () => {
     expect(parseBingHtmlSearchResponse(standardHtml, "https://cn.bing.com")).toEqual([
       {

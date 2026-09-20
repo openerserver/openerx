@@ -24,10 +24,15 @@ export const memoryClusterSystemPrompt = [
 ].join("\n\n");
 
 export function parseMemoryJsonOutput(value: string, invalidCode: string): unknown {
-  const unfenced = value
-    .replace(/^```(?:json)?\s*/iu, "")
-    .replace(/\s*```$/u, "")
-    .trim();
+  // Model output is untrusted, even when the provider advertises a token limit.
+  if (value.length > 65_536) throw new Error(invalidCode);
+  let unfenced = value.trim();
+  if (unfenced.startsWith("```")) {
+    unfenced = unfenced.slice(3);
+    if (unfenced.slice(0, 4).toLowerCase() === "json") unfenced = unfenced.slice(4);
+    unfenced = unfenced.trimStart();
+  }
+  if (unfenced.endsWith("```")) unfenced = unfenced.slice(0, -3).trimEnd();
   const start = unfenced.indexOf("{");
   const end = unfenced.lastIndexOf("}");
   if (start < 0 || end < start) throw new Error(invalidCode);

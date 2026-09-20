@@ -22,7 +22,13 @@ export function desktopArtifactIdentity(desktop, env = process.env) {
     !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(executableName)
   )
     throw new Error("DESKTOP_ARTIFACT_EXECUTABLE_INVALID");
-  if (typeof appBundleId !== "string" || !/^[A-Za-z0-9]+(?:[.-][A-Za-z0-9-]+)+$/u.test(appBundleId))
+  // Hyphens belong to a label; only dots repeat between labels. This avoids
+  // ambiguous repetition while retaining the existing bundle ID syntax.
+  if (
+    typeof appBundleId !== "string" ||
+    appBundleId.length > 255 ||
+    !/^[A-Za-z0-9]+[.-][A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*$/u.test(appBundleId)
+  )
     throw new Error("DESKTOP_ARTIFACT_BUNDLE_INVALID");
   return { productName, executableName, appBundleId, version: pkg.version, manifest, brand };
 }

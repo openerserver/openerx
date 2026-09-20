@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -73,4 +74,51 @@ it("rejects path traversal in the product name before searching artifacts", () =
   expect(() => desktopArtifactIdentity(f.root, { OPENERX_BRAND_MANIFEST: f.brand })).toThrow(
     "PRODUCT_INVALID",
   );
+});
+
+it.each(["org.example.custom", "org.example.my-app", "legacy-app", "com.example.a--b"])(
+  "preserves supported bundle identity %s",
+  (appBundleId) => {
+    const f = fixture();
+    writeFileSync(f.brand, JSON.stringify({ productName: "Personal", appBundleId }));
+    expect(desktopArtifactIdentity(f.root, { OPENERX_BRAND_MANIFEST: f.brand }).appBundleId).toBe(
+      appBundleId,
+    );
+  },
+);
+
+it.each(["com..example", ".com.example", "com.example.", "com_example", "x".repeat(256)])(
+  "rejects malformed or oversized bundle identity %s",
+  (appBundleId) => {
+    const f = fixture();
+    writeFileSync(f.brand, JSON.stringify({ productName: "Personal", appBundleId }));
+    expect(() => desktopArtifactIdentity(f.root, { OPENERX_BRAND_MANIFEST: f.brand })).toThrow(
+      "DESKTOP_ARTIFACT_BUNDLE_INVALID",
+    );
+  },
+);
+
+it("bounds hostile bundle validation in a separate process", () => {
+  const f = fixture();
+  writeFileSync(
+    f.brand,
+    JSON.stringify({ productName: "Personal", appBundleId: `0-${"--".repeat(100)}!` }),
+  );
+  const moduleUrl = new URL("../scripts/desktop-artifact-identity.mjs", import.meta.url).href;
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const {desktopArtifactIdentity} = await import(process.argv[1]);
+       try { desktopArtifactIdentity(process.argv[2], {OPENERX_BRAND_MANIFEST:process.argv[3]}); process.exit(1); }
+       catch (error) { if (error.message !== "DESKTOP_ARTIFACT_BUNDLE_INVALID") throw error; }`,
+      moduleUrl,
+      f.root,
+      f.brand,
+    ],
+    { timeout: 3_000, encoding: "utf8" },
+  );
+  expect(child.error).toBeUndefined();
+  expect(child.status, child.stderr).toBe(0);
 });
