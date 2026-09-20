@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,7 @@ for (const project of [
   "apps/desktop",
   "packages/app-service",
   "packages/pi-host",
+  "packages/tool-sdk",
   "packages/remote-host",
   "packages/remote-protocol",
 ])
@@ -39,6 +40,8 @@ run(
     "run",
     "--maxWorkers=2",
     "tests/browser-settings-panel.test.tsx",
+    "tests/browser-script-security.test.ts",
+    "tests/desktop-artifact-identity.test.ts",
     "tests/browser-computer-use-system-default.test.ts",
     "tests/browser-computer-use-browser-bridge.test.ts",
     "tests/desktop-tool-availability.test.ts",
@@ -78,6 +81,9 @@ run(vitest, [
   "packages/app-service/tests/tool-app-service.test.ts",
   "packages/remote-host/tests/http-transport.test.ts",
   "packages/pi-host/tests/agent-session.test.ts",
+  "packages/pi-host/tests/memory-background.test.ts",
+  "packages/tool-sdk/tests/bing-html-search-provider.test.ts",
+  "packages/tool-sdk/tests/brokered-bash-egress.test.ts",
   "packages/tool-sdk/tests/broker.test.ts",
   "packages/tool-sdk/tests/workspace-change-tracker.test.ts",
   "packages/tool-sdk/tests/workspace-file-transaction.test.ts",

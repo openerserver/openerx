@@ -43,6 +43,11 @@ import {
   selectDesktopWindowByNativeId,
 } from "./desktop-window-target";
 import {
+  browserClickScript,
+  browserTargetScript,
+  browserTypeScript,
+} from "./legacy-browser-script";
+import {
   macDesktopAutomationError,
   macDesktopAutomationScript,
   macDesktopCaptureTargetScript,
@@ -96,10 +101,6 @@ function imageResult(
     sideEffectCommitted: false,
     durationMs: 0,
   };
-}
-
-function escapedSelector(selector: string): string {
-  return JSON.stringify(selector);
 }
 
 function inside(root: string, target: string): boolean {
@@ -527,14 +528,14 @@ export class ElectronToolCapabilityHost {
     if (operation.action === "type") {
       const text = operation.text ?? "";
       await browser.window.webContents.executeJavaScript(
-        `(() => { const element = document.querySelector(${escapedSelector(operation.selector)}); if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) throw new Error("BROWSER_TARGET_NOT_EDITABLE"); element.focus(); element.value = ${JSON.stringify(text)}; element.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`,
+        browserTypeScript(operation.selector, text),
         true,
       );
       return result("已输入文本", { sessionId: browser.id, selector: operation.selector }, true);
     }
     if (operation.action === "click" || operation.action === "submit") {
       const target = (await browser.window.webContents.executeJavaScript(
-        `(() => { const element = document.querySelector(${escapedSelector(operation.selector)}); if (!(element instanceof HTMLElement)) throw new Error("BROWSER_TARGET_NOT_FOUND"); return { tag: element.tagName.toLowerCase(), type: element.getAttribute("type"), role: element.getAttribute("role"), text: (element.innerText || element.getAttribute("aria-label") || "").slice(0, 200) }; })()`,
+        browserTargetScript(operation.selector),
         true,
       )) as { tag: string; type: string | null; role: string | null; text: string };
       const highImpact =
@@ -546,7 +547,7 @@ export class ElectronToolCapabilityHost {
       if (operation.action === "click" && highImpact)
         throw new Error("BROWSER_EXPLICIT_SUBMIT_REQUIRED");
       await browser.window.webContents.executeJavaScript(
-        `(() => { const element = document.querySelector(${escapedSelector(operation.selector)}); if (!(element instanceof HTMLElement)) throw new Error("BROWSER_TARGET_NOT_FOUND"); element.click(); return true; })()`,
+        browserClickScript(operation.selector),
         true,
       );
       return result(
@@ -603,7 +604,7 @@ export class ElectronToolCapabilityHost {
         });
       });
       await browser.window.webContents.executeJavaScript(
-        `(() => { const element = document.querySelector(${escapedSelector(operation.selector)}); if (!(element instanceof HTMLElement)) throw new Error("BROWSER_TARGET_NOT_FOUND"); element.click(); return true; })()`,
+        browserClickScript(operation.selector),
         true,
       );
       return result("下载完成", { sessionId: browser.id, ...(await downloaded) }, true);

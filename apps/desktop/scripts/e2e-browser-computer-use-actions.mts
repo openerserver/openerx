@@ -12,6 +12,7 @@ import {
   type SystemBrowserBinding,
   SystemDefaultBrowserAdapter,
 } from "../src/main/browser-computer-use/system-default-browser-adapter";
+import { escapeHtmlText as html } from "./escape-html-text";
 
 if (process.platform !== "darwin") throw new Error("BCU_ACTIONS_MACOS_REQUIRED");
 console.log("BCU_ACTIONS_BOOT");
@@ -39,15 +40,6 @@ function saveImage(fileName: string, result: NormalizedToolResult): void {
   writeFileSync(path.join(outputDirectory, fileName), Buffer.from(content.data, "base64"), {
     mode: 0o600,
   });
-}
-
-function html(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function fixturePage(title: string, body: string): string {

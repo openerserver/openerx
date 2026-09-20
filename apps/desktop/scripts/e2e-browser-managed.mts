@@ -9,6 +9,7 @@ import {
 import { app, BrowserWindow, nativeImage } from "electron";
 import { ManagedChromiumDriver } from "../src/main/browser-computer-use/managed-chromium-driver";
 import { SystemDefaultBrowserAdapter } from "../src/main/browser-computer-use/system-default-browser-adapter";
+import { escapeHtmlText } from "./escape-html-text";
 
 const observe = (result: NormalizedToolResult) =>
   (result.data as { observation: BrowserObservation }).observation;
@@ -22,7 +23,7 @@ void app
     const server = createServer((request, response) => {
       response.setHeader("Content-Type", "text/html; charset=utf-8");
       response.end(
-        `<html><body><h1>Browser fixture</h1><form action="/done"><label>Search<input name="q"></label><button>Search now</button></form><label>Password<input type="password" value="private-secret"></label><a href="http://localhost:1/denied">Cross origin</a><button onclick="document.querySelector('h1').textContent='Clicked successfully'">Change title</button><p>${request.url}</p></body></html>`,
+        `<html><body><h1>Browser fixture</h1><form action="/done"><label>Search<input name="q"></label><button>Search now</button></form><label>Password<input type="password" value="private-secret"></label><a href="http://localhost:1/denied">Cross origin</a><button onclick="document.querySelector('h1').textContent='Clicked successfully'">Change title</button><p>${escapeHtmlText(request.url ?? "/")}</p></body></html>`,
       );
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
