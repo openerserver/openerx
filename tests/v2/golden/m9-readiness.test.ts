@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -36,11 +37,21 @@ describe("M9 release readiness ledger", () => {
     );
   });
 
-  it("has release automation inputs without committing credentials", () => {
+  it("keeps local release validation available and blocks unapproved publishing", () => {
     expect(readFileSync(path.join(root, ".gitignore"), "utf8")).toMatch(/credentials\.json/u);
-    const workflow = readFileSync(path.join(root, ".github/workflows/v2-release.yml"), "utf8");
-    expect(workflow).toContain("environment: production-release");
-    expect(workflow).toContain("npm run release:gate:v2");
-    expect(workflow).not.toMatch(/BEGIN (?:PRIVATE KEY|CERTIFICATE)/u);
+    const gate = path.join(root, "scripts/m9/check-release-readiness.mjs");
+    const local = spawnSync(process.execPath, [gate, "--mode", "local"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(local.error).toBeUndefined();
+    expect(local.status).toBe(0);
+    const publish = spawnSync(process.execPath, [gate, "--mode", "publish"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(publish.error).toBeUndefined();
+    expect(publish.status).toBe(1);
+    expect(publish.stderr).toContain("explicit user release approval is missing");
   });
 });

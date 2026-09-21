@@ -13,8 +13,11 @@ npm run dev:desktop
 
 ## 检查
 
+所有检查、测试和构建均在本地执行，GitHub Actions 已停用。提交代码前运行 `npm run check:local`；该命令依次检查版本、公开文件范围、生产依赖漏洞、模块边界、内置 Skill、发布配置、代码规范、类型及单元和集成测试，任一步失败即停止。依赖审计需要连接 npm registry，检查程序在本机运行。
+
 | 命令 | 用途 |
 | --- | --- |
+| `npm run check:local` | 提交前的本地源码检查与测试，不打包应用。 |
 | `npm run check:public-surface` | 检查公开文件范围、文档白名单和相对链接。 |
 | `npm run lint:v2` | Biome 源码检查。 |
 | `npm run typecheck:v2` | 全部 workspace 类型检查。 |
@@ -24,6 +27,8 @@ npm run dev:desktop
 | `npm run version:check` | 检查各产品版本一致性。 |
 
 `npm run check:v2` 还涉及构建、产物和签名校验，适合完整验证环境。修改代码时先运行对应测试；完整检查通过后不必重复相同测试。
+
+这些命令需主动执行，`git push` 不会自动运行检查。检查已提交的内置 Skill 变更时，用 `npm run check:builtin-skills:v2 -- --base <推送前的远端提交>` 比较版本。桌面打包、端到端测试和签名验证按需在对应的本地 macOS 或 Windows 环境完成；在 Mac 上通过不能证明 Windows 已通过。
 
 ## 模型与本地平台
 

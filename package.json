@@ -16,6 +16,7 @@
     "services/*"
   ],
   "scripts": {
+    "check:local": "npm run version:check && npm run check:public-surface && npm run audit:prod:v2 && npm run check:boundaries:v2 && npm run check:builtin-skills:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2",
     "audit:prod:v2": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org",
     "check:boundaries:v2": "node scripts/check-v2-boundaries.mjs",
     "check:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs",
