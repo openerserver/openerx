@@ -14,6 +14,8 @@ openerx 是运行在 Windows 和 macOS 上的 AI 桌面客户端。它把对话�
 
 本仓库提供源码。已发布的客户端安装包会列在 [GitHub Releases](https://github.com/openerserver/openerx/releases)；没有可用 Release 时，请按下方步骤从源码运行。支持的平台、签名状态和更新方式以对应发布说明为准。
 
+日常使用优先选择标记为 **Latest** 的稳定版；标记为 **Pre-release** 的版本用于测试，可能未签名或尚未完成发布验收。如果只有预览版，则当前没有正式稳定版。请下载 Assets 中与系统和架构匹配的安装包；GitHub 自动生成的 `Source code` 压缩包不是安装程序。源码合并不会自动更新已有安装包，发布流程见 [构建与发布](docs/releasing.md)。
+
 1. 打开 **设置 → 模型**，选择厂商并填写 API Key，测试连接后保存。
 2. 新建对话，按需添加附件、选择工作目录或创建项目。
 3. 在 **设置 → 工具** 中配置浏览器、MCP 等能力，并检查授权范围。
