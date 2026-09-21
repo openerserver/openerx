@@ -59,8 +59,8 @@ afterEach(() => {
 });
 
 describe("Pi runtime dependency", () => {
-  it("loads the pinned 0.84.4 coding-agent runtime", () => {
-    expect(PI_CODING_AGENT_VERSION).toBe("0.84.4");
+  it("loads the pinned 0.86.0 coding-agent runtime", () => {
+    expect(PI_CODING_AGENT_VERSION).toBe("0.86.0");
   });
 });
 

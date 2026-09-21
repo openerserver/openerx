@@ -3,8 +3,8 @@ import type { RemoteDesktopState } from "@openerx/contracts";
 import { ArrowClockwise, Desktop, DeviceMobile } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { RemoteConnectionRequests } from "./RemoteConnections";
 import { Link } from "react-router-dom";
+import { RemoteConnectionRequests } from "./RemoteConnections";
 import { RemotePairingPanel } from "./RemotePairingPanel";
 
 function remoteErrorMessage(reason: string): string {

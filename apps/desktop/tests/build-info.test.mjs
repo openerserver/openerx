@@ -1,8 +1,8 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import test from "node:test";
 import { createBuildInfo, getBuildInfo } from "../scripts/build-info.mjs";
 
 test("build identifiers advance across dates and keep native version bounds", () => {
@@ -14,7 +14,9 @@ test("build identifiers advance across dates and keep native version bounds", ()
     assert.equal(first.version, "2.1.1");
     assert.equal(next.buildId, "20260916T000000Z");
     assert.ok(next.androidVersionCode > first.androidVersionCode);
-    assert.ok(Number(next.nativeBuildNumber.split(".")[0]) > Number(first.nativeBuildNumber.split(".")[0]));
+    assert.ok(
+      Number(next.nativeBuildNumber.split(".")[0]) > Number(first.nativeBuildNumber.split(".")[0]),
+    );
     assert.match(first.nativeBuildNumber, /^\d{1,4}\.\d{1,2}\.\d{1,2}$/u);
     const previous = process.env.OPENERX_BUILD_INFO;
     try {
@@ -28,5 +30,7 @@ test("build identifiers advance across dates and keep native version bounds", ()
     }
     writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "0.0.0" }));
     assert.throws(() => createBuildInfo(root), /PRODUCT_VERSION_REQUIRED/u);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

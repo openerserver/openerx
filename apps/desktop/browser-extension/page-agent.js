@@ -143,7 +143,19 @@
       sensitiveRects,
     };
   };
-  const act = (command, expectedRevision) => {
+  const destination = (command, expectedRevision) => {
+    if (pageRevision() !== expectedRevision) throw new Error("BROWSER_OBSERVATION_MISMATCH");
+    const el = command.sourceNodeId ? nodes.get(command.sourceNodeId) : document.activeElement;
+    if (command.kind === "invoke")
+      return (
+        el?.closest("a[href]")?.href ||
+        (el?.form && ["submit", "image"].includes(el.type) ? el.form.action || location.href : null)
+      );
+    if (command.kind === "key" && command.key === "Enter" && el?.form)
+      return el.form.action || location.href;
+    return null;
+  };
+  const act = (command, expectedRevision, crossSiteAllowed = false) => {
     if (pageRevision() !== expectedRevision) throw new Error("BROWSER_OBSERVATION_MISMATCH");
     const el = command.sourceNodeId ? nodes.get(command.sourceNodeId) : null;
     if (command.sourceNodeId && (!el?.isConnected || !visible(el)))
@@ -167,8 +179,16 @@
         break;
       case "invoke": {
         const link = el.closest("a[href]");
-        if (link && (new URL(link.href).origin !== location.origin || !/^https?:/.test(link.href)))
+        if (
+          link &&
+          ((!crossSiteAllowed && new URL(link.href).origin !== location.origin) ||
+            !/^https?:/.test(link.href))
+        )
           throw new Error("BROWSER_NAVIGATION_DENIED");
+        // Keep observed links in the controlled surface so redirects pass through its policy gate.
+        if (crossSiteAllowed && link?.target && link.target !== "_self") link.target = "_self";
+        if (crossSiteAllowed && el.form?.target && el.form.target !== "_self")
+          el.form.target = "_self";
         el.click();
         break;
       }
@@ -212,8 +232,12 @@
         if (sensitive(focused) !== "none" || focused?.tagName === "IFRAME")
           return "user_takeover_required";
         if (command.key === "Enter" && focused?.form) {
-          if (new URL(focused.form.action || location.href).origin !== location.origin)
+          if (
+            !crossSiteAllowed &&
+            new URL(focused.form.action || location.href).origin !== location.origin
+          )
             throw new Error("BROWSER_NAVIGATION_DENIED");
+          if (crossSiteAllowed) focused.form.target = "_self";
           focused.form.requestSubmit();
         } else return "unsupported";
         break;
@@ -227,6 +251,7 @@
   globalThis.__openerxPageAgent = {
     snapshot,
     act,
+    destination,
     status: () => ({ documentId, pageRevision: pageRevision(), userEpoch, url: location.href }),
   };
 })();

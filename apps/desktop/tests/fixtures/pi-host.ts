@@ -1,4 +1,9 @@
-import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  getCurrentSystemPrompt,
+  type JsonObject,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -42,7 +47,7 @@ function toolResultSafeSummary(message: unknown): { dataKeys: string[]; text: st
   };
 }
 
-function responseFor(context: Context): AssistantMessage {
+function responseFor(context: TranscriptContext): AssistantMessage {
   const userMessages = context.messages.filter(({ role }) => role === "user");
   const latestUser = contentText(userMessages.at(-1)?.content);
   if (latestUser.includes("[PI_TEST_TIMEOUT]")) {
@@ -62,11 +67,11 @@ function responseFor(context: Context): AssistantMessage {
     .slice(lastUserIndex + 1)
     .filter(({ role }) => role === "toolResult");
   if (latestUser.includes("[PI_TEST_WORKSPACE_PATCH]")) {
-    const workspaceGrantId = context.systemPrompt?.match(
+    const workspaceGrantId = getCurrentSystemPrompt(context.messages)?.match(
       /\(grant ([0-9a-f-]{36}), read_write/u,
     )?.[1];
     if (!workspaceGrantId) return fauxAssistantMessage("EDIT_FIXTURE_NO_WORKSPACE");
-    const calls = [
+    const calls: Array<{ name: string; params: JsonObject }> = [
       { name: "openerx_workspace_instructions", params: { workspaceGrantId, relativePath: "." } },
       {
         name: "openerx_workspace_apply_patch",
@@ -110,7 +115,9 @@ function responseFor(context: Context): AssistantMessage {
         );
   }
   if (latestUser.includes("[PI_TEST_XLS_ATTACHMENT]")) {
-    const personalFileId = context.systemPrompt?.match(/\(xls, id ([0-9a-f-]{36})\)/u)?.[1];
+    const personalFileId = getCurrentSystemPrompt(context.messages)?.match(
+      /\(xls, id ([0-9a-f-]{36})\)/u,
+    )?.[1];
     if (!personalFileId) return fauxAssistantMessage("XLS 附件未进入模型上下文。");
     if (toolResults.length === 0) {
       return fauxAssistantMessage(
@@ -201,7 +208,9 @@ function responseFor(context: Context): AssistantMessage {
   }
   if (latestUser.includes("[PI_TEST_SKILL]") || latestUser.includes("[PI_TEST_SKILL_AUTO]")) {
     const automatic = latestUser.includes("[PI_TEST_SKILL_AUTO]");
-    const skillContext = automatic ? `${latestUser}\n${context.systemPrompt}` : latestUser;
+    const skillContext = automatic
+      ? `${latestUser}\n${getCurrentSystemPrompt(context.messages)}`
+      : latestUser;
     const skillName = automatic
       ? skillContext.match(/<name>([^<]+)<\/name>/)?.[1]
       : skillContext.match(/<skill name="([^"]+)"/)?.[1];
@@ -282,6 +291,7 @@ function responseFor(context: Context): AssistantMessage {
       );
     }
     if (toolResults.length === 3) {
+      if (!uploadFileId) return fauxAssistantMessage("缺少测试文件 ID。");
       return fauxAssistantMessage(
         fauxToolCall(
           "openerx_browser",
@@ -334,7 +344,7 @@ function responseFor(context: Context): AssistantMessage {
         "",
         "| 项目 | 状态 | 版本 |",
         "| --- | --- | --- |",
-        "| Pi AgentSession | ready | 0.84.4 |",
+        "| Pi AgentSession | ready | 0.86.0 |",
       ].join("\n"),
     );
   }
@@ -346,7 +356,7 @@ function responseFor(context: Context): AssistantMessage {
   }
   if (userMessages.length >= 2) {
     return fauxAssistantMessage(
-      `这是第 ${userMessages.length} 轮回答。当前 Pi 上下文共有 ${context.messages.length} 条消息。`,
+      `这是第 ${userMessages.length} 轮回答。当前 Pi 上下文共有 ${context.messages.filter((message) => message.role !== "system").length} 条消息。`,
     );
   }
   return fauxAssistantMessage(`Pi AgentSession 已收到：${latestUser}`);

@@ -184,6 +184,7 @@ export const browserBridgeActionCommandSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.enum(["history_back", "history_forward", "reload"]) }).strict(),
+  z.object({ kind: z.literal("navigate"), url: httpUrlSchema }).strict(),
 ]);
 
 export const browserBridgeActionRequestSchema = z
@@ -274,6 +275,21 @@ export type BrowserBridgeRequest = BrowserBridgeObserveRequest | BrowserBridgeAc
 export type BrowserBridgePostMessage =
   | BrowserBridgeGrantAcceptedMessage
   | BrowserBridgeReleaseMessage;
+
+export const browserDiscoveredTabSchema = z
+  .object({
+    tabId: z.number().int().positive(),
+    browserWindowId: z.number().int().positive(),
+    url: httpUrlSchema,
+    title: z.string().max(2000),
+  })
+  .strict();
+export type BrowserDiscoveredTab = z.infer<typeof browserDiscoveredTabSchema>;
+export const browserTabListSchema = z.array(browserDiscoveredTabSchema).max(2000);
+export type BrowserManagementRequest =
+  | { kind: "list_tabs"; requestId: string }
+  | { kind: "claim_tab"; requestId: string; tab: BrowserDiscoveredTab }
+  | { kind: "create_tab"; requestId: string; url: string };
 
 export class BrowserBridgeProtocolError extends Error {
   constructor() {

@@ -132,6 +132,14 @@ export function createProductCapabilityTools(input: {
   // fail schema validation before it could answer. Add the required root type
   // while preserving the action-specific branches and required fields.
   const browserComputerUseParameters = Type.Union([
+    Type.Object(
+      {
+        ...observedIdentity,
+        action: Type.Literal("navigate"),
+        url: Type.String({ minLength: 1, maxLength: 4096 }),
+      },
+      { additionalProperties: false },
+    ),
     Type.Object({ action: Type.Literal("contexts") }, { additionalProperties: false }),
     Type.Object(
       {
@@ -262,7 +270,7 @@ export function createProductCapabilityTools(input: {
         name: "openerx_browser",
         label: "Use browser",
         description:
-          "Control a browser using the user's configured mode. Call contexts to discover authorized Chrome tabs and their exact URL/browserContextRef; never invent a context reference. Omit browserContextRef for an independent browser. managed_chromium requests always use an isolated ephemeral profile. Use fresh elementRef and observationId from every result. Passwords, browser profile data and raw CDP/scripts are unavailable; ask the user to authorize a new tab after cross-origin navigation.",
+          "Control a browser using the user's configured mode. Call contexts to discover connected browser tabs and their exact URL/browserContextRef, or managedSessions owned by this task; never invent a reference. Use a managed sessionId with observe for a fresh snapshot. Open with a discovered browserContextRef to claim that Chrome tab. Without a reference, a connected browser reuses one matching tab or creates a new tab; ambiguous matches require choosing a reference. Chrome and managed_chromium share desktop website permissions: task/site/all-site grants and a block list. Use navigate, back, forward or reload within either kind of session. Tab switching does not revoke website permission. managed_chromium uses an isolated ephemeral profile, without sharing Chrome logins or requiring an extension; never silently switch profiles after failure. Use fresh elementRef and observationId from every result. Passwords, browser profile data and raw CDP/scripts are unavailable.",
         parameters: browserComputerUseParameters,
         execute: async (toolCallId, params) =>
           await invoke(toolCallId, "openerx_browser", {

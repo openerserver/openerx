@@ -29,6 +29,7 @@ import {
   browserConnectionStateSchema,
   browserExtensionSetupSchema,
   browserModeSchema,
+  browserPermissionUpdateSchema,
   browserSessionDescriptorSchema,
   byokModelRef,
   byokProviderIdSchema,
@@ -322,6 +323,12 @@ function registerIpcHandlers(
   ipcMain.handle(ipcChannels.browserExtensionPrepare, async (event) => {
     assertTrustedIpcSender(event);
     return browserExtensionSetupSchema.parse(await supervisor.prepareBrowserExtension());
+  });
+  ipcMain.handle(ipcChannels.browserPermissionUpdate, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event);
+    return browserConnectionStateSchema.parse(
+      await supervisor.updateBrowserPermission(browserPermissionUpdateSchema.parse(raw)),
+    );
   });
   ipcMain.handle(ipcChannels.browserComputerUseSessions, (event) => {
     assertTrustedIpcSender(event);

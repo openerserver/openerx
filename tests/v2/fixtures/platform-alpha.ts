@@ -28,7 +28,6 @@ const catalog: ModelCatalogEntry[] = [
   {
     modelRef: "platform/standard",
     displayName: "标准模型",
-    thinkingLevels: ["off", "medium"],
     version: "m2-e2e",
     capabilities: {
       textInput: true,
@@ -48,7 +47,6 @@ const catalog: ModelCatalogEntry[] = [
   {
     modelRef: "platform/tools",
     displayName: "工具模型",
-    thinkingLevels: ["off", "medium"],
     version: "m2-e2e",
     capabilities: {
       textInput: true,

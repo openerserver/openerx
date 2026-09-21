@@ -12,7 +12,7 @@ multi-harness API would duplicate those semantics and create two sources of trut
 
 ## Decision
 
-1. V1 has one production harness: `@earendil-works/pi-coding-agent`, pinned to `0.84.4`.
+1. V1 has one production harness: `@earendil-works/pi-coding-agent`, pinned to `0.86.0`.
 2. Pi owns `AgentSession`, the agent loop, model turns, context, compaction, retry and tool-call
    lifecycle.
 3. Pi runs only in the supervised `@openerx/pi-host` Electron utility process.

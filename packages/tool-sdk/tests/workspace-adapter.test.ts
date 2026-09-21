@@ -227,7 +227,11 @@ describe("Workspace context patch integration", () => {
     await expect(f.patch("*** Add File: .git/config\n+bad")).rejects.toThrow(
       "WORKSPACE_PATCH_PROTECTED_PATH",
     );
-    symlinkSync(f.outside, path.join(f.workspace, "linked"), process.platform === "win32" ? "junction" : "dir");
+    symlinkSync(
+      f.outside,
+      path.join(f.workspace, "linked"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     await expect(f.patch("*** Add File: linked/escape.txt\n+bad")).rejects.toThrow(
       "WORKSPACE_SYMLINK_DENIED",
     );

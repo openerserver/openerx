@@ -140,7 +140,9 @@ describe("Remote settings", () => {
 
   it("removes expired QR codes and allows a new challenge", async () => {
     const bridge = mount(enabledState);
-    await userEvent.setup().click(await screen.findByRole("button", { name: "使用二维码快捷配对" }));
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "使用二维码快捷配对" }));
     await screen.findByAltText("openerx Remote 一次性配对二维码");
     vi.useFakeTimers();
     // Re-render the effect with a fresh challenge under the fake clock.

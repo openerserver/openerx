@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 // Mobile apps and edition services have their own contracts and regressions.
 export function inScope(file) {
   return (
-    /^(?:apps\/desktop\/(?:src|native|scripts|tests)\/|packages\/|services\/(?:platform-alpha|remote-control-gateway)\/)/u.test(
+    /^(?:apps\/desktop\/(?:src|native|scripts|tests|browser-extension)\/|packages\/|services\/(?:platform-alpha|remote-control-gateway)\/)/u.test(
       file,
     ) ||
     /^apps\/desktop\/(?:package\.json|tsconfig\.json|forge\.config\.ts|vite\.[^/]+\.(?:mts|ts))$/u.test(

@@ -1,8 +1,8 @@
-import { buildInfoDefine } from "./vite.build-info";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { buildInfoDefine } from "./vite.build-info";
 
 export default defineConfig({
   define: buildInfoDefine,

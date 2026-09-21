@@ -56,8 +56,8 @@
     "prepackage:v2": "npm run version:check"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.4",
-    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-ai": "0.86.0",
+    "@earendil-works/pi-coding-agent": "0.86.0",
     "@biomejs/biome": "2.5.10",
     "jsdom": "29.0.0",
     "typescript": "6.0.3",

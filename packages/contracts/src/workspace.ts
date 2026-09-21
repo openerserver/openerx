@@ -1,6 +1,23 @@
 import { z } from "zod";
 import { entityIdSchema, timestampSchema } from "./common";
 
+// These are patch preconditions, not requests for additional user permission.
+export function workspacePatchRecoveryMessage(code: string): string | null {
+  switch (code) {
+    case "WORKSPACE_READ_REQUIRED":
+      return "补丁未写入：请先在本轮用 openerx_workspace_read 读取所有待修改的已有文件，再按当前内容重试；这不是权限不足，无需再次授权。";
+    case "WORKSPACE_INSTRUCTIONS_NOT_ACKNOWLEDGED":
+      return "补丁未写入：请用 openerx_workspace_instructions 加载所有源路径和目标路径适用的项目指令，遵循指令后重试。";
+    case "WORKSPACE_CONTENT_CHANGED":
+    case "WORKSPACE_PATCH_CONTEXT_MISMATCH":
+      return "补丁未写入：文件内容或补丁上下文已变化，请用 openerx_workspace_read 重新读取，并按当前内容生成补丁后重试。";
+    case "WORKSPACE_PATCH_DUPLICATE_PATH":
+      return "补丁未写入：同一路径不能在一个补丁中重复出现；修改已有文件请使用一个 *** Update File:，不要同时 Delete 和 Add 同一路径。";
+    default:
+      return null;
+  }
+}
+
 export const workspaceAccessSchema = z.enum(["read_only", "read_write"]);
 export const workspaceBindingRoleSchema = z.enum(["primary", "additional"]);
 export const workspaceBindingSourceSchema = z.enum(["default", "project", "user_added"]);

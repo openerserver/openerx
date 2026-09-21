@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Context } from "@earendil-works/pi-ai";
+import type { TranscriptContext } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import type { PiSkillMount } from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -60,7 +60,7 @@ describe("Pi native Skill alignment", () => {
       mounts: [auto, manual],
       transport: { request },
     });
-    const contexts: Context[] = [];
+    const contexts: TranscriptContext[] = [];
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     runtime.registerNativeProvider(faux.provider);

@@ -69,10 +69,13 @@ export class MainCapabilityClient {
         this.port.postMessage({ kind: "main.capability.cancel", requestId });
         this.#finish(requestId, () => reject(new Error("TOOL_CANCELLED")));
       };
-      const timeout = setTimeout(() => {
-        this.port.postMessage({ kind: "main.capability.cancel", requestId });
-        this.#finish(requestId, () => reject(new Error("MAIN_CAPABILITY_TIMEOUT")));
-      }, 60_000);
+      const timeout = setTimeout(
+        () => {
+          this.port.postMessage({ kind: "main.capability.cancel", requestId });
+          this.#finish(requestId, () => reject(new Error("MAIN_CAPABILITY_TIMEOUT")));
+        },
+        operation.operation === "browser_computer_use" ? 180_000 : 60_000,
+      );
       this.#pending.set(requestId, {
         resolve,
         reject,

@@ -1,7 +1,7 @@
-import { buildInfoDefine } from "./vite.build-info";
-import { defineConfig } from "vite";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { defineConfig } from "vite";
+import { buildInfoDefine } from "./vite.build-info";
 
 export default defineConfig(({ command }) => {
   if (command === "serve" && process.platform === "darwin") {

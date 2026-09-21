@@ -229,7 +229,11 @@ class UnusedSystemBrowserDriver implements SystemDefaultBrowserDriver {
 
 function registry(
   endpoint: FakeBridgeEndpoint,
-  options: { now?: () => number; authorizationTtlMs?: number } = {},
+  options: {
+    now?: () => number;
+    authorizationTtlMs?: number;
+    isUrlAllowed?: (grantId: string, url: string) => boolean;
+  } = {},
 ) {
   const grants = new BrowserBridgeGrantRegistry({
     expectedExtensionOrigin: EXTENSION_ORIGIN,
@@ -283,6 +287,72 @@ async function openAuthorizedBridge(endpoint = new FakeBridgeEndpoint()) {
 }
 
 describe("BCU-003 connected Browser Bridge", () => {
+  it("permits authorized cross-site navigation while invalidating old observations and honoring live revocation", async () => {
+    const endpoint = new FakeBridgeEndpoint();
+    const allowed = new Set(["fixture.test", "other.test"]);
+    const { grants, connection } = registry(endpoint, {
+      isUrlAllowed: (_id, url) => allowed.has(new URL(url).hostname),
+    });
+    const auth = connection.authorizeTab(authorizationMessage(), NATIVE_SURFACE);
+    const browser = adapter(grants);
+    const signal = new AbortController().signal;
+    const first = observation(
+      await browser.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "open",
+          url: PAGE_URL,
+          browserContextRef: auth.browserContextRef,
+        },
+        signal,
+      ),
+    );
+    endpoint.emit(
+      "cross_origin_navigation",
+      tabBinding({
+        url: "https://other.test/page",
+        origin: "https://other.test",
+        documentId: "document_next_site",
+      }),
+    );
+    const second = observation(
+      await browser.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "observe",
+          sessionId: first.sessionId,
+        },
+        signal,
+      ),
+    );
+    expect(second.url).toBe("https://other.test/page");
+    await expect(
+      browser.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "setValue",
+          sessionId: first.sessionId,
+          observationId: first.observationId,
+          target: { elementRef: first.elements[0]!.elementRef },
+          text: "stale",
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_OBSERVATION_");
+    allowed.delete("other.test");
+    await expect(
+      browser.execute(
+        {
+          contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+          action: "observe",
+          sessionId: first.sessionId,
+        },
+        signal,
+      ),
+    ).rejects.toThrow("BROWSER_NAVIGATION_DENIED");
+    browser.close();
+    grants.close();
+  });
   it("releases authorization without closing the user's browser tab on host cleanup", async () => {
     const { browser, endpoint } = await openAuthorizedBridge();
     const requestCount = endpoint.requests.length;

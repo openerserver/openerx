@@ -1,5 +1,5 @@
 const status = document.querySelector("#status");
-for (const action of ["pair", "authorize", "disconnect"])
+for (const action of ["pair", "stop", "disconnect"])
   document.querySelector(`#${action}`).addEventListener("click", async () => {
     const button = document.querySelector(`#${action}`);
     button.disabled = true;
@@ -10,10 +10,10 @@ for (const action of ["pair", "authorize", "disconnect"])
       });
       status.textContent =
         result.error ||
-        (action === "authorize"
-          ? `已授权 ${result.origin}`
+        (action === "stop"
+          ? "已停止所有标签页操作"
           : action === "pair"
-            ? "已配对，请授权当前标签页"
+            ? "已连接，无需逐页授权"
             : "已断开");
       if (!result.error) document.querySelector("#code").value = "";
     } catch (error) {
@@ -23,5 +23,5 @@ for (const action of ["pair", "authorize", "disconnect"])
     }
   });
 chrome.runtime.sendMessage({ action: "status" }).then((value) => {
-  status.textContent = value.connected ? `已连接 · ${value.authorized} 个授权标签页` : "尚未连接";
+  status.textContent = value.connected ? `已连接 · ${value.authorized} 个任务标签页` : "尚未连接";
 });

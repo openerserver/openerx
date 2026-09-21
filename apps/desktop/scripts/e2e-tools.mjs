@@ -47,6 +47,34 @@ try {
   });
   let page = await application.firstWindow();
   await page.waitForLoadState("domcontentloaded");
+  await application.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler("model:catalog:list");
+    ipcMain.handle("model:catalog:list", () => [
+      {
+        modelRef: "platform/e2e-faux",
+        displayName: "E2E faux model",
+        version: "1.0.0",
+        capabilities: {
+          textInput: true,
+          imageInput: false,
+          fileInput: false,
+          functionCalling: true,
+          structuredOutput: true,
+        },
+        contextWindow: 128_000,
+        maxOutputTokens: 8_192,
+        status: "available",
+        priceRef: "e2e-faux",
+        priceSummary: "E2E only",
+        free: true,
+        thinkingLevels: ["off", "medium", "high"],
+      },
+    ]);
+  });
+  await page.evaluate(() =>
+    window.localStorage.setItem("openerx.defaultModelRef", "platform/e2e-faux"),
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
   await application.evaluate(({ dialog }, selectedPath) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] });
   }, uploadPath);
@@ -55,28 +83,43 @@ try {
   const uploadFileId = imported[0]?.id;
   assert.ok(uploadFileId);
   const isolatedWindowPromise = application.waitForEvent("window");
-  await page
-    .getByLabel("发送消息")
-    .fill(`打开隔离网页 [PI_TEST_BROWSER] ${fixtureUrl} FILE_ID=${uploadFileId}`);
-  await page.getByRole("button", { name: "发送", exact: true }).click();
-  const isolatedWindow = await isolatedWindowPromise;
+  let isolatedWindow;
+  try {
+    [isolatedWindow] = await Promise.all([
+      isolatedWindowPromise,
+      (async () => {
+        await page
+          .getByLabel("发送消息")
+          .fill(`打开隔离网页 [PI_TEST_BROWSER] ${fixtureUrl} FILE_ID=${uploadFileId}`);
+        await page.getByRole("button", { name: "发送", exact: true }).click();
+      })(),
+    ]);
+  } catch (error) {
+    console.error("E2E_TOOLS_BROWSER_OPEN_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
   const isolatedWindowClosed = isolatedWindow.waitForEvent("close", { timeout: 90_000 });
   await isolatedWindow.waitForLoadState("domcontentloaded");
   assert.equal(new URL(isolatedWindow.url()).origin, new URL(fixtureUrl).origin);
   assert.equal(application.windows().length, 2);
 
-  await page
-    .getByText("隔离浏览器操作：upload", { exact: true })
-    .locator("..")
-    .getByRole("button", { name: "仅本次允许" })
-    .click();
+  await page.getByLabel("待处理的工具授权").getByRole("button", { name: "仅本次允许" }).click();
   await page.locator(".message-assistant[data-message-status='completed']").waitFor();
   await page
     .getByLabel("对话消息")
     .getByText(/独立分区 openerx-isolated-browser-/)
     .waitFor();
-  await page.waitForFunction(() => document.querySelectorAll(".tool-call-row").length === 6);
-  assert.equal(await page.getByLabel("工具权限确认").count(), 1);
+  const activityOverview = page.locator("button.assistant-activity-overview").last();
+  if ((await activityOverview.getAttribute("aria-expanded")) !== "true") {
+    await activityOverview.click();
+  }
+  try {
+    await page.waitForFunction(() => document.querySelectorAll(".tool-call-row").length === 6);
+  } catch (error) {
+    console.error("E2E_TOOLS_BROWSER_RESULT_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
+  assert.equal(await page.getByLabel("工具权限确认").count(), 0);
   await isolatedWindowClosed;
   const remainingWindows = application.windows();
   assert.equal(remainingWindows.length, 1);
@@ -92,11 +135,7 @@ try {
     .count();
   await page.getByLabel("发送消息").fill("捕获当前 openerx 窗口 [PI_TEST_DESKTOP]");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await page
-    .getByText("控制桌面应用 openerx：screenshot", { exact: true })
-    .locator("..")
-    .getByRole("button", { name: "仅本次允许" })
-    .click();
+  await page.getByLabel("待处理的工具授权").getByRole("button", { name: "仅本次允许" }).click();
   await page.waitForFunction(
     (minimum) =>
       document.querySelectorAll(".message-assistant[data-message-status='completed']").length >=
@@ -121,7 +160,13 @@ try {
   await localSearchPanel.getByRole("button", { name: "保存设置" }).click();
   await localSearchPanel.getByText("搜索设置已保存。", { exact: true }).waitFor();
   await page.reload();
-  await page.getByRole("heading", { name: "工具" }).waitFor();
+  try {
+    await page.getByRole("button", { name: "工具" }).click();
+    await page.getByRole("heading", { name: "工具" }).waitFor();
+  } catch (error) {
+    console.error("E2E_TOOLS_SETTINGS_RELOAD_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
   localSearchRow = page.locator(".tool-library-row").filter({ hasText: "本地 Web Search" });
   await localSearchRow.getByRole("button", { name: "设置" }).click();
   localSearchPanel = page.getByRole("dialog", { name: "本地 Web Search" });

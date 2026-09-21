@@ -265,7 +265,7 @@
 }
 
 .workspace-feedback[role="alert"] {
-  color: #a13d37;
+  color: var(--workspace-danger);
 }
 
 .context-file-import-actions {

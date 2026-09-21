@@ -119,11 +119,11 @@ export const byokProviderPresets: readonly ByokProviderPreset[] = [
     models: [
       {
         id: "flash",
-        label: "DeepSeek V4 Flash",
+        label: "DeepSeek Flash",
         configuration: {
           baseUrl: "https://api.deepseek.com",
-          modelId: "deepseek-v4-flash",
-          displayName: "DeepSeek V4 Flash",
+          modelId: "deepseek-flash",
+          displayName: "DeepSeek Flash",
           contextWindow: 1_000_000,
           maxOutputTokens: 384_000,
           capabilities: { imageInput: false, functionCalling: true, reasoning: true },

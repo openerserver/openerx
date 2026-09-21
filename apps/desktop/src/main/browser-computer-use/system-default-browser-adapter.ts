@@ -70,10 +70,15 @@ export interface SystemBrowserSessionDriver {
     signal: AbortSignal,
   ): Promise<BrowserAdapterResult>;
   closeOwnedWindow(binding: SystemBrowserBinding, signal: AbortSignal): Promise<void>;
+  releaseControl?(binding: SystemBrowserBinding): void;
 }
 
 export interface SystemDefaultBrowserDriver extends SystemBrowserSessionDriver {
-  openDedicatedWindow(url: string, signal: AbortSignal): Promise<SystemBrowserBinding>;
+  openDedicatedWindow(
+    url: string,
+    signal: AbortSignal,
+    generationId?: string,
+  ): Promise<SystemBrowserBinding>;
 }
 
 export interface ConnectedBrowserBridgeDriver extends SystemBrowserSessionDriver {
@@ -277,6 +282,7 @@ export class SystemDefaultBrowserAdapter {
     for (const [sessionId, session] of this.#sessions) {
       session.monitor?.close();
       if (session.kind === "bridge") this.bridgeDriver?.releaseAuthorizedTab(session.binding);
+      else session.driver.releaseControl?.(session.binding);
       this.#observations.endSession(sessionId, "detached");
     }
     this.#sessions.clear();
@@ -345,7 +351,9 @@ export class SystemDefaultBrowserAdapter {
     if (operation.browserContextRef) {
       return await this.#openBridge(operation, signal, generationId);
     }
-    const binding = await driver.openDedicatedWindow(operation.url, signal);
+    const binding = managed
+      ? await driver.openDedicatedWindow(operation.url, signal, generationId)
+      : await driver.openDedicatedWindow(operation.url, signal);
     if (
       binding.descriptor.backend !== (managed ? "managed_chromium" : "system_default") ||
       binding.descriptor.controlPath !==
@@ -392,7 +400,7 @@ export class SystemDefaultBrowserAdapter {
         throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
       }
       return observationResult(
-        managed ? "已打开 UWA 独立浏览器" : "已在系统默认浏览器中打开专用窗口",
+        managed ? "已打开 openerx 独立浏览器" : "已在系统默认浏览器中打开专用窗口",
         observation,
         true,
         {
@@ -504,6 +512,7 @@ export class SystemDefaultBrowserAdapter {
     const session = this.#requiredSession(sessionId);
     session.monitor?.close();
     if (session.kind === "bridge") this.bridgeDriver?.releaseAuthorizedTab(session.binding);
+    else session.driver.releaseControl?.(session.binding);
     const descriptor = this.#observations.endSession(sessionId, "detached");
     this.#sessions.delete(sessionId);
     return lifecycleResult(

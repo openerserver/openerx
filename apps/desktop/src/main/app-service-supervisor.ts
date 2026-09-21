@@ -6,6 +6,7 @@ import type {
   BrowserConnectionState,
   BrowserExtensionSetup,
   BrowserMode,
+  BrowserPermissionUpdate,
 } from "@openerx/contracts";
 import {
   type AppServiceAuthorization,
@@ -71,6 +72,7 @@ export interface MainCapabilityHost {
   availability(): Promise<HostToolAvailability>;
   getBrowserConnectionState?(): BrowserConnectionState;
   updateBrowserMode?(mode: BrowserMode): BrowserConnectionState;
+  updateBrowserPermission?(input: BrowserPermissionUpdate): BrowserConnectionState;
   prepareBrowserExtension?(): Promise<BrowserExtensionSetup>;
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[];
   pauseBrowserComputerUseSession(sessionId: string): BrowserSessionDescriptor;
@@ -282,6 +284,12 @@ export class AppServiceSupervisor {
     if (!this.#capabilityHost?.prepareBrowserExtension)
       throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
     return await this.#capabilityHost.prepareBrowserExtension();
+  }
+  async updateBrowserPermission(input: BrowserPermissionUpdate): Promise<BrowserConnectionState> {
+    await this.start();
+    if (!this.#capabilityHost?.updateBrowserPermission)
+      throw new Error("MAIN_CAPABILITY_UNAVAILABLE");
+    return this.#capabilityHost.updateBrowserPermission(input);
   }
 
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[] {

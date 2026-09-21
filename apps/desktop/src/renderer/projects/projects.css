@@ -345,13 +345,16 @@
   text-decoration: none;
 }
 
-.project-primary-button {
+.project-primary-button,
+.project-dialog footer .project-primary-button {
   border-color: var(--workspace-accent);
   color: var(--workspace-accent-ink);
   background: var(--workspace-accent);
 }
 
-.project-primary-button:hover {
+.project-primary-button:hover,
+.project-dialog footer .project-primary-button:hover {
+  color: var(--workspace-accent-ink);
   background: var(--workspace-accent-hover);
 }
 
@@ -432,11 +435,11 @@
   align-items: center;
   gap: 10px;
   margin: 0 0 28px;
-  border: 1px solid color-mix(in srgb, #d8952d 45%, var(--workspace-border));
+  border: 1px solid color-mix(in srgb, var(--workspace-warning) 45%, var(--workspace-border));
   border-radius: 10px;
   padding: 12px 14px;
   color: var(--workspace-text);
-  background: color-mix(in srgb, #d8952d 10%, var(--workspace-surface));
+  background: color-mix(in srgb, var(--workspace-warning) 10%, var(--workspace-surface));
   text-align: left;
 }
 
@@ -514,7 +517,7 @@
 }
 
 .project-directory-summary em[data-state="reconnect_required"] {
-  color: #f0b75b;
+  color: var(--workspace-warning);
 }
 
 .project-empty-state,
@@ -646,7 +649,7 @@
 }
 
 .project-notice {
-  color: #74c98e;
+  color: var(--workspace-success);
 }
 
 .conversation-heading .conversation-project-badge {

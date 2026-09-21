@@ -8,10 +8,7 @@ import { WorkspaceEdits } from "../src/renderer/WorkspaceEdits";
 
 afterEach(cleanup);
 
-function fixture(
-  status = "completed",
-  editStatus: "applied" | "reverted" = "applied",
-) {
+function fixture(status = "completed", editStatus: "applied" | "reverted" = "applied") {
   const detail = {
     workItem: { id: "work-1", status },
     run: { id: "run-1", status },

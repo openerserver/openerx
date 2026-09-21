@@ -222,6 +222,28 @@ describe("workspace output artifacts", () => {
     expect((await f.outputs()).map(({ displayName }) => displayName)).toEqual(["valid.txt"]);
   });
 
+  it("removes a previously captured workspace output after its file is reverted", async () => {
+    const f = fixture();
+    const reverted = await f.patch("reverted.txt", "reverted");
+    const [captured] = await f.outputs();
+    if (!captured) throw new Error("missing captured artifact");
+    const diff = reverted.content.find((part) => part.type === "diff");
+    if (diff?.type !== "diff") throw new Error("missing diff");
+
+    await f.call({
+      operation: "workspace_undo",
+      workspaceGrantId: f.grant.id,
+      workspaceChangeId: diff.workspaceChangeId,
+      idempotencyKey: randomUUID(),
+    });
+
+    expect(await f.outputs()).toEqual([]);
+    expect(await f.service.handle({ command: "artifact.list", input: {} })).toEqual([]);
+    expect(
+      f.files.workspaceArtifactLinks(f.conversationId).map(({ artifactId }) => artifactId),
+    ).toEqual([captured.id]);
+  });
+
   it("only backfills applied change sets, including additional workspace roots", async () => {
     const f = fixture();
     await f.patch("seed.txt", "seed");

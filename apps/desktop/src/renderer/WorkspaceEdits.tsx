@@ -77,8 +77,7 @@ export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JS
     undoConfirmation?.kind === "edit"
       ? (confirmationEdit?.relativePaths ?? [])
       : undoable.flatMap(({ relativePaths }) => relativePaths);
-  const showUndoConfirmation =
-    undoConfirmation?.kind === "run" || Boolean(confirmationEdit);
+  const showUndoConfirmation = undoConfirmation?.kind === "run" || Boolean(confirmationEdit);
   const confirmUndo = () => {
     if (!undoConfirmation) return;
     undo.mutate(undoConfirmation.kind === "edit" ? undoConfirmation.editId : undefined);

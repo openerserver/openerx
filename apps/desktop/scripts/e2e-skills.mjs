@@ -44,7 +44,7 @@ writeFileSync(
 
 async function approveScriptExecution(page) {
   const permission = page
-    .getByLabel("工具权限确认")
+    .getByLabel("待处理的工具授权")
     .filter({ hasText: "执行 Skill 脚本：scripts/render.mjs" })
     .last();
   try {
@@ -133,7 +133,7 @@ try {
 
   await page.getByRole("button", { name: "返回应用", exact: true }).click();
   await page.waitForURL(/#\/chat\/new$/);
-  await page.getByLabel("选择 Skill").selectOption({ label: "E2E report" });
+  await page.getByLabel("选择 Skill", { exact: true }).selectOption({ label: "E2E report" });
   await page.getByLabel("发送消息").fill("生成验证报告 [PI_TEST_SKILL]");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await approveScriptExecution(page);

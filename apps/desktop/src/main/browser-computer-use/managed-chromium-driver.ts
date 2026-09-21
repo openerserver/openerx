@@ -7,6 +7,7 @@ import type {
   BrowserCoordinateActionInput,
 } from "./browser-action-dispatcher";
 import type { BrowserBridgeActionCommand } from "./browser-bridge-protocol";
+import { type BrowserSitePermissions, browserSiteHost } from "./browser-site-permissions";
 import { boundedCommand, semanticCommand } from "./connected-browser-bridge-driver";
 import type {
   SystemBrowserBinding,
@@ -35,7 +36,14 @@ type PageSnapshot = {
 };
 type ManagedSession = {
   window: BrowserWindow;
-  origin: string;
+  scope: string;
+  privateScope: boolean;
+  controller: AbortController;
+  ownerSignal: AbortSignal;
+  actionSignal?: AbortSignal;
+  automationActive: boolean;
+  busy: boolean;
+  navigationError: BrowserObservationError | null;
   listener?: (event: SystemBrowserControlEvent) => void;
   userEpoch: number;
   documentId: string;
@@ -46,19 +54,31 @@ type ManagedSession = {
 /** Uses Electron's private debugger channel; no TCP debugging port or raw-CDP tool. */
 export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
   readonly #sessions = new Map<string, ManagedSession>();
-  constructor(private readonly show = true) {}
+  constructor(
+    private readonly permissions: BrowserSitePermissions,
+    private readonly show = true,
+    private readonly title = "openerx 独立浏览器",
+  ) {}
 
-  async openDedicatedWindow(url: string, signal: AbortSignal): Promise<SystemBrowserBinding> {
+  async openDedicatedWindow(
+    url: string,
+    signal: AbortSignal,
+    generationId?: string,
+  ): Promise<SystemBrowserBinding> {
     if (signal.aborted) throw new BrowserObservationError("BROWSER_CANCELLED");
-    const parsed = new URL(url);
-    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password)
-      throw new BrowserObservationError("BROWSER_NAVIGATION_DENIED");
+    browserSiteHost(url);
     const sessionId = randomUUID();
+    const scope = generationId ?? sessionId;
+    await this.permissions.require(url, scope, signal);
+    if (signal.aborted) {
+      if (!generationId) this.permissions.release(scope);
+      throw new BrowserObservationError("BROWSER_CANCELLED");
+    }
     const window = new BrowserWindow({
       width: 1280,
       height: 820,
       show: this.show,
-      title: "UWA 独立浏览器",
+      title: this.title,
       webPreferences: {
         partition: `openerx-managed-${sessionId}`,
         sandbox: true,
@@ -76,19 +96,16 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
     wc.session.setPermissionCheckHandler(() => false);
     wc.session.on("will-download", (event) => event.preventDefault());
     wc.setWindowOpenHandler(() => ({ action: "deny" }));
-    const allowNavigation = (event: Electron.Event, target: string) => {
-      if (new URL(target).origin !== parsed.origin || !/^https?:/.test(target))
-        event.preventDefault();
-    };
-    wc.on("will-navigate", allowNavigation);
-    wc.on("will-redirect", allowNavigation);
-    // Applies to subframes too, including schemes that could escape the web sandbox.
-    wc.on("will-frame-navigate", (event) => {
-      if (!/^https?:/.test(event.url)) event.preventDefault();
-    });
+    const controller = new AbortController();
     const state: ManagedSession = {
       window,
-      origin: parsed.origin,
+      scope,
+      privateScope: !generationId,
+      controller,
+      ownerSignal: AbortSignal.any([signal, controller.signal]),
+      automationActive: true,
+      busy: false,
+      navigationError: null,
       userEpoch: 0,
       documentId: "",
       polling: false,
@@ -96,11 +113,53 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
         void this.#monitor(state);
       }, 150),
     };
+    // Non-web schemes do not necessarily create network requests. Reject them synchronously.
+    const allowWebNavigation = (event: Electron.Event, target: string) => {
+      try {
+        browserSiteHost(target);
+      } catch {
+        state.navigationError = new BrowserObservationError("BROWSER_NAVIGATION_DENIED");
+        event.preventDefault();
+      }
+    };
+    wc.on("will-navigate", allowWebNavigation);
+    wc.on("will-redirect", allowWebNavigation);
+    wc.on("will-frame-navigate", (event) => allowWebNavigation(event, event.url));
+    // Each managed window owns its own ephemeral Session, including this sole request listener.
+    // Checking before every document request also covers redirects, forms and child frames.
+    partitionSession.webRequest.onBeforeRequest((details, callback) => {
+      if (!["mainFrame", "subFrame"].includes(details.resourceType) || !state.automationActive) {
+        callback({});
+        return;
+      }
+      const permissionSignal = state.actionSignal ?? state.ownerSignal;
+      void this.permissions.require(details.url, scope, permissionSignal).then(
+        () => {
+          const cancelled =
+            permissionSignal.aborted || !state.automationActive || window.isDestroyed();
+          const allowed = !cancelled && this.permissions.allows(details.url, scope);
+          if (!allowed)
+            state.navigationError = new BrowserObservationError(
+              cancelled ? "BROWSER_CANCELLED" : "BROWSER_NAVIGATION_DENIED",
+            );
+          callback({ cancel: !allowed });
+        },
+        () => {
+          state.navigationError = new BrowserObservationError(
+            permissionSignal.aborted ? "BROWSER_CANCELLED" : "BROWSER_NAVIGATION_DENIED",
+          );
+          callback({ cancel: true });
+        },
+      );
+    });
     this.#sessions.set(sessionId, state);
     window.on("closed", () => {
+      controller.abort();
       clearInterval(state.timer);
       state.listener?.({ kind: "monitor_lost" });
       this.#sessions.delete(sessionId);
+      partitionSession.webRequest.onBeforeRequest(null);
+      if (state.privateScope) this.permissions.release(scope);
       void partitionSession.clearStorageData().catch(() => undefined);
     });
     wc.on("render-process-gone", () => state.listener?.({ kind: "monitor_lost" }));
@@ -137,7 +196,7 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
       return { descriptor };
     } catch (error) {
       abort();
-      throw error;
+      throw state.navigationError ?? error;
     } finally {
       signal.removeEventListener("abort", abort);
     }
@@ -148,6 +207,7 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
     listener: (event: SystemBrowserControlEvent) => void,
   ): Promise<SystemBrowserUserInputMonitor> {
     const state = this.#required(binding);
+    this.#assertAllowed(state);
     const status = (await this.#evaluate(
       state,
       "globalThis.__openerxPageAgent.status()",
@@ -167,13 +227,13 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
     signal: AbortSignal,
   ): Promise<SystemBrowserDriverObservation> {
     const state = this.#required(binding, signal);
+    this.#assertAllowed(state);
     const data = (await this.#evaluate(
       state,
       "globalThis.__openerxPageAgent.snapshot()",
     )) as PageSnapshot;
     this.#acceptStatus(state, data);
-    if (new URL(data.url).origin !== state.origin)
-      throw new BrowserObservationError("BROWSER_NAVIGATION_DENIED");
+    this.#assertAllowed(state, data.url);
     const captured = await state.window.webContents.capturePage();
     const size = captured.getSize();
     const bitmap = captured.toBitmap();
@@ -199,6 +259,8 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
       "globalThis.__openerxPageAgent.status()",
     )) as PageSnapshot;
     this.#acceptStatus(state, after);
+    this.#assertAllowed(state, after.url);
+    if (signal.aborted) throw new BrowserObservationError("BROWSER_CANCELLED");
     const stable = after.pageRevision === data.pageRevision;
     return {
       surface: {
@@ -251,7 +313,36 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
     return "unsupported";
   }
   async closeOwnedWindow(binding: SystemBrowserBinding, _signal: AbortSignal): Promise<void> {
-    this.#required(binding).window.destroy();
+    const state = this.#sessions.get(binding.descriptor.sessionId);
+    if (state && !state.window.isDestroyed()) state.window.destroy();
+  }
+  releaseControl(binding: SystemBrowserBinding): void {
+    const state = this.#sessions.get(binding.descriptor.sessionId);
+    if (!state || state.window.isDestroyed()) return;
+    state.automationActive = false;
+    state.controller.abort();
+    state.listener = undefined;
+    // A detached window belongs to the user; stop automatic permission prompts and debugging.
+    if (state.window.webContents.debugger.isAttached()) state.window.webContents.debugger.detach();
+    if (state.privateScope) this.permissions.release(state.scope);
+  }
+  contexts(generationId?: string): { sessionId: string; url: string; title: string }[] {
+    if (!generationId) return [];
+    const contexts = [];
+    for (const [sessionId, state] of this.#sessions) {
+      if (state.scope !== generationId || state.window.isDestroyed()) continue;
+      try {
+        this.#assertAllowed(state);
+        contexts.push({
+          sessionId,
+          url: state.window.webContents.getURL(),
+          title: state.window.webContents.getTitle().slice(0, 2000),
+        });
+      } catch {
+        // Do not disclose metadata for another task, a detached window, or a revoked site.
+      }
+    }
+    return contexts;
   }
   close(): void {
     for (const state of [...this.#sessions.values()]) state.window.destroy();
@@ -265,43 +356,75 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
   ): Promise<BrowserAdapterResult> {
     if (!command) return "unsupported";
     const state = this.#required(binding, signal);
-    const status = (await this.#evaluate(
-      state,
-      "globalThis.__openerxPageAgent.status()",
-    )) as PageSnapshot;
-    this.#acceptStatus(state, status);
-    if (status.pageRevision !== surface.pageRevision || status.url !== surface.url)
-      throw new BrowserObservationError("BROWSER_OBSERVATION_MISMATCH");
-    if (
-      command.kind === "history_back" ||
-      command.kind === "history_forward" ||
-      command.kind === "reload"
-    ) {
+    state.busy = true;
+    state.navigationError = null;
+    const actionSignal = AbortSignal.any([signal, state.ownerSignal]);
+    state.actionSignal = actionSignal;
+    const abortAction = () => {
+      if (!state.window.isDestroyed()) state.window.webContents.stop();
+    };
+    actionSignal.addEventListener("abort", abortAction, { once: true });
+    const validate = async () => {
+      this.#assertAllowed(state);
+      if (actionSignal.aborted) throw new BrowserObservationError("BROWSER_CANCELLED");
+      const status = (await this.#evaluate(
+        state,
+        "globalThis.__openerxPageAgent.status()",
+      )) as PageSnapshot;
+      this.#acceptStatus(state, status);
+      if (status.pageRevision !== surface.pageRevision || status.url !== surface.url)
+        throw new BrowserObservationError("BROWSER_OBSERVATION_MISMATCH");
+    };
+    try {
+      await validate();
       const wc = state.window.webContents;
-      if (command.kind === "reload") wc.reload();
-      else {
+      let result: unknown = "performed";
+      if (command.kind === "navigate") {
+        await this.permissions.require(command.url, state.scope, actionSignal);
+        await validate();
+        await wc.loadURL(command.url);
+      } else if (command.kind === "reload") wc.reload();
+      else if (command.kind === "history_back" || command.kind === "history_forward") {
         const history = wc.navigationHistory;
         const offset = command.kind === "history_back" ? -1 : 1;
         const entry = history.getEntryAtIndex(history.getActiveIndex() + offset);
         if (!entry) return "unsupported";
-        if (new URL(entry.url).origin !== state.origin)
-          throw new BrowserObservationError("BROWSER_NAVIGATION_DENIED");
+        await this.permissions.require(entry.url, state.scope, actionSignal);
+        await validate();
         history.goToOffset(offset);
+      } else {
+        const destination = await this.#evaluate(
+          state,
+          `globalThis.__openerxPageAgent.destination(${JSON.stringify(command)}, ${JSON.stringify(surface.pageRevision)})`,
+        );
+        if (typeof destination === "string")
+          await this.permissions.require(destination, state.scope, actionSignal);
+        await validate();
+        result = await this.#evaluate(
+          state,
+          `globalThis.__openerxPageAgent.act(${JSON.stringify(command)}, ${JSON.stringify(surface.pageRevision)}, true)`,
+        );
       }
-      await this.#loaded(state, signal);
-      return "performed";
+      if (result === "user_takeover_required")
+        throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
+      await this.#loaded(state, actionSignal);
+      if (state.navigationError) throw state.navigationError;
+      return result === "performed" ? "performed" : "unsupported";
+    } catch (error) {
+      if (actionSignal.aborted) throw new BrowserObservationError("BROWSER_CANCELLED");
+      throw state.navigationError ?? error;
+    } finally {
+      actionSignal.removeEventListener("abort", abortAction);
+      state.busy = false;
+      state.actionSignal = undefined;
     }
-    const result = await this.#evaluate(
-      state,
-      `globalThis.__openerxPageAgent.act(${JSON.stringify(command)}, ${JSON.stringify(surface.pageRevision)})`,
-    );
-    if (result === "user_takeover_required")
-      throw new BrowserObservationError("BROWSER_USER_TAKEOVER_REQUIRED");
-    await this.#loaded(state, signal);
-    return result === "performed" ? "performed" : "unsupported";
   }
 
   async #loaded(state: ManagedSession, signal: AbortSignal): Promise<void> {
+    // DOM clicks can schedule navigation after evaluate returns.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (signal.aborted) throw new BrowserObservationError("BROWSER_CANCELLED");
+    if (state.window.isDestroyed()) throw new BrowserObservationError("BROWSER_SESSION_NOT_FOUND");
     if (!state.window.webContents.isLoadingMainFrame()) return;
     await new Promise<void>((resolve, reject) => {
       const wc = state.window.webContents;
@@ -311,13 +434,14 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
       };
       const fail = () => {
         cleanup();
+        if (!state.window.isDestroyed()) wc.stop();
         reject(
           new BrowserObservationError(
             signal.aborted ? "BROWSER_CANCELLED" : "BROWSER_BACKEND_UNAVAILABLE",
           ),
         );
       };
-      const timer = setTimeout(fail, 15000);
+      const timer = setTimeout(fail, 175000);
       const cleanup = () => {
         clearTimeout(timer);
         wc.off("did-stop-loading", finish);
@@ -326,6 +450,12 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
       wc.once("did-stop-loading", finish);
       signal.addEventListener("abort", fail, { once: true });
     });
+  }
+  #assertAllowed(state: ManagedSession, url = state.window.webContents.getURL()): void {
+    if (state.ownerSignal.aborted || !state.automationActive)
+      throw new BrowserObservationError("BROWSER_CANCELLED");
+    if (!this.permissions.allows(url, state.scope))
+      throw new BrowserObservationError("BROWSER_NAVIGATION_DENIED");
   }
   #required(binding: SystemBrowserBinding, signal?: AbortSignal): ManagedSession {
     if (signal?.aborted) throw new BrowserObservationError("BROWSER_CANCELLED");
@@ -373,12 +503,15 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
     if (
       !state.listener ||
       state.polling ||
+      state.busy ||
+      !state.automationActive ||
       state.window.isDestroyed() ||
       state.window.webContents.isLoadingMainFrame()
     )
       return;
     state.polling = true;
     try {
+      this.#assertAllowed(state);
       this.#acceptStatus(
         state,
         (await this.#evaluate(state, "globalThis.__openerxPageAgent.status()")) as PageSnapshot,

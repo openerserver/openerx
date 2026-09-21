@@ -97,6 +97,7 @@
 44. [24-memory-system-method.md](24-memory-system-method.md)：当前长期记忆的完整运行方法，包括显式/自动写入、召回注入、冲突合并、安全、同步、计费、评测和剩余门禁。
 45. [25-pi-runtime-remote-update-plan.md](25-pi-runtime-remote-update-plan.md)：Pi Runtime 从应用整包依赖演进为签名、版本化、可灰度和可自动回滚的独立远程升级方案，以及 `0.84.3 → 0.84.4` 专项门禁。
 46. [evidence/pi-0.84.4-upgrade-2026-08-30.md](evidence/pi-0.84.4-upgrade-2026-08-30.md)：Pi `0.84.4` 普通依赖升级、实际模块加载、Session 兼容、生产 Bundle、真实 DeepSeek 和本地门禁例外证据。
+    最新内置依赖见 [Pi 0.86.0 配对升级验证（2026-09-20）](evidence/pi-0.86.0-upgrade-2026-09-20.md)。
 47. [26-personal-projects-plan.md](26-personal-projects-plan.md)：个人项目、主/附加目录、对话继承、跨设备重连、安全边界和分阶段开发任务。
 48. [evidence/prj-005-2026-09-04.md](evidence/prj-005-2026-09-04.md)：项目说明与设备目录惰性协调到每轮 Generation、普通对话隔离和专项回归证据。
 49. [evidence/prj-006-2026-09-04.md](evidence/prj-006-2026-09-04.md)：项目 Main/Preload 固定 Bridge、主帧 sender 校验和 Renderer 任意路径负向门禁证据。

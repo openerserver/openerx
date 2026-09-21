@@ -7,6 +7,7 @@ export function routeBrowserOpen(
   request: OpenRequest,
   mode: BrowserMode,
   tabs: readonly { url: string; browserContextRef: string }[],
+  connected = false,
 ): OpenRequest {
   if (
     mode === "managed_chromium" &&
@@ -14,6 +15,8 @@ export function routeBrowserOpen(
   )
     throw new BrowserObservationError("BROWSER_BACKEND_DOWNGRADE_REJECTED");
   if (request.browserContextRef || request.requestedBackend) return request;
+  if (connected && (mode === "auto" || mode === "connected_chrome"))
+    return { ...request, requestedBackend: "system_default" };
   const matches = tabs.filter((tab) => new URL(tab.url).href === new URL(request.url).href);
   if ((mode === "auto" || mode === "connected_chrome") && matches.length === 1)
     return { ...request, browserContextRef: matches[0]!.browserContextRef };

@@ -6,6 +6,8 @@
 >
 > 首个目标：`@earendil-works/pi-* 0.84.3 → 0.84.4`
 >
+> 2026-09-20：两版内置依赖已升级到 `0.86.0`，见[配对升级验证](evidence/pi-0.86.0-upgrade-2026-09-20.md)。下文保留最初的远程 Runtime 方案与历史专项门禁；本次升级仍为源码依赖更新。
+>
 > 适用面：Windows x64、macOS arm64/x64 桌面执行主机；iOS/Android Remote Companion 不运行 Pi
 
 ## 1. 结论

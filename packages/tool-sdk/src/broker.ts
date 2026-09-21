@@ -3,6 +3,7 @@ import {
   normalizedToolResultSchema,
   type PermissionRequest,
   type ToolOperation,
+  workspacePatchRecoveryMessage,
 } from "@openerx/contracts";
 import type { ToolRepository } from "@openerx/storage";
 import {
@@ -78,6 +79,25 @@ function normalizedContent(result: NormalizedToolResult): NormalizedToolResult {
       ...parsed.sources.map((source) => ({ type: "source" as const, source })),
       ...parsed.artifacts.map((artifactId) => ({ type: "artifact" as const, artifactId })),
     ],
+  };
+}
+
+function recoverableWorkspacePrecondition(
+  code: string,
+  message: string,
+  durationMs: number,
+): NormalizedToolResult | null {
+  const detail = message.includes(":") ? message.slice(message.indexOf(":") + 1).trim() : "";
+  const instruction = workspacePatchRecoveryMessage(code);
+  if (!instruction) return null;
+  return {
+    summary: instruction,
+    content: [{ type: "text", text: instruction }],
+    data: { recoverable: true, errorCode: code, detail: detail || null },
+    sources: [],
+    artifacts: [],
+    sideEffectCommitted: false,
+    durationMs,
   };
 }
 
@@ -231,6 +251,23 @@ export class CapabilityBroker {
           : error instanceof Error
             ? (error.message.split(":", 1)[0] ?? "TOOL_FAILED")
             : "TOOL_FAILED";
+      const recoverable =
+        operation.operation === "workspace_patch" || operation.operation === "workspace_apply_patch"
+          ? recoverableWorkspacePrecondition(
+              code,
+              error instanceof Error ? error.message : code,
+              Math.max(0, Date.now() - startedAt),
+            )
+          : null;
+      if (recoverable) {
+        this.#repository.markToolCall(toolCall.id, "failed", {
+          resultSummary: recoverable.summary,
+          resultContent: recoverable.content,
+          resultData: recoverable.data,
+          errorCode: code,
+        });
+        throw new ToolBrokerError(code, `${code}: ${recoverable.summary}`);
+      }
       const failedResult =
         error instanceof ToolAdapterError ? normalizedContent(error.result) : null;
       this.#repository.markToolCall(toolCall.id, signal.aborted ? "cancelled" : "failed", {

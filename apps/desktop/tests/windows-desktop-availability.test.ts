@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DESKTOP_CONTROL_FEATURE_FLAG, DESKTOP_CONTROL_VERSION } from "@openerx/contracts";
@@ -25,6 +25,16 @@ describe("Windows desktop startup readiness", () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     vi.stubEnv(DESKTOP_CONTROL_FEATURE_FLAG, undefined);
     directory = mkdtempSync(path.join(tmpdir(), "openerx-desktop-readiness-"));
+    const windowsPowerShellDirectory = path.join(
+      directory,
+      "windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+    );
+    mkdirSync(windowsPowerShellDirectory, { recursive: true });
+    writeFileSync(path.join(windowsPowerShellDirectory, "powershell.exe"), "");
+    vi.stubEnv("SystemRoot", path.join(directory, "windows"));
     host = new ElectronToolCapabilityHost(directory, {} as ToolCredentialVault);
   });
 

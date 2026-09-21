@@ -8,6 +8,7 @@ import {
   type BrowserConnectionState,
   type BrowserExtensionSetup,
   type BrowserMode,
+  type BrowserPermissionUpdate,
   type BrowserSessionDescriptor,
   browserComputerUseV2Enabled,
   DESKTOP_CONTROL_FEATURE_FLAG,
@@ -18,9 +19,10 @@ import {
   type ToolOperation,
   windowsDesktopControlEnabled,
 } from "@openerx/contracts";
-import { app, BrowserWindow, desktopCapturer, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, shell, systemPreferences } from "electron";
 import { routeBrowserOpen } from "./browser-computer-use/browser-routing";
 import { BrowserSettingsStore } from "./browser-computer-use/browser-settings";
+import { BrowserSitePermissions } from "./browser-computer-use/browser-site-permissions";
 import { ChromeExtensionServer } from "./browser-computer-use/chrome-extension-server";
 import { ConnectedChromeBrowserBridgeDriver } from "./browser-computer-use/connected-browser-bridge-driver";
 import { ElectronMacSystemBrowserDriver } from "./browser-computer-use/electron-mac-system-browser-driver";
@@ -114,8 +116,9 @@ export class ElectronToolCapabilityHost {
   readonly #browserGenerations = new Map<string, AbortController>();
   readonly #browserComputerUse: SystemDefaultBrowserAdapter;
   readonly #browserComputerUseDriver: SystemDefaultBrowserDriver;
-  readonly #managedBrowser = new ManagedChromiumDriver();
-  readonly #chromeExtension = new ChromeExtensionServer();
+  readonly #managedBrowser: ManagedChromiumDriver;
+  readonly #chromeExtension: ChromeExtensionServer;
+  readonly #browserPermissions: BrowserSitePermissions;
   readonly #browserSettings: BrowserSettingsStore;
   readonly #desktopCaptures = new DesktopCaptureRegistry();
   readonly #oauth: OAuthLoopbackController;
@@ -130,6 +133,34 @@ export class ElectronToolCapabilityHost {
   ) {
     this.#profileDirectory = profileDirectory;
     this.#browserSettings = new BrowserSettingsStore(profileDirectory);
+    this.#browserPermissions = new BrowserSitePermissions(
+      profileDirectory,
+      async (host, signal) => {
+        const parent = BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+        if (!parent || signal.aborted) throw new Error("BROWSER_CANCELLED");
+        const { response } = await dialog.showMessageBox(parent, {
+          type: "question",
+          title: "网站访问权限",
+          message: `允许浏览器任务使用 ${host} 吗？`,
+          detail:
+            "允许后，任务可以读取和操作该网站，包括已登录的页面。你可以在设置 → 浏览器控制中管理网站权限。",
+          buttons: ["本次任务允许", "始终允许此网站", "允许所有网站", "阻止此网站", "取消"],
+          defaultId: 0,
+          cancelId: 4,
+          noLink: true,
+          signal,
+        });
+        return (["task", "site", "all", "block", "deny"] as const)[response] ?? "deny";
+      },
+    );
+    this.#managedBrowser = new ManagedChromiumDriver(this.#browserPermissions);
+    this.#chromeExtension = new ChromeExtensionServer(undefined, {
+      directory: profileDirectory,
+      permissions: this.#browserPermissions,
+    });
+    void this.#chromeExtension.restore().catch(() => {
+      /* Connection setup can be retried in Settings. */
+    });
     this.#oauth = oauth;
     const helperDirectory = app.isPackaged
       ? path.join(process.resourcesPath, "app.asar.unpacked", "native", "windows-desktop-control")
@@ -304,6 +335,7 @@ export class ElectronToolCapabilityHost {
     return {
       mode: this.#browserSettings.mode,
       extensionConnected: this.#chromeExtension.grants.connected,
+      sitePolicy: this.#browserPermissions.policy,
       authorizedTabs: this.#chromeExtension.grants.availableAuthorizations(),
       extensionDirectory: path.join(app.getPath("userData"), "browser-extension"),
       fullCdpEnabled: false,
@@ -311,6 +343,11 @@ export class ElectronToolCapabilityHost {
   }
   updateBrowserMode(mode: BrowserMode): BrowserConnectionState {
     this.#browserSettings.save(mode);
+    return this.getBrowserConnectionState();
+  }
+  updateBrowserPermission(input: BrowserPermissionUpdate): BrowserConnectionState {
+    if (input.action === "disconnect") this.#chromeExtension.unpair();
+    else this.#browserPermissions.update(input);
     return this.getBrowserConnectionState();
   }
   async prepareBrowserExtension(): Promise<BrowserExtensionSetup> {
@@ -332,21 +369,38 @@ export class ElectronToolCapabilityHost {
       const data = {
         mode: state.mode,
         extensionConnected: state.extensionConnected,
-        authorizedTabs: state.authorizedTabs,
+        tabs: await this.#chromeExtension.contexts(signal),
+        managedSessions: this.#managedBrowser.contexts(generationId),
       };
       return result(`可用浏览器上下文\n${JSON.stringify(data)}`, data);
     }
     if (request.action !== "open")
       return await this.#browserComputerUse.execute(request, signal, generationId);
-    return await this.#browserComputerUse.execute(
-      routeBrowserOpen(
-        request,
-        this.#browserSettings.mode,
-        this.#chromeExtension.grants.availableAuthorizations(),
-      ),
-      signal,
-      generationId,
+    let routed = routeBrowserOpen(
+      request,
+      this.#browserSettings.mode,
+      this.#chromeExtension.grants.availableAuthorizations(),
+      this.#chromeExtension.grants.connected,
     );
+    if (
+      routed.browserContextRef?.startsWith("btab_") ||
+      (!routed.browserContextRef &&
+        !request.requestedBackend &&
+        routed.requestedBackend === "system_default" &&
+        ["auto", "connected_chrome"].includes(this.#browserSettings.mode) &&
+        this.#chromeExtension.grants.connected)
+    ) {
+      if (routed.requestedBackend === "managed_chromium")
+        throw new Error("BROWSER_BACKEND_DOWNGRADE_REJECTED");
+      const tab = await this.#chromeExtension.prepareTab(
+        routed.url,
+        routed.browserContextRef,
+        generationId ?? randomUUID(),
+        signal,
+      );
+      routed = { ...routed, ...tab };
+    }
+    return await this.#browserComputerUse.execute(routed, signal, generationId);
   }
 
   async releaseBrowserGeneration(generationId?: string): Promise<void> {
@@ -361,6 +415,7 @@ export class ElectronToolCapabilityHost {
       this.#browserSessions.delete(browser.id);
     }
     await this.#browserComputerUse.releaseGeneration(generationId);
+    this.#browserPermissions.release(generationId);
   }
 
   listBrowserComputerUseSessions(): BrowserSessionDescriptor[] {
