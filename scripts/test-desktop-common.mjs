@@ -84,6 +84,7 @@ run(vitest, [
   "packages/app-service/tests/remote-project-create.test.ts",
   "packages/contracts/tests/remote.test.ts",
   "packages/contracts/tests/model-service.test.ts",
+  "packages/skills/tests/package-service.test.ts",
   "packages/contracts/tests/desktop-control.test.ts",
   "packages/pi-host/tests/desktop-capability-tool.test.ts",
   "packages/app-service/tests/tool-app-service.test.ts",

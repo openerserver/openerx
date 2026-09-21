@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SkillPackageManifest } from "@openerx/contracts";
 import { SkillRepository } from "@openerx/storage";
+import { shellToolAvailability } from "@openerx/tool-sdk";
 import { zipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
 import { builtInStructuredReportSkill, SkillPackageService, SkillToolAdapter } from "../src";
@@ -61,7 +62,7 @@ function writeSkill(
 }
 
 describe("SkillPackageService", () => {
-  it("seeds a bundled Skill, exposes resources, and executes its declared script adapter", async () => {
+  it("seeds a bundled Skill and enforces host sandbox availability for its script adapter", async () => {
     const { repository, service } = profile();
     const builtIns = service.seedBuiltIns();
     const [builtIn] = builtIns;
@@ -93,7 +94,7 @@ describe("SkillPackageService", () => {
     );
 
     const adapter = new SkillToolAdapter(service);
-    const result = await adapter.execute(
+    const execution = adapter.execute(
       {
         operation: "skill_script_execute",
         idempotencyKey: "skill-script-test-0001",
@@ -109,10 +110,19 @@ describe("SkillPackageService", () => {
         update() {},
       },
     );
-    expect(result.summary).toContain("Quarterly review");
-    expect(result.data).toMatchObject({ state: "completed", exitCode: 0 });
-    await adapter.stopAll();
-    repository.close();
+    try {
+      const availability = shellToolAvailability();
+      if (!availability.availableToolNames.includes("openerx_shell")) {
+        await expect(execution).rejects.toThrow(availability.unavailableReasons.openerx_shell);
+      } else {
+        const result = await execution;
+        expect(result.summary).toContain("Quarterly review");
+        expect(result.data).toMatchObject({ state: "completed", exitCode: 0 });
+      }
+    } finally {
+      await adapter.stopAll();
+      repository.close();
+    }
   });
 
   it.each([
