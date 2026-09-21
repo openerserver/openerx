@@ -202,11 +202,12 @@ describe("workspace output artifacts", () => {
     await f.patch("changed.txt", "generated");
     writeFileSync(path.join(f.workspace, "changed.txt"), "later user edit");
     await f.patch("unsupported.unknown", "unsupported");
-    await f.patch("link.txt", "outside");
-    const outside = path.join(f.directory, "outside.txt");
-    writeFileSync(outside, "outside");
-    rmSync(path.join(f.workspace, "link.txt"));
-    symlinkSync(outside, path.join(f.workspace, "link.txt"));
+    await f.patch("linked/output.txt", "outside");
+    const outside = path.join(f.directory, "outside");
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "output.txt"), "outside");
+    rmSync(path.join(f.workspace, "linked"), { recursive: true });
+    symlinkSync(outside, path.join(f.workspace, "linked"), "junction");
     const reverted = await f.patch("reverted.txt", "reverted");
     const diff = reverted.content.find((part) => part.type === "diff");
     if (diff?.type !== "diff") throw new Error("missing diff");

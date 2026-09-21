@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codexWindowsSandboxReady,
+  resolveWindowsExecutable,
   ShellToolAdapter,
   shellToolAvailability,
   ToolAdapterError,
@@ -45,6 +46,23 @@ afterEach(() => {
 });
 
 describe("ShellToolAdapter", () => {
+  it("resolves bare Windows executables from PATH before invoking the sandbox", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openerx-shell-path-"));
+    directories.push(root);
+    const bin = path.join(root, "Node runtime");
+    mkdirSync(bin);
+    const executable = path.join(bin, "node.exe");
+    writeFileSync(executable, "fixture");
+    const searchPath = [path.join(root, "missing"), `"${bin}"`].join(path.delimiter);
+    expect(resolveWindowsExecutable("node.exe", searchPath)).toBe(realpathSync(executable));
+    expect(resolveWindowsExecutable("node", searchPath)).toBe(realpathSync(executable));
+    expect(resolveWindowsExecutable(executable, "")).toBe(executable);
+    expect(() => resolveWindowsExecutable("missing.exe", searchPath)).toThrow(
+      "SHELL_EXECUTABLE_NOT_FOUND",
+    );
+    expect(() => resolveWindowsExecutable("node.exe", ".")).toThrow("SHELL_EXECUTABLE_NOT_FOUND");
+  });
+
   it("requires the complete Codex Windows sandbox installation", () => {
     expect(
       codexWindowsSandboxReady({
@@ -102,9 +120,11 @@ describe("ShellToolAdapter", () => {
     });
   });
 
-  it.runIf(process.platform === "darwin" || codexWindowsSandboxReady())(
-    "runs argv without a shell inside the approved workspace",
-    async () => {
+  it
+    .runIf(process.platform === "darwin" || codexWindowsSandboxReady())
+    .each(process.platform === "win32" ? [process.execPath, "node.exe"] : [process.execPath])(
+    "runs %s argv without a shell inside the approved workspace",
+    async (command) => {
       const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-"));
       directories.push(workspace);
       const adapter = new ShellToolAdapter([workspace]);
@@ -112,7 +132,7 @@ describe("ShellToolAdapter", () => {
         {
           operation: "shell_execute",
           cwd: workspace,
-          command: process.execPath,
+          command,
           args: ["-e", "process.stdout.write('tool-ok')"],
           timeoutMs: 10_000,
           background: false,

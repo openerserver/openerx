@@ -322,6 +322,61 @@ function responseFor(context: TranscriptContext): AssistantMessage {
     );
   }
   if (latestUser.includes("[PI_TEST_DESKTOP]")) {
+    if (process.platform === "win32") {
+      const call = (params: Record<string, string>, id: string) =>
+        fauxAssistantMessage(fauxToolCall("openerx_desktop", params, { id }), {
+          stopReason: "toolUse",
+        });
+      if (toolResults.length === 0) return call({ action: "list_apps" }, "desktop-list");
+      const expectedTitle = JSON.parse(latestUser.split("WINDOW_TITLE=")[1] ?? '""');
+      const windows = toolResultData(toolResults[0]).windows as
+        | Array<{ title: string; applicationId: string; windowRef: string }>
+        | undefined;
+      const target = windows?.find(({ title }) => title === expectedTitle);
+      if (!target)
+        return fauxAssistantMessage(
+          `DESKTOP_FIXTURE_WINDOW_NOT_FOUND ${JSON.stringify(toolResultSafeSummary(toolResults[0]))}`,
+        );
+      if (toolResults.length === 1)
+        return call(
+          {
+            action: "attach",
+            applicationId: target.applicationId,
+            windowRef: target.windowRef,
+          },
+          "desktop-attach",
+        );
+      const captured = toolResults[1];
+      const data = toolResultData(captured);
+      const session = data.session as { sessionId: string; windowTitle: string } | undefined;
+      const observation = data.observation as { width: number; height: number } | undefined;
+      if (
+        !session ||
+        session.windowTitle !== expectedTitle ||
+        !observation ||
+        observation.width <= 0 ||
+        observation.height <= 0 ||
+        !Array.isArray(captured?.content) ||
+        !captured?.content.some((part) => part.type === "image")
+      ) {
+        return fauxAssistantMessage(
+          `DESKTOP_FIXTURE_CAPTURE_FAILED ${contentText(captured?.content)}`,
+        );
+      }
+      if (toolResults.length === 2)
+        return call(
+          {
+            action: "detach",
+            applicationId: target.applicationId,
+            sessionId: session.sessionId,
+          },
+          "desktop-detach",
+        );
+      const detached = toolResultData(toolResults[2]).session as { state: string } | undefined;
+      if (detached?.state !== "stopped")
+        return fauxAssistantMessage("DESKTOP_FIXTURE_DETACH_FAILED");
+      return fauxAssistantMessage("桌面窗口捕获完成：已捕获目标应用窗口（Windows native）");
+    }
     if (toolResults.length === 0) {
       return fauxAssistantMessage(
         fauxToolCall(

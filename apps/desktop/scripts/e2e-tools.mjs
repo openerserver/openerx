@@ -6,7 +6,6 @@ import path from "node:path";
 import { _electron as electron } from "playwright";
 
 const desktopDirectory = path.resolve(import.meta.dirname, "..");
-const mainEntry = path.join(desktopDirectory, ".vite", "build", "main.js");
 const profileDirectory = mkdtempSync(path.join(tmpdir(), "openerx-e2e-tools-"));
 const uploadPath = path.join(profileDirectory, "upload-fixture.txt");
 writeFileSync(uploadPath, "upload fixture", "utf8");
@@ -35,7 +34,7 @@ const fixtureUrl = `http://127.0.0.1:${address.port}/`;
 let application;
 try {
   application = await electron.launch({
-    args: [mainEntry],
+    args: [desktopDirectory],
     cwd: desktopDirectory,
     env: {
       ...process.env,
@@ -45,6 +44,7 @@ try {
       OPENERX_E2E_PROFILE_DIR: profileDirectory,
     },
   });
+  assert.equal(await application.evaluate(({ app }) => app.getAppPath()), desktopDirectory);
   let page = await application.firstWindow();
   await page.waitForLoadState("domcontentloaded");
   await application.evaluate(({ ipcMain }) => {
@@ -133,9 +133,43 @@ try {
   const completedBeforeDesktop = await page
     .locator(".message-assistant[data-message-status='completed']")
     .count();
-  await page.getByLabel("发送消息").fill("捕获当前 openerx 窗口 [PI_TEST_DESKTOP]");
+  const desktopWindowTitle = `openerx E2E ${path.basename(profileDirectory)}`;
+  if (process.platform === "win32") {
+    // Capture a stable, test-owned window: the chat's animated progress indicator
+    // changes its accessibility revision while the native helper takes a screenshot.
+    await application.evaluate(async ({ app, BrowserWindow }, title) => {
+      app.setAccessibilitySupportEnabled(true);
+      const fixture = new BrowserWindow({
+        width: 640,
+        height: 480,
+        title,
+        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+      });
+      await fixture.loadURL(
+        `data:text/html,${encodeURIComponent(`<title>${title}</title><h1>Desktop capture fixture</h1><p>Stable test-owned window</p>`)}`,
+      );
+    }, desktopWindowTitle);
+  }
+  await page
+    .getByLabel("发送消息")
+    .fill(`捕获桌面测试窗口 [PI_TEST_DESKTOP] WINDOW_TITLE=${JSON.stringify(desktopWindowTitle)}`);
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await page.getByLabel("待处理的工具授权").getByRole("button", { name: "仅本次允许" }).click();
+  try {
+    if (process.platform === "win32") {
+      for (const action of ["list_apps", "attach"]) {
+        await page
+          .getByLabel("待处理的工具授权")
+          .filter({ hasText: `Windows 桌面：${action}` })
+          .getByRole("button", { name: "仅本次允许" })
+          .click();
+      }
+    } else {
+      await page.getByLabel("待处理的工具授权").getByRole("button", { name: "仅本次允许" }).click();
+    }
+  } catch (error) {
+    console.error("E2E_TOOLS_DESKTOP_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
   await page.waitForFunction(
     (minimum) =>
       document.querySelectorAll(".message-assistant[data-message-status='completed']").length >=

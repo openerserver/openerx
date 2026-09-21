@@ -349,8 +349,10 @@ describe("M4 Codex FILE capability baseline", () => {
     const { root, repository } = harness();
     const folder = path.join(root, "scope");
     mkdirSync(folder);
-    writeFileSync(path.join(root, "outside.txt"), "outside");
-    symlinkSync(path.join(root, "outside.txt"), path.join(folder, "linked.txt"));
+    const outside = path.join(root, "outside");
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "outside.txt"), "outside");
+    symlinkSync(outside, path.join(folder, "linked"), "junction");
     const broker = new FileScopeBroker(repository);
     const scope = broker.grant(folder);
     expect(() => broker.selectedFiles(scope.id)).toThrow("FILE_SYMLINK_BLOCKED");

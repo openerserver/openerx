@@ -22,9 +22,10 @@ describe("authenticated extension loopback transport", () => {
     const first = new ChromeExtensionServer(async () => 1234, { directory });
     servers.push(first);
     const code = await first.pairingCode();
-    expect(statSync(path.join(directory, "browser-bridge-connection.json")).mode & 0o777).toBe(
-      0o600,
-    );
+    const connectionFile = statSync(path.join(directory, "browser-bridge-connection.json"));
+    expect(connectionFile.isFile()).toBe(true);
+    // Windows reports DOS attributes through stat.mode, not POSIX access bits.
+    if (process.platform !== "win32") expect(connectionFile.mode & 0o777).toBe(0o600);
     first.close();
     const second = new ChromeExtensionServer(async () => 1234, { directory });
     servers.push(second);

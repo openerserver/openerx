@@ -144,7 +144,8 @@ export function cleanDebugArtifacts(
   candidates,
   { apply = false, processCommands = runningCommands() } = {},
 ) {
-  const commands = processCommands.toLowerCase();
+  const normalizedCommandPath = (value) => value.replaceAll("\\", "/").toLowerCase();
+  const commands = normalizedCommandPath(processCommands);
   return candidates.map((candidate) => {
     if (!isDirectoryWithin(candidate.root, candidate.directory)) {
       return { ...candidate, status: "skipped-path-changed" };
@@ -156,7 +157,7 @@ export function cleanDebugArtifacts(
     );
     const used =
       [candidate.directory, realpathSync(candidate.directory)].some((directory) =>
-        commands.includes(`${directory}${path.sep}`.toLowerCase()),
+        commands.includes(`${normalizedCommandPath(directory)}/`),
       ) ||
       (candidate.reason === "development cache" && devServerRunning);
     if (used) return { ...candidate, status: "skipped-running" };

@@ -100,19 +100,31 @@ describe("desktop debug artifact cleanup", () => {
     expect(existsSync(valid)).toBe(true);
   });
 
-  it("skips running packages and dev caches while cleaning unrelated debug artifacts", () => {
-    file("openerx/apps/desktop/.vite/build/main.js");
-    const running = electronOutput("openerx/apps/desktop/out/openerx-running-darwin-arm64");
-    const unused = electronOutput("openerx/apps/desktop/out-codex/openerx-darwin-arm64");
-    const result = cleanDebugArtifacts(planDebugArtifactCleanup(desktop), {
-      apply: true,
-      processCommands: `${running}/openerx.app/Contents/MacOS/openerx\nnode electron-forge start`,
-    });
-    expect(result.filter((entry) => entry.status === "skipped-running")).toHaveLength(2);
-    expect(existsSync(running)).toBe(true);
-    expect(existsSync(path.join(desktop, ".vite/build/main.js"))).toBe(true);
-    expect(existsSync(unused)).toBe(false);
-  });
+  it.each(["native", "forward", "backward", "mixed"])(
+    "skips running packages and dev caches with %s separators",
+    (separators) => {
+      file("openerx/apps/desktop/.vite/build/main.js");
+      const running = electronOutput("openerx/apps/desktop/out/openerx-running-darwin-arm64");
+      const unused = electronOutput("openerx/apps/desktop/out-codex/openerx-darwin-arm64");
+      const executable = path.join(running, "openerx.app", "Contents", "MacOS", "openerx");
+      const command =
+        separators === "forward"
+          ? executable.replaceAll("\\", "/")
+          : separators === "backward"
+            ? executable.replaceAll("/", "\\")
+            : separators === "mixed"
+              ? `${running}/openerx.app/Contents/MacOS/openerx`
+              : executable;
+      const result = cleanDebugArtifacts(planDebugArtifactCleanup(desktop), {
+        apply: true,
+        processCommands: `"${command}"\nnode electron-forge start`,
+      });
+      expect(result.filter((entry) => entry.status === "skipped-running")).toHaveLength(2);
+      expect(existsSync(running)).toBe(true);
+      expect(existsSync(path.join(desktop, ".vite/build/main.js"))).toBe(true);
+      expect(existsSync(unused)).toBe(false);
+    },
+  );
 
   it("never follows linked output roots or linked checkpoint build directories", () => {
     electronOutput("outside/openerx-preview-darwin-arm64");

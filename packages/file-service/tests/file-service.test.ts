@@ -164,13 +164,20 @@ describe("M4 file scope and controlled copies", () => {
     const source = path.join(root, "scope");
     mkdirSync(source);
     writeFileSync(path.join(source, "inside.txt"), "inside");
-    writeFileSync(path.join(root, "outside.txt"), "outside");
-    symlinkSync(path.join(root, "outside.txt"), path.join(source, "escape.txt"));
+    const outside = path.join(root, "outside");
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "outside.txt"), "outside");
+    // Directory junctions exercise traversal protection without Windows admin privileges.
+    symlinkSync(outside, path.join(source, "escape"), "junction");
     const scope = broker.grant(source);
 
-    expect(() => broker.resolve(scope.id, "../outside.txt")).toThrow("FILE_PATH_ESCAPE");
-    expect(() => broker.selectedFiles(scope.id)).toThrow("FILE_SYMLINK_BLOCKED");
-    repository.close();
+    try {
+      expect(() => broker.resolve(scope.id, "../outside.txt")).toThrow("FILE_PATH_ESCAPE");
+      expect(() => broker.resolve(scope.id, "escape/outside.txt")).toThrow("FILE_PATH_ESCAPE");
+      expect(() => broker.selectedFiles(scope.id)).toThrow("FILE_SYMLINK_BLOCKED");
+    } finally {
+      repository.close();
+    }
   });
 
   it("exports without overwriting an existing destination", () => {
@@ -272,7 +279,8 @@ describe("M4 parsers and artifacts", () => {
       ).toBe(true);
       expect(parsed.text.length).toBeGreaterThan(0);
     }
-  });
+    // Four real formats include native rendering and PDF parsing on a cold runtime.
+  }, 30_000);
 
   it("creates and edits a generated Office Artifact through immutable versions", () => {
     const { database, profile } = fixture();

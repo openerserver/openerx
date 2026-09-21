@@ -140,6 +140,29 @@ function safeAppServerEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
+// CreateProcessAsUser does not reliably search the caller's PATH. Resolve the
+// executable before crossing the sandbox boundary; argv and sandbox policy stay intact.
+export function resolveWindowsExecutable(
+  command: string,
+  searchPath = process.env.PATH ?? "",
+): string {
+  if (path.isAbsolute(command) || /[/\\]/u.test(command)) return command;
+  const names = path.extname(command) ? [command] : [command, `${command}.exe`, `${command}.com`];
+  for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
+    const root = directory.replace(/^"|"$/gu, "");
+    if (!path.isAbsolute(root)) continue;
+    for (const name of names) {
+      const candidate = path.join(root, name);
+      try {
+        if (statSync(candidate).isFile()) return realpathSync(candidate);
+      } catch {
+        // Missing or inaccessible PATH entries are not executable candidates.
+      }
+    }
+  }
+  throw new Error("SHELL_EXECUTABLE_NOT_FOUND");
+}
+
 export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost {
   readonly #codexExecutable: string;
   readonly #pending = new Map<number, PendingRequest>();
@@ -162,6 +185,9 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
     allowNetwork: boolean;
     onOutput(delta: string, stream: "stdout" | "stderr", truncated: boolean): void;
   }): Promise<WindowsSandboxCommandHandle> {
+    const [command, ...args] = input.command;
+    if (!command) throw new Error("SHELL_EXECUTABLE_NOT_FOUND");
+    const executable = resolveWindowsExecutable(command);
     await this.#ensureStarted();
     if (this.#activeProcessId) throw new Error("SHELL_WINDOWS_COMMAND_ALREADY_RUNNING");
     const processId = randomUUID();
@@ -169,7 +195,7 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
     const completion = this.#request(
       "command/exec",
       {
-        command: input.command,
+        command: [executable, ...args],
         timeoutMs: input.timeoutMs,
         cwd: input.cwd,
         env: {
