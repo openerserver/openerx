@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>浏览器连接</title>
+<style>body{font:14px system-ui;width:320px;margin:20px;color:#18212b}h1{font-size:18px}p{line-height:1.6}input,button{box-sizing:border-box;width:100%;padding:10px;margin:5px 0}button{cursor:pointer}#pair{background:#215bdf;color:white;border:0;border-radius:6px}#status{white-space:pre-wrap}</style>
+<h1>浏览器连接</h1>
+<p>从桌面应用的「设置 → 浏览器控制」复制配对码。连接后，任务可使用已有标签页或新建页面。</p>
+<label>配对码<input id="code" type="password" autocomplete="off" placeholder="粘贴配对码"></label>
+<button type="button" id="pair">连接桌面应用</button>
+<button type="button" id="stop">停止所有标签页操作</button>
+<button type="button" id="disconnect">断开并清除配对</button>
+<p>首次使用新网站时，桌面应用会询问访问权限。切换标签页不会清除权限；你可以在设置中管理允许和阻止的网站。</p>
+<p id="status" role="status"></p><script src="popup.js"></script>
+</html>

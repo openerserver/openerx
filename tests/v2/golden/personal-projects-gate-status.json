@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "checkpoint": "PRJ-012-personal-projects-local-release-foundation",
+  "updatedAt": "2026-09-04",
+  "releaseClaim": false,
+  "localImplementation": {
+    "status": "complete",
+    "completedSlices": 12,
+    "expectedSlices": 12,
+    "electronE2E": "pass",
+    "releaseNotes": "docs/releasing.md",
+    "regressionFiles": [
+      "packages/contracts/tests/project.test.ts",
+      "packages/storage/tests/project-repository.test.ts",
+      "packages/app-service/tests/project-app-service.test.ts",
+      "packages/app-service/tests/remote-project-create.test.ts",
+      "apps/desktop/scripts/e2e-projects.mjs",
+      "tests/v2/mobile-project-creation.test.tsx"
+    ]
+  },
+  "externalBeta": {
+    "status": "pending_external",
+    "completedEvidence": [],
+    "requiredEvidence": [
+      "signed-windows-macos-directory-picker-and-reconnect",
+      "physical-cross-device-project-sync-and-conflict-recovery",
+      "ios-android-remote-project-read-only-matrix"
+    ]
+  },
+  "externalRelease": {
+    "status": "pending_external",
+    "userApproval": false,
+    "publishAllowed": false,
+    "completedEvidence": [],
+    "requiredEvidence": ["personal-projects-signed-cross-device-directory-reconnect-and-remote"]
+  }
+}

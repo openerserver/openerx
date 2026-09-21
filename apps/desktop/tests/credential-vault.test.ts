@@ -1,0 +1,436 @@
+import { randomUUID } from "node:crypto";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  type AccountIdentity,
+  byokModelRef,
+  type DeviceSession,
+  defaultByokModelConfiguration,
+  isByokModelRef,
+} from "@openerx/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  type CredentialProtector,
+  DeviceCredentialVault,
+  ToolCredentialVault,
+} from "../src/main/credential-vault";
+import { ModelServiceSettingsStore } from "../src/main/model-service-settings";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+class TestProtector implements CredentialProtector {
+  readonly #available: boolean;
+
+  constructor(available = true) {
+    this.#available = available;
+  }
+
+  async isAvailable(): Promise<boolean> {
+    return this.#available;
+  }
+
+  async encrypt(value: string): Promise<Buffer> {
+    return Buffer.from(`protected:${Buffer.from(value).toString("base64")}`);
+  }
+
+  async decrypt(value: Buffer): Promise<{ result: string; shouldReEncrypt: boolean }> {
+    const encoded = value.toString().replace(/^protected:/, "");
+    return { result: Buffer.from(encoded, "base64").toString(), shouldReEncrypt: false };
+  }
+}
+
+function fixture() {
+  const account: AccountIdentity = {
+    accountId: randomUUID(),
+    email: "vault@example.com",
+    displayName: "Vault",
+    createdAt: "2026-08-25T10:00:00.000Z",
+  };
+  const session: DeviceSession = {
+    sessionId: randomUUID(),
+    accountId: account.accountId,
+    device: {
+      deviceId: randomUUID(),
+      name: "Test Mac",
+      platform: "darwin",
+      arch: "arm64",
+    },
+    sessionVersion: 1,
+    createdAt: "2026-08-25T10:00:00.000Z",
+    lastActiveAt: "2026-08-25T10:00:00.000Z",
+    revokedAt: null,
+  };
+  return { account, session, refreshCredential: "refresh-secret-never-plaintext-1234567890" };
+}
+
+describe("DeviceCredentialVault", () => {
+  it("persists the reusable credential only as protected bytes", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-vault-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "account", "device-session.bin");
+    const vault = new DeviceCredentialVault(filePath, new TestProtector());
+    const credential = fixture();
+    await vault.save(credential);
+    const bytes = await readFile(filePath);
+    expect(bytes.toString()).not.toContain(credential.refreshCredential);
+    await expect(vault.load()).resolves.toEqual({ version: 1, ...credential });
+    await vault.clear();
+    await expect(vault.load()).resolves.toBeNull();
+  });
+
+  it("fails closed when the OS credential boundary is unavailable", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-vault-"));
+    temporaryDirectories.push(directory);
+    const vault = new DeviceCredentialVault(
+      path.join(directory, "device-session.bin"),
+      new TestProtector(false),
+    );
+    await expect(vault.save(fixture())).rejects.toThrow("OS_CREDENTIAL_STORE_UNAVAILABLE");
+  });
+
+  it("keeps offline account selection after session rejection, across new vault instances", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-vault-profile-"));
+    temporaryDirectories.push(directory);
+    const file = path.join(directory, "device-session.bin");
+    const protector = new TestProtector();
+    const credential = fixture();
+    const vault = new DeviceCredentialVault(file, protector);
+    await vault.save(credential);
+    await vault.clearSession();
+    const reopened = new DeviceCredentialVault(file, protector);
+    expect(await reopened.load()).toBeNull();
+    expect(await reopened.loadProfile()).toEqual({
+      version: 1,
+      account: credential.account,
+      session: credential.session,
+    });
+    const metadata = await readFile(`${file}.profile.json`, "utf8");
+    expect(metadata).not.toContain(credential.refreshCredential);
+    expect(metadata).not.toMatch(/refreshCredential|accessToken/);
+    // Windows exposes DOS attributes here, not POSIX owner/group permission bits.
+    if (process.platform !== "win32")
+      expect((await stat(`${file}.profile.json`)).mode & 0o777).toBe(0o600);
+    await reopened.clear();
+    expect(await new DeviceCredentialVault(file, protector).loadProfile()).toBeNull();
+  });
+
+  it("backfills profile metadata from an existing encrypted session before upgrading", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-vault-upgrade-"));
+    temporaryDirectories.push(directory);
+    const file = path.join(directory, "device-session.bin");
+    const protector = new TestProtector();
+    const credential = { version: 1, ...fixture() };
+    const original = await protector.encrypt(JSON.stringify(credential));
+    await writeFile(file, original);
+    const vault = new DeviceCredentialVault(file, protector);
+    expect(await vault.loadProfile()).toBeNull();
+    expect(await vault.load()).toEqual(credential);
+    expect(await vault.loadProfile()).toEqual({
+      version: 1,
+      account: credential.account,
+      session: credential.session,
+    });
+    expect(await readFile(file)).toEqual(original);
+    const unavailable = new DeviceCredentialVault(file, new TestProtector(false));
+    await expect(unavailable.load()).rejects.toThrow("OS_CREDENTIAL_STORE_UNAVAILABLE");
+    expect(await unavailable.loadProfile()).toEqual(await vault.loadProfile());
+    expect(await readFile(file)).toEqual(original);
+  });
+});
+
+describe("ToolCredentialVault", () => {
+  it("keeps MCP credentials protected and removes one credential without exposing others", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-tool-vault-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "tool-credentials.bin");
+    const vault = new ToolCredentialVault(filePath, new TestProtector());
+    await vault.save("mcp:one", "first-bearer-secret");
+    await vault.save("mcp:two", "second-bearer-secret");
+    const bytes = await readFile(filePath);
+    expect(bytes.toString()).not.toContain("bearer-secret");
+    await expect(vault.resolve("mcp:one")).resolves.toBe("first-bearer-secret");
+    await vault.clear("mcp:one");
+    await expect(vault.resolve("mcp:one")).rejects.toThrow("MCP_CREDENTIAL_NOT_FOUND");
+    await expect(vault.resolve("mcp:two")).resolves.toBe("second-bearer-secret");
+  });
+});
+
+describe("ModelServiceSettingsStore", () => {
+  it("persists added provider models and executes with the provider credential", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-added-model-"));
+    temporaryDirectories.push(directory);
+    const vault = new ToolCredentialVault(path.join(directory, "keys.bin"), new TestProtector());
+    const file = path.join(directory, "settings.json");
+    const store = new ModelServiceSettingsStore(file, vault, async () => ["93.184.216.34"]);
+    const { baseUrl: _url, ...model } = defaultByokModelConfiguration();
+    await store.update({
+      mode: "byok",
+      byok: defaultByokModelConfiguration(),
+      providerApiKeys: { deepseek: "provider-secret" },
+      providerModels: { deepseek: [{ ...model, modelId: "new/model", displayName: "New model" }] },
+    });
+    const reopened = new ModelServiceSettingsStore(file, vault, async () => ["93.184.216.34"]);
+    const ref = byokModelRef("deepseek", `custom-${encodeURIComponent("new/model")}`);
+    expect(isByokModelRef(ref)).toBe(true);
+    await expect(reopened.execution(ref)).resolves.toMatchObject({
+      modelId: "new/model",
+      apiKey: "provider-secret",
+      baseUrl: "https://api.deepseek.com",
+    });
+    await reopened.update({ mode: "byok", byok: defaultByokModelConfiguration() });
+    expect((await reopened.state()).providerModels?.deepseek).toHaveLength(1);
+    await expect(reopened.execution(byokModelRef("deepseek", "custom-missing"))).rejects.toThrow(
+      "BYOK_MODEL_NOT_FOUND",
+    );
+    expect(await readFile(file, "utf8")).not.toContain("provider-secret");
+  });
+
+  it("reports unreadable keys and requires explicit recovery with an exact encrypted backup", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "model-service.bin");
+    const original = Buffer.from("old-unreadable-encrypted-fixture");
+    await writeFile(filePath, original);
+    const protector = new TestProtector();
+    const decode = protector.decrypt.bind(protector);
+    vi.spyOn(protector, "decrypt").mockImplementation(async (value) => {
+      if (value.equals(original)) throw new Error("OS_CREDENTIAL_DECRYPT_FAILED");
+      return await decode(value);
+    });
+    const vault = new ToolCredentialVault(filePath, protector);
+    const store = new ModelServiceSettingsStore(path.join(directory, "model-service.json"), vault);
+    expect(await store.state()).toMatchObject({
+      credentialIssue: "unreadable",
+      credentialConfigured: false,
+    });
+    expect(protector.decrypt).toHaveBeenCalledTimes(1);
+    const input = {
+      mode: "byok" as const,
+      byok: defaultByokModelConfiguration(),
+      providerApiKeys: { deepseek: "new-synthetic-deepseek", qwen: "new-synthetic-qwen" },
+    };
+    await expect(store.update(input)).rejects.toThrow("OS_CREDENTIAL_DECRYPT_FAILED");
+    expect(await readFile(filePath)).toEqual(original);
+    expect((await readdir(directory)).filter((name) => name.endsWith(".bak"))).toHaveLength(0);
+    expect(await store.update({ ...input, recoverUnreadableCredentials: true })).toMatchObject({
+      credentialIssue: null,
+      providerCredentials: { deepseek: true, qwen: true },
+    });
+    const backups = (await readdir(directory)).filter((name) => name.endsWith(".bak"));
+    expect(backups).toHaveLength(1);
+    expect(await readFile(path.join(directory, backups[0]!))).toEqual(original);
+    if (process.platform !== "win32")
+      expect((await stat(path.join(directory, backups[0]!))).mode & 0o777).toBe(0o600);
+    expect((await readFile(filePath)).toString()).not.toContain("new-synthetic");
+    expect(await vault.resolve("model-service:byok:deepseek:api-key")).toBe(
+      "new-synthetic-deepseek",
+    );
+    await store.update({ ...input, providerApiKeys: { kimi: "another-synthetic-key" } });
+    expect((await store.state()).providerCredentials).toMatchObject({
+      deepseek: true,
+      qwen: true,
+      kimi: true,
+    });
+  });
+
+  it("never resets readable keys or a temporarily unavailable store", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "model-service.bin");
+    const vault = new ToolCredentialVault(filePath, new TestProtector());
+    await vault.save("existing", "synthetic-existing-key");
+    const original = await readFile(filePath);
+    await expect(vault.recoverUnreadable({ replacement: "fixture" })).rejects.toThrow(
+      "CREDENTIAL_RECOVERY_NOT_REQUIRED",
+    );
+    const unavailable = new ToolCredentialVault(filePath, new TestProtector(false));
+    await expect(unavailable.recoverUnreadable({ replacement: "fixture" })).rejects.toThrow(
+      "OS_CREDENTIAL_STORE_UNAVAILABLE",
+    );
+    await expect(vault.recoverUnreadable({})).rejects.toThrow("BYOK_API_KEY_REQUIRED");
+    expect(await readFile(filePath)).toEqual(original);
+    expect((await readdir(directory)).filter((name) => name.endsWith(".bak"))).toHaveLength(0);
+  });
+
+  it("preserves the unreadable file if encrypting its replacement fails", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "model-service.bin");
+    const original = Buffer.from("encrypted-unreadable-fixture");
+    await writeFile(filePath, original);
+    const protector = new TestProtector();
+    vi.spyOn(protector, "decrypt").mockRejectedValue(new Error("OS_CREDENTIAL_DECRYPT_FAILED"));
+    vi.spyOn(protector, "encrypt").mockRejectedValue(new Error("OS_CREDENTIAL_ENCRYPT_FAILED"));
+    const vault = new ToolCredentialVault(filePath, protector);
+    await expect(vault.recoverUnreadable({ replacement: "fixture" })).rejects.toThrow(
+      "OS_CREDENTIAL_ENCRYPT_FAILED",
+    );
+    expect(await readFile(filePath)).toEqual(original);
+    expect((await readdir(directory)).filter((name) => name.endsWith(".bak"))).toHaveLength(0);
+  });
+
+  it("does not overwrite a credential file changed during recovery", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-key-recovery-"));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, "model-service.bin");
+    await writeFile(filePath, "old-unreadable-fixture");
+    const protector = new TestProtector();
+    vi.spyOn(protector, "decrypt").mockRejectedValue(new Error("OS_CREDENTIAL_DECRYPT_FAILED"));
+    const encrypt = protector.encrypt.bind(protector);
+    vi.spyOn(protector, "encrypt").mockImplementation(async (value) => {
+      await writeFile(filePath, "concurrent-writer-fixture");
+      return await encrypt(value);
+    });
+    await expect(
+      new ToolCredentialVault(filePath, protector).recoverUnreadable({ replacement: "fixture" }),
+    ).rejects.toThrow("CREDENTIAL_RECOVERY_CONFLICT");
+    expect(await readFile(filePath, "utf8")).toBe("concurrent-writer-fixture");
+  });
+
+  it("defaults to unconfigured BYOK mode and stores secrets only in the protected vault", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-model-settings-"));
+    temporaryDirectories.push(directory);
+    const configurationPath = path.join(directory, "model-service.json");
+    const credentialPath = path.join(directory, "model-service.bin");
+    const store = new ModelServiceSettingsStore(
+      configurationPath,
+      new ToolCredentialVault(credentialPath, new TestProtector()),
+      async () => ["93.184.216.34"],
+    );
+    await expect(store.state()).resolves.toMatchObject({
+      mode: "byok",
+      byok: {
+        baseUrl: "https://api.deepseek.com",
+        modelId: "deepseek-flash",
+      },
+      credentialConfigured: false,
+    });
+    const secret = "sk-user-secret-value";
+    const state = await store.update({
+      mode: "byok",
+      apiKey: secret,
+      byok: {
+        baseUrl: "https://api.example.com/v1/",
+        modelId: "example-model",
+        displayName: "Example",
+        contextWindow: 128_000,
+        maxOutputTokens: 8_192,
+        capabilities: { imageInput: false, functionCalling: true, reasoning: false },
+      },
+    });
+    expect(state).toMatchObject({ mode: "byok", credentialConfigured: true });
+    expect(await readFile(configurationPath, "utf8")).not.toContain(secret);
+    expect((await readFile(credentialPath)).toString()).not.toContain(secret);
+    await expect(store.execution()).resolves.toMatchObject({
+      apiKey: secret,
+      baseUrl: "https://api.example.com/v1",
+      modelId: "example-model",
+    });
+    await store.update({ mode: "hosted", byok: state.byok });
+    await expect(store.execution()).resolves.toBeUndefined();
+    await store.update({ mode: "byok", byok: state.byok });
+    await store.clearApiKey();
+    await expect(store.state()).resolves.toMatchObject({
+      mode: "byok",
+      credentialConfigured: false,
+    });
+  });
+
+  it("stores independent API keys for multiple preset providers", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-model-settings-"));
+    temporaryDirectories.push(directory);
+    const credentialPath = path.join(directory, "model-service.bin");
+    const store = new ModelServiceSettingsStore(
+      path.join(directory, "model-service.json"),
+      new ToolCredentialVault(credentialPath, new TestProtector()),
+      async () => ["93.184.216.34"],
+    );
+
+    const state = await store.update({
+      mode: "byok",
+      byok: {
+        baseUrl: "https://api.deepseek.com",
+        modelId: "deepseek-v4-flash",
+        displayName: "DeepSeek V4 Flash",
+        contextWindow: 1_000_000,
+        maxOutputTokens: 384_000,
+        capabilities: { imageInput: false, functionCalling: true, reasoning: true },
+      },
+      providerApiKeys: {
+        deepseek: "sk-deepseek-secret",
+        qwen: "sk-qwen-secret",
+      },
+    });
+
+    expect(state.providerCredentials).toMatchObject({ deepseek: true, qwen: true });
+    await expect(store.execution(byokModelRef("deepseek", "pro"))).resolves.toMatchObject({
+      apiKey: "sk-deepseek-secret",
+      modelId: "deepseek-v4-pro",
+    });
+    await expect(store.execution(byokModelRef("qwen", "plus"))).resolves.toMatchObject({
+      apiKey: "sk-qwen-secret",
+      modelId: "qwen3.7-plus",
+    });
+    expect((await readFile(credentialPath)).toString()).not.toContain("sk-deepseek-secret");
+    expect((await readFile(credentialPath)).toString()).not.toContain("sk-qwen-secret");
+
+    await store.clearApiKey("deepseek");
+    await expect(store.execution(byokModelRef("deepseek", "pro"))).resolves.toBeUndefined();
+    await expect(store.execution(byokModelRef("qwen", "plus"))).resolves.toMatchObject({
+      apiKey: "sk-qwen-secret",
+    });
+  });
+
+  it("rejects insecure non-loopback HTTP endpoints", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-model-settings-"));
+    temporaryDirectories.push(directory);
+    const store = new ModelServiceSettingsStore(
+      path.join(directory, "model-service.json"),
+      new ToolCredentialVault(path.join(directory, "model-service.bin"), new TestProtector()),
+    );
+    await expect(
+      store.update({
+        mode: "byok",
+        apiKey: "secret",
+        byok: {
+          baseUrl: "http://api.example.com/v1",
+          modelId: "model",
+          displayName: "Model",
+          contextWindow: 8_192,
+          maxOutputTokens: 1_024,
+          capabilities: { imageInput: false, functionCalling: false, reasoning: false },
+        },
+      }),
+    ).rejects.toThrow("BYOK_INSECURE_REMOTE_URL");
+  });
+
+  it("rejects private DNS targets before returning BYOK execution credentials", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "openerx-model-settings-"));
+    temporaryDirectories.push(directory);
+    const store = new ModelServiceSettingsStore(
+      path.join(directory, "model-service.json"),
+      new ToolCredentialVault(path.join(directory, "model-service.bin"), new TestProtector()),
+      async () => ["169.254.169.254"],
+    );
+    await store.update({
+      mode: "byok",
+      apiKey: "secret",
+      byok: {
+        baseUrl: "https://api.example.com/v1",
+        modelId: "model",
+        displayName: "Model",
+        contextWindow: 8_192,
+        maxOutputTokens: 1_024,
+        capabilities: { imageInput: false, functionCalling: false, reasoning: false },
+      },
+    });
+    await expect(store.execution()).rejects.toThrow("BYOK_PRIVATE_NETWORK_FORBIDDEN");
+  });
+});

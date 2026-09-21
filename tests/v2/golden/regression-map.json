@@ -1,0 +1,110 @@
+{
+  "GT-CHAT-01": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-02": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-03": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-04": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-05": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-06": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-07": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-08": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-09": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-CHAT-10": ["tests/v2/golden/chat-m1.test.ts"],
+  "GT-FILE-01": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-02": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-03": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-04": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-05": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-06": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-07": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-08": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-09": ["apps/desktop/tests/chat-ui.test.tsx", "tests/v2/golden/files-m4.test.ts"],
+  "GT-FILE-10": ["tests/v2/golden/files-m4.test.ts"],
+  "GT-ACCOUNT-01": [
+    "apps/desktop/scripts/e2e-account.mjs",
+    "apps/desktop/tests/account-session-manager.test.ts",
+    "apps/desktop/tests/credential-vault.test.ts",
+    "services/identity-api/tests/identity-service.test.ts",
+    "tests/v2/golden/account-m2.test.ts"
+  ],
+  "GT-ACCOUNT-02": ["apps/desktop/scripts/e2e-account.mjs", "tests/v2/golden/account-m2.test.ts"],
+  "GT-ACCOUNT-03": [
+    "packages/app-service/tests/sync-coordinator.test.ts",
+    "services/account-sync-api/tests/account-sync-service.test.ts",
+    "tests/v2/golden/account-m2.test.ts"
+  ],
+  "GT-ACCOUNT-04": [
+    "apps/desktop/tests/chat-ui.test.tsx",
+    "services/account-sync-api/tests/account-sync-service.test.ts",
+    "tests/v2/golden/account-m2.test.ts"
+  ],
+  "GT-ACCOUNT-05": [
+    "apps/desktop/scripts/e2e-account.mjs",
+    "services/identity-api/tests/identity-service.test.ts",
+    "tests/v2/golden/account-m2.test.ts"
+  ],
+  "GT-ACCOUNT-06": [
+    "packages/pi-host/tests/platform-provider.test.ts",
+    "services/model-gateway/tests/model-gateway-service.test.ts",
+    "tests/v2/golden/account-m2.test.ts"
+  ],
+  "GT-ACCOUNT-07": [
+    "packages/pi-host/tests/platform-provider.test.ts",
+    "services/model-gateway/tests/model-gateway-service.test.ts",
+    "tests/v2/golden/account-m2.test.ts"
+  ],
+  "GT-ACCOUNT-08": [
+    "apps/desktop/tests/chat-ui.test.tsx",
+    "services/token-usage-store/tests/usage-store.test.ts",
+    "tests/v2/golden/account-m2.test.ts",
+    "tests/v2/platform-alpha-m2.test.ts"
+  ],
+  "GT-ACCOUNT-09": [
+    "services/token-usage-store/tests/usage-store.test.ts",
+    "tests/v2/golden/account-m2.test.ts"
+  ],
+  "GT-ACCOUNT-10": [
+    "services/account-sync-api/tests/account-sync-service.test.ts",
+    "tests/v2/golden/account-m2.test.ts"
+  ],
+  "GT-BILLING-01": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-BILLING-02": [
+    "services/pricing-service/tests/pricing-service.test.ts",
+    "tests/v2/golden/billing-m3.test.ts"
+  ],
+  "GT-BILLING-03": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-BILLING-04": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-BILLING-05": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-BILLING-06": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-BILLING-07": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-BILLING-08": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-BILLING-09": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-BILLING-10": ["tests/v2/golden/billing-m3.test.ts"],
+  "GT-TOOL-01": ["packages/tool-sdk/tests/broker.test.ts", "tests/v2/golden/tools-m5.test.ts"],
+  "GT-TOOL-02": ["apps/desktop/scripts/e2e-tools.mjs", "tests/v2/golden/tools-m5.test.ts"],
+  "GT-TOOL-03": ["tests/v2/golden/tools-m5.test.ts"],
+  "GT-TOOL-04": [
+    "packages/tool-sdk/tests/shell-adapter.test.ts",
+    "tests/v2/golden/tools-m5.test.ts"
+  ],
+  "GT-TOOL-05": ["packages/tool-sdk/tests/mcp-adapter.test.ts", "tests/v2/golden/tools-m5.test.ts"],
+  "GT-TOOL-06": [
+    "packages/tool-sdk/tests/mcp-http-adapter.test.ts",
+    "tests/v2/golden/tools-m5.test.ts"
+  ],
+  "GT-TOOL-07": [
+    "apps/desktop/scripts/e2e-skills.mjs",
+    "packages/skills/tests/package-service.test.ts",
+    "tests/v2/golden/skills-m7.test.ts"
+  ],
+  "GT-TOOL-08": [
+    "apps/desktop/scripts/e2e-skills.mjs",
+    "packages/skills/tests/package-service.test.ts",
+    "tests/v2/golden/skills-m7.test.ts"
+  ],
+  "GT-TOOL-09": [
+    "apps/desktop/scripts/e2e-skills.mjs",
+    "packages/skills/tests/package-service.test.ts",
+    "tests/v2/golden/skills-m7.test.ts"
+  ],
+  "GT-TOOL-10": ["tests/v2/golden/tools-m5.test.ts"]
+}

@@ -1,0 +1,30 @@
+{
+  "checkpoint": "M8-local-personal-beta-foundation",
+  "updatedAt": "2026-08-26",
+  "localImplementation": {
+    "status": "complete",
+    "catalogTasks": 50,
+    "regressionTasks": 50,
+    "minimumExpectedResults": 46
+  },
+  "externalBeta": {
+    "status": "pending_external",
+    "targetUsers": { "minimum": 5, "maximum": 20, "completed": 0 },
+    "completedEvidence": ["real-deepseek-api-usage-and-server-charge-smoke"],
+    "requiredEvidence": [
+      "real-provider-streaming-stop-and-provider-invoice-reconciliation",
+      "alipay-wechat-sandbox-and-payment-reconciliation",
+      "ios-android-remote-device-matrix",
+      "windows-x64-and-macos-arm64-x64",
+      "signed-install-upgrade-and-rollback",
+      "personal-projects-signed-cross-device-directory-reconnect-and-remote",
+      "target-user-task-and-feedback-records"
+    ]
+  },
+  "performanceBudgets": {
+    "status": "provisional_local",
+    "desktopInteractiveMs": 5000,
+    "appServiceReadyMs": 5000,
+    "idleRssMiB": 512
+  }
+}

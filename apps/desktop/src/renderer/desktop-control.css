@@ -1,0 +1,49 @@
+.desktop-control-bar {
+  position: fixed;
+  z-index: 1500;
+  right: 24px;
+  bottom: 24px;
+  max-width: min(620px, calc(100vw - 48px));
+  padding: 14px 18px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 14px;
+  background: var(--workspace-surface);
+  color: var(--workspace-text);
+  box-shadow: var(--workspace-shadow);
+}
+.desktop-control-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.desktop-control-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.desktop-control-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.desktop-control-row small {
+  font-size: 11px;
+}
+.desktop-control-row button {
+  white-space: nowrap;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--workspace-border);
+  background: var(--workspace-surface);
+  color: var(--workspace-text);
+  cursor: pointer;
+}
+.desktop-control-row button:focus-visible {
+  outline: 2px solid var(--workspace-accent-strong);
+  outline-offset: 2px;
+}
+.desktop-control-bar p {
+  margin: 10px 0 0;
+  font-size: 12px;
+}

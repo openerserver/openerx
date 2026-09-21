@@ -1,0 +1,29 @@
+{
+  "cli": {
+    "version": ">= 16.15.0",
+    "requireCommit": true,
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "credentialsSource": "remote",
+      "env": {
+        "OPENERX_RELEASE_MODE": "1"
+      }
+    },
+    "production": {
+      "distribution": "store",
+      "channel": "production",
+      "credentialsSource": "remote",
+      "autoIncrement": true,
+      "env": {
+        "OPENERX_RELEASE_MODE": "1"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

@@ -1,0 +1,66 @@
+.browser-settings h4,
+.browser-settings h5 {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.browser-settings label,
+.browser-settings form,
+.browser-settings p,
+.browser-settings ol {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.browser-settings button {
+  min-height: 34px;
+  padding: 6px 10px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 7px;
+  justify-self: start;
+  cursor: pointer;
+}
+
+.browser-settings button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.browser-settings input:not([type="checkbox"]),
+.browser-settings select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 10px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 7px;
+  font: inherit;
+}
+
+.browser-settings form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.browser-settings form label {
+  display: grid;
+  flex: 1 1 180px;
+  gap: 6px;
+}
+
+.browser-settings input[type="checkbox"] {
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+.browser-settings button:focus-visible,
+.browser-settings input:focus-visible,
+.browser-settings select:focus-visible {
+  outline: 2px solid var(--workspace-text);
+  outline-offset: 2px;
+}

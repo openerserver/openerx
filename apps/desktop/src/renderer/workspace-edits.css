@@ -1,0 +1,109 @@
+.workspace-edits {
+  margin: 12px 0;
+  border: 1px solid var(--workspace-border);
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 13px;
+}
+.workspace-edits-header,
+.workspace-edit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.workspace-edits-header {
+  padding: 10px 12px;
+}
+.workspace-edits-header strong,
+.workspace-edits button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.workspace-edit-count {
+  color: var(--workspace-muted);
+  font-weight: 400;
+}
+.workspace-edit {
+  border-top: 1px solid var(--workspace-border);
+  padding: 10px 12px;
+}
+.workspace-edits button {
+  font: inherit;
+  white-space: nowrap;
+  padding: 5px 8px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.workspace-edits button:hover:not(:disabled) {
+  color: var(--workspace-accent-strong);
+  border-color: var(--workspace-accent-strong);
+}
+.workspace-edits button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.workspace-edits :is(button, summary):focus-visible {
+  outline: 2px solid var(--workspace-accent-strong);
+  outline-offset: 3px;
+}
+.workspace-edit-paths {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.workspace-edit-paths span {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.workspace-edit-reverted {
+  opacity: 0.65;
+  white-space: nowrap;
+}
+.workspace-edit-diffs {
+  margin-top: 8px;
+}
+.workspace-edit-diffs summary {
+  cursor: pointer;
+  opacity: 0.7;
+}
+.workspace-edit-diffs strong {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.workspace-edit-diffs pre {
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+}
+.workspace-edit-note {
+  margin: 8px 12px 10px;
+  opacity: 0.7;
+}
+.workspace-history-note {
+  margin: 8px 0;
+  color: var(--workspace-muted);
+  font-size: 12px;
+}
+.workspace-history-diff {
+  margin-top: 8px;
+}
+.workspace-edits > .inline-error {
+  margin: 8px 12px 10px;
+}
+@media (max-width: 600px) {
+  .workspace-edit-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+}

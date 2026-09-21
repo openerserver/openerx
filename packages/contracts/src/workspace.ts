@@ -1,0 +1,201 @@
+import { z } from "zod";
+import { entityIdSchema, timestampSchema } from "./common";
+
+// These are patch preconditions, not requests for additional user permission.
+export function workspacePatchRecoveryMessage(code: string): string | null {
+  switch (code) {
+    case "WORKSPACE_READ_REQUIRED":
+      return "补丁未写入：请先在本轮用 openerx_workspace_read 读取所有待修改的已有文件，再按当前内容重试；这不是权限不足，无需再次授权。";
+    case "WORKSPACE_INSTRUCTIONS_NOT_ACKNOWLEDGED":
+      return "补丁未写入：请用 openerx_workspace_instructions 加载所有源路径和目标路径适用的项目指令，遵循指令后重试。";
+    case "WORKSPACE_CONTENT_CHANGED":
+    case "WORKSPACE_PATCH_CONTEXT_MISMATCH":
+      return "补丁未写入：文件内容或补丁上下文已变化，请用 openerx_workspace_read 重新读取，并按当前内容生成补丁后重试。";
+    case "WORKSPACE_PATCH_DUPLICATE_PATH":
+      return "补丁未写入：同一路径不能在一个补丁中重复出现；修改已有文件请使用一个 *** Update File:，不要同时 Delete 和 Add 同一路径。";
+    default:
+      return null;
+  }
+}
+
+export const workspaceAccessSchema = z.enum(["read_only", "read_write"]);
+export const workspaceBindingRoleSchema = z.enum(["primary", "additional"]);
+export const workspaceBindingSourceSchema = z.enum(["default", "project", "user_added"]);
+
+export const workspaceGrantSchema = z
+  .object({
+    id: entityIdSchema,
+    ownerProfileId: z.string().min(1),
+    conversationId: entityIdSchema.nullable(),
+    displayName: z.string().trim().min(1).max(240),
+    rootPath: z.string().min(1).max(4_096),
+    access: workspaceAccessSchema,
+    allowNetwork: z.boolean(),
+    expiresAt: timestampSchema.nullable(),
+    revokedAt: timestampSchema.nullable(),
+    createdAt: timestampSchema,
+    bindingRole: workspaceBindingRoleSchema.optional(),
+    bindingSource: workspaceBindingSourceSchema.optional(),
+  })
+  .strict();
+
+export const workspaceGrantPrivilegedInputSchema = z
+  .object({
+    rootPath: z.string().min(1).max(4_096),
+    conversationId: entityIdSchema.nullable(),
+    access: workspaceAccessSchema.default("read_write"),
+    allowNetwork: z.boolean().default(false),
+    expiresAt: timestampSchema.nullable().default(null),
+    role: workspaceBindingRoleSchema.optional(),
+  })
+  .strict();
+
+export const workspaceChooseInputSchema = workspaceGrantPrivilegedInputSchema
+  .omit({ rootPath: true })
+  .strict();
+
+export const workspaceListInputSchema = z
+  .object({ conversationId: entityIdSchema.optional() })
+  .strict();
+
+export const workspaceRevokeInputSchema = z.object({ workspaceGrantId: entityIdSchema }).strict();
+export const workspaceSetPrimaryInputSchema = z
+  .object({ conversationId: entityIdSchema, workspaceGrantId: entityIdSchema })
+  .strict();
+
+export const workspaceInstructionSourceSchema = z
+  .object({
+    kind: z.enum(["global", "project", "nested"]),
+    workspaceGrantId: entityIdSchema.nullable(),
+    relativePath: z.string().min(1).max(2_048),
+    appliesTo: z.string().min(1).max(2_048),
+    digest: z.string().regex(/^[a-f0-9]{64}$/u),
+    content: z.string().max(200_000),
+  })
+  .strict();
+
+export const workspaceChangeSchema = z
+  .object({
+    id: entityIdSchema,
+    workspaceGrantId: entityIdSchema,
+    runId: entityIdSchema,
+    relativePath: z.string().min(1).max(2_048),
+    status: z.enum(["preparing", "applied", "reverted", "failed", "outcome_unknown"]),
+    beforeSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    afterSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    diff: z.string().max(5_000_000),
+    createdAt: timestampSchema,
+    updatedAt: timestampSchema,
+  })
+  .strict();
+
+export const workspaceChangeSetStatusSchema = z.enum([
+  "pending_review",
+  "reviewed",
+  "applying",
+  "applied",
+  "reverted",
+  "discarded",
+  "blocked",
+  "apply_failed",
+  "outcome_unknown",
+]);
+
+export const workspaceChangeSetEntrySchema = z
+  .object({
+    workspaceGrantId: entityIdSchema,
+    workspaceLogicalName: z.string().min(1).max(240),
+    relativePath: z.string().min(1).max(2_048),
+    previousRelativePath: z.string().min(1).max(2_048).nullable(),
+    kind: z.enum(["created", "modified", "deleted", "renamed"]),
+    entryType: z.enum(["file", "directory", "symlink", "other"]),
+    beforeSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    afterSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    beforeText: z.string().max(5_000_000).nullable(),
+    afterText: z.string().max(5_000_000).nullable(),
+    beforeMode: z.number().int().min(0).max(0o7777).optional(),
+    afterMode: z.number().int().min(0).max(0o7777).optional(),
+    applySupported: z.boolean(),
+  })
+  .strict();
+
+export const workspaceChangeSetSchema = z
+  .object({
+    id: entityIdSchema,
+    workspaceGrantId: entityIdSchema,
+    runId: entityIdSchema,
+    toolCallId: entityIdSchema,
+    status: workspaceChangeSetStatusSchema,
+    baselineRevision: z.string().regex(/^[a-f0-9]{64}$/u),
+    finalRevision: z.string().regex(/^[a-f0-9]{64}$/u),
+    manifest: z.array(z.unknown()).max(10_000),
+    diffs: z.array(z.unknown()).max(10_000),
+    entries: z.array(workspaceChangeSetEntrySchema).max(10_000),
+    createdAt: timestampSchema,
+    updatedAt: timestampSchema,
+  })
+  .strict();
+
+export const workspaceEditSummarySchema = z
+  .object({
+    id: entityIdSchema,
+    kind: z.enum(["patch", "change_set"]),
+    workspaceGrantId: entityIdSchema,
+    relativePaths: z.array(z.string().max(2_048)).max(10_000),
+    status: z.union([workspaceChangeSchema.shape.status, workspaceChangeSetStatusSchema]),
+    canUndo: z.boolean(),
+    createdAt: timestampSchema,
+  })
+  .strict();
+
+export type WorkspaceEditSummary = z.infer<typeof workspaceEditSummarySchema>;
+// A durable combined undo plan survives a process exit between file and database writes.
+export const workspaceUndoRecordSchema = z
+  .object({
+    id: entityIdSchema,
+    runId: entityIdSchema,
+    edits: z.array(workspaceEditSummarySchema.pick({ id: true, kind: true, status: true })),
+    mutations: z.array(
+      z
+        .object({
+          workspaceGrantId: entityIdSchema,
+          relativePath: z.string().min(1).max(2_048),
+          beforeText: z.string().max(5_000_000).nullable(),
+          afterText: z.string().max(5_000_000).nullable(),
+          beforeMode: z.number().int().min(0).max(0o7777).optional(),
+          afterMode: z.number().int().min(0).max(0o7777).optional(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type WorkspaceUndoRecord = z.infer<typeof workspaceUndoRecordSchema>;
+export type WorkspaceAccess = z.infer<typeof workspaceAccessSchema>;
+export type WorkspaceBindingRole = z.infer<typeof workspaceBindingRoleSchema>;
+export type WorkspaceBindingSource = z.infer<typeof workspaceBindingSourceSchema>;
+export type WorkspaceGrant = z.infer<typeof workspaceGrantSchema>;
+export type WorkspaceInstructionSource = z.infer<typeof workspaceInstructionSourceSchema>;
+export type WorkspaceChange = z.infer<typeof workspaceChangeSchema>;
+export type WorkspaceChangeSetStatus = z.infer<typeof workspaceChangeSetStatusSchema>;
+export type WorkspaceChangeSet = z.infer<typeof workspaceChangeSetSchema>;
+export type WorkspaceChangeSetEntry = z.infer<typeof workspaceChangeSetEntrySchema>;
+
+export interface WorkspaceBridge {
+  chooseWorkspace(
+    input: z.input<typeof workspaceChooseInputSchema>,
+  ): Promise<WorkspaceGrant | null>;
+  listWorkspaces(input?: z.input<typeof workspaceListInputSchema>): Promise<WorkspaceGrant[]>;
+  revokeWorkspace(input: z.input<typeof workspaceRevokeInputSchema>): Promise<WorkspaceGrant>;
+  setPrimaryWorkspace(
+    input: z.input<typeof workspaceSetPrimaryInputSchema>,
+  ): Promise<WorkspaceGrant>;
+}

@@ -1,0 +1,59 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+
+const root = path.resolve(import.meta.dirname, "../../..");
+const regressions = JSON.parse(
+  readFileSync(path.join(import.meta.dirname, "regression-map.json"), "utf8"),
+) as Record<string, string[]>;
+const catalog = JSON.parse(
+  readFileSync(path.join(import.meta.dirname, "catalog.json"), "utf8"),
+) as {
+  tasks: Array<{ id: string }>;
+};
+const status = JSON.parse(
+  readFileSync(path.join(import.meta.dirname, "m8-gate-status.json"), "utf8"),
+) as {
+  localImplementation: { status: string; catalogTasks: number; regressionTasks: number };
+  externalBeta: {
+    status: string;
+    targetUsers: { completed: number };
+    completedEvidence: string[];
+    requiredEvidence: string[];
+  };
+  performanceBudgets: Record<string, string | number>;
+};
+
+describe("M8 Personal Beta readiness ledger", () => {
+  it("links every Golden task to existing executable regression coverage", () => {
+    expect(catalog.tasks).toHaveLength(50);
+    for (const { id } of catalog.tasks) {
+      expect(regressions[id]?.length, id).toBeGreaterThan(0);
+      for (const test of regressions[id] ?? [])
+        expect(existsSync(path.join(root, test)), test).toBe(true);
+    }
+    expect(status.localImplementation).toMatchObject({
+      status: "complete",
+      catalogTasks: 50,
+      regressionTasks: 50,
+    });
+  });
+
+  it("keeps real-user and cross-platform Beta evidence pending instead of simulating approval", () => {
+    expect(status.externalBeta.status).toBe("pending_external");
+    expect(status.externalBeta.targetUsers.completed).toBe(0);
+    expect(status.externalBeta.completedEvidence).toEqual([
+      "real-deepseek-api-usage-and-server-charge-smoke",
+    ]);
+    expect(status.externalBeta.requiredEvidence).toHaveLength(7);
+    expect(status.externalBeta.requiredEvidence).toContain(
+      "personal-projects-signed-cross-device-directory-reconnect-and-remote",
+    );
+    expect(status.performanceBudgets).toMatchObject({
+      status: "provisional_local",
+      desktopInteractiveMs: 5_000,
+      appServiceReadyMs: 5_000,
+      idleRssMiB: 512,
+    });
+  });
+});

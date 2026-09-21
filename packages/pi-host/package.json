@@ -1,0 +1,27 @@
+{
+  "name": "@openerx/pi-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/agent-session.ts",
+    "./host": "./src/host.ts",
+    "./memory-background": "./src/memory-background.ts",
+    "./platform-provider": "./src/platform-provider.ts",
+    "./process": "./src/process.ts"
+  },
+  "types": "./src/agent-session.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.86.0",
+    "@earendil-works/pi-coding-agent": "0.86.0",
+    "@openerx/contracts": "0.0.0",
+    "@sinclair/typebox": "0.34.52"
+  },
+  "devDependencies": {
+    "electron": "44.0.0"
+  }
+}

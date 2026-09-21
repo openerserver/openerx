@@ -1,0 +1,79 @@
+name: V2 CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: V2 quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npm run check:public-surface
+      - run: npm run audit:prod:v2
+      - run: npm run check:boundaries:v2
+      - run: npm run check:builtin-skills:v2
+        env:
+          OPENERX_BUILTIN_SKILL_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+      - run: npm run check:release-graph:v2
+      - run: npm run check:release:v2
+      - run: npm run lint:v2
+      - run: npm run typecheck:v2
+      - run: npm run test:v2
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2022
+            platform: win32
+            arch: x64
+          - target: macos-arm64
+            os: macos-14
+            platform: darwin
+            arch: arm64
+          - target: macos-x64
+            os: macos-14
+            platform: darwin
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npm run check:public-surface
+      - run: npm run build --workspace @openerx/contracts
+      - run: npm run build --workspace @openerx/release
+      - run: npm run package --workspace @openerx/desktop -- --arch=${{ matrix.arch }}
+      - run: npm run test:e2e:v2
+      - run: npm run verify:fuses --workspace @openerx/desktop
+      - run: npm run verify:release-artifacts --workspace @openerx/desktop
+        env:
+          OPENERX_RELEASE_TARGET: ${{ matrix.platform }}-${{ matrix.arch }}
+      - run: npm run verify:native-signature --workspace @openerx/desktop
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openerx-${{ matrix.target }}-unsigned
+          path: apps/desktop/out/
+          if-no-files-found: error
+          retention-days: 7

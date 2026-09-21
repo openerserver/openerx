@@ -1,0 +1,88 @@
+/* All application colors live here. Foreground and surface tokens are paired
+   in both themes; document/image previews intentionally keep their own colors. */
+:root {
+  color-scheme: dark;
+  color: var(--workspace-text);
+  background: var(--workspace-bg);
+  --workspace-bg: #111113;
+  --workspace-surface: #18181b;
+  --workspace-surface-raised: #242428;
+  --workspace-sidebar: #151518;
+  --workspace-border: #38383f;
+  --workspace-border-strong: #777781;
+  --workspace-text: #f4f4f5;
+  --workspace-muted: #adaeb8;
+  --workspace-muted-strong: #d2d2da;
+  --workspace-accent: #8bd7a7;
+  --workspace-accent-strong: #a1e4b9;
+  --workspace-accent-ink: #102b1b;
+  --workspace-accent-hover: #a1e4b9;
+  --workspace-accent-muted-ink: #234831;
+  --workspace-accent-soft: #233b2d;
+  --workspace-user-message: #23352b;
+  --workspace-icon-surface: #293d32;
+  --workspace-dock: #18181b;
+  --workspace-status-surface: #2d2d33;
+  --workspace-success: #91d7a5;
+  --workspace-success-surface: #21372a;
+  --workspace-success-border: #537d61;
+  --workspace-warning: #f0c17d;
+  --workspace-warning-surface: #3a2d1d;
+  --workspace-warning-border: #957345;
+  --workspace-danger: #ffaaa5;
+  --workspace-danger-surface: #412725;
+  --workspace-danger-border: #a46964;
+  --workspace-danger-action: #a33335;
+  --workspace-danger-ink: #ffffff;
+  --workspace-info: #a9c9ff;
+  --workspace-info-surface: #25334a;
+  --workspace-code-bg: #101114;
+  --workspace-code-text: #ededf2;
+  --workspace-code-control: #292b31;
+  --workspace-code-border: #62656f;
+  --workspace-switch-thumb: #ffffff;
+  --workspace-shadow: 0 14px 42px rgb(0 0 0 / 24%);
+  --workspace-surface-subtle: var(--workspace-surface-raised);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --workspace-bg: #f5f5f7;
+  --workspace-surface: #ffffff;
+  --workspace-surface-raised: #eeeef2;
+  --workspace-sidebar: #f0f0f3;
+  --workspace-border: #d4d4dd;
+  --workspace-border-strong: #858590;
+  --workspace-text: #24242b;
+  --workspace-muted: #62626f;
+  --workspace-muted-strong: #454550;
+  --workspace-accent: #5145cd;
+  --workspace-accent-strong: #493cba;
+  --workspace-accent-ink: #ffffff;
+  --workspace-accent-hover: #4335b3;
+  --workspace-accent-muted-ink: #ffffff;
+  --workspace-accent-soft: #eae7fc;
+  --workspace-user-message: #ece9fa;
+  --workspace-icon-surface: #e7e3fa;
+  --workspace-dock: #f8f8fa;
+  --workspace-status-surface: #e7e7ed;
+  --workspace-success: #24613b;
+  --workspace-success-surface: #e2f0e6;
+  --workspace-success-border: #729c7f;
+  --workspace-warning: #805313;
+  --workspace-warning-surface: #fbefd8;
+  --workspace-warning-border: #a88143;
+  --workspace-danger: #ab3436;
+  --workspace-danger-surface: #fbe8e7;
+  --workspace-danger-border: #bf7574;
+  --workspace-danger-action: #a33335;
+  --workspace-danger-ink: #ffffff;
+  --workspace-info: #295da1;
+  --workspace-info-surface: #e7eefb;
+  --workspace-code-bg: #f0f1f5;
+  --workspace-code-text: #272a36;
+  --workspace-code-control: #e3e5ec;
+  --workspace-code-border: #868a97;
+  --workspace-shadow: 0 14px 42px rgb(28 28 34 / 12%);
+}

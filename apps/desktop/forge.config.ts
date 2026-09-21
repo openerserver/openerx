@@ -1,0 +1,320 @@
+import { execFileSync } from "node:child_process";
+import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { FuseV1Options, FuseVersion, flipFuses } from "@electron/fuses";
+import { MakerDMG } from "@electron-forge/maker-dmg";
+import { MakerSquirrel } from "@electron-forge/maker-squirrel";
+import { MakerZIP } from "@electron-forge/maker-zip";
+import { VitePlugin } from "@electron-forge/plugin-vite";
+import type { ForgeConfig } from "@electron-forge/shared-types";
+import { releaseUpdateConfigurationSchema } from "@openerx/contracts";
+import { resolveMacSigningIdentity } from "./scripts/mac-signing.mjs";
+import { signWindowsFile, verifyWindowsFile } from "./scripts/windows-signing.mjs";
+import { buildInfo } from "./vite.build-info";
+
+const releaseMode = process.env.OPENERX_RELEASE_MODE === "1";
+const windowsStoreBuild =
+  process.platform === "win32" && process.env.OPENERX_DISTRIBUTION === "ms-store";
+const desktopDirectory = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const macEntitlements = path.join(desktopDirectory, "resources", "entitlements.mac.plist");
+const macChildEntitlements = path.join(
+  desktopDirectory,
+  "resources",
+  "entitlements.mac.inherit.plist",
+);
+const macBrowserHelperBuildScript = path.join(
+  desktopDirectory,
+  "scripts",
+  "build-macos-browser-helper.mjs",
+);
+const windowsBrowserHelperSource = path.join(
+  desktopDirectory,
+  "native",
+  "windows-browser-accessibility.ps1",
+);
+
+const resvgNativePackages: Record<string, string> = {
+  "darwin-arm64": "@resvg/resvg-js-darwin-arm64",
+  "darwin-x64": "@resvg/resvg-js-darwin-x64",
+  "linux-arm64": "@resvg/resvg-js-linux-arm64-gnu",
+  "linux-armv7l": "@resvg/resvg-js-linux-arm-gnueabihf",
+  "linux-x64": "@resvg/resvg-js-linux-x64-gnu",
+  "win32-arm64": "@resvg/resvg-js-win32-arm64-msvc",
+  "win32-ia32": "@resvg/resvg-js-win32-ia32-msvc",
+  "win32-x64": "@resvg/resvg-js-win32-x64-msvc",
+};
+
+function copyRuntimePackage(buildPath: string, packageName: string): void {
+  const source = path.dirname(require.resolve(`${packageName}/package.json`));
+  const destination = path.join(buildPath, "node_modules", ...packageName.split("/"));
+  mkdirSync(path.dirname(destination), { recursive: true });
+  cpSync(source, destination, { recursive: true, dereference: true });
+}
+
+function requiredEnvironment(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`RELEASE_ENV_REQUIRED:${name}`);
+  return value;
+}
+
+function updateConfiguration() {
+  if (!releaseMode || windowsStoreBuild) {
+    return releaseUpdateConfigurationSchema.parse({
+      enabled: false,
+      channel: "internal",
+      manifestUrl: null,
+      keyId: null,
+      publicKeyPem: null,
+    });
+  }
+  const publicKeyPem = Buffer.from(
+    requiredEnvironment("OPENERX_UPDATE_PUBLIC_KEY_BASE64"),
+    "base64",
+  ).toString("utf8");
+  if (!publicKeyPem.includes("BEGIN PUBLIC KEY")) throw new Error("RELEASE_PUBLIC_KEY_INVALID");
+  return releaseUpdateConfigurationSchema.parse({
+    enabled: true,
+    channel: requiredEnvironment("OPENERX_RELEASE_CHANNEL"),
+    manifestUrl: requiredEnvironment("OPENERX_UPDATE_MANIFEST_URL"),
+    keyId: requiredEnvironment("OPENERX_UPDATE_KEY_ID"),
+    publicKeyPem,
+  });
+}
+
+function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
+  if (process.platform === "darwin") {
+    const identity = resolveMacSigningIdentity();
+    if (!identity) return {};
+    const osxSign = {
+      identity,
+      ignore: (filePath: string) => /\.(?:asar|bin|dat|pak)$/iu.test(filePath),
+      optionsForFile: (filePath: string) => ({
+        hardenedRuntime: true,
+        entitlements:
+          path.basename(filePath) === "openerx.app" ? macEntitlements : macChildEntitlements,
+      }),
+    };
+    if (!releaseMode) return { osxSign };
+    return {
+      osxSign,
+      osxNotarize: {
+        appleApiKey: requiredEnvironment("APPLE_API_KEY"),
+        appleApiKeyId: requiredEnvironment("APPLE_API_KEY_ID"),
+        appleApiIssuer: requiredEnvironment("APPLE_API_ISSUER"),
+      },
+    };
+  }
+  if (process.platform === "win32") {
+    // Store signs the submitted MSIX. This branch is independent of signed EXE distribution.
+    if (windowsStoreBuild) return {};
+    const identityConfigured = Boolean(
+      process.env.WINDOWS_CERTIFICATE_FILE || process.env.OPENERX_WINDOWS_SIGN_THUMBPRINT,
+    );
+    if (!releaseMode && process.env.OPENERX_REQUIRE_SIGNED_WINDOWS !== "1" && !identityConfigured)
+      return {};
+    if (!process.env.WINDOWS_CERTIFICATE_FILE && !process.env.OPENERX_WINDOWS_SIGN_THUMBPRINT)
+      throw new Error("WINDOWS_SIGNING_IDENTITY_REQUIRED");
+    return {
+      windowsSign: {
+        hookFunction: async (filePath: string) => {
+          // The helper is signed before its hash is sealed inside app.asar.
+          // Signing it again here would invalidate that protected manifest.
+          const helper =
+            /[\\/]native[\\/]windows-desktop-control[\\/]openerx-desktop-helper\.exe$/iu.test(
+              filePath,
+            );
+          if (helper) verifyWindowsFile(filePath, process.env, undefined, true);
+          else signWindowsFile(filePath);
+        },
+      },
+    };
+  }
+  if (!releaseMode) return {};
+  throw new Error("RELEASE_HOST_PLATFORM_UNSUPPORTED");
+}
+
+const config: ForgeConfig = {
+  packagerConfig: {
+    appVersion: buildInfo.version,
+    buildVersion: buildInfo.nativeBuildNumber,
+    asar: {
+      unpack:
+        "**/{*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1,openerx-desktop-helper.exe}",
+    },
+    appBundleId: "com.openerx.desktop",
+    icon: path.join(desktopDirectory, "public", "assets", "openerx"),
+    appCategoryType: "public.app-category-type.productivity",
+    appCopyright: "Copyright © 2026 openerx",
+    executableName: "openerx",
+    extendInfo: {
+      NSScreenCaptureUsageDescription: "openerx 在您请求桌面读取时使用录屏权限。",
+      NSAppleEventsUsageDescription:
+        "openerx 仅在您逐次批准桌面操作后，使用系统自动化控制您指定的应用。",
+    },
+    name: "openerx",
+    ...signingConfiguration(),
+  },
+  hooks: {
+    postPackage: async (forgeConfig, { platform, outputPaths }) => {
+      if (!["darwin", "mas"].includes(platform)) return;
+      for (const output of outputPaths) {
+        const appBundle = path.join(output, "openerx.app");
+        // Packager finalizes Info.plist after packageAfterCopy. Refresh the
+        // local ad-hoc seal only after those edits; retain formal signatures.
+        if (!forgeConfig.packagerConfig.osxSign) {
+          execFileSync("codesign", ["--force", "--deep", "--sign", "-", appBundle], {
+            stdio: "inherit",
+          });
+        }
+        execFileSync("codesign", ["--verify", "--deep", "--strict", appBundle], {
+          stdio: "inherit",
+        });
+      }
+    },
+    packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
+      writeFileSync(
+        path.join(buildPath, "build-info.json"),
+        JSON.stringify(buildInfo, null, 2) + "\n",
+      );
+      cpSync(
+        path.join(desktopDirectory, "browser-extension"),
+        path.join(buildPath, "browser-extension"),
+        { recursive: true },
+      );
+      if (["darwin", "mas"].includes(platform)) {
+        execFileSync(
+          process.execPath,
+          [
+            path.join(desktopDirectory, "scripts", "build-macos-screen-permission.mjs"),
+            "--output",
+            path.join(buildPath, "native", "openerx-screen-permission.node"),
+            "--arch",
+            arch,
+          ],
+          { stdio: "inherit" },
+        );
+        execFileSync(
+          process.execPath,
+          [
+            macBrowserHelperBuildScript,
+            "--output",
+            path.join(buildPath, "native", "openerx-browser-accessibility"),
+            "--arch",
+            arch,
+          ],
+          { stdio: "inherit" },
+        );
+      }
+      if (platform === "win32") {
+        const nativeDirectory = path.join(buildPath, "native");
+        mkdirSync(nativeDirectory, { recursive: true });
+        cpSync(
+          windowsBrowserHelperSource,
+          path.join(nativeDirectory, "windows-browser-accessibility.ps1"),
+        );
+        if (arch === "x64") {
+          execFileSync(
+            process.execPath,
+            [
+              path.join(desktopDirectory, "scripts", "build-windows-desktop-helper.mjs"),
+              "--arch",
+              arch,
+              "--output",
+              path.join(nativeDirectory, "windows-desktop-control"),
+            ],
+            { stdio: "inherit", windowsHide: true },
+          );
+        }
+      }
+      const resvgNativePackage = resvgNativePackages[`${platform}-${arch}`];
+      if (!resvgNativePackage) {
+        throw new Error(`RESVG_NATIVE_TARGET_UNSUPPORTED:${platform}-${arch}`);
+      }
+      copyRuntimePackage(buildPath, "@resvg/resvg-js");
+      copyRuntimePackage(buildPath, resvgNativePackage);
+
+      const releaseDirectory = path.join(buildPath, "release");
+      mkdirSync(releaseDirectory, { recursive: true });
+      writeFileSync(
+        path.join(releaseDirectory, "update-config.json"),
+        `${JSON.stringify(updateConfiguration(), null, 2)}\n`,
+        { mode: 0o644 },
+      );
+      const appBasePath = path.resolve(buildPath, "../..");
+      const executablePath = ["darwin", "mas"].includes(platform)
+        ? path.join(appBasePath, "MacOS", "openerx")
+        : path.join(appBasePath, platform === "win32" ? "electron.exe" : "openerx");
+      const hasMacSigning = Boolean(forgeConfig.packagerConfig.osxSign);
+
+      await flipFuses(executablePath, {
+        version: FuseVersion.V1,
+        strictlyRequireAllFuses: true,
+        resetAdHocDarwinSignature:
+          !hasMacSigning && ["darwin", "mas"].includes(platform) && arch === "arm64",
+        [FuseV1Options.RunAsNode]: false,
+        [FuseV1Options.EnableCookieEncryption]: true,
+        [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+        [FuseV1Options.EnableNodeCliInspectArguments]: false,
+        [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+        [FuseV1Options.OnlyLoadAppFromAsar]: true,
+        [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
+        [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
+        [FuseV1Options.WasmTrapHandlers]: true,
+      });
+    },
+  },
+  rebuildConfig: {},
+  makers: [
+    new MakerSquirrel({
+      name: "openerx",
+      exe: "openerx.exe",
+      setupExe: "openerxSetup.exe",
+      title: "openerx",
+      authors: "openerx",
+    }),
+    new MakerZIP({}, ["darwin"]),
+    new MakerDMG({}),
+  ],
+  plugins: [
+    new VitePlugin({
+      build: [
+        {
+          entry: "src/main/index.ts",
+          config: "vite.main.config.mts",
+          target: "main",
+        },
+        {
+          entry: "src/preload/index.ts",
+          config: "vite.preload.config.mts",
+          target: "preload",
+        },
+        {
+          entry: "src/utility/app-service.ts",
+          config: "vite.app-service.config.mts",
+          target: "main",
+        },
+        {
+          entry: "src/utility/pi-host.ts",
+          config: "vite.pi-host.config.mts",
+          target: "main",
+        },
+        {
+          entry: "src/utility/remote-host.ts",
+          config: "vite.remote-host.config.mts",
+          target: "main",
+        },
+      ],
+      renderer: [
+        {
+          name: "main_window",
+          config: "vite.renderer.config.mts",
+        },
+      ],
+    }),
+  ],
+};
+
+export default config;

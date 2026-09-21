@@ -1,0 +1,111 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+const vitest = path.join(path.dirname(require.resolve("vitest/package.json")), "vitest.mjs");
+const tsc = path.join(path.dirname(require.resolve("typescript/package.json")), "bin/tsc");
+function run(entry, args, cwd = root) {
+  const result = spawnSync(process.execPath, [entry, ...args], { cwd, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+for (const relativePath of [
+  "apps/desktop/src/renderer/App.tsx",
+  "apps/desktop/src/renderer/styles.css",
+]) {
+  const source = readFileSync(path.join(root, relativePath), "utf8");
+  assert.equal(
+    source.includes("conversation-usage") || source.includes("次模型调用 · Token"),
+    false,
+    `Conversation header usage display must stay removed: ${relativePath}`,
+  );
+}
+for (const project of [
+  "apps/desktop",
+  "packages/app-service",
+  "packages/pi-host",
+  "packages/tool-sdk",
+  "packages/remote-host",
+  "packages/remote-protocol",
+])
+  run(tsc, ["--noEmit", "-p", `${project}/tsconfig.json`]);
+run(
+  vitest,
+  [
+    "run",
+    "--maxWorkers=2",
+    "tests/browser-settings-panel.test.tsx",
+    "tests/browser-site-permissions.test.ts",
+    "tests/browser-managed-permissions.test.ts",
+    "tests/browser-routing.test.ts",
+    "tests/browser-script-security.test.ts",
+    "tests/desktop-artifact-identity.test.ts",
+    "tests/browser-extension-transport.test.ts",
+    "tests/browser-computer-use-system-default.test.ts",
+    "tests/browser-computer-use-browser-bridge.test.ts",
+    "tests/desktop-tool-availability.test.ts",
+    "tests/windows-desktop-availability.test.ts",
+    "tests/desktop-control.test.ts",
+    "tests/windows-interaction.test.ts",
+    "tests/windows-desktop-artifact.test.ts",
+    "tests/desktop-native-permissions.test.ts",
+    "tests/desktop-control-ui.test.tsx",
+    "tests/model-connection.test.ts",
+    "tests/chat-ui.test.tsx",
+    "tests/theme-contrast.test.ts",
+    "tests/conversation-menu-contrast.test.ts",
+    "tests/mcp-config.test.ts",
+    "tests/mcp-editor.test.tsx",
+    "tests/mcp-settings.test.ts",
+    "tests/mac-signing.test.ts",
+    "tests/credential-vault.test.ts",
+    "tests/account-session-manager.test.ts",
+    "tests/desktop-data-persistence.test.ts",
+    "tests/remote-settings.test.tsx",
+    "tests/remote-connections.test.tsx",
+    "tests/remote-authorization-refresh.test.ts",
+    "tests/workspace-edits.test.tsx",
+    "tests/workspace-patch-status.test.ts",
+  ],
+  path.join(root, "apps/desktop"),
+);
+run(vitest, [
+  "run",
+  "--maxWorkers=2",
+  "--testTimeout=30000",
+  "--exclude=**/.codex-temp/**",
+  "--exclude=**/v1-backup/**",
+  "packages/app-service/tests/remote-app-service.test.ts",
+  "packages/app-service/tests/remote-project-create.test.ts",
+  "packages/contracts/tests/remote.test.ts",
+  "packages/contracts/tests/model-service.test.ts",
+  "packages/contracts/tests/desktop-control.test.ts",
+  "packages/pi-host/tests/desktop-capability-tool.test.ts",
+  "packages/app-service/tests/tool-app-service.test.ts",
+  "packages/app-service/tests/workspace-artifacts.test.ts",
+  "packages/remote-host/tests/http-transport.test.ts",
+  "packages/pi-host/tests/agent-session.test.ts",
+  "packages/pi-host/tests/memory-background.test.ts",
+  "packages/tool-sdk/tests/bing-html-search-provider.test.ts",
+  "packages/tool-sdk/tests/brokered-bash-egress.test.ts",
+  "packages/pi-host/tests/platform-provider.test.ts",
+  "packages/pi-host/tests/byok-provider.test.ts",
+  "packages/pi-host/tests/session-and-file-tools.test.ts",
+  "packages/pi-host/tests/workspace-tools.test.ts",
+  "packages/tool-sdk/tests/broker.test.ts",
+  "packages/tool-sdk/tests/workspace-change-tracker.test.ts",
+  "packages/tool-sdk/tests/workspace-file-transaction.test.ts",
+  "packages/tool-sdk/tests/workspace-adapter.test.ts",
+  "packages/tool-sdk/tests/mcp-adapter.test.ts",
+  "services/remote-control-gateway/tests/connection-requests.test.ts",
+  "services/remote-control-gateway/tests/remote-control-gateway.test.ts",
+  "tests/v2/golden/chat-m1.test.ts",
+  "tests/v2/remote-connection-http.test.ts",
+  "tests/v2/remote-host-gateway.test.ts",
+]);
+console.log("Common desktop regressions passed.");
