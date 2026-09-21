@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -418,9 +419,7 @@ describe("Pi AgentSession composition", () => {
         ),
       ).toHaveLength(1);
       expect(
-        piPort.sent.filter(
-          (frame) => frame.kind === "pi.product-event" && frame.type !== "delta",
-        ),
+        piPort.sent.filter((frame) => frame.kind === "pi.product-event" && frame.type !== "delta"),
       ).toEqual([expect.objectContaining({ generationId, type: "stopped" })]);
       expect(JSON.stringify(piPort.sent)).not.toContain("QUEUED_");
     } finally {
@@ -549,10 +548,14 @@ describe("Pi AgentSession composition", () => {
     modelRuntime.registerNativeProvider(faux.provider);
     faux.setResponses([
       (context) => {
-        expect(context.systemPrompt).toContain("plan of distinct evidence angles");
-        expect(context.systemPrompt).toContain("search count itself is not the stopping criterion");
+        expect(getCurrentSystemPrompt(context.messages)).toContain(
+          "plan of distinct evidence angles",
+        );
+        expect(getCurrentSystemPrompt(context.messages)).toContain(
+          "search count itself is not the stopping criterion",
+        );
         return fauxAssistantMessage(
-          `Pi context messages: ${context.messages.length}; response: 巴黎。`,
+          `Pi context messages: ${context.messages.filter((message) => message.role !== "system").length}; response: 巴黎。`,
         );
       },
     ]);
@@ -581,7 +584,8 @@ describe("Pi AgentSession composition", () => {
     expect(eventTypes).toContain("agent_end");
     expect(eventTypes).toContain("agent_settled");
     expect(session.getActiveToolNames()).toEqual([]);
-    expect(session.messages).toHaveLength(4);
+    expect(session.messages.filter((message) => message.role !== "system")).toHaveLength(4);
+    expect(getCurrentSystemPrompt(session.messages)).toContain("plan of distinct evidence angles");
     unsubscribe();
     session.dispose();
   });

@@ -29,6 +29,7 @@ import {
   browserConnectionStateSchema,
   browserExtensionSetupSchema,
   browserModeSchema,
+  browserPermissionUpdateSchema,
   browserSessionDescriptorSchema,
   byokConnectionTestResultSchema,
   type ChatCommandEnvelope,
@@ -204,6 +205,13 @@ const bridge: DesktopBridge = {
   updateBrowserMode: async (mode) =>
     browserConnectionStateSchema.parse(
       await ipcRenderer.invoke(ipcChannels.browserModeUpdate, browserModeSchema.parse(mode)),
+    ),
+  updateBrowserPermission: async (input) =>
+    browserConnectionStateSchema.parse(
+      await ipcRenderer.invoke(
+        ipcChannels.browserPermissionUpdate,
+        browserPermissionUpdateSchema.parse(input),
+      ),
     ),
   prepareBrowserExtension: async () =>
     browserExtensionSetupSchema.parse(

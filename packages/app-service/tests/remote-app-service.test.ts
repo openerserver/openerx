@@ -204,7 +204,11 @@ describe("ChatAppService remote Pi mapping", () => {
     });
     const result = await service.applyRemoteCommand(command, payload, authorization);
     expect(result.ok).toBe(true);
-    expect(pi.prompts[0]).toMatchObject({ selectedModelRef: "platform/byok", thinkingLevel: "high", byok });
+    expect(pi.prompts[0]).toMatchObject({
+      selectedModelRef: "platform/byok",
+      thinkingLevel: "high",
+      byok,
+    });
     expect(pi.prompts[0]).not.toHaveProperty("accessToken");
     expect(JSON.stringify(result)).not.toContain(byok.apiKey);
     await service.applyRemoteCommand(command, payload, authorization);
@@ -238,7 +242,11 @@ describe("ChatAppService remote Pi mapping", () => {
     );
     expect(context).toHaveBeenLastCalledWith("platform/byok");
     expect(pi.prompts).toHaveLength(2);
-    expect(pi.prompts.at(-1)).toMatchObject({ selectedModelRef: "platform/byok", thinkingLevel: "off", byok });
+    expect(pi.prompts.at(-1)).toMatchObject({
+      selectedModelRef: "platform/byok",
+      thinkingLevel: "off",
+      byok,
+    });
     expect(chat.getConversation(conversationId).conversation.thinkingLevel).toBe("off");
     expect(chat.thinkingLevelForMessage(pi.prompts[0]!.assistantMessageId)).toBe("high");
     service.close();

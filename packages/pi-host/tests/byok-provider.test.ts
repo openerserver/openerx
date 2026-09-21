@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Model } from "@earendil-works/pi-ai";
+import { type Model, normalizeContext } from "@earendil-works/pi-ai";
 import { type ByokUsageRecord, usageRecordSchema } from "@openerx/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createByokStream } from "../src/byok-provider";
@@ -16,7 +16,9 @@ const model: Model<"openai-completions"> = {
   maxTokens: 1024,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
-const messages = { messages: [{ role: "user" as const, content: "test", timestamp: Date.now() }] };
+const messages = normalizeContext({
+  messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+});
 function sse(chunks: unknown[], chunkBytes = 17): Response {
   const bytes = new TextEncoder().encode(
     chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join("") +

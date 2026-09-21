@@ -24,7 +24,7 @@
   gap: 6px;
 }
 .workspace-edit-count {
-  opacity: 0.6;
+  color: var(--workspace-muted);
   font-weight: 400;
 }
 .workspace-edit {
@@ -91,7 +91,7 @@
 }
 .workspace-history-note {
   margin: 8px 0;
-  color: var(--workspace-text-muted, #6d746c);
+  color: var(--workspace-muted);
   font-size: 12px;
 }
 .workspace-history-diff {

@@ -7,6 +7,7 @@ import type {
   BrowserConnectionState,
   BrowserExtensionSetup,
   BrowserMode,
+  BrowserPermissionUpdate,
   BrowserSessionDescriptor,
 } from "./browser-computer-use";
 import type { DesktopControlCommand, DesktopControlSession } from "./desktop-control";
@@ -141,6 +142,7 @@ export const ipcChannels = Object.freeze({
   desktopNativePermissionRequest: "desktop:native-permission:request",
   browserConnectionState: "browser:connection:state",
   browserModeUpdate: "browser:mode:update",
+  browserPermissionUpdate: "browser:permission:update",
   browserExtensionPrepare: "browser:extension:prepare",
   browserComputerUseSessions: "browser-computer-use:sessions:list",
   desktopControlSessions: "desktop-control:sessions:list",
@@ -248,6 +250,7 @@ export interface DesktopBridge
   ): Promise<DesktopNativePermissionResult>;
   getBrowserConnectionState(): Promise<BrowserConnectionState>;
   updateBrowserMode(mode: BrowserMode): Promise<BrowserConnectionState>;
+  updateBrowserPermission(input: BrowserPermissionUpdate): Promise<BrowserConnectionState>;
   prepareBrowserExtension(): Promise<BrowserExtensionSetup>;
   listBrowserComputerUseSessions(): Promise<BrowserSessionDescriptor[]>;
   listDesktopControlSessions?(): Promise<DesktopControlSession[]>;

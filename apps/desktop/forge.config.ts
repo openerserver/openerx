@@ -1,4 +1,3 @@
-import { buildInfo } from "./vite.build-info";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -11,8 +10,9 @@ import { MakerZIP } from "@electron-forge/maker-zip";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { releaseUpdateConfigurationSchema } from "@openerx/contracts";
-import { signWindowsFile, verifyWindowsFile } from "./scripts/windows-signing.mjs";
 import { resolveMacSigningIdentity } from "./scripts/mac-signing.mjs";
+import { signWindowsFile, verifyWindowsFile } from "./scripts/windows-signing.mjs";
+import { buildInfo } from "./vite.build-info";
 
 const releaseMode = process.env.OPENERX_RELEASE_MODE === "1";
 const windowsStoreBuild =
@@ -175,7 +175,10 @@ const config: ForgeConfig = {
       }
     },
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
-      writeFileSync(path.join(buildPath, "build-info.json"), JSON.stringify(buildInfo, null, 2) + "\n");
+      writeFileSync(
+        path.join(buildPath, "build-info.json"),
+        JSON.stringify(buildInfo, null, 2) + "\n",
+      );
       cpSync(
         path.join(desktopDirectory, "browser-extension"),
         path.join(buildPath, "browser-extension"),

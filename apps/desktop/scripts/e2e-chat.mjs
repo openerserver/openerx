@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright";
@@ -7,6 +7,28 @@ import { _electron as electron } from "playwright";
 const desktopDirectory = path.resolve(import.meta.dirname, "..");
 const mainEntry = path.join(desktopDirectory, ".vite", "build", "main.js");
 const profileDirectory = mkdtempSync(path.join(tmpdir(), "openerx-e2e-"));
+
+async function waitForAppServiceRestart() {
+  const diagnosticsPath = path.join(profileDirectory, "logs", "diagnostics.jsonl");
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const events = existsSync(diagnosticsPath)
+      ? readFileSync(diagnosticsPath, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+    const restartingIndex = events.findLastIndex(({ code }) => code === "service.restarting");
+    if (
+      restartingIndex >= 0 &&
+      events.slice(restartingIndex + 1).some(({ code }) => code === "service.ready")
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("App Service did not record a completed restart");
+}
 
 async function launch() {
   const application = await electron.launch({
@@ -21,6 +43,34 @@ async function launch() {
   const page = await application.firstWindow();
   await page.waitForLoadState("domcontentloaded");
   page.on("pageerror", (error) => console.error("E2E_PAGE_ERROR", error));
+  await application.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler("model:catalog:list");
+    ipcMain.handle("model:catalog:list", () => [
+      {
+        modelRef: "platform/e2e-faux",
+        displayName: "E2E faux model",
+        version: "1.0.0",
+        capabilities: {
+          textInput: true,
+          imageInput: false,
+          fileInput: false,
+          functionCalling: true,
+          structuredOutput: true,
+        },
+        contextWindow: 128_000,
+        maxOutputTokens: 8_192,
+        status: "available",
+        priceRef: "e2e-faux",
+        priceSummary: "E2E only",
+        free: true,
+        thinkingLevels: ["off", "medium", "high"],
+      },
+    ]);
+  });
+  await page.evaluate(() =>
+    window.localStorage.setItem("openerx.defaultModelRef", "platform/e2e-faux"),
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
   return { application, page };
 }
 
@@ -71,12 +121,12 @@ try {
   await interruptedMessage.hover();
   await interruptedMessage.getByRole("button", { name: "重新生成" }).click();
   try {
-    await page.locator(".message-assistant").last().locator(".status-completed").waitFor();
+    await page.locator(".message-assistant[data-message-status='completed']").last().waitFor();
   } catch (error) {
     console.error("E2E_CHAT_REGENERATE_STATE\n", await page.locator("body").innerText());
     throw error;
   }
-  await page.getByLabel("分支").waitFor();
+  await page.getByLabel("选择对话分支").waitFor();
 
   await page.getByLabel("发送消息").fill("崩溃恢复 2000 字 [PI_TEST_SLOW]");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -86,8 +136,7 @@ try {
     if (typeof crash !== "function") throw new Error("Crash injection hook missing");
     crash();
   });
-  await page.locator(".sync-state.service-restarting").waitFor();
-  await page.locator(".sync-state.service-ready").waitFor();
+  await waitForAppServiceRestart();
   await page.reload();
   try {
     const recoveredFailure = page

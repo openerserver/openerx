@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { PiToolRequestFrame, ToolOperation } from "@openerx/contracts";
+import {
+  type PiToolRequestFrame,
+  type ToolOperation,
+  workspacePatchRecoveryMessage,
+} from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
 import type { PiCapabilityToolTransport } from "./capability-tools";
 import { productToolResult } from "./tool-result";
@@ -23,20 +27,33 @@ export function createProductWorkspaceTools(input: {
     toolName: string,
     operation: OperationWithoutIdempotency,
   ) => {
-    const result = await input.transport.request({
-      kind: "pi.tool.request",
-      requestId: randomUUID(),
-      generationId: input.generationId,
-      conversationId: input.conversationId,
-      branchId: input.branchId,
-      assistantMessageId: input.assistantMessageId,
-      piToolCallId: toolCallId,
-      toolName,
-      operation: {
-        ...operation,
-        idempotencyKey: `tool:${input.generationId}:${toolCallId}:${toolName}`,
-      } as ToolOperation,
-    } satisfies PiToolRequestFrame);
+    const result = await input.transport
+      .request({
+        kind: "pi.tool.request",
+        requestId: randomUUID(),
+        generationId: input.generationId,
+        conversationId: input.conversationId,
+        branchId: input.branchId,
+        assistantMessageId: input.assistantMessageId,
+        piToolCallId: toolCallId,
+        toolName,
+        operation: {
+          ...operation,
+          idempotencyKey: `tool:${input.generationId}:${toolCallId}:${toolName}`,
+        } as ToolOperation,
+      } satisfies PiToolRequestFrame)
+      .catch((error: unknown) => {
+        // IPC may carry only the error code. Keep this an error while giving the
+        // model a concrete recovery step; never pretend an unapplied patch succeeded.
+        const code = error instanceof Error ? (error.message.split(":")[0] ?? "") : "";
+        const recovery =
+          operation.operation === "workspace_patch" ||
+          operation.operation === "workspace_apply_patch"
+            ? workspacePatchRecoveryMessage(code)
+            : null;
+        if (recovery) throw new Error(`${code}: ${recovery}`);
+        throw error;
+      });
     return productToolResult(result);
   };
 
@@ -132,7 +149,7 @@ export function createProductWorkspaceTools(input: {
       name: "openerx_workspace_apply_patch",
       label: "Apply workspace patch",
       description:
-        "Apply a context patch across up to 100 authorized text files. Use *** Begin Patch / *** End Patch with *** Add File:, *** Update File:, *** Delete File:, optional *** Move to:, and @@ hunks with space/context, -/removed, +/added lines. Read existing files with openerx_workspace_read in this turn and load applicable instructions for every source/destination before editing; the host binds those versions and digests. All files are checked before writing. Returns contextual diffs and data.changeSet.id; use openerx_workspace_change_set_review or openerx_workspace_change_set_undo with that id. Legacy exact replacements remain accepted.",
+        "Apply a context patch across up to 100 authorized text files. Use *** Begin Patch / *** End Patch with *** Add File:, *** Update File:, *** Delete File:, optional *** Move to:, and @@ hunks with space/context, -/removed, +/added lines. Read existing files with openerx_workspace_read in this turn and load applicable instructions for every source/destination before editing; the host binds those versions and digests. All files are checked before writing. For an existing file, use one *** Update File: operation; do not combine Delete and Add for the same path. Returns contextual diffs and data.changeSet.id; use openerx_workspace_change_set_review or openerx_workspace_change_set_undo with that id. Legacy exact replacements remain accepted.",
       parameters: Type.Object(
         {
           workspaceGrantId: grantId,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright";
@@ -10,6 +10,10 @@ const desktopDirectory = path.resolve(import.meta.dirname, "..");
 const mainEntry = path.join(desktopDirectory, ".vite", "build", "main.js");
 const platformEntry = path.join(desktopDirectory, ".vite", "build", "platform-alpha-test.mjs");
 const profileDirectory = mkdtempSync(path.join(tmpdir(), "openerx-account-e2e-"));
+writeFileSync(
+  path.join(profileDirectory, "model-service.json"),
+  JSON.stringify({ mode: "hosted", byok: null, updatedAt: null }),
+);
 
 const platform = fork(platformEntry, [], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
 platform.stderr?.pipe(process.stderr);
@@ -120,7 +124,7 @@ try {
   running = await launch();
   let { application, page } = running;
   await page.getByRole("link", { name: "设置" }).click();
-  await page.getByLabel("邮箱").fill("account-e2e@example.com");
+  await page.getByRole("textbox", { name: "邮箱", exact: true }).fill("account-e2e@example.com");
   await page.getByRole("button", { name: "发送验证码" }).click();
   await page.getByLabel("六位验证码").fill("123456");
   await page.getByRole("button", { name: "验证并登录" }).click();
@@ -137,14 +141,25 @@ try {
 
   const billingSession = await signInDevice("account-e2e@example.com", "Billing Setup");
   await fundBilling(billingSession.accessToken);
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("button", { name: "费用与账单", exact: true }).click();
   await page.getByRole("link", { name: "查看费用与账单" }).click();
   await page.getByText("¥50.00", { exact: true }).first().waitFor();
   await page.getByText(/已接受/).waitFor();
   await page.getByText("credited", { exact: true }).waitFor();
 
-  await page.getByRole("link", { name: "新对话", exact: true }).click();
+  await page.evaluate(() => {
+    window.location.hash = "#/chat/new";
+  });
+  await page.waitForURL(/#\/chat\/new$/u);
   await page.getByLabel("发送消息").fill("账户模型测试");
+  try {
+    await page.waitForFunction(
+      () => !document.querySelector('button[aria-label="发送"]')?.hasAttribute("disabled"),
+    );
+  } catch (error) {
+    console.error("E2E_ACCOUNT_SEND_READINESS\n", await page.locator("body").innerText());
+    throw error;
+  }
   await page.getByRole("button", { name: "发送", exact: true }).click();
   try {
     await page.locator(".message-assistant[data-message-status='completed']").waitFor();
@@ -156,6 +171,7 @@ try {
     .getByLabel("对话消息")
     .getByText(/平台 platform\/standard 已回答：账户模型测试/)
     .waitFor();
+  await page.getByText("运行详情", { exact: true }).first().click();
   await page
     .getByLabel("消息 Token 用量")
     .getByText(/总计 35/)
@@ -174,7 +190,9 @@ try {
     headers: { authorization: `Bearer ${billingSession.accessToken}` },
   }).then((response) => response.json());
   assert.equal(settledCharges.length, 2, JSON.stringify(settledCharges));
+  const conversationUrl = page.url();
   await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("button", { name: "费用与账单", exact: true }).click();
   await page.getByRole("link", { name: "查看费用与账单" }).click();
   try {
     await page.getByLabel("消费明细").getByText("2 笔", { exact: true }).waitFor();
@@ -183,8 +201,8 @@ try {
     console.error("E2E_ACCOUNT_BILLING_STATE\n", await page.locator("body").innerText());
     throw error;
   }
-  await page.getByRole("link", { name: /账户模型测试/ }).click();
-  const conversationUrl = page.url();
+  await page.goto(conversationUrl);
+  await page.getByRole("heading", { name: "账户模型测试", exact: true }).waitFor();
 
   await application.close();
   running = await launch();
@@ -229,17 +247,26 @@ try {
   await page.getByRole("button", { name: "清理本机缓存" }).click();
   await page.getByText("本机缓存已清理。", { exact: true }).waitFor();
   await page.getByLabel("同步状态").getByRole("button", { name: "立即同步" }).click();
-  await page.getByRole("link", { name: /账户模型测试/ }).waitFor();
+  await page.goto(conversationUrl);
+  await page
+    .getByLabel("对话消息")
+    .getByText(/平台 platform\/tools 已回答：切换后的消息/)
+    .waitFor();
+  await page.getByRole("link", { name: "设置" }).click();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "删除云端对话数据" }).click();
   await page.getByText(/墓碑保留至/).waitFor();
   await page.getByLabel("同步状态").getByRole("button", { name: "立即同步" }).click();
-  await page.getByRole("link", { name: /账户模型测试/ }).waitFor({ state: "detached" });
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "退出全部设备" }).click();
-  await page.getByLabel("账户状态").getByText("未登录", { exact: true }).waitFor();
+  try {
+    await page.getByRole("heading", { name: "登录或注册", exact: true }).waitFor();
+  } catch (error) {
+    console.error("E2E_ACCOUNT_SIGN_OUT_STATE\n", await page.locator("body").innerText());
+    throw error;
+  }
   assert.equal(existsSync(credentialPath), false);
 
   console.log(

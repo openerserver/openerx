@@ -38,6 +38,24 @@ function matchingProvider(configuration: ByokModelConfiguration | null | undefin
 
 type HostResolver = (hostname: string) => Promise<string[]>;
 
+type ConnectionTestChoice = {
+  message?: {
+    content?: unknown;
+    reasoning_content?: unknown;
+    tool_calls?: unknown;
+  };
+};
+
+function hasUsableConnectionTestChoice(choice: ConnectionTestChoice): boolean {
+  const message = choice.message;
+  return (
+    (typeof message?.content === "string" && message.content.trim().length > 0) ||
+    (typeof message?.reasoning_content === "string" &&
+      message.reasoning_content.trim().length > 0) ||
+    (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0)
+  );
+}
+
 const resolveHost: HostResolver = async (hostname) =>
   (await lookup(hostname, { all: true, verbatim: true })).map(({ address }) => address);
 
@@ -280,15 +298,19 @@ export class ModelServiceSettingsStore {
     }
     apiKey ??= input.apiKey ?? (await this.credentials.resolve(credentialRef));
     const started = performance.now();
+    const requestBody: Record<string, unknown> = {
+      model: input.byok.modelId,
+      messages: [{ role: "user", content: "Reply with OK." }],
+      max_tokens: 32,
+      stream: false,
+    };
+    if (provider?.id === "deepseek" || input.byok.modelId.startsWith("deepseek-")) {
+      requestBody.thinking = { type: "disabled" };
+    }
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: input.byok.modelId,
-        messages: [{ role: "user", content: "Reply with OK." }],
-        max_tokens: 8,
-        stream: false,
-      }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(20_000),
       redirect: "error",
     }).catch((error: unknown) => {
@@ -303,20 +325,14 @@ export class ModelServiceSettingsStore {
     });
     const body = (payload && typeof payload === "object" ? payload : {}) as {
       model?: unknown;
-      choices?: Array<{ message?: { content?: unknown } }>;
+      choices?: ConnectionTestChoice[];
       error?: unknown;
     };
     if (!response.ok)
       throw new Error(
         classifyModelError(JSON.stringify(body.error ?? {}), { httpStatus: response.status }).code,
       );
-    if (
-      !Array.isArray(body.choices) ||
-      !body.choices.some(
-        (choice) =>
-          typeof choice?.message?.content === "string" && choice.message.content.trim().length > 0,
-      )
-    ) {
+    if (!Array.isArray(body.choices) || !body.choices.some(hasUsableConnectionTestChoice)) {
       throw new Error("MODEL_RESPONSE_INVALID");
     }
     return byokConnectionTestResultSchema.parse({

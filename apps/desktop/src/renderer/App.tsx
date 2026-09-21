@@ -137,6 +137,7 @@ import { RemoteSettings } from "./RemoteSettings";
 import { withUiTimeout } from "./ui-timeout";
 import { WorkspaceLocation, WorkspaceSection } from "./WorkspaceContext";
 import { WorkItemWorkspaceEdits } from "./WorkspaceEdits";
+import { workspacePatchStatus } from "./workspace-patch-status";
 
 const suggestions = [
   "复盘最近一周 A 股行情：哪些板块最受关注，背后的驱动因素是什么？",
@@ -339,6 +340,11 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   SHELL_OS_SANDBOX_UNAVAILABLE: "当前系统缺少安全 Shell 沙箱",
   SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE: "Codex Windows 安全沙箱尚未就绪",
   WORKSPACE_WRITE_GRANT_REQUIRED: "需先授权一个可写工作区",
+  WORKSPACE_READ_REQUIRED: "补丁未写入：请先在本轮读取待修改文件，再重试；无需再次授权",
+  WORKSPACE_INSTRUCTIONS_NOT_ACKNOWLEDGED: "补丁未写入：请先加载适用的工作区指令",
+  WORKSPACE_CONTENT_CHANGED: "补丁未写入：文件内容已变化，请重新读取后重试",
+  WORKSPACE_PATCH_CONTEXT_MISMATCH: "补丁未写入：上下文已变化，请重新读取后重试",
+  WORKSPACE_PATCH_DUPLICATE_PATH: "补丁未写入：同一路径不能重复操作，请合并为一次更新",
   DESKTOP_SCREEN_CAPTURE_PERMISSION_REQUIRED: "需在系统设置中允许屏幕录制",
   DESKTOP_SCREEN_CAPTURE_STATUS_UNKNOWN: "无法确认屏幕录制权限",
   DESKTOP_ACCESSIBILITY_PERMISSION_REQUIRED: "需在系统设置中允许辅助功能",
@@ -3464,6 +3470,11 @@ function ToolActivity({
               (part) =>
                 part.type === "diff" && revertedWorkspaceChangeIds.has(part.workspaceChangeId),
             );
+            const patchStatus = workspacePatchStatus(
+              call,
+              value?.toolCalls ?? [],
+              value?.workspaceEdits ?? [],
+            );
             const visibleParts = call.resultContent.filter(
               (part) =>
                 !(part.type === "source" && projectedSources.has(call.id)) &&
@@ -3481,7 +3492,7 @@ function ToolActivity({
                     <strong>{call.toolName}</strong>
                     <span>{call.inputSummary}</span>
                   </div>
-                  <span>{call.status}</span>
+                  <span>{patchStatus?.label ?? toolCallStatusLabel[call.status]}</span>
                 </header>
                 {call.input ? (
                   <details className="typed-input">
@@ -3489,7 +3500,15 @@ function ToolActivity({
                     <pre>{JSON.stringify(call.input, null, 2)}</pre>
                   </details>
                 ) : null}
-                {call.resultSummary ? (
+                {patchStatus ? <p role="status">{patchStatus.message}</p> : null}
+                {patchStatus && call.errorCode ? (
+                  <details>
+                    <summary>原始检查结果</summary>
+                    <p>{toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}</p>
+                    <code>{call.errorCode}</code>
+                  </details>
+                ) : null}
+                {call.resultSummary && !patchStatus ? (
                   <p>
                     {call.resultSummary}
                     {hasRevertedWorkspaceChange ? " · 当前状态：已撤销" : ""}
@@ -3500,7 +3519,7 @@ function ToolActivity({
                     工作区已恢复；此处内容仅作为历史输出记录保留。
                   </p>
                 ) : null}
-                {visibleParts.map((part, index) => {
+                {(patchStatus ? [] : visibleParts).map((part, index) => {
                   const key = `${call.id}:${index}`;
                   if (part.type === "image") {
                     return (
@@ -3543,7 +3562,7 @@ function ToolActivity({
                     </a>
                   );
                 })}
-                {call.errorCode ? (
+                {call.errorCode && !patchStatus ? (
                   <p className="inline-error">
                     {toolRuntimeReasonLabels[call.errorCode] ?? call.errorCode}
                   </p>

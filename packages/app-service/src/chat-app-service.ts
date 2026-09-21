@@ -25,11 +25,18 @@ import type {
   MemoryRepository,
   ProjectRepository,
   RemoteRepository,
+  WorkspaceArtifactLink,
 } from "@openerx/storage";
 import type { PiHostClient } from "./pi-host-client";
 import type { SyncCoordinator } from "./sync-coordinator";
 import type { ToolAppService } from "./tool-app-service";
 import { captureWorkspaceArtifacts } from "./workspace-artifacts";
+
+function workspaceOutputKey(
+  output: Pick<WorkspaceArtifactLink, "conversationId" | "workspaceRootPath" | "relativePath">,
+): string {
+  return JSON.stringify([output.conversationId, output.workspaceRootPath, output.relativePath]);
+}
 
 interface RemoteExecutionAuthority {
   pairingId: string;
@@ -683,9 +690,16 @@ export class ChatAppService {
           },
           context.byok,
         );
-        if (draft.created && payload.thinkingLevel !== undefined &&
-          this.#repository.getConversation(draft.receipt.conversationId).conversation.thinkingLevel !== payload.thinkingLevel) {
-          const selection = this.#repository.selectConversationThinkingLevel(draft.receipt.conversationId, payload.thinkingLevel);
+        if (
+          draft.created &&
+          payload.thinkingLevel !== undefined &&
+          this.#repository.getConversation(draft.receipt.conversationId).conversation
+            .thinkingLevel !== payload.thinkingLevel
+        ) {
+          const selection = this.#repository.selectConversationThinkingLevel(
+            draft.receipt.conversationId,
+            payload.thinkingLevel,
+          );
           this.#emit(selection.event);
         }
         await this.#syncIfAuthorized(authorization);
@@ -1341,16 +1355,26 @@ export class ChatAppService {
     const artifacts = this.#requiredFiles().listArtifacts();
     if (!this.#tools) return conversationId ? [] : artifacts;
     const retention = this.#requiredToolsRepository().artifactRetention(conversationId);
+    // Links remain as provenance for history, but only the latest applied workspace state is
+    // a current output. A reverted link must not keep a file clickable in the results rail.
+    const workspaceLinks = this.#requiredFiles().workspaceArtifactLinks(conversationId);
+    const activeWorkspaceOutputKeys = new Set(
+      this.#requiredToolsRepository()
+        .workspaceOutputCandidates(conversationId)
+        .filter(({ afterSha256 }) => Boolean(afterSha256))
+        .map(workspaceOutputKey),
+    );
+    const activeWorkspaceArtifactIds = workspaceLinks
+      .filter((link) => activeWorkspaceOutputKeys.has(workspaceOutputKey(link)))
+      .map(({ artifactId }) => artifactId);
     if (conversationId) {
-      const deliverableIds = new Set([
-        ...retention.deliverableIds,
-        ...this.#requiredFiles()
-          .workspaceArtifactLinks(conversationId)
-          .map(({ artifactId }) => artifactId),
-      ]);
+      const deliverableIds = new Set([...retention.deliverableIds, ...activeWorkspaceArtifactIds]);
       return artifacts.filter(({ id }) => deliverableIds.has(id));
     }
-    const disposableIds = new Set(retention.disposableIds);
+    const staleWorkspaceArtifactIds = workspaceLinks
+      .filter((link) => !activeWorkspaceOutputKeys.has(workspaceOutputKey(link)))
+      .map(({ artifactId }) => artifactId);
+    const disposableIds = new Set([...retention.disposableIds, ...staleWorkspaceArtifactIds]);
     return artifacts.filter(({ id }) => !disposableIds.has(id));
   }
 

@@ -172,6 +172,103 @@ describe("CapabilityBroker", () => {
     repository.close();
   });
 
+  it("keeps recoverable workspace preconditions in the run and tells the model how to continue", async () => {
+    const { chat, repository, projection } = fixture();
+    const adapter = {
+      operations: ["workspace_patch"] as const,
+      execute: vi.fn(async () => {
+        throw new Error(
+          "WORKSPACE_READ_REQUIRED: Read src/example.ts in this turn before editing it",
+        );
+      }),
+    };
+    const broker = new CapabilityBroker(repository, [adapter]);
+    await expect(
+      broker.execute(projection, {
+        operation: "workspace_patch",
+        workspaceGrantId: "11111111-1111-4111-8111-111111111111",
+        patch: "*** Begin Patch\n*** End Patch",
+        idempotencyKey: "workspace-recoverable-read-0001",
+      }),
+    ).rejects.toMatchObject({
+      code: "WORKSPACE_READ_REQUIRED",
+      message: expect.stringContaining("openerx_workspace_read"),
+    });
+    expect(repository.toolCallByPiRef(projection.runId, projection.piToolCallId)).toMatchObject({
+      status: "failed",
+      errorCode: "WORKSPACE_READ_REQUIRED",
+      resultSummary: expect.stringContaining("补丁未写入"),
+    });
+    chat.close();
+    repository.close();
+  });
+
+  it("requires real reads for every file, then commits a retry and replays only the successful write", async () => {
+    const { chat, directory, repository, projection } = fixture();
+    const workspace = path.join(directory, "workspace");
+    mkdirSync(workspace);
+    for (const name of ["a.txt", "b.txt"]) writeFileSync(path.join(workspace, name), "before\n");
+    const grant = repository.grantWorkspace({
+      conversationId: projection.conversationId,
+      displayName: "workspace",
+      rootPath: workspace,
+      access: "read_write",
+      allowNetwork: false,
+      expiresAt: null,
+    });
+    const adapter = new WorkspaceToolAdapter(repository, directory);
+    const broker = new CapabilityBroker(repository, [adapter]);
+    let call = 0;
+    const execute = (operation: Parameters<typeof broker.execute>[1]) =>
+      broker.execute({ ...projection, piToolCallId: `recovery-${++call}` }, operation);
+    const patch = {
+      operation: "workspace_patch" as const,
+      workspaceGrantId: grant.id,
+      patch:
+        "*** Begin Patch\n*** Update File: a.txt\n@@\n-before\n+after\n*** Update File: b.txt\n@@\n-before\n+after\n*** End Patch",
+      idempotencyKey: "recovery-patch-0001",
+    };
+    await execute({
+      operation: "workspace_instructions",
+      workspaceGrantId: grant.id,
+      relativePath: ".",
+      idempotencyKey: "recovery-instructions-0001",
+    });
+    await expect(execute(patch)).rejects.toMatchObject({ code: "WORKSPACE_READ_REQUIRED" });
+    const read = (relativePath: string) =>
+      execute({
+        operation: "workspace_read",
+        workspaceGrantId: grant.id,
+        relativePath,
+        startLine: 1,
+        maxLines: 500,
+        idempotencyKey: `recovery-read-${relativePath}`,
+      });
+    await read("a.txt");
+    await expect(
+      execute({ ...patch, idempotencyKey: "recovery-patch-0002" }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_READ_REQUIRED" });
+    for (const name of ["a.txt", "b.txt"])
+      expect(readFileSync(path.join(workspace, name), "utf8")).toBe("before\n");
+    await read("b.txt");
+    const retry = { ...patch, idempotencyKey: "recovery-patch-0003" };
+    await expect(execute(retry)).resolves.toMatchObject({
+      status: "completed",
+      replayed: false,
+      result: { sideEffectCommitted: true },
+    });
+    for (const name of ["a.txt", "b.txt"])
+      expect(readFileSync(path.join(workspace, name), "utf8")).toBe("after\n");
+    await expect(execute(retry)).resolves.toMatchObject({ status: "completed", replayed: true });
+    expect(repository.listPermissions()).toHaveLength(0);
+    expect(repository.toolCallByPiRef(projection.runId, "recovery-2")).toMatchObject({
+      status: "failed",
+      errorCode: "WORKSPACE_READ_REQUIRED",
+    });
+    chat.close();
+    repository.close();
+  });
+
   it("runs first-party Web search automatically and keeps sources", async () => {
     const { chat, repository, projection } = fixture();
     const expected: NormalizedToolResult = {

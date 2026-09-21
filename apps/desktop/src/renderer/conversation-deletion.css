@@ -39,7 +39,7 @@
 }
 
 .conversation-list-delete:hover {
-  color: #bb4e48;
+  color: var(--workspace-danger);
   background: color-mix(in srgb, #bb4e48 12%, var(--workspace-surface));
 }
 
@@ -55,7 +55,7 @@
 }
 
 .confirmation-dialog .conversation-delete-error {
-  color: #bb4e48;
+  color: var(--workspace-danger);
 }
 
 @media (hover: none) {

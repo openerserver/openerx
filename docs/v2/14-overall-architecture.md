@@ -149,7 +149,7 @@ flowchart LR
   MAIN -.->|启动 / 退出 / 有界重启| PI_HOST[Pi Host<br/>utility process]
   APP -->|Conversation / Message<br/>Branch / Event / Idempotency| SQLITE[(SQLite local profile)]
   APP -->|pi.session.prompt / abort<br/>私有 MessagePort| PI_HOST
-  PI_HOST --> SESSION[Pi AgentSession<br/>0.84.4]
+  PI_HOST --> SESSION[Pi AgentSession<br/>0.86.0]
   SESSION -.->|Pi ModelRuntime| MODEL[已配置模型 Provider]
   SESSION -->|Pi events| PI_HOST
   PI_HOST -->|pi.product-event<br/>ordered delta + terminal| APP
@@ -158,7 +158,7 @@ flowchart LR
 ```
 
 M1 没有 localhost App Service、Renderer 网络业务 API、Platform Model Gateway、账户云或账单调用。
-Pi Host 已直接加载 `@earendil-works/pi-coding-agent@0.84.4`；每次生成使用 Pi
+Pi Host 已直接加载 `@earendil-works/pi-coding-agent@0.86.0`；每次生成使用 Pi
 `AgentSession` 和 Pi 原生事件。受支持启动路径必须先准备好真实 Platform Model Gateway 与
 默认 `platform/auto`，不能让用户进入“模型未配置”状态；宿主内部仍保留配置不变量检查，
 用于阻止错误发布或损坏的启动链路继续运行。应用重启时未完成助手消息以
@@ -607,7 +607,7 @@ App Service 进程组就绪/重启只产生白名单生命周期信号，Main �
 - App Service 独占 `node:sqlite`，实现迁移校验、Conversation/Message/Part、分支、revision、
   幂等键、单调事件、中断恢复，以及账户内容 Outbox、cursor、冲突和墓碑。本地数据库不包含
   可复用账户凭证。
-- Pi Host 直接运行维护中的 Pi 0.84.4，使用 `AgentSession`、`SessionManager`、原生流式事件和
+- Pi Host 直接运行维护中的 Pi 0.86.0，使用 `AgentSession`、`SessionManager`、原生流式事件和
   `abort()`；M4 注册 Pi 原生文件 ToolDefinition，并保留 Pi 的上下文压缩和崩溃恢复语义，
   不建立平行 harness。
 - `packages/file-service` 实现设备级 File Scope Broker、内容寻址副本、多格式解析器、稳定引用和

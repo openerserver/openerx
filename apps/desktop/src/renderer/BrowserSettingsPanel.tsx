@@ -1,6 +1,7 @@
-import type { BrowserMode } from "@openerx/contracts";
+import type { BrowserMode, BrowserPermissionUpdate } from "@openerx/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import "./browser-settings.css";
 
 const modes: { value: BrowserMode; label: string }[] = [
   { value: "auto", label: "自动（推荐）" },
@@ -11,6 +12,7 @@ const modes: { value: BrowserMode; label: string }[] = [
 export function BrowserSettingsPanel() {
   const client = useQueryClient();
   const [copied, setCopied] = useState(false);
+  const [siteHost, setSiteHost] = useState("");
   const state = useQuery({
     queryKey: ["browser-connection"],
     queryFn: () => window.openerx.getBrowserConnectionState(),
@@ -29,6 +31,14 @@ export function BrowserSettingsPanel() {
     },
   });
   const setup = useMutation({ mutationFn: () => window.openerx.prepareBrowserExtension() });
+  const permissions = useMutation({
+    mutationFn: (input: BrowserPermissionUpdate) => window.openerx.updateBrowserPermission(input),
+    onSuccess: (value, input) => {
+      client.setQueryData(["browser-connection"], value);
+      setSiteHost("");
+      if (input.action === "disconnect") setup.reset();
+    },
+  });
   const control = useMutation({
     mutationFn: ({ sessionId, resume }: { sessionId: string; resume: boolean }) =>
       resume
@@ -36,13 +46,13 @@ export function BrowserSettingsPanel() {
         : window.openerx.pauseBrowserComputerUseSession({ sessionId }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["browser-sessions"] }),
   });
-  const error = state.error || save.error || setup.error || control.error;
+  const error = state.error || save.error || setup.error || control.error || permissions.error;
   return (
-    <section className="tool-settings-section" aria-label="浏览器连接设置">
+    <section className="tool-settings-section browser-settings" aria-label="浏览器连接设置">
       <div className="tool-settings-heading">
         <div>
           <h3>浏览器控制</h3>
-          <p>复用已授权的 Chrome 标签页，或打开独立浏览器处理任务。</p>
+          <p>连接 Chrome 后，任务可以选择已有标签页或新建页面，复用你的登录状态。</p>
         </div>
       </div>
       <label>
@@ -61,8 +71,9 @@ export function BrowserSettingsPanel() {
         </select>
       </label>
       <p>
-        自动模式优先使用地址匹配的已授权标签页；没有匹配时打开独立浏览器。独立浏览器使用临时资料，关闭后清除，不共享
-        Chrome 的登录状态。
+        自动模式优先使用已连接的
+        Chrome；没有连接时打开独立浏览器。独立浏览器使用临时资料，关闭后清除，不共享 Chrome
+        的登录状态。
       </p>
       {save.isSuccess && (
         <p role="status" className="inline-success">
@@ -71,8 +82,9 @@ export function BrowserSettingsPanel() {
       )}
       <h4>连接已有 Chrome</h4>
       <p role="status">
-        {state.data?.extensionConnected ? "扩展已连接" : "扩展尚未连接"} ·{" "}
-        {state.data?.authorizedTabs.length ?? 0} 个待使用的授权标签页
+        {state.data?.extensionConnected
+          ? "扩展已连接 · 可使用已有标签页或新建页面"
+          : "扩展尚未连接"}
       </p>
       <button
         type="button"
@@ -89,7 +101,7 @@ export function BrowserSettingsPanel() {
           <ol>
             <li>在 Chrome 地址栏打开 chrome://extensions，开启开发者模式。</li>
             <li>点击「加载已解压的扩展程序」，选择下面的扩展目录。</li>
-            <li>打开目标网页，点击 openerx 扩展图标，粘贴配对码并「授权当前标签页」。</li>
+            <li>点击浏览器扩展图标，粘贴配对码并连接。无需逐个授权标签页。</li>
           </ol>
           <label>
             扩展目录
@@ -123,21 +135,85 @@ export function BrowserSettingsPanel() {
             {copied ? "已复制配对码" : "复制配对码"}
           </button>
           <p>
-            openerx
-            重启后需要重新配对。标签页首次授权五分钟内可使用；切换标签页或离开当前网站后需重新授权。
+            连接信息会保存在本机，重启后自动重连。首次使用新网站时会询问；切换标签页不会清除网站权限。
           </p>
         </div>
       )}
-      {state.data?.authorizedTabs.map((tab) => (
-        <p key={tab.browserContextRef}>{tab.url} · 已授权</p>
+      <h4>网站访问权限</h4>
+      <p>
+        已连接的 Chrome
+        和独立浏览器共用以下规则。默认在首次使用新网站时询问，允许后可跨站导航；发送、提交和敏感操作仍按各自规则处理。
+      </p>
+      <label>
+        <input
+          type="checkbox"
+          checked={state.data?.sitePolicy?.allowAllSites ?? false}
+          disabled={!state.data || permissions.isPending}
+          onChange={(event) =>
+            permissions.mutate({ action: "all_sites", allowed: event.target.checked })
+          }
+        />
+        允许所有网站（已阻止的网站除外）
+      </label>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          permissions.mutate({ action: "site", host: siteHost, decision: "allow" });
+        }}
+      >
+        <label>
+          网站域名
+          <input
+            aria-label="网站域名"
+            placeholder="example.com"
+            value={siteHost}
+            onChange={(event) => setSiteHost(event.target.value)}
+          />
+        </label>
+        <button type="submit" disabled={!siteHost.trim() || permissions.isPending}>
+          允许此网站
+        </button>
+        <button
+          type="button"
+          disabled={!siteHost.trim() || permissions.isPending}
+          onClick={() => permissions.mutate({ action: "site", host: siteHost, decision: "block" })}
+        >
+          阻止此网站
+        </button>
+      </form>
+      <p>仅匹配完整域名，子域名分别管理。</p>
+      {(["allowedHosts", "blockedHosts"] as const).map((kind) => (
+        <div key={kind}>
+          <h5>{kind === "allowedHosts" ? "已允许的网站" : "已阻止的网站"}</h5>
+          {(state.data?.sitePolicy?.[kind] ?? []).map((host) => (
+            <p key={host}>
+              {host}{" "}
+              <button
+                type="button"
+                disabled={permissions.isPending}
+                onClick={() => permissions.mutate({ action: "site", host, decision: "ask" })}
+              >
+                移除 {host}
+              </button>
+            </p>
+          ))}
+          {!state.data?.sitePolicy?.[kind]?.length && <p>暂无</p>}
+        </div>
       ))}
+      <button
+        type="button"
+        disabled={!state.data || permissions.isPending}
+        onClick={() => permissions.mutate({ action: "disconnect" })}
+      >
+        断开浏览器并清除配对
+      </button>
       {!!sessions.data?.length && (
         <div>
           <h4>正在控制的会话</h4>
           {sessions.data.map((session) => (
             <p key={session.sessionId}>
               {session.controlPath === "connected_browser_bridge"
-                ? "Chrome 授权标签页"
+                ? "Chrome 任务标签页"
                 : session.backend === "managed_chromium"
                   ? "独立浏览器"
                   : "系统浏览器"}{" "}

@@ -5,24 +5,112 @@ let config = null,
   polling = false,
   sendTail = Promise.resolve();
 const sourcePromise = fetch(chrome.runtime.getURL("page-agent.js")).then((r) => r.text());
-const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function siteCheck(record, url, checkOnly = false) {
+  if (!/^https?:\/\//.test(url || "")) throw new Error("BROWSER_NAVIGATION_DENIED");
+  const response = await api("/site-check", {
+    grantId: record.grantId,
+    intentId: record.authorizationId,
+    requestId: record.activeRequestId,
+    url,
+    checkOnly,
+  });
+  if (!response.allowed) throw new Error("BROWSER_NAVIGATION_DENIED");
+}
+async function settle(record) {
+  // A click schedules navigation after Runtime.evaluate returns. Wait for the ensuing document.
+  await delay(100);
+  const deadline = Date.now() + 170000;
+  while (record.loading && tabs.has(record.tabId) && Date.now() < deadline) await delay(50);
+  if (!tabs.has(record.tabId) || record.loading) throw new Error("BROWSER_OBSERVATION_MISMATCH");
+}
+async function manage(request) {
+  if (request.kind === "list_tabs") {
+    const candidates = await chrome.tabs.query({});
+    return {
+      tabs: candidates
+        .filter((tab) => /^https?:\/\//.test(tab.url || "") && !tab.incognito)
+        .map((tab) => ({
+          tabId: tab.id,
+          browserWindowId: tab.windowId,
+          url: tab.url,
+          title: (tab.title || "").slice(0, 2000),
+        })),
+    };
+  }
+  let tab;
+  if (request.kind === "claim_tab") {
+    tab = await chrome.tabs.get(request.tab.tabId);
+    if (
+      tab.incognito ||
+      tab.url !== request.tab.url ||
+      tab.title !== request.tab.title ||
+      tab.windowId !== request.tab.browserWindowId
+    )
+      throw new Error("BROWSER_SURFACE_MISMATCH");
+    if (tabs.has(tab.id)) throw new Error("标签页正由其他任务控制");
+  } else tab = await chrome.tabs.create({ url: "about:blank", active: false });
+  const record = {
+    tabId: tab.id,
+    authorizationId: request.requestId,
+    sequence: 1,
+    grantId: null,
+    busy: true,
+    loading: false,
+  };
+  await chrome.debugger.attach({ tabId: tab.id }, "1.3");
+  tabs.set(tab.id, record);
+  try {
+    await cdp(tab.id, "Page.enable");
+    await cdp(tab.id, "Fetch.enable", {
+      patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
+    });
+    if (request.kind === "create_tab") {
+      await siteCheck(record, request.url);
+      const navigation = await cdp(tab.id, "Page.navigate", { url: request.url });
+      if (navigation.errorText) throw new Error("BROWSER_NAVIGATION_DENIED");
+      await settle(record);
+    }
+    tab = await chrome.tabs.get(tab.id);
+    await siteCheck(record, tab.url, true);
+    record.status = await evaluate(tab.id, "globalThis.__openerxPageAgent.status()");
+    record.binding = binding(tab, record.status);
+    const authorization = await api("/authorize", {
+      protocolVersion,
+      kind: "authorize_tab",
+      messageId: request.requestId,
+      sequence: 1,
+      binding: record.binding,
+    });
+    record.busy = false;
+    return { browserContextRef: authorization.browserContextRef };
+  } catch (error) {
+    await release(record);
+    if (request.kind === "create_tab") await chrome.tabs.remove(tab.id).catch(() => {});
+    throw error;
+  }
+}
 async function api(route, body) {
-  if (!config) throw new Error("请先填写 UWA 设置中的配对码");
+  if (!config) throw new Error("请先填写桌面应用设置中的配对码");
   const response = await fetch(config.base + route, {
     method: body === undefined ? "GET" : "POST",
     mode: "cors",
     headers: {
       Authorization: `Bearer ${config.token}`,
       "Content-Type": "application/json",
+      "X-Openerx-Bridge-Version": "2",
       ...(connectionId ? { "X-Openerx-Connection": connectionId } : {}),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    signal: AbortSignal.timeout(25000),
+    signal: AbortSignal.timeout(route === "/site-check" ? 175000 : 25000),
   });
   if (!response.ok)
     throw new Error(
-      response.status === 403 ? "配对已失效，请从 UWA 获取新配对码" : "UWA 连接中断，请重新配对",
+      response.status === 403
+        ? "配对已失效，请从桌面应用获取新配对码"
+        : response.status === 426
+          ? "请重新导出并刷新浏览器扩展"
+          : "浏览器连接暂时中断",
     );
   return await response.json();
 }
@@ -86,11 +174,9 @@ async function event(record, kind, state = record.status) {
   if (!["user_input", "same_origin_navigation"].includes(kind)) await release(record);
 }
 async function refresh(record) {
+  const tab = await chrome.tabs.get(record.tabId);
+  await siteCheck(record, tab.url, true);
   const state = await evaluate(record.tabId, "globalThis.__openerxPageAgent.status()");
-  if (new URL(state.url).origin !== record.origin) {
-    await event(record, "cross_origin_navigation", state);
-    throw new Error("网站变化，需要重新授权");
-  }
   if (state.documentId !== record.status.documentId || state.url !== record.status.url)
     await event(record, "same_origin_navigation", state);
   else if (state.userEpoch > record.status.userEpoch) {
@@ -138,6 +224,19 @@ async function capture(record, snapshot) {
   };
 }
 async function command(request) {
+  if (["list_tabs", "claim_tab", "create_tab"].includes(request.kind)) {
+    try {
+      const result = await manage(request);
+      await api("/message", { kind: "management_result", requestId: request.requestId, ...result });
+    } catch (error) {
+      await api("/message", {
+        kind: "management_result",
+        requestId: request.requestId,
+        error: String(error.message),
+      });
+    }
+    return;
+  }
   if (request.kind === "grant_accepted") {
     const record = [...tabs.values()].find(
       (r) => r.authorizationId === request.authorizationMessageId,
@@ -154,15 +253,21 @@ async function command(request) {
   while (record.busy && tabs.has(record.tabId)) await delay(20);
   if (!tabs.has(record.tabId)) return;
   record.busy = true;
+  record.activeRequestId = request.requestId;
   try {
     const tab = await chrome.tabs.get(record.tabId);
-    if (!tab.active) {
-      await event(record, "tab_deactivated");
-      return;
-    }
+    if (record.loading) await settle(record);
     const state = await refresh(record);
-    if (JSON.stringify(binding(tab, state)) !== JSON.stringify(request.expectedBinding))
-      throw new Error("授权页面已经变化");
+    if (
+      tab.id !== request.expectedBinding.tabId ||
+      tab.windowId !== request.expectedBinding.browserWindowId
+    )
+      throw new Error("BROWSER_SURFACE_MISMATCH");
+    if (
+      request.kind === "act" &&
+      JSON.stringify(binding(tab, state)) !== JSON.stringify(request.expectedBinding)
+    )
+      throw new Error("BROWSER_OBSERVATION_MISMATCH");
     if (request.kind === "observe") {
       const snapshot = await evaluate(record.tabId, "globalThis.__openerxPageAgent.snapshot()");
       const image = await capture(record, snapshot);
@@ -182,8 +287,14 @@ async function command(request) {
         throw new Error("BROWSER_OBSERVATION_MISMATCH");
       // Keep navigation responses bound to the originating document; refresh sends the navigation event afterwards.
       let result;
-      if (["history_back", "history_forward", "reload"].includes(request.command.kind)) {
-        if (request.command.kind === "reload") await cdp(record.tabId, "Page.reload");
+      record.navigationError = false;
+      if (
+        ["history_back", "history_forward", "reload", "navigate"].includes(request.command.kind)
+      ) {
+        if (request.command.kind === "navigate") {
+          await siteCheck(record, request.command.url);
+          await cdp(record.tabId, "Page.navigate", { url: request.command.url });
+        } else if (request.command.kind === "reload") await cdp(record.tabId, "Page.reload");
         else {
           const history = await cdp(record.tabId, "Page.getNavigationHistory");
           const entry =
@@ -191,16 +302,25 @@ async function command(request) {
               history.currentIndex + (request.command.kind === "history_back" ? -1 : 1)
             ];
           if (!entry) result = "unsupported";
-          else if (new URL(entry.url).origin !== record.origin)
-            throw new Error("BROWSER_NAVIGATION_DENIED");
-          else await cdp(record.tabId, "Page.navigateToHistoryEntry", { entryId: entry.id });
+          else {
+            await siteCheck(record, entry.url);
+            await cdp(record.tabId, "Page.navigateToHistoryEntry", { entryId: entry.id });
+          }
         }
         result ||= "performed";
-      } else
+      } else {
+        const destination = await evaluate(
+          record.tabId,
+          `globalThis.__openerxPageAgent.destination(${JSON.stringify(request.command)}, ${JSON.stringify(request.expectedPageRevision)})`,
+        );
+        if (destination) await siteCheck(record, destination);
         result = await evaluate(
           record.tabId,
-          `globalThis.__openerxPageAgent.act(${JSON.stringify(request.command)}, ${JSON.stringify(request.expectedPageRevision)})`,
+          `globalThis.__openerxPageAgent.act(${JSON.stringify(request.command)}, ${JSON.stringify(request.expectedPageRevision)}, true)`,
         );
+      }
+      await settle(record);
+      if (record.navigationError) throw new Error("BROWSER_NAVIGATION_DENIED");
       await emit(record, {
         kind: "action_result",
         requestId: request.requestId,
@@ -237,6 +357,7 @@ async function command(request) {
     await release(record);
   } finally {
     record.busy = false;
+    record.activeRequestId = null;
   }
 }
 async function poll() {
@@ -250,7 +371,7 @@ async function poll() {
         for (const delivery of deliveries)
           if (delivery.expiresAt > Date.now()) await command(delivery.message);
       } catch (error) {
-        console.error("UWA bridge poll:", error.message);
+        console.error("Browser bridge:", error.message);
         connectionId = null;
         for (const record of [...tabs.values()]) await release(record);
         await delay(2000);
@@ -261,8 +382,11 @@ async function poll() {
   }
 }
 setInterval(() => {
+  if (connectionId) void api("/heartbeat", {}).catch(() => {});
+}, 10000);
+setInterval(() => {
   for (const record of tabs.values()) {
-    if (!record.grantId || record.busy) continue;
+    if (!record.grantId || record.busy || record.loading) continue;
     record.busy = true;
     refresh(record)
       .catch(() => {})
@@ -274,16 +398,21 @@ setInterval(() => {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const record = tabs.get(source.tabId);
   if (!record) return;
-  if (method === "Fetch.requestPaused") {
-    let allowed = false;
-    try {
-      allowed = new URL(params.request.url).origin === record.origin;
-    } catch {}
-    void cdp(record.tabId, allowed ? "Fetch.continueRequest" : "Fetch.failRequest", {
-      requestId: params.requestId,
-      ...(allowed ? {} : { errorReason: "BlockedByClient" }),
-    }).catch(() => {});
-  }
+  if (method === "Page.frameStartedLoading") record.loading = true;
+  if (method === "Page.frameStoppedLoading") record.loading = false;
+  if (method === "Fetch.requestPaused")
+    void (async () => {
+      try {
+        await siteCheck(record, params.request.url);
+        await cdp(record.tabId, "Fetch.continueRequest", { requestId: params.requestId });
+      } catch {
+        record.navigationError = true;
+        await cdp(record.tabId, "Fetch.failRequest", {
+          requestId: params.requestId,
+          errorReason: "BlockedByClient",
+        }).catch(() => {});
+      }
+    })();
 });
 chrome.debugger.onDetach.addListener((source) => {
   const record = tabs.get(source.tabId);
@@ -291,11 +420,6 @@ chrome.debugger.onDetach.addListener((source) => {
     tabs.delete(source.tabId);
     void event(record, "authorization_revoked").catch(() => {});
   }
-});
-chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
-  for (const record of tabs.values())
-    if (record.binding.browserWindowId === windowId && record.tabId !== tabId)
-      void event(record, "tab_deactivated").catch(() => {});
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   const record = tabs.get(tabId);
@@ -320,53 +444,20 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       config = { base: code.origin, token: code.hash.slice(1) };
       connectionId = null;
       connectionId = (await api("/connect", {})).connectionId;
-      await chrome.storage.session.set({ config });
+      await chrome.storage.local.set({ config });
       void poll();
       return { ok: true };
     }
-    if (message.action === "authorize") {
-      if (!connectionId) throw new Error("请先配对 UWA");
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab || !/^https?:\/\//.test(tab.url)) throw new Error("只能授权 HTTP/HTTPS 网页");
-      if (tabs.has(tab.id)) await release(tabs.get(tab.id));
-      await chrome.debugger.attach({ tabId: tab.id }, "1.3");
-      try {
-        const status = await evaluate(tab.id, "globalThis.__openerxPageAgent.status()");
-        const record = {
-          tabId: tab.id,
-          authorizationId: id("authorization"),
-          sequence: 1,
-          grantId: null,
-          binding: binding(tab, status),
-          status,
-          origin: new URL(status.url).origin,
-          busy: false,
-        };
-        tabs.set(tab.id, record);
-        await cdp(tab.id, "Fetch.enable", {
-          patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
-        });
-        const authorization = await api("/authorize", {
-          protocolVersion,
-          kind: "authorize_tab",
-          messageId: record.authorizationId,
-          sequence: 1,
-          binding: record.binding,
-        });
-        return { ok: true, origin: authorization.origin };
-      } catch (error) {
-        const record = tabs.get(tab.id);
-        if (record) await release(record);
-        else await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
-        throw error;
-      }
+    if (message.action === "stop") {
+      for (const record of [...tabs.values()]) await event(record, "authorization_revoked");
+      return { ok: true };
     }
     if (message.action === "disconnect") {
       for (const record of [...tabs.values()]) await release(record);
       await api("/disconnect", {}).catch(() => {});
       config = null;
       connectionId = null;
-      await chrome.storage.session.clear();
+      await chrome.storage.local.remove("config");
       return { ok: true };
     }
     throw new Error("操作不支持");
@@ -376,7 +467,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   );
   return true;
 });
-chrome.storage.session.get("config").then((saved) => {
+chrome.storage.local.get("config").then((saved) => {
   if (!config && saved.config) {
     config = saved.config;
     void poll();

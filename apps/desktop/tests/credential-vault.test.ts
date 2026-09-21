@@ -308,7 +308,7 @@ describe("ModelServiceSettingsStore", () => {
       mode: "byok",
       byok: {
         baseUrl: "https://api.deepseek.com",
-        modelId: "deepseek-v4-flash",
+        modelId: "deepseek-flash",
       },
       credentialConfigured: false,
     });

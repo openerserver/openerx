@@ -10,6 +10,28 @@ const mainEntry = path.join(desktopDirectory, ".vite", "build", "main.js");
 const profileDirectory = mkdtempSync(path.join(tmpdir(), "openerx-beta-e2e-"));
 const privatePrompt = "M8 私人导出正文 sk-beta-private-12345678";
 
+async function waitForAppServiceRestart() {
+  const diagnosticsPath = path.join(profileDirectory, "logs", "diagnostics.jsonl");
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const events = existsSync(diagnosticsPath)
+      ? readFileSync(diagnosticsPath, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+    const restartingIndex = events.findLastIndex(({ code }) => code === "service.restarting");
+    if (
+      restartingIndex >= 0 &&
+      events.slice(restartingIndex + 1).some(({ code }) => code === "service.ready")
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("App Service did not record a completed restart");
+}
+
 let application;
 try {
   application = await electron.launch({
@@ -24,6 +46,34 @@ try {
   });
   const page = await application.firstWindow();
   await page.waitForLoadState("domcontentloaded");
+  await application.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler("model:catalog:list");
+    ipcMain.handle("model:catalog:list", () => [
+      {
+        modelRef: "platform/e2e-faux",
+        displayName: "E2E faux model",
+        version: "1.0.0",
+        capabilities: {
+          textInput: true,
+          imageInput: false,
+          fileInput: false,
+          functionCalling: true,
+          structuredOutput: true,
+        },
+        contextWindow: 128_000,
+        maxOutputTokens: 8_192,
+        status: "available",
+        priceRef: "e2e-faux",
+        priceSummary: "E2E only",
+        free: true,
+        thinkingLevels: ["off", "medium", "high"],
+      },
+    ]);
+  });
+  await page.evaluate(() =>
+    window.localStorage.setItem("openerx.defaultModelRef", "platform/e2e-faux"),
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByLabel("发送消息").fill(privatePrompt);
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await page.locator(".message-assistant[data-message-status='completed']").waitFor();
@@ -33,10 +83,9 @@ try {
     if (typeof crash !== "function") throw new Error("Crash injection hook missing");
     crash();
   });
-  await page.locator(".sync-state.service-restarting").waitFor();
-  await page.locator(".sync-state.service-ready").waitFor();
+  await waitForAppServiceRestart();
   await page.getByRole("link", { name: "设置", exact: true }).click();
-  await page.locator("#diagnostics-section > summary").click();
+  await page.getByRole("button", { name: "诊断与数据", exact: true }).click();
   await page.getByRole("heading", { name: "诊断与数据" }).waitFor();
   await page.getByText("次服务重启", { exact: false }).waitFor();
 

@@ -190,4 +190,39 @@ describe("desktop update data retention", () => {
     expect(setPath).toHaveBeenCalledWith("sessionData", profile);
     expect(setPath).toHaveBeenCalledWith("userData", profile);
   });
+
+  it("keeps development profiles separate from packaged profiles", () => {
+    const appData = path.join(tmpdir(), "app-data");
+    const developmentPaths: Record<string, string> = {};
+    const development = {
+      isPackaged: false,
+      getPath: () => appData,
+      setPath: (name: string, value: string) => {
+        developmentPaths[name] = value;
+      },
+    };
+    expect(configureDesktopProfile(development, {}, "OpenerX-Enterprise")).toBe(
+      path.join(appData, "OpenerX-Enterprise-Development"),
+    );
+    expect(developmentPaths).toEqual({
+      userData: path.join(appData, "OpenerX-Enterprise-Development"),
+      sessionData: path.join(appData, "OpenerX-Enterprise-Development"),
+    });
+
+    const packagedPaths: Record<string, string> = {};
+    const packaged = {
+      isPackaged: true,
+      getPath: () => appData,
+      setPath: (name: string, value: string) => {
+        packagedPaths[name] = value;
+      },
+    };
+    expect(configureDesktopProfile(packaged, {}, "OpenerX-Enterprise")).toBe(
+      path.join(appData, "OpenerX-Enterprise"),
+    );
+    expect(packagedPaths).toEqual({
+      userData: path.join(appData, "OpenerX-Enterprise"),
+      sessionData: path.join(appData, "OpenerX-Enterprise"),
+    });
+  });
 });

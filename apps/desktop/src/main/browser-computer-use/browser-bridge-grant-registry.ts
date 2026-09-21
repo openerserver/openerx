@@ -75,6 +75,7 @@ interface GrantRecord {
 }
 
 interface RegistryOptions {
+  isUrlAllowed?: (grantId: string, url: string) => boolean;
   expectedExtensionOrigin: string;
   mainChannelNonce: string;
   supportedApplicationIds: readonly string[];
@@ -178,6 +179,7 @@ export class BrowserBridgeConnection {
 }
 
 export class BrowserBridgeGrantRegistry {
+  readonly #isUrlAllowed: RegistryOptions["isUrlAllowed"];
   readonly #expectedExtensionOrigin: string;
   readonly #mainChannelNonce: string;
   readonly #supportedApplicationIds: Set<string>;
@@ -190,6 +192,7 @@ export class BrowserBridgeGrantRegistry {
   readonly #contextRefs = new Map<string, string>();
 
   constructor(options: RegistryOptions) {
+    this.#isUrlAllowed = options.isUrlAllowed;
     this.#expectedExtensionOrigin = browserBridgeExtensionOriginSchema.parse(
       options.expectedExtensionOrigin,
     );
@@ -342,12 +345,22 @@ export class BrowserBridgeGrantRegistry {
     }
     if (
       connection.usedAuthorizationIds.has(message.messageId) ||
-      connection.usedAuthorizationIds.size >= MAXIMUM_AUTHORIZATION_IDS_PER_CONNECTION ||
+      (!this.#isUrlAllowed &&
+        connection.usedAuthorizationIds.size >= MAXIMUM_AUTHORIZATION_IDS_PER_CONNECTION) ||
       this.#grants.size >= MAXIMUM_GRANTS
     ) {
       throw new BrowserObservationError("BROWSER_BRIDGE_AUTHORIZATION_REQUIRED");
     }
     connection.usedAuthorizationIds.add(message.messageId);
+    // Task-managed claims also require a live, one-use Main intent. Bound the replay cache
+    // without imposing a lifetime limit on an otherwise persistent browser connection.
+    if (
+      this.#isUrlAllowed &&
+      connection.usedAuthorizationIds.size > MAXIMUM_AUTHORIZATION_IDS_PER_CONNECTION
+    ) {
+      const oldest = connection.usedAuthorizationIds.values().next().value;
+      if (oldest) connection.usedAuthorizationIds.delete(oldest);
+    }
     for (const grant of this.#grants.values()) {
       if (
         grant.state !== "released" &&
@@ -532,8 +545,11 @@ export class BrowserBridgeGrantRegistry {
       if (!sameBrowserBridgeTab(grant.binding, message.binding)) {
         throw new Error("BROWSER_BRIDGE_TAB_MISMATCH");
       }
-      if (message.event === "same_origin_navigation") {
-        if (message.binding.origin !== grant.authorizedOrigin) {
+      if (
+        message.event === "same_origin_navigation" ||
+        (message.event === "cross_origin_navigation" && this.#isUrlAllowed)
+      ) {
+        if (!this.#allowed(grant, message.binding)) {
           throw new Error("BROWSER_BRIDGE_ORIGIN_MISMATCH");
         }
         grant.binding = clone(message.binding);
@@ -557,10 +573,7 @@ export class BrowserBridgeGrantRegistry {
   }
 
   #acceptObservationBinding(grant: GrantRecord, binding: BrowserBridgeTabBinding): void {
-    if (
-      !sameBrowserBridgeTab(grant.binding, binding) ||
-      binding.origin !== grant.authorizedOrigin
-    ) {
+    if (!sameBrowserBridgeTab(grant.binding, binding) || !this.#allowed(grant, binding)) {
       throw new Error("BROWSER_BRIDGE_BINDING_MISMATCH");
     }
     grant.binding = clone(binding);
@@ -637,6 +650,8 @@ export class BrowserBridgeGrantRegistry {
       if (grant.state === "authorized" && now >= grant.expiresAtMs) {
         this.#revokeGrant(grant, false);
       }
+      if (grant.state === "released" || grant.state === "revoked")
+        this.#grants.delete(grant.grantId);
     }
   }
 
@@ -651,7 +666,24 @@ export class BrowserBridgeGrantRegistry {
     if (grant?.state !== "claimed" || !grant.connection.active) {
       throw new BrowserObservationError("BROWSER_BRIDGE_DISCONNECTED");
     }
+    if (!this.#allowed(grant, grant.binding))
+      throw new BrowserObservationError("BROWSER_NAVIGATION_DENIED");
     return grant;
+  }
+
+  #allowed(grant: GrantRecord, binding: BrowserBridgeTabBinding): boolean {
+    return this.#isUrlAllowed
+      ? this.#isUrlAllowed(grant.grantId, binding.url)
+      : binding.origin === grant.authorizedOrigin;
+  }
+
+  hasActiveGrant(grantId: string): boolean {
+    const grant = this.#grants.get(grantId);
+    return (
+      !!grant &&
+      grant.connection.active &&
+      (grant.state === "authorized" || grant.state === "claimed")
+    );
   }
 
   #reference(prefix: string): string {

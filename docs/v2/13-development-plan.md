@@ -21,7 +21,7 @@ V1 完成必须同时满足：
 
 ## 2. 不可变架构原则
 
-- `@earendil-works/pi-coding-agent@0.84.4` 是当前唯一生产 agent harness。
+- `@earendil-works/pi-coding-agent@0.86.0` 是当前唯一生产 agent harness。
 - Pi 负责 `AgentSession`、Agent Loop、模型轮次、上下文、压缩、内部重试和工具调用生命周期。
 - `packages/pi-host` 只承载 Pi、隔离工作目录和 Electron 进程桥接。
 - V2 只负责产品数据、进程监督、模型/计费前置条件、事件投影和 Capability and Permission Broker。

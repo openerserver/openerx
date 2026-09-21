@@ -190,6 +190,9 @@ export const browserComputerUseOperationV2Schema = z.discriminatedUnion("action"
     })
     .strict(),
   z
+    .object({ ...observedOperationBase, action: z.literal("navigate"), url: browserHttpUrlSchema })
+    .strict(),
+  z
     .object({
       ...observedOperationBase,
       action: z.literal("upload"),
@@ -508,10 +511,35 @@ export const browserModeSchema = z.enum([
   "os_accessibility",
 ]);
 export type BrowserMode = z.infer<typeof browserModeSchema>;
+export const browserSitePolicySchema = z
+  .object({
+    allowAllSites: z.boolean().default(false),
+    allowedHosts: z.array(z.string().min(1).max(253)).max(1000).default([]),
+    blockedHosts: z.array(z.string().min(1).max(253)).max(1000).default([]),
+  })
+  .strict();
+export type BrowserSitePolicy = z.infer<typeof browserSitePolicySchema>;
+export const browserPermissionUpdateSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("all_sites"), allowed: z.boolean() }).strict(),
+  z
+    .object({
+      action: z.literal("site"),
+      host: z.string().min(1).max(253),
+      decision: z.enum(["allow", "block", "ask"]),
+    })
+    .strict(),
+  z.object({ action: z.literal("disconnect") }).strict(),
+]);
+export type BrowserPermissionUpdate = z.infer<typeof browserPermissionUpdateSchema>;
 export const browserConnectionStateSchema = z
   .object({
     mode: browserModeSchema,
     extensionConnected: z.boolean(),
+    sitePolicy: browserSitePolicySchema.default({
+      allowAllSites: false,
+      allowedHosts: [],
+      blockedHosts: [],
+    }),
     authorizedTabs: z.array(
       z.object({
         browserContextRef: browserOpaqueReferenceSchema,

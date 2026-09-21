@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import {
   automaticModelRef,
@@ -181,7 +182,7 @@ describe("Platform Model Pi Provider", () => {
     });
     const stream = platform.provider.streamSimple(
       platform.model,
-      {
+      normalizeContext({
         messages: [
           {
             role: "user",
@@ -192,7 +193,7 @@ describe("Platform Model Pi Provider", () => {
             timestamp: Date.now(),
           },
         ],
-      },
+      }),
       undefined,
     );
     for await (const _event of stream) {
@@ -204,7 +205,7 @@ describe("Platform Model Pi Provider", () => {
     );
   });
 
-  it("redacts private host paths before hashing and sending model context", async () => {
+  it("replays prompt and tool changes before redacting and hashing gateway context", async () => {
     const privateDirectory = "/private/profile/pi-workspace";
     const accountId = randomUUID();
     const conversationId = randomUUID();
@@ -253,20 +254,33 @@ describe("Platform Model Pi Provider", () => {
         },
       ],
     });
-    const stream = platform.provider.streamSimple(
-      platform.model,
-      {
-        systemPrompt: `Current working directory: ${privateDirectory}`,
-        messages: [
-          {
-            role: "user",
-            content: `do not use ${privateDirectory}`,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      undefined,
-    );
+    const context = normalizeContext({
+      messages: [
+        {
+          role: "system",
+          content: `Current working directory: ${privateDirectory}`,
+          sections: { policy: "old policy", removed: "obsolete section" },
+          toolsAdded: [{ name: "old_tool", description: "old", parameters: Type.Object({}) }],
+          timestamp: 1,
+        },
+        {
+          role: "user",
+          content: `do not use ${privateDirectory}`,
+          timestamp: 2,
+        },
+        {
+          role: "system",
+          content: "Use current instructions.",
+          sections: { policy: "new policy", removed: null },
+          toolsRemoved: [{ name: "old_tool" }],
+          toolsAdded: [
+            { name: "current_tool", description: privateDirectory, parameters: Type.Object({}) },
+          ],
+          timestamp: 3,
+        },
+      ],
+    });
+    const stream = platform.provider.streamSimple(platform.model, context, undefined);
     for await (const _event of stream) {
       // Exhaust the provider stream so the transport request completes.
     }
@@ -275,6 +289,32 @@ describe("Platform Model Pi Provider", () => {
     expect(JSON.stringify(request?.context)).toContain(
       "<private-pi-session-directory-not-a-tool-workspace>",
     );
+    expect(request?.requirements.functionCalling).toBe(true);
+    expect(request?.context).toMatchObject({
+      systemPrompt: expect.stringContaining("new policy"),
+      tools: [
+        {
+          name: "current_tool",
+          description: "<private-pi-session-directory-not-a-tool-workspace>",
+        },
+      ],
+      messages: [{ role: "user" }],
+    });
+    expect(JSON.stringify(request?.context)).toContain("Use current instructions.");
+    expect(JSON.stringify(request?.context)).not.toMatch(/old policy|obsolete section|old_tool/);
+    expect(JSON.stringify(context)).toContain(privateDirectory);
+
+    const withoutTools = normalizeContext({
+      messages: [
+        ...context.messages,
+        { role: "system", content: "", toolsRemoved: [{ name: "current_tool" }], timestamp: 4 },
+      ],
+    });
+    await platform.provider.streamSimple(platform.model, withoutTools).result();
+    const nextRequest = execute.mock.calls[1]?.[0];
+    expect(nextRequest?.context).toMatchObject({ tools: [] });
+    expect(nextRequest?.requirements.functionCalling).toBeUndefined();
+    expect(nextRequest?.requestDedupeKey).not.toBe(request?.requestDedupeKey);
   });
 
   it("streams a Gateway response through Pi and preserves authoritative unknown usage", async () => {
@@ -409,7 +449,7 @@ describe("Platform Model Pi Provider", () => {
     const events: Array<{ type: string; reason?: string }> = [];
     const stream = platform.provider.streamSimple(
       platform.model,
-      { messages: [{ role: "user", content: "long", timestamp: Date.now() }] },
+      normalizeContext({ messages: [{ role: "user", content: "long", timestamp: Date.now() }] }),
       undefined,
     );
     for await (const event of stream) events.push(event);
@@ -460,7 +500,9 @@ describe("Platform Model Pi Provider", () => {
     const events: Array<{ type: string; reason?: string }> = [];
     const stream = platform.provider.streamSimple(
       platform.model,
-      { messages: [{ role: "user", content: "filtered", timestamp: Date.now() }] },
+      normalizeContext({
+        messages: [{ role: "user", content: "filtered", timestamp: Date.now() }],
+      }),
       undefined,
     );
     for await (const event of stream) events.push(event);

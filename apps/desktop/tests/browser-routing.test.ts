@@ -5,6 +5,16 @@ import { routeBrowserOpen } from "../src/main/browser-computer-use/browser-routi
 const request = { contractVersion, action: "open" as const, url: "https://fixture.test/page" };
 const tab = { url: request.url, browserContextRef: "bctx_real_authorization" };
 describe("browser profile selection", () => {
+  it("stays in connected Chrome for new sites and tabs without requiring a preauthorized exact URL", () => {
+    expect(routeBrowserOpen(request, "auto", [], true).requestedBackend).toBe("system_default");
+    expect(routeBrowserOpen(request, "connected_chrome", [], true).requestedBackend).toBe(
+      "system_default",
+    );
+    expect(
+      routeBrowserOpen({ ...request, requestedBackend: "managed_chromium" }, "auto", [], true)
+        .requestedBackend,
+    ).toBe("managed_chromium");
+  });
   it("uses an ephemeral managed browser when no authorized tab matches", () => {
     expect(routeBrowserOpen(request, "auto", []).requestedBackend).toBe("managed_chromium");
     expect(

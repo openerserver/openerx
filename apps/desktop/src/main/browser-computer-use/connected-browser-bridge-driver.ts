@@ -116,6 +116,8 @@ export function boundedCommand(
       return { kind: "history_forward" };
     case "reload":
       return { kind: "reload" };
+    case "navigate":
+      return { kind: "navigate", url: input.operation.url };
     default:
       return null;
   }

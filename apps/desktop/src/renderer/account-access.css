@@ -178,7 +178,7 @@
 
 .account-access-error {
   margin: 0;
-  color: var(--color-error, #c14040);
+  color: var(--workspace-danger);
   font-size: 13px;
   line-height: 1.6;
 }

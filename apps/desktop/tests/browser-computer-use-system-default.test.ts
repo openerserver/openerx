@@ -75,6 +75,7 @@ class FakeSystemBrowserDriver implements SystemDefaultBrowserDriver {
   value = "";
   revision = 1;
   closeCount = 0;
+  releaseControl = vi.fn();
   monitorStarts = 0;
   monitorStops = 0;
   monitorGate: Promise<void> | null = null;
@@ -282,6 +283,7 @@ describe("BCU-003 SystemDefaultBrowserAdapter", () => {
     const second = resultObservation(await adapter.execute(open, signal, "generation-b"));
     await adapter.releaseGeneration("generation-a");
     expect(driver.closeCount).toBe(1);
+    expect(driver.releaseControl).toHaveBeenCalledTimes(1);
     expect(adapter.descriptors().map(({ sessionId }) => sessionId)).toEqual([second.sessionId]);
     await adapter.releaseGeneration("generation-a");
     expect(driver.closeCount).toBe(1);
@@ -306,7 +308,26 @@ describe("BCU-003 SystemDefaultBrowserAdapter", () => {
     await adapter.releaseGeneration("generation-a");
     expect(driver.closeCount).toBe(0);
     expect(driver.monitorStops).toBe(1);
+    expect(driver.releaseControl).toHaveBeenCalledWith(driver.binding);
     expect(adapter.descriptors()).toEqual([]);
+  });
+
+  it("releases driver automation on adapter shutdown without closing the window", async () => {
+    const driver = new FakeSystemBrowserDriver();
+    const adapter = new SystemDefaultBrowserAdapter(driver);
+    await adapter.execute(
+      {
+        contractVersion: BROWSER_COMPUTER_USE_CONTRACT_VERSION,
+        action: "open",
+        url: "https://fixture.test/",
+      },
+      new AbortController().signal,
+    );
+    adapter.close();
+    adapter.close();
+    expect(driver.releaseControl).toHaveBeenCalledTimes(1);
+    expect(driver.releaseControl).toHaveBeenCalledWith(driver.binding);
+    expect(driver.closeCount).toBe(0);
   });
 
   it("closes a window created after cancellation using a fresh cleanup signal", async () => {

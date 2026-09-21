@@ -259,7 +259,7 @@ M1 当前实现在 `packages/contracts/src/pi.ts` 和 `packages/pi-host`，覆�
 
 ## 8. Pi 所有权合同
 
-`已确认`：`@earendil-works/pi-coding-agent@0.84.4` 完整提供 V1 唯一的生产 agent
+`已确认`：`@earendil-works/pi-coding-agent@0.86.0` 完整提供 V1 唯一的生产 agent
 harness，但不是产品数据、权限或商业真值。
 
 1. Pi 负责 Agent Loop、`AgentSession`/SessionManager、上下文与压缩、模型轮次、内部重试和工具调用生命周期。

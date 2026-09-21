@@ -200,6 +200,7 @@ const snapshot: ConversationSnapshot = {
 
 function createBridge(): DesktopBridge {
   return {
+    updateBrowserPermission: vi.fn(),
     getBrowserConnectionState: vi.fn().mockResolvedValue({
       mode: "auto",
       extensionConnected: false,
@@ -3251,6 +3252,153 @@ describe("M1 chat renderer", () => {
       expect(within(card).getByText("正在思考…")).toBeTruthy();
       expect(within(card).getByRole("button", { name: "停止" })).toBeTruthy();
       expect(card.getAttribute("aria-busy")).toBe("true");
+      cleanup();
+    },
+  );
+
+  it.each([false, true])(
+    "shows workspace precondition recovery accurately (recovered=%s)",
+    async (recovered) => {
+      cleanup();
+      const bridge = createBridge();
+      const workItem: WorkItem = {
+        id: crypto.randomUUID(),
+        ownerProfileId: "local-default",
+        conversationId,
+        messageId: assistantMessageId,
+        title: "对话轮次",
+        status: "running",
+        activeRunId: crypto.randomUUID(),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: null,
+        revision: 1,
+      };
+      const runId = workItem.activeRunId as string;
+      const input = {
+        operation: "workspace_patch" as const,
+        workspaceGrantId: projectWorkspaceGrantId,
+        idempotencyKey: "patch-ui-failure",
+        patch: "*** Begin Patch\n*** Update File: a.txt\n@@\n-before\n+after\n*** End Patch",
+      };
+      const failed = {
+        id: crypto.randomUUID(),
+        runId,
+        stepId: crypto.randomUUID(),
+        piCallRef: "patch-1",
+        toolName: "openerx_workspace_apply_patch",
+        source: "openerx" as const,
+        status: "failed" as const,
+        risk: "L3" as const,
+        idempotencyKey: input.idempotencyKey,
+        input,
+        inputSummary: "修改文件",
+        targetSummary: "a.txt",
+        resultSummary: null,
+        resultContent: [],
+        errorCode: "WORKSPACE_READ_REQUIRED",
+        startedAt: timestamp,
+        completedAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const success = {
+        ...failed,
+        id: crypto.randomUUID(),
+        status: "completed" as const,
+        errorCode: null,
+        resultContent: [
+          {
+            type: "diff" as const,
+            workspaceChangeId: "edit",
+            relativePath: "a.txt",
+            patch: "-before\n+after",
+          },
+        ],
+      };
+      const run: WorkItemDetail["run"] = {
+        id: runId,
+        workItemId: workItem.id,
+        attempt: 1,
+        status: "running",
+        piPackageVersion: "0.84.4",
+        piHostContractVersion: 2,
+        selectedModelRef: "platform/auto",
+        effectiveModelRef: "platform/standard",
+        branchId,
+        thinkingLevel: "high",
+        fallbackReason: null,
+        initialToolNames: [failed.toolName],
+        availableToolNames: [failed.toolName],
+        skillInstallationIds: [],
+        instructionSources: [],
+        piSessionRef: `run:${runId}`,
+        usageRecords: [],
+        cancellationRequestedAt: null,
+        lastPiEventSequence: 1,
+        retryCount: 0,
+        compactionCount: 0,
+        errorCode: null,
+        createdAt: timestamp,
+        startedAt: timestamp,
+        completedAt: null,
+        updatedAt: timestamp,
+      };
+      const detail: WorkItemDetail = {
+        workItem,
+        run,
+        runs: [run],
+        steps: [],
+        permissions: [],
+        toolCalls: recovered ? [failed, success] : [failed],
+        workspaceEdits: recovered
+          ? [
+              {
+                id: "edit",
+                kind: "change_set",
+                workspaceGrantId: projectWorkspaceGrantId,
+                relativePaths: ["a.txt"],
+                status: "applied",
+                canUndo: true,
+                createdAt: timestamp,
+              },
+            ]
+          : [],
+        items: [
+          {
+            id: crypto.randomUUID(),
+            runId,
+            sequence: 1,
+            piItemRef: "patch-1",
+            status: "failed",
+            content: {
+              type: "tool",
+              toolCallId: failed.id,
+              toolName: failed.toolName,
+              input,
+              inputSummary: "修改文件",
+              targetSummary: "a.txt",
+            },
+            startedAt: timestamp,
+            completedAt: timestamp,
+            errorCode: failed.errorCode,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
+      };
+      vi.mocked(bridge.listWorkItems).mockResolvedValue([workItem]);
+      vi.mocked(bridge.getWorkItem).mockResolvedValue(detail);
+      renderApp(bridge, `/chat/${conversationId}`);
+      await userEvent.setup().click(await screen.findByRole("button", { name: /对话轮次/ }));
+      const label = await screen.findByText(recovered ? "后续重试成功" : "未写入 · 需修正后重试");
+      const row = label.closest(".tool-call-row") as HTMLElement;
+      expect(within(row).getByRole("status").textContent).toContain(
+        recovered ? "成功写入" : "无需再次授权",
+      );
+      expect(within(row).queryByText("failed")).toBeNull();
+      expect(row.querySelector(".inline-error")).toBeNull();
+      expect(within(row).getByText("WORKSPACE_READ_REQUIRED")).toBeTruthy();
+      expect(failed.status).toBe("failed");
       cleanup();
     },
   );

@@ -38,16 +38,19 @@ describe("model connection failure classification", () => {
     await expect(store.test(input)).rejects.toThrow(new Error(code));
   });
 
-  it.each(["null", "{}", '{"choices":[]}', "invalid JSON"])(
-    "rejects invalid successful bodies: %s",
-    async (body) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(body)),
-      );
-      await expect(store.test(input)).rejects.toThrow("MODEL_RESPONSE_INVALID");
-    },
-  );
+  it.each([
+    "null",
+    "{}",
+    '{"choices":[]}',
+    '{"choices":[{"message":{"content":null}}]}',
+    "invalid JSON",
+  ])("rejects invalid successful bodies: %s", async (body) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body)),
+    );
+    await expect(store.test(input)).rejects.toThrow("MODEL_RESPONSE_INVALID");
+  });
 
   it("classifies non-JSON failures and network exceptions without exposing provider text", async () => {
     vi.stubGlobal(
@@ -67,13 +70,34 @@ describe("model connection failure classification", () => {
     await expect(store.test(input)).rejects.toThrow("MODEL_REQUEST_TIMEOUT");
   });
 
-  it("accepts a valid response", async () => {
+  it.each([
+    ["content", { content: "OK" }],
+    ["reasoning_content", { content: null, reasoning_content: "The connection is valid." }],
+    ["tool_calls", { content: null, tool_calls: [{ id: "call_fixture", type: "function" }] }],
+  ])("accepts a valid response with %s", async (_field, message) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ model: "fixture", choices: [{ message }] })),
+    );
+    await expect(store.test(input)).resolves.toMatchObject({ ok: true, reportedModel: "fixture" });
+  });
+
+  it("uses the DeepSeek compatibility probe settings", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
-        Response.json({ model: "fixture", choices: [{ message: { content: "OK" } }] }),
+        Response.json({ model: "deepseek-flash", choices: [{ message: { content: "OK" } }] }),
       ),
     );
-    await expect(store.test(input)).resolves.toMatchObject({ ok: true, reportedModel: "fixture" });
+    await expect(
+      store.test({ ...input, byok: { ...input.byok, modelId: "deepseek-flash" } }),
+    ).resolves.toMatchObject({ ok: true });
+    const request = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(request).toMatchObject({
+      model: "deepseek-flash",
+      max_tokens: 32,
+      stream: false,
+      thinking: { type: "disabled" },
+    });
   });
 });

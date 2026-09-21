@@ -5,10 +5,13 @@ import {
   type Context,
   createAssistantMessageEventStream,
   createProvider,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type Model,
   type Provider,
   type SimpleStreamOptions,
   type ToolCall,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
   automaticModelRef,
@@ -271,11 +274,20 @@ function redactContext(
 
 function streamPlatform(
   model: Model<string>,
-  context: Context,
+  context: TranscriptContext,
   options: SimpleStreamOptions | undefined,
   configuration: CreatePlatformProviderOptions,
 ): AssistantMessageEventStream {
-  const modelContext = redactContext(context, configuration.contextRedactions);
+  // The gateway carries prompt/tools outside the transcript. Replay Pi's system
+  // deltas before projecting so resumed sessions and tool changes keep their state.
+  const modelContext = redactContext(
+    {
+      systemPrompt: getCurrentSystemPrompt(context.messages),
+      tools: getCurrentTools(context.messages),
+      messages: context.messages.filter((message) => message.role !== "system"),
+    },
+    configuration.contextRedactions,
+  );
   const stream = createAssistantMessageEventStream();
   const output: AssistantMessage = {
     role: "assistant",
@@ -388,7 +400,7 @@ function streamPlatform(
         const contentIndex = output.content.length - 1;
         stream.push({ type: "toolcall_start", contentIndex, partial: output });
         const argumentsJson = JSON.stringify(responseToolCall.arguments);
-        block.arguments = structuredClone(responseToolCall.arguments);
+        block.arguments = JSON.parse(argumentsJson) as ToolCall["arguments"];
         stream.push({
           type: "toolcall_delta",
           contentIndex,

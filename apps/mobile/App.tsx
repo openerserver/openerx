@@ -36,12 +36,12 @@ import {
   validateAttachmentBatch,
 } from "./src/attachments";
 import { ComposerInput } from "./src/ComposerInput";
-import { ProjectCreator } from "./src/ProjectCreator";
 import { emptyHistory, historyTasks, MobileHistorySync } from "./src/history";
 import { HistoryPanel } from "./src/history-panel";
 import { MobileApi } from "./src/mobile-api";
 import { attachmentChecksum, pickAttachments, readAttachment } from "./src/native-attachments";
 import { nativeHistoryStorage } from "./src/native-history-storage";
+import { ProjectCreator } from "./src/ProjectCreator";
 import {
   hostPresenceLabel,
   isRemoteHostReachable,
@@ -95,10 +95,14 @@ function PrimaryButton({
         disabled ? styles.buttonDisabled : null,
       ]}
     >
-      <Text style={[
-        tone === "accent" ? styles.buttonAccentText : styles.buttonText,
-        symbol ? styles.composerSymbol : null,
-      ]}>{symbol ?? label}</Text>
+      <Text
+        style={[
+          tone === "accent" ? styles.buttonAccentText : styles.buttonText,
+          symbol ? styles.composerSymbol : null,
+        ]}
+      >
+        {symbol ?? label}
+      </Text>
     </Pressable>
   );
 }
@@ -872,7 +876,11 @@ function TasksScreen({
               value={text}
               onChangeText={setText}
               placeholder={
-                running ? "补充当前任务的要求…" : conversationId ? "继续提问或说明…" : "描述任务目标…"
+                running
+                  ? "补充当前任务的要求…"
+                  : conversationId
+                    ? "继续提问或说明…"
+                    : "描述任务目标…"
               }
               placeholderTextColor="#929c92"
               style={[styles.input, styles.composerInput]}
@@ -903,13 +911,7 @@ function TasksScreen({
             <PrimaryButton
               symbol="↑"
               label={
-                busy
-                  ? "等待电脑确认…"
-                  : running
-                    ? "补充要求"
-                    : conversationId
-                      ? "发送"
-                      : "开始任务"
+                busy ? "等待电脑确认…" : running ? "补充要求" : conversationId ? "发送" : "开始任务"
               }
               disabled={
                 busy || picking || !canControl || !text.trim() || (running && files.length > 0)
@@ -1544,7 +1546,9 @@ function RemoteApp({
         throw new Error("REMOTE_HOST_NOT_SELECTED");
       setError(null);
       const target =
-        payload.kind === "task.start" || payload.kind === "project.list" || payload.kind === "project.create"
+        payload.kind === "task.start" ||
+        payload.kind === "project.list" ||
+        payload.kind === "project.create"
           ? null
           : targetId;
       const revision = eventCache.current.reduce(
@@ -1573,10 +1577,13 @@ function RemoteApp({
           ...current,
           [selectedHost.hostDeviceId]: [
             project,
-            ...(current[selectedHost.hostDeviceId] ?? []).filter((p) => p.projectId !== project.projectId),
+            ...(current[selectedHost.hostDeviceId] ?? []).filter(
+              (p) => p.projectId !== project.projectId,
+            ),
           ],
         }));
-        if (previousHost.current === selectedHost.hostDeviceId) setSelectedProjectId(project.projectId);
+        if (previousHost.current === selectedHost.hostDeviceId)
+          setSelectedProjectId(project.projectId);
       }
       if (payload.kind === "task.start" && outcome.envelope.conversationId)
         setConversationId(outcome.envelope.conversationId);

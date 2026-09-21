@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
+import type { AssistantMessage, TranscriptContext } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import type { PiHistoryMessage } from "@openerx/contracts";
 import { createProductPiSession, ModelRuntime } from "@openerx/pi-host";
@@ -48,7 +48,7 @@ function contentText(content: unknown): string {
     .join("");
 }
 
-function responseFor(context: Context): AssistantMessage {
+function responseFor(context: TranscriptContext): AssistantMessage {
   const userMessages = context.messages.filter(({ role }) => role === "user");
   const latestUser = contentText(userMessages.at(-1)?.content);
   const userTurns = userMessages.length;
@@ -85,7 +85,7 @@ function responseFor(context: Context): AssistantMessage {
         "",
         "| 项目 | 状态 | 版本 |",
         "| --- | --- | --- |",
-        "| Pi AgentSession | ready | 0.84.4 |",
+        "| Pi AgentSession | ready | 0.86.0 |",
       ].join("\n"),
     );
   }
@@ -96,7 +96,7 @@ function responseFor(context: Context): AssistantMessage {
   }
   if (userTurns >= 2) {
     return fauxAssistantMessage(
-      `这是第 ${userTurns} 轮回答。我仍记得当前 Pi 上下文共有 ${context.messages.length} 条消息。`,
+      `这是第 ${userTurns} 轮回答。我仍记得当前 Pi 上下文共有 ${context.messages.filter((message) => message.role !== "system").length} 条消息。`,
     );
   }
   return fauxAssistantMessage(`Pi AgentSession 已收到：${latestUser}`);
