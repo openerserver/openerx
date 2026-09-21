@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ThinkingLevel } from "./model";
 
 export const modelServiceModeSchema = z.enum(["hosted", "byok"]);
 
@@ -8,6 +9,8 @@ export const byokProviderIdSchema = z.enum([
   "kimi",
   "zhipu",
   "doubao",
+  "hunyuan",
+  // Read legacy settings without deleting or reusing the former provider key.
   "qianfan",
 ]);
 
@@ -111,6 +114,43 @@ export interface ByokProviderPreset {
   models: readonly ByokModelPreset[];
 }
 
+/** Keep model-specific reasoning constraints consistent in the picker and transport. */
+export function byokReasoningProfile(
+  configuration: Pick<ByokModelConfiguration, "baseUrl" | "modelId">,
+) {
+  const host = new URL(configuration.baseUrl).hostname;
+  const id = configuration.modelId;
+  if (host === "open.bigmodel.cn" && /^glm-5\.3(?:-flashx?)?$/u.test(id)) return "glm-5.3";
+  if (host === "api.moonshot.cn" || host === "api.moonshot.ai") {
+    if (id === "kimi-k3") return "kimi-k3";
+    if (/^kimi-k2\.7-code(?:-highspeed)?$/u.test(id)) return "kimi-k2.7";
+  }
+  if (host === "tokenhub.tencentmaas.com") {
+    if (id === "hy4-preview") return "hy4";
+    if (id === "hy3") return "hy3";
+  }
+  return null;
+}
+
+export function byokThinkingLevels(configuration: ByokModelConfiguration): ThinkingLevel[] {
+  if (!configuration.capabilities.reasoning) return ["off"];
+  switch (byokReasoningProfile(configuration)) {
+    case "glm-5.3":
+    case "kimi-k3":
+      return ["low", "high", "max"];
+    case "kimi-k2.7":
+      return ["medium"];
+    case "hy4":
+      return ["off", "high"];
+    case "hy3":
+      return ["off", "low", "high"];
+    default:
+      return ["off", "medium", "high"];
+  }
+}
+
+// Verified 2026-09-21. Sources and compatibility notes:
+// docs/v2/evidence/model-catalog-2026-09-21.md
 export const byokProviderPresets: readonly ByokProviderPreset[] = [
   {
     id: "deepseek",
@@ -119,14 +159,14 @@ export const byokProviderPresets: readonly ByokProviderPreset[] = [
     models: [
       {
         id: "flash",
-        label: "DeepSeek Flash",
+        label: "DeepSeek V4.1 Flash",
         configuration: {
           baseUrl: "https://api.deepseek.com",
           modelId: "deepseek-flash",
-          displayName: "DeepSeek Flash",
+          displayName: "DeepSeek V4.1 Flash",
           contextWindow: 1_000_000,
           maxOutputTokens: 384_000,
-          capabilities: { imageInput: false, functionCalling: true, reasoning: true },
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
         },
       },
       {
@@ -143,11 +183,11 @@ export const byokProviderPresets: readonly ByokProviderPreset[] = [
       },
       {
         id: "vision",
-        label: "DeepSeek V4 Flash Vision",
+        label: "DeepSeek V4.1 Flash（兼容入口）",
         configuration: {
           baseUrl: "https://api.deepseek.com",
-          modelId: "deepseek-v4-flash-vision-exp",
-          displayName: "DeepSeek V4 Flash Vision",
+          modelId: "deepseek-flash",
+          displayName: "DeepSeek V4.1 Flash（兼容入口）",
           contextWindow: 1_000_000,
           maxOutputTokens: 384_000,
           capabilities: { imageInput: true, functionCalling: true, reasoning: true },
@@ -185,6 +225,18 @@ export const byokProviderPresets: readonly ByokProviderPreset[] = [
         },
       },
       {
+        id: "flash-3-8",
+        label: "Qwen 3.8 Flash",
+        configuration: {
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          modelId: "qwen3.8-flash",
+          displayName: "Qwen 3.8 Flash",
+          contextWindow: 1_000_000,
+          maxOutputTokens: 131_072,
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
+        },
+      },
+      {
         id: "flash",
         label: "Qwen 3.7 Flash",
         configuration: {
@@ -204,6 +256,42 @@ export const byokProviderPresets: readonly ByokProviderPreset[] = [
     apiKeyPlaceholder: "输入 Moonshot API Key",
     models: [
       {
+        id: "k3",
+        label: "Kimi K3",
+        configuration: {
+          baseUrl: "https://api.moonshot.cn/v1",
+          modelId: "kimi-k3",
+          displayName: "Kimi K3",
+          contextWindow: 1_048_576,
+          maxOutputTokens: 131_072,
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
+        },
+      },
+      {
+        id: "k2-7-code",
+        label: "Kimi K2.7 Code",
+        configuration: {
+          baseUrl: "https://api.moonshot.cn/v1",
+          modelId: "kimi-k2.7-code",
+          displayName: "Kimi K2.7 Code",
+          contextWindow: 262_144,
+          maxOutputTokens: 32_768,
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
+        },
+      },
+      {
+        id: "k2-7-code-highspeed",
+        label: "Kimi K2.7 Code HighSpeed",
+        configuration: {
+          baseUrl: "https://api.moonshot.cn/v1",
+          modelId: "kimi-k2.7-code-highspeed",
+          displayName: "Kimi K2.7 Code HighSpeed",
+          contextWindow: 262_144,
+          maxOutputTokens: 32_768,
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
+        },
+      },
+      {
         id: "k2-6",
         label: "Kimi K2.6",
         configuration: {
@@ -222,6 +310,42 @@ export const byokProviderPresets: readonly ByokProviderPreset[] = [
     label: "智谱 AI · GLM",
     apiKeyPlaceholder: "输入智谱 API Key",
     models: [
+      {
+        id: "glm-5-3",
+        label: "GLM-5.3",
+        configuration: {
+          baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+          modelId: "glm-5.3",
+          displayName: "GLM-5.3",
+          contextWindow: 1_000_000,
+          maxOutputTokens: 131_072,
+          capabilities: { imageInput: false, functionCalling: true, reasoning: true },
+        },
+      },
+      {
+        id: "glm-5-3-flash",
+        label: "GLM-5.3 Flash",
+        configuration: {
+          baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+          modelId: "glm-5.3-flash",
+          displayName: "GLM-5.3 Flash",
+          contextWindow: 1_000_000,
+          maxOutputTokens: 131_072,
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
+        },
+      },
+      {
+        id: "glm-5-3-flashx",
+        label: "GLM-5.3 FlashX",
+        configuration: {
+          baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+          modelId: "glm-5.3-flashx",
+          displayName: "GLM-5.3 FlashX",
+          contextWindow: 1_000_000,
+          maxOutputTokens: 131_072,
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
+        },
+      },
       {
         id: "glm-5-2",
         label: "GLM-5.2",
@@ -254,6 +378,30 @@ export const byokProviderPresets: readonly ByokProviderPreset[] = [
     apiKeyPlaceholder: "输入火山方舟 API Key",
     models: [
       {
+        id: "seed-2-1-pro-260915",
+        label: "Doubao Seed 2.1 Pro · 260915",
+        configuration: {
+          baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+          modelId: "doubao-seed-2-1-pro-260915",
+          displayName: "Doubao Seed 2.1 Pro · 260915",
+          contextWindow: 1_000_000,
+          maxOutputTokens: 65_536,
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
+        },
+      },
+      {
+        id: "seed-2-lite-260428",
+        label: "Doubao Seed 2.0 Lite · 260428",
+        configuration: {
+          baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+          modelId: "doubao-seed-2-0-lite-260428",
+          displayName: "Doubao Seed 2.0 Lite · 260428",
+          contextWindow: 262_144,
+          maxOutputTokens: 32_768,
+          capabilities: { imageInput: true, functionCalling: true, reasoning: true },
+        },
+      },
+      {
         id: "seed-2-1-pro",
         label: "Doubao Seed 2.1 Pro",
         configuration: {
@@ -280,32 +428,32 @@ export const byokProviderPresets: readonly ByokProviderPreset[] = [
     ],
   },
   {
-    id: "qianfan",
-    label: "百度智能云千帆 · 文心",
-    apiKeyPlaceholder: "输入千帆 API Key",
+    id: "hunyuan",
+    label: "腾讯云 · 混元",
+    apiKeyPlaceholder: "输入 TokenHub API Key（广州）",
     models: [
       {
-        id: "ernie-5",
-        label: "ERNIE 5.0",
+        id: "hy4-preview",
+        label: "Tencent Hy4 Preview",
         configuration: {
-          baseUrl: "https://qianfan.baidubce.com/v2",
-          modelId: "ernie-5.0",
-          displayName: "ERNIE 5.0",
-          contextWindow: 131_072,
-          maxOutputTokens: 65_536,
-          capabilities: { imageInput: true, functionCalling: true, reasoning: false },
+          baseUrl: "https://tokenhub.tencentmaas.com/v1",
+          modelId: "hy4-preview",
+          displayName: "Tencent Hy4 Preview",
+          contextWindow: 1_000_000,
+          maxOutputTokens: 64_000,
+          capabilities: { imageInput: false, functionCalling: true, reasoning: true },
         },
       },
       {
-        id: "ernie-4-5-turbo",
-        label: "ERNIE 4.5 Turbo 128K",
+        id: "hy3",
+        label: "Tencent Hy3",
         configuration: {
-          baseUrl: "https://qianfan.baidubce.com/v2",
-          modelId: "ernie-4.5-turbo-128k",
-          displayName: "ERNIE 4.5 Turbo 128K",
-          contextWindow: 131_072,
-          maxOutputTokens: 12_288,
-          capabilities: { imageInput: false, functionCalling: true, reasoning: false },
+          baseUrl: "https://tokenhub.tencentmaas.com/v1",
+          modelId: "hy3",
+          displayName: "Tencent Hy3",
+          contextWindow: 256_000,
+          maxOutputTokens: 128_000,
+          capabilities: { imageInput: false, functionCalling: true, reasoning: true },
         },
       },
     ],
@@ -335,7 +483,9 @@ export function resolveByokModelPreset(
 export function isByokModelRef(modelRef: string): boolean {
   return (
     modelRef === "platform/byok" ||
-    /^platform\/byok\.(deepseek|qwen|kimi|zhipu|doubao|qianfan)\.custom-.+$/u.test(modelRef) ||
+    /^platform\/byok\.(deepseek|qwen|kimi|zhipu|doubao|hunyuan|qianfan)\.custom-.+$/u.test(
+      modelRef,
+    ) ||
     resolveByokModelPreset(modelRef) !== null
   );
 }

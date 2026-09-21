@@ -2,11 +2,15 @@ import { randomUUID } from "node:crypto";
 import {
   type AssistantMessage,
   createAssistantMessageEventStream,
+  type Model,
+  type SimpleStreamOptions,
   type StreamFunction,
 } from "@earendil-works/pi-ai";
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import {
+  type ByokModelConfiguration,
   type ByokUsageRecord,
+  byokReasoningProfile,
   byokUsageRecordSchema,
   classifyModelError,
   type ModelFailure,
@@ -201,12 +205,67 @@ function usageRecord(
   });
 }
 
+/** Register these before Pi clamps session thinking levels, not just at HTTP dispatch. */
+export function byokModelCompatibility(
+  configuration: Pick<ByokModelConfiguration, "baseUrl" | "modelId">,
+): Pick<Model<"openai-completions">, "compat" | "thinkingLevelMap"> {
+  const profile = byokReasoningProfile(configuration);
+  if (!profile) return {};
+  const limitedEffort = profile === "glm-5.3" || profile === "kimi-k3";
+  const hunyuan = profile === "hy4" || profile === "hy3";
+  return {
+    ...(limitedEffort
+      ? {
+          thinkingLevelMap: {
+            off: null,
+            minimal: null,
+            low: "low",
+            medium: null,
+            high: "high",
+            xhigh: null,
+            max: "max",
+          },
+        }
+      : {}),
+    compat: {
+      supportsReasoningEffort: limitedEffort || hunyuan,
+      thinkingFormat: profile === "glm-5.3" ? "zai" : hunyuan ? "deepseek" : "openai",
+      requiresReasoningContentOnAssistantMessages: true,
+      ...(hunyuan ? { supportsStore: false, supportsDeveloperRole: false } : {}),
+      ...(profile === "kimi-k3" ? { maxTokensField: "max_completion_tokens" } : {}),
+    },
+  };
+}
+
 /** Retains Pi's retry policy and records every actual HTTP attempt, including SDK retries. */
 export function createByokStream(
   context: ByokUsageContext,
   restrictedFetch: typeof fetch,
-): StreamFunction<"openai-completions"> {
+): StreamFunction<"openai-completions", SimpleStreamOptions> {
   return (model, messages, options) => {
+    const profile = byokReasoningProfile({ baseUrl: model.baseUrl, modelId: model.id });
+    const limitedEffort = profile === "glm-5.3" || profile === "kimi-k3";
+    const compatibility = byokModelCompatibility({ baseUrl: model.baseUrl, modelId: model.id });
+    const runtimeModel: Model<"openai-completions"> = {
+      ...model,
+      ...compatibility,
+      compat: { ...model.compat, ...compatibility.compat },
+    };
+    // Old conversations and memory jobs can still request off/medium; always-on
+    // models must receive a supported effort even before their settings are saved.
+    const reasoning = limitedEffort
+      ? options?.reasoning === "max" || options?.reasoning === "xhigh"
+        ? "max"
+        : options?.reasoning === "high" || options?.reasoning === "medium"
+          ? "high"
+          : "low"
+      : profile === "hy4" || profile === "hy3"
+        ? options?.reasoning
+          ? profile === "hy3" && (options.reasoning === "low" || options.reasoning === "minimal")
+            ? "low"
+            : "high"
+          : undefined
+        : options?.reasoning;
     const output = createAssistantMessageEventStream();
     const attempts: Attempt[] = [];
     const recorded = new Set<string>();
@@ -254,7 +313,12 @@ export function createByokStream(
       }
     };
     void (async () => {
-      const source = streamOpenAICompletions(model, messages, { ...options, fetch: observedFetch });
+      const source = streamOpenAICompletions(runtimeModel, messages, {
+        ...options,
+        reasoning,
+        ...(profile === "kimi-k3" || profile === "kimi-k2.7" ? { temperature: undefined } : {}),
+        fetch: observedFetch,
+      });
       for await (const event of source) {
         if (event.type === "done" || event.type === "error") {
           const message: AssistantMessage = event.type === "done" ? event.message : event.error;

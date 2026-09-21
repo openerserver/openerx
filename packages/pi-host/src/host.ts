@@ -27,7 +27,11 @@ import {
 } from "@openerx/contracts";
 import type { MessagePortMain } from "electron";
 import { createProductPiSession, ModelRuntime } from "./agent-session";
-import { createByokStream, createRestrictedByokFetch } from "./byok-provider";
+import {
+  byokModelCompatibility,
+  createByokStream,
+  createRestrictedByokFetch,
+} from "./byok-provider";
 
 export { createRestrictedByokFetch } from "./byok-provider";
 
@@ -353,6 +357,7 @@ export function startPiHostProcess(
             models: [
               {
                 id: frame.byok.modelId,
+                ...byokModelCompatibility(frame.byok),
                 name: frame.byok.displayName,
                 api: "openai-completions",
                 reasoning: frame.byok.capabilities.reasoning,
@@ -492,6 +497,7 @@ export function startPiHostProcess(
             models: [
               {
                 id: frame.byok.modelId,
+                ...byokModelCompatibility(frame.byok),
                 name: frame.byok.displayName,
                 api: "openai-completions",
                 reasoning: frame.byok.capabilities.reasoning,
@@ -664,6 +670,7 @@ export function startPiHostProcess(
             models: [
               {
                 id: frame.byok.modelId,
+                ...byokModelCompatibility(frame.byok),
                 name: frame.byok.displayName,
                 api: "openai-completions",
                 reasoning: frame.byok.capabilities.reasoning,

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { type Model, normalizeContext } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, type Model, normalizeContext } from "@earendil-works/pi-ai";
 import { type ByokUsageRecord, usageRecordSchema } from "@openerx/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { createByokStream } from "../src/byok-provider";
+import { byokModelCompatibility, createByokStream } from "../src/byok-provider";
 
 const model: Model<"openai-completions"> = {
   id: "fixture-model",
@@ -67,6 +67,110 @@ function fixture(fetcher: typeof fetch) {
 }
 
 describe("BYOK provider accounting", () => {
+  it.each([
+    ["glm-5.3", "https://open.bigmodel.cn/api/paas/v4"],
+    ["kimi-k3", "https://api.moonshot.cn/v1"],
+  ])("preserves max effort through Pi session initialization for %s", (id, baseUrl) => {
+    const runtimeModel = {
+      ...model,
+      id,
+      baseUrl,
+      reasoning: true,
+      ...byokModelCompatibility({ modelId: id, baseUrl }),
+    };
+    expect(clampThinkingLevel(runtimeModel, "max")).toBe("max");
+  });
+
+  it.each([
+    ["glm-5.3", "https://open.bigmodel.cn/api/paas/v4"],
+    ["kimi-k3", "https://api.moonshot.cn/v1"],
+    ["kimi-k2.7-code", "https://api.moonshot.cn/v1"],
+    ["hy4-preview", "https://tokenhub.tencentmaas.com/v1"],
+  ])("replays preserved reasoning in a second turn for %s", async (id, baseUrl) => {
+    const fetcher = vi.fn(async () =>
+      sse([
+        {
+          model: id,
+          choices: [
+            {
+              index: 0,
+              delta: { reasoning_content: "Synthetic reasoning fixture." },
+              finish_reason: null,
+            },
+          ],
+        },
+        { ...finish, model: id },
+      ]),
+    );
+    const { stream } = fixture(fetcher);
+    const currentModel = { ...model, id, baseUrl, reasoning: true };
+    const options = { apiKey: "fixture", maxRetries: 0, reasoning: "high" as const };
+    const first = await stream(currentModel, messages, options).result();
+    await stream(
+      currentModel,
+      normalizeContext({
+        messages: [
+          ...messages.messages,
+          first,
+          { role: "user", content: "Continue", timestamp: Date.now() },
+        ],
+      }),
+      options,
+    ).result();
+    const request = JSON.parse(
+      String((fetcher.mock.calls[1] as unknown as [unknown, RequestInit])[1].body),
+    );
+    expect(
+      request.messages.find((message: { role: string }) => message.role === "assistant")
+        .reasoning_content,
+    ).toBe("Synthetic reasoning fixture.");
+  });
+
+  it.each([
+    ["glm-5.3", "https://open.bigmodel.cn/api/paas/v4", "off", "low"],
+    ["glm-5.3-flash", "https://open.bigmodel.cn/api/paas/v4", "medium", "high"],
+    ["glm-5.3-flashx", "https://open.bigmodel.cn/api/paas/v4", "max", "max"],
+    ["kimi-k3", "https://api.moonshot.cn/v1", "off", "low"],
+    ["kimi-k3", "https://api.moonshot.cn/v1", "medium", "high"],
+    ["kimi-k3", "https://api.moonshot.cn/v1", "max", "max"],
+    ["kimi-k2.7-code", "https://api.moonshot.cn/v1", "off", undefined],
+    ["kimi-k2.7-code-highspeed", "https://api.moonshot.cn/v1", "high", undefined],
+    ["hy4-preview", "https://tokenhub.tencentmaas.com/v1", "medium", "high"],
+    ["hy4-preview", "https://tokenhub.tencentmaas.com/v1", "off", undefined],
+    ["hy3", "https://tokenhub.tencentmaas.com/v1", "low", "low"],
+    ["hy3", "https://tokenhub.tencentmaas.com/v1", "medium", "high"],
+  ] as const)(
+    "sends supported reasoning parameters for %s at %s / %s",
+    async (id, baseUrl, reasoning, expectedEffort) => {
+      const fetcher = vi.fn(async () => sse([finish]));
+      const { stream } = fixture(fetcher);
+      const result = await stream({ ...model, id, baseUrl, reasoning: true }, messages, {
+        apiKey: "synthetic-key",
+        maxRetries: 0,
+        reasoning: reasoning === "off" ? undefined : reasoning,
+        temperature: 0.2,
+      }).result();
+      expect(result.stopReason).toBe("stop");
+      const request = JSON.parse(
+        String((fetcher.mock.calls[0] as unknown as [unknown, RequestInit])[1].body),
+      );
+      expect(request.model).toBe(id);
+      expect(request.reasoning_effort).toBe(expectedEffort);
+      if (id.startsWith("glm-")) {
+        expect(request.thinking).toEqual({ type: "enabled", clear_thinking: false });
+      } else if (id.startsWith("hy")) {
+        expect(request.thinking).toEqual({ type: reasoning === "off" ? "disabled" : "enabled" });
+      } else {
+        expect(request.thinking).toBeUndefined();
+      }
+      if (id.startsWith("kimi-")) expect(request.temperature).toBeUndefined();
+      if (id === "kimi-k3") {
+        expect(request.max_completion_tokens).toBeGreaterThan(0);
+        expect(request.max_tokens).toBeUndefined();
+      }
+    },
+  );
+
   it("uses provider counts, keeps reasoning inside output, and counts repeated cumulative usage once", async () => {
     const { records, stream } = fixture(
       vi.fn(async () =>

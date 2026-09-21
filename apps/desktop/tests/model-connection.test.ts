@@ -1,4 +1,4 @@
-import { defaultByokModelConfiguration } from "@openerx/contracts";
+import { defaultByokModelConfiguration, resolveByokModelPreset } from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolCredentialVault } from "../src/main/credential-vault";
 import { ModelServiceSettingsStore } from "../src/main/model-service-settings";
@@ -21,6 +21,57 @@ const store = new ModelServiceSettingsStore(
 );
 
 describe("model connection failure classification", () => {
+  it.each([
+    ["zhipu.glm-5-3", "glm-5.3"],
+    ["zhipu.glm-5-3-flash", "glm-5.3-flash"],
+    ["kimi.k3", "kimi-k3"],
+    ["kimi.k2-7-code", "kimi-k2.7-code"],
+    ["hunyuan.hy4-preview", "hy4-preview"],
+    ["hunyuan.hy3", "hy3"],
+  ])("probes the new %s preset with supported parameters", async (ref, modelId) => {
+    const configuration = resolveByokModelPreset(`platform/byok.${ref}`)?.model.configuration;
+    if (!configuration) throw new Error(`Missing model preset ${ref}`);
+    const probeStore = new ModelServiceSettingsStore(
+      "/unused-model-connection-fixture.json",
+      new ToolCredentialVault("/unused-model-connection-fixture.bin"),
+      async () => ["8.8.8.8"],
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          model: modelId,
+          choices: [{ message: { reasoning_content: "Connected." } }],
+        }),
+      ),
+    );
+    await expect(
+      probeStore.test({
+        ...input,
+        byok: configuration,
+        providerApiKeys: { hunyuan: "synthetic-hunyuan-key" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      reportedModel: modelId,
+    });
+    const request = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(request.model).toBe(modelId);
+    if (modelId.startsWith("hy")) {
+      expect(request.thinking).toEqual({ type: "disabled" });
+      expect(vi.mocked(fetch).mock.calls[0]?.[1]?.headers).toMatchObject({
+        authorization: "Bearer synthetic-hunyuan-key",
+      });
+    }
+    if (modelId === "kimi-k3") {
+      expect(request.max_completion_tokens).toBe(1_024);
+      expect(request.max_tokens).toBeUndefined();
+    } else expect(request.max_tokens).toBe(1_024);
+    if (modelId.startsWith("glm-")) expect(request.thinking.type).toBe("enabled");
+    if (modelId.startsWith("glm-") || modelId === "kimi-k3")
+      expect(request.reasoning_effort).toBe("low");
+  });
+
   it.each([
     [401, "localized provider error", "MODEL_AUTHENTICATION_FAILED"],
     [403, "localized provider error", "MODEL_PERMISSION_DENIED"],

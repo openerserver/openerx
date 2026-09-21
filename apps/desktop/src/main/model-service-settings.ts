@@ -9,6 +9,7 @@ import {
   type ByokProviderId,
   byokConnectionTestResultSchema,
   byokProviderPresets,
+  byokReasoningProfile,
   classifyModelError,
   defaultByokModelConfiguration,
   type ModelServiceSettings,
@@ -306,6 +307,21 @@ export class ModelServiceSettingsStore {
     };
     if (provider?.id === "deepseek" || input.byok.modelId.startsWith("deepseek-")) {
       requestBody.thinking = { type: "disabled" };
+    }
+    const profile = byokReasoningProfile(input.byok);
+    if (profile) {
+      // Leave room for always-on reasoning during the short connectivity probe.
+      requestBody.max_tokens = 1_024;
+      if (profile === "glm-5.3") {
+        requestBody.thinking = { type: "enabled", clear_thinking: false };
+        requestBody.reasoning_effort = "low";
+      } else if (profile === "hy4" || profile === "hy3") {
+        requestBody.thinking = { type: "disabled" };
+      } else if (profile === "kimi-k3") {
+        requestBody.reasoning_effort = "low";
+        requestBody.max_completion_tokens = requestBody.max_tokens;
+        delete requestBody.max_tokens;
+      }
     }
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",

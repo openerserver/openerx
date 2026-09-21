@@ -33,6 +33,7 @@ import {
   browserSessionDescriptorSchema,
   byokModelRef,
   byokProviderIdSchema,
+  byokThinkingLevels,
   chatActivateBranchInputSchema,
   chatArchiveInputSchema,
   chatCommandEnvelopeSchema,
@@ -540,9 +541,7 @@ function registerIpcHandlers(
         priceRef: `byok/${provider.id}`,
         priceSummary: `${provider.label} 直接计费`,
         free: false,
-        thinkingLevels: model.configuration.capabilities.reasoning
-          ? (["off", "medium", "high"] as const)
-          : (["off"] as const),
+        thinkingLevels: byokThinkingLevels(model.configuration),
       })),
     );
     const customByokModel =
@@ -566,9 +565,7 @@ function registerIpcHandlers(
             priceRef: "byok/user-provider",
             priceSummary: "由 API 提供商直接计费",
             free: false,
-            thinkingLevels: settings.byok.capabilities.reasoning
-              ? (["off", "medium", "high"] as const)
-              : (["off"] as const),
+            thinkingLevels: byokThinkingLevels(settings.byok),
           }
         : null;
     if (settings.mode === "byok") {

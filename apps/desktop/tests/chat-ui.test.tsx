@@ -1901,6 +1901,26 @@ describe("M1 chat renderer", () => {
     const qwenCard = screen.getByRole("article", { name: "阿里云百炼 · 通义千问 配置" });
     expect(within(deepSeekCard).getByRole("option", { name: "DeepSeek V4 Pro" })).toBeTruthy();
     expect(within(qwenCard).getByRole("option", { name: "Qwen 3.7 Plus" })).toBeTruthy();
+    expect(within(qwenCard).getByRole("option", { name: "Qwen 3.8 Flash" })).toBeTruthy();
+    expect(screen.queryByRole("article", { name: "百度智能云千帆 · 文心 配置" })).toBeNull();
+    const zhipuCard = screen.getByRole("article", { name: "智谱 AI · GLM 配置" });
+    expect(within(zhipuCard).getByRole("option", { name: "GLM-5.3" })).toBeTruthy();
+    expect(within(zhipuCard).getByRole("option", { name: "GLM-5.3 Flash" })).toBeTruthy();
+    expect(
+      within(screen.getByRole("article", { name: "月之暗面 · Kimi 配置" })).getByRole("option", {
+        name: "Kimi K3",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("article", { name: "火山方舟 · 豆包 配置" })).getByRole("option", {
+        name: "Doubao Seed 2.1 Pro · 260915",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("article", { name: "腾讯云 · 混元 配置" })).getByRole("option", {
+        name: "Tencent Hy4 Preview",
+      }),
+    ).toBeTruthy();
     await user.type(screen.getByLabelText("DeepSeek API Key"), "sk-deepseek-secret");
     await user.type(screen.getByLabelText("阿里云百炼 · 通义千问 API Key"), "sk-qwen-secret");
     await user.selectOptions(within(qwenCard).getByLabelText("连接测试模型"), "plus");
