@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@openerx/contracts": "0.0.0",
-    "fflate": "0.8.2"
+    "fflate": "0.8.3"
   },
   "devDependencies": {
     "@openerx/storage": "0.0.0"
