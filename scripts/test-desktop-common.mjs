@@ -46,6 +46,7 @@ run(
     "tests/browser-routing.test.ts",
     "tests/browser-script-security.test.ts",
     "tests/desktop-artifact-identity.test.ts",
+    "tests/desktop-dev-watch.test.ts",
     "tests/browser-extension-transport.test.ts",
     "tests/browser-computer-use-system-default.test.ts",
     "tests/browser-computer-use-browser-bridge.test.ts",

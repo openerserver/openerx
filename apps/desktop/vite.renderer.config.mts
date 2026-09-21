@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { isDesktopBuildArtifact } from "./scripts/desktop-dev-watch.mjs";
 import { buildInfoDefine } from "./vite.build-info";
 
 export default defineConfig({
@@ -27,7 +28,7 @@ export default defineConfig({
   server: {
     headers: { "Cache-Control": "no-store" },
     watch: {
-      ignored: ["**/out/**"],
+      ignored: isDesktopBuildArtifact,
     },
   },
   build: {

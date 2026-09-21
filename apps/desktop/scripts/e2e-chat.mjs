@@ -190,7 +190,10 @@ try {
   console.log("E2E_CHAT_OK new-stream-context-stop-crash-branch-restart-markdown-search");
   await application.close();
   running = undefined;
+} catch (error) {
+  console.error("E2E_CHAT_FAILURE", error);
+  throw error;
 } finally {
   if (running) await running.application.close().catch(() => undefined);
-  rmSync(profileDirectory, { recursive: true, force: true });
+  rmSync(profileDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
 }
