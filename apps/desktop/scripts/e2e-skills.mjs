@@ -116,7 +116,7 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await waitForAppService(page);
 
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "skill", exact: true }).click();
   await page.getByRole("heading", { name: "Skill", exact: true }).waitFor();
   await page.getByRole("button", { name: "安装 Skill" }).click();

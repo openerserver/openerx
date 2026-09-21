@@ -182,7 +182,7 @@ try {
     .innerText();
   assert.match(desktopAssistantText, /桌面窗口捕获完成：已捕获目标应用窗口/u);
 
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "工具" }).click();
   await page.getByRole("heading", { name: "工具" }).waitFor();
   let localSearchRow = page.locator(".tool-library-row").filter({ hasText: "本地 Web Search" });
