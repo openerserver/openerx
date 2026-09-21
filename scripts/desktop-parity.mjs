@@ -20,6 +20,10 @@ export function inScope(file) {
       "scripts/desktop-parity.mjs",
       "scripts/test-desktop-common.mjs",
       "tests/desktop-parity.test.mjs",
+      "scripts/forge-runner.mjs",
+      "scripts/dmg-image-size.mjs",
+      "tests/v2/forge-runner.test.ts",
+      "tests/v2/dmg-image-size.test.ts",
     ].includes(file)
   );
 }

@@ -47,6 +47,7 @@ run(
     "tests/browser-script-security.test.ts",
     "tests/desktop-artifact-identity.test.ts",
     "tests/desktop-dev-watch.test.ts",
+    "tests/build-dependencies.test.ts",
     "tests/browser-extension-transport.test.ts",
     "tests/browser-computer-use-system-default.test.ts",
     "tests/browser-computer-use-browser-bridge.test.ts",
@@ -113,5 +114,7 @@ run(vitest, [
   "tests/v2/golden/chat-m1.test.ts",
   "tests/v2/remote-connection-http.test.ts",
   "tests/v2/remote-host-gateway.test.ts",
+  "tests/v2/forge-runner.test.ts",
+  "tests/v2/dmg-image-size.test.ts",
 ]);
 console.log("Common desktop regressions passed.");

@@ -16,7 +16,8 @@
     "services/*"
   ],
   "scripts": {
-    "check:local": "npm run version:check && npm run check:public-surface && npm run audit:prod:v2 && npm run check:boundaries:v2 && npm run check:builtin-skills:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2",
+    "check:local": "npm run version:check && npm run check:public-surface && npm run audit:v2 && npm run check:boundaries:v2 && npm run check:builtin-skills:v2 && npm run check:release-graph:v2 && npm run check:release:v2 && npm run lint:v2 && npm run typecheck:v2 && npm run test:v2",
+    "audit:v2": "npm audit --audit-level=high --registry=https://registry.npmjs.org",
     "audit:prod:v2": "npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org",
     "check:boundaries:v2": "node scripts/check-v2-boundaries.mjs",
     "check:builtin-skills:v2": "node scripts/check-builtin-skill-versions.mjs",
@@ -57,7 +58,16 @@
     "prepackage:v2": "npm run version:check",
     "check:public-surface": "node scripts/check-public-surface.mjs && node --test tests/public-surface.test.mjs"
   },
+  "overrides": {
+    "@electron/packager": "20.3.0",
+    "@electron/rebuild": "4.2.0",
+    "@electron/get": "5.0.0",
+    "tar": "7.5.22",
+    "tmp": "0.2.7",
+    "image-size": "$image-size"
+  },
   "devDependencies": {
+    "image-size": "2.0.4",
     "@earendil-works/pi-ai": "0.86.0",
     "@earendil-works/pi-coding-agent": "0.86.0",
     "@biomejs/biome": "2.5.10",

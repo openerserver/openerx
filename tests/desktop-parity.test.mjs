@@ -7,6 +7,16 @@ const shared = "apps/desktop/src/renderer/RemoteSettings.tsx",
 const a = "a".repeat(64),
   b = "b".repeat(64),
   revision = "c".repeat(40);
+test("reviewed desktop build adapters and their regressions belong to parity", () => {
+  for (const file of [
+    "scripts/forge-runner.mjs",
+    "scripts/dmg-image-size.mjs",
+    "tests/v2/forge-runner.test.ts",
+    "tests/v2/dmg-image-size.test.ts",
+    "apps/desktop/tests/build-dependencies.test.ts",
+  ])
+    assert.equal(inScope(file), true);
+});
 test("browser extension control and permission files belong to desktop parity", () => {
   for (const file of ["background.js", "manifest.json", "page-agent.js", "popup.html", "popup.js"])
     assert.equal(inScope(`apps/desktop/browser-extension/${file}`), true);

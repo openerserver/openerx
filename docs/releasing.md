@@ -30,6 +30,8 @@ npm run make --workspace @openerx/desktop
 
 发布前运行公开文件检查、边界检查、类型检查、相关单元和集成测试，并在目标平台运行桌面端到端测试。应用包还需检查 Electron fuses、产物内容与原生签名：
 
+`npm run check:local` 包含全量依赖审计，开发工具和打包依赖的高危、严重漏洞同样阻断发布准备。Windows 的构建结果不能替代 macOS DMG、签名或公证验证；更改打包依赖后需要重新验证相应平台的产物。
+
 ```sh
 npm run test:e2e:v2
 npm run verify:package:v2
