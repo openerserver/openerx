@@ -101,6 +101,7 @@ run(
     "tests/mcp-editor.test.tsx",
     "tests/mcp-settings.test.ts",
     "tests/mac-signing.test.ts",
+    "tests/windows-signing.test.ts",
     "tests/credential-vault.test.ts",
     "tests/account-session-manager.test.ts",
     "tests/desktop-data-persistence.test.ts",

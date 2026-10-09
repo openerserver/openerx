@@ -6,9 +6,11 @@ const require = createRequire(import.meta.url);
 export function signToolPath(env = process.env) {
   if (env.OPENERX_SIGNTOOL_PATH) return path.resolve(env.OPENERX_SIGNTOOL_PATH);
   // Use the Microsoft tool already distributed with Electron's packager.
-  const packager = createRequire(require.resolve("@electron/packager/package.json"));
-  return path.join(
-    path.dirname(packager.resolve("@electron/windows-sign/package.json")),
+  // Resolve public entry points; these packages do not export package.json.
+  const packager = createRequire(require.resolve("@electron/packager"));
+  return path.resolve(
+    path.dirname(packager.resolve("@electron/windows-sign")),
+    "..",
     "vendor",
     "signtool.exe",
   );

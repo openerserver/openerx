@@ -2435,6 +2435,108 @@ describe("M1 chat renderer", () => {
     cleanup();
   });
 
+  it.each(["files", "artifacts", "conversations", "conversationFiles"] as const)(
+    "bounds a stalled %s library read and offers an explicit retry",
+    async (stalledRead) => {
+      cleanup();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const bridge = createBridge();
+        let finishLateRead: ((files: PersonalFile[]) => void) | undefined;
+        if (stalledRead === "files") {
+          vi.mocked(bridge.listFiles).mockImplementation(() => new Promise(() => undefined));
+        } else if (stalledRead === "artifacts") {
+          vi.mocked(bridge.listArtifacts).mockImplementation(() => new Promise(() => undefined));
+        } else if (stalledRead === "conversations") {
+          vi.mocked(bridge.listConversations).mockImplementation(
+            () => new Promise(() => undefined),
+          );
+        } else {
+          vi.mocked(bridge.listConversations).mockResolvedValue([
+            { ...snapshot.conversation, lastMessagePreview: "", messageCount: 0 },
+          ]);
+          vi.mocked(bridge.listFiles).mockImplementation((input) =>
+            input?.conversationId
+              ? new Promise((resolve) => {
+                  finishLateRead = resolve;
+                })
+              : Promise.resolve([]),
+          );
+        }
+        renderApp(bridge, "/files");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_001);
+        });
+
+        const alert = screen.getByRole("alert");
+        expect(within(alert).getByText("文件列表读取失败")).toBeTruthy();
+        expect(within(alert).getByText(/请求等待时间过长/u)).toBeTruthy();
+        expect(screen.queryByText("正在整理对话文件…")).toBeNull();
+        expect(screen.queryByText("还没有文件或成果")).toBeNull();
+
+        vi.mocked(bridge.listFiles).mockResolvedValue([]);
+        vi.mocked(bridge.listArtifacts).mockResolvedValue([]);
+        vi.mocked(bridge.listConversations).mockResolvedValue([]);
+        fireEvent.click(within(alert).getByRole("button", { name: "重新读取文件" }));
+        await screen.findByText("还没有文件或成果");
+        expect(screen.queryByText("文件列表读取失败")).toBeNull();
+        if (finishLateRead) {
+          await act(async () => {
+            finishLateRead?.([
+              {
+                id: "late-file",
+                displayName: "late-result.csv",
+                format: "csv",
+                sizeBytes: 1,
+                parseStatus: "ready",
+              } as PersonalFile,
+            ]);
+          });
+          expect(screen.queryByText("late-result.csv")).toBeNull();
+          expect(screen.getByText("还没有文件或成果")).toBeTruthy();
+        }
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("bounds an archived sidebar read already in flight before opening the library", async () => {
+    cleanup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const bridge = createBridge();
+      vi.mocked(bridge.listConversations).mockImplementation((input) =>
+        input?.includeArchived ? new Promise(() => undefined) : Promise.resolve([]),
+      );
+      renderApp(bridge);
+      fireEvent.click(screen.getByRole("button", { name: "显示归档对话" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      fireEvent.click(
+        within(screen.getByRole("navigation", { name: "主导航" })).getByRole("link", { name: /文件/u }),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_001);
+      });
+      const alert = screen.getByRole("alert");
+      expect(within(alert).getByText("文件列表读取失败")).toBeTruthy();
+      expect(within(alert).getByText(/请求等待时间过长/u)).toBeTruthy();
+      expect(screen.queryByText("正在整理对话文件…")).toBeNull();
+      expect(
+        vi.mocked(bridge.listConversations).mock.calls.filter(([input]) => input?.includeArchived),
+      ).toHaveLength(1);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it("groups personal files and deliverables by conversation in the library", async () => {
     const bridge = createBridge();
     const personalFileId = crypto.randomUUID();

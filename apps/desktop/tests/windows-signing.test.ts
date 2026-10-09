@@ -1,6 +1,8 @@
 import type { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { signWindowsFile, verifyWindowsFile } from "../scripts/windows-signing.mjs";
+import { signToolPath, signWindowsFile, verifyWindowsFile } from "../scripts/windows-signing.mjs";
 
 const result = {
   pid: 1,
@@ -15,6 +17,24 @@ const env = {
   OPENERX_WINDOWS_SIGN_THUMBPRINT: "a".repeat(40),
 };
 describe("Windows native signing", () => {
+  it("resolves the bundled executable without an environment override", () => {
+    const tool = signToolPath({});
+    expect(path.isAbsolute(tool)).toBe(true);
+    expect(path.basename(tool)).toBe("signtool.exe");
+    expect(existsSync(tool)).toBe(true);
+    const runner = vi.fn<typeof spawnSync>().mockReturnValue(result);
+    verifyWindowsFile("helper.exe", {}, runner);
+    expect(runner.mock.calls[0]?.[0]).toBe(tool);
+  });
+
+  it("still requires a signing identity when the bundled tool is available", () => {
+    const runner = vi.fn<typeof spawnSync>().mockReturnValue(result);
+    expect(() => signWindowsFile("helper.exe", {}, runner)).toThrow(
+      "WINDOWS_SIGNING_IDENTITY_REQUIRED",
+    );
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it("signs with the selected store identity and verifies timestamp and trust", () => {
     const runner = vi.fn<typeof spawnSync>().mockReturnValue(result);
     signWindowsFile("helper.exe", env, runner);

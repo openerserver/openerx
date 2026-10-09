@@ -181,6 +181,7 @@ const chatKeys = {
 };
 
 const accountKey = ["account", "state"] as const;
+const searchShortcutLabel = /^Mac/u.test(navigator.platform) ? "⌘K" : "Ctrl+K";
 const billingKey = ["billing"] as const;
 const themeStorageKey = "openerx.theme";
 const defaultModelStorageKey = "openerx.defaultModelRef";
@@ -1810,6 +1811,7 @@ function formatBytes(value: number): string {
 }
 
 const libraryConversationPageSize = 6;
+const libraryReadTimeoutMs = 30_000;
 
 function libraryTextMatches(query: string, values: Array<string | null | undefined>): boolean {
   return values.some((value) => value?.toLocaleLowerCase("zh-CN").includes(query));
@@ -1826,40 +1828,52 @@ function FilesAndArtifacts(): React.JSX.Element {
   const [libraryPage, setLibraryPage] = useState(1);
   const files = useQuery({
     queryKey: ["files", "all"],
-    queryFn: () => desktopWorkspaceBridge().listFiles(),
+    queryFn: () => withUiTimeout(desktopWorkspaceBridge().listFiles(), libraryReadTimeoutMs),
+    retry: false,
   });
   const artifacts = useQuery({
     queryKey: ["artifacts"],
-    queryFn: () => desktopWorkspaceBridge().listArtifacts(),
+    queryFn: () => withUiTimeout(desktopWorkspaceBridge().listArtifacts(), libraryReadTimeoutMs),
+    retry: false,
   });
   const conversations = useQuery({
     queryKey: chatKeys.list(true),
-    queryFn: () => desktopWorkspaceBridge().listConversations({ includeArchived: true }),
+    queryFn: () =>
+      withUiTimeout(
+        desktopWorkspaceBridge().listConversations({ includeArchived: true }),
+        libraryReadTimeoutMs,
+      ),
+    retry: false,
   });
   const conversationSignature =
     conversations.data?.map(({ id, revision }) => `${id}:${revision}`).join("|") ?? "pending";
   const conversationLibrary = useQuery({
     queryKey: ["library", "by-conversation", conversationSignature],
     enabled: conversations.data !== undefined,
-    queryFn: async () => {
-      const groups = await Promise.all(
-        (conversations.data ?? []).map(async (conversation) => {
-          const [conversationFiles, conversationArtifacts] = await Promise.all([
-            desktopWorkspaceBridge().listFiles({ conversationId: conversation.id }),
-            desktopWorkspaceBridge().listArtifacts({ conversationId: conversation.id }),
-          ]);
-          return {
-            conversation,
-            files: conversationFiles,
-            artifacts: conversationArtifacts,
-          };
-        }),
-      );
-      return groups.filter(
-        ({ files: groupFiles, artifacts: groupArtifacts }) =>
-          groupFiles.length > 0 || groupArtifacts.length > 0,
-      );
-    },
+    retry: false,
+    queryFn: () =>
+      withUiTimeout(
+        (async () => {
+          const groups = await Promise.all(
+            (conversations.data ?? []).map(async (conversation) => {
+              const [conversationFiles, conversationArtifacts] = await Promise.all([
+                desktopWorkspaceBridge().listFiles({ conversationId: conversation.id }),
+                desktopWorkspaceBridge().listArtifacts({ conversationId: conversation.id }),
+              ]);
+              return {
+                conversation,
+                files: conversationFiles,
+                artifacts: conversationArtifacts,
+              };
+            }),
+          );
+          return groups.filter(
+            ({ files: groupFiles, artifacts: groupArtifacts }) =>
+              groupFiles.length > 0 || groupArtifacts.length > 0,
+          );
+        })(),
+        libraryReadTimeoutMs,
+      ),
   });
   const linkedFileIds = useMemo(
     () =>
@@ -2255,7 +2269,9 @@ function FilesAndArtifacts(): React.JSX.Element {
             </button>
           </nav>
         ) : null}
-        {conversationLibrary.isPending ? <p className="muted-copy">正在整理对话文件…</p> : null}
+        {conversationLibrary.isPending && !libraryReadError ? (
+          <p className="muted-copy">正在整理对话文件…</p>
+        ) : null}
         {!conversationLibrary.isPending &&
         filteredUnlinkedFiles.length + filteredUnlinkedArtifacts.length > 0 ? (
           <section className="library-section" aria-labelledby="unlinked-files-title">
@@ -4414,7 +4430,7 @@ function SearchPage(): React.JSX.Element {
           <div className="empty-state">
             <MagnifyingGlass size={26} />
             <strong>从历史对话中快速定位内容</strong>
-            <p>按 ⌘K 可以随时来到这里。输入完整词组通常能得到更精确的结果。</p>
+            <p>按 {searchShortcutLabel} 可以随时来到这里。输入完整词组通常能得到更精确的结果。</p>
           </div>
         ) : null}
         {query && !results.isFetching && !results.error && results.data?.length === 0 ? (
@@ -8156,7 +8172,12 @@ function Sidebar({
   const [showArchived, setShowArchived] = useState(false);
   const history = useQuery({
     queryKey: chatKeys.list(showArchived),
-    queryFn: () => desktopWorkspaceBridge().listConversations({ includeArchived: showArchived }),
+    queryFn: () =>
+      withUiTimeout(
+        desktopWorkspaceBridge().listConversations({ includeArchived: showArchived }),
+        libraryReadTimeoutMs,
+      ),
+    retry: false,
   });
   const account = useQuery({
     queryKey: accountKey,
@@ -8223,7 +8244,7 @@ function Sidebar({
         <NavLink to="/search">
           <MagnifyingGlass size={17} />
           <span>搜索</span>
-          <kbd>⌘K</kbd>
+          <kbd>{searchShortcutLabel}</kbd>
         </NavLink>
         <NavLink to="/files">
           <FolderSimple size={17} />

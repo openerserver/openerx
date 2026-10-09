@@ -1,8 +1,9 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { promisify } from "node:util";
 import type { NormalizedToolResult, ToolOperation, WorkspaceGrant } from "@openerx/contracts";
 import { type ToolAdapter, ToolAdapterError, type ToolExecutionContext } from "./types";
 
@@ -34,6 +35,7 @@ export interface WindowsSandboxCommandHandle {
 }
 
 export interface WindowsSandboxCommandHost {
+  readonly isolation?: "codex-windows-restricted-token" | "codex-windows-mxc";
   start(input: {
     command: string[];
     cwd: string;
@@ -50,6 +52,65 @@ export interface CodexWindowsSandboxProbe {
   codexExecutable?: string | null;
   setupMarkerExists?: boolean;
   helpersExist?: boolean;
+  backend?: CodexWindowsSandboxBackend;
+  mxcSupported?: boolean;
+}
+
+export type CodexWindowsSandboxBackend = "elevated" | "mxc";
+
+export function codexWindowsSandboxBackend(
+  value = process.env.OPENERX_WINDOWS_SANDBOX_BACKEND,
+): CodexWindowsSandboxBackend {
+  if (value === undefined || value === "" || value === "elevated") return "elevated";
+  if (value === "mxc") return "mxc";
+  throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_BACKEND_INVALID");
+}
+
+const execFileAsync = promisify(execFile);
+const mxcProbes = new Map<string, { checkedAt: number; supported: Promise<boolean> }>();
+
+async function mxcSupported(codexExecutable: string): Promise<boolean> {
+  try {
+    const key = `${codexExecutable}:${statSync(codexExecutable).mtimeMs}`;
+    const cached = mxcProbes.get(key);
+    if (cached && Date.now() - cached.checkedAt < 60_000) return cached.supported;
+    const supported = execFileAsync(
+      codexExecutable,
+      [
+        "-c",
+        "windows.sandbox=mxc",
+        "--disable",
+        "prefer_mxc",
+        "sandbox",
+        "--include-managed-config",
+        "--permission-profile",
+        ":workspace",
+        "--",
+        path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"),
+        "/d",
+        "/c",
+        "echo OPENERX_MXC_READY",
+      ],
+      {
+        cwd: path.dirname(codexExecutable),
+        env: safeAppServerEnvironment(),
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+        maxBuffer: 1024,
+      },
+    ).then(
+      ({ stdout }) => stdout.trim() === "OPENERX_MXC_READY",
+      () => false,
+    );
+    mxcProbes.set(key, { checkedAt: Date.now(), supported });
+    void supported.then((ready) => {
+      if (!ready && mxcProbes.get(key)?.supported === supported) mxcProbes.delete(key);
+    });
+    return supported;
+  } catch {
+    return false;
+  }
 }
 
 function codexHome(): string | null {
@@ -106,6 +167,15 @@ export function codexWindowsSandboxReady(probe: CodexWindowsSandboxProbe = {}): 
   const executable =
     probe.codexExecutable === undefined ? findCodexExecutable() : probe.codexExecutable;
   if (!executable) return false;
+  let backend: CodexWindowsSandboxBackend;
+  try {
+    backend = probe.backend ?? codexWindowsSandboxBackend();
+  } catch {
+    return false;
+  }
+  // Installation readiness is synchronous; native capability validation happens
+  // asynchronously before execution so catalog reads cannot block the UI.
+  if (backend === "mxc") return probe.mxcSupported ?? true;
   return (
     (probe.helpersExist ?? helpersExist(executable)) &&
     (probe.setupMarkerExists ?? setupMarkerExists())
@@ -165,6 +235,8 @@ export function resolveWindowsExecutable(
 
 export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost {
   readonly #codexExecutable: string;
+  readonly #backend: CodexWindowsSandboxBackend;
+  readonly isolation: "codex-windows-restricted-token" | "codex-windows-mxc";
   readonly #pending = new Map<number, PendingRequest>();
   #child?: ChildProcessWithoutNullStreams;
   #startPromise?: Promise<void>;
@@ -172,9 +244,11 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
   #stderr = "";
   #activeProcessId: string | null = null;
 
-  constructor(codexExecutable = findCodexExecutable()) {
+  constructor(codexExecutable = findCodexExecutable(), backend = codexWindowsSandboxBackend()) {
     if (!codexExecutable) throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE");
     this.#codexExecutable = codexExecutable;
+    this.#backend = backend;
+    this.isolation = backend === "mxc" ? "codex-windows-mxc" : "codex-windows-restricted-token";
   }
 
   async start(input: {
@@ -260,16 +334,35 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
   }
 
   async #start(): Promise<void> {
-    if (!codexWindowsSandboxReady({ codexExecutable: this.#codexExecutable })) {
+    if (
+      !codexWindowsSandboxReady({
+        codexExecutable: this.#codexExecutable,
+        backend: this.#backend,
+      })
+    ) {
       throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE");
     }
+    if (this.#backend === "mxc" && !(await mxcSupported(this.#codexExecutable))) {
+      throw new Error("SHELL_WINDOWS_CODEX_MXC_UNAVAILABLE");
+    }
     this.#stderr = "";
-    const child = spawn(this.#codexExecutable, ["app-server", "--stdio"], {
-      cwd: path.dirname(this.#codexExecutable),
-      env: safeAppServerEnvironment(),
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawn(
+      this.#codexExecutable,
+      [
+        "-c",
+        `windows.sandbox=${this.#backend}`,
+        "-c",
+        "features.prefer_mxc=false",
+        "app-server",
+        "--stdio",
+      ],
+      {
+        cwd: path.dirname(this.#codexExecutable),
+        env: safeAppServerEnvironment(),
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     this.#child = child;
     const decoder = new StringDecoder("utf8");
     let buffered = "";
@@ -558,7 +651,7 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
         state: record.state,
         exitCode: record.exitCode,
         outputTruncated: record.output.length >= OUTPUT_LIMIT,
-        isolation: "codex-windows-restricted-token",
+        isolation: this.host.isolation ?? "codex-windows-restricted-token",
       },
       sources: [],
       artifacts: [],

@@ -14,7 +14,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { codexWindowsSandboxReady, ShellToolAdapter, WorkspaceToolAdapter } from "../src";
+import {
+  codexWindowsSandboxBackend,
+  codexWindowsSandboxReady,
+  ShellToolAdapter,
+  WorkspaceToolAdapter,
+} from "../src";
 
 const directories: string[] = [];
 
@@ -476,7 +481,12 @@ describe("WorkspaceToolAdapter", () => {
         // Keep this explicit so release documentation cannot promise read isolation.
         await expect(execution).resolves.toMatchObject({
           summary: expect.stringContaining("outside-secret"),
-          data: { isolation: "codex-windows-restricted-token" },
+          data: {
+            isolation:
+              codexWindowsSandboxBackend() === "mxc"
+                ? "codex-windows-mxc"
+                : "codex-windows-restricted-token",
+          },
         });
       } else {
         await expect(execution).rejects.toThrow(

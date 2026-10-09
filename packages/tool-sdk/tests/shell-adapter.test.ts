@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -5,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  codexWindowsSandboxBackend,
   codexWindowsSandboxReady,
   resolveWindowsExecutable,
   ShellToolAdapter,
@@ -67,6 +69,7 @@ describe("ShellToolAdapter", () => {
     expect(
       codexWindowsSandboxReady({
         platform: "win32",
+        backend: "elevated",
         codexExecutable: "C:\\Codex\\codex.exe",
         helpersExist: true,
         setupMarkerExists: true,
@@ -77,7 +80,9 @@ describe("ShellToolAdapter", () => {
       { codexExecutable: "C:\\Codex\\codex.exe", helpersExist: false, setupMarkerExists: true },
       { codexExecutable: "C:\\Codex\\codex.exe", helpersExist: true, setupMarkerExists: false },
     ]) {
-      expect(codexWindowsSandboxReady({ platform: "win32", ...probe })).toBe(false);
+      expect(codexWindowsSandboxReady({ platform: "win32", backend: "elevated", ...probe })).toBe(
+        false,
+      );
     }
     expect(
       codexWindowsSandboxReady({
@@ -85,6 +90,45 @@ describe("ShellToolAdapter", () => {
         codexExecutable: "C:\\Codex\\codex.exe",
         helpersExist: true,
         setupMarkerExists: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("requires an explicit supported MXC backend and never falls back to the legacy sandbox", () => {
+    expect(codexWindowsSandboxBackend("")).toBe("elevated");
+    expect(codexWindowsSandboxBackend("elevated")).toBe("elevated");
+    expect(codexWindowsSandboxBackend("mxc")).toBe("mxc");
+    for (const backend of ["unelevated", "disabled", "MXC", "unknown"]) {
+      expect(() => codexWindowsSandboxBackend(backend)).toThrow(
+        "SHELL_WINDOWS_CODEX_SANDBOX_BACKEND_INVALID",
+      );
+    }
+    expect(
+      codexWindowsSandboxReady({
+        platform: "win32",
+        backend: "mxc",
+        codexExecutable: "C:\\Codex\\codex.exe",
+        helpersExist: false,
+        setupMarkerExists: false,
+        mxcSupported: true,
+      }),
+    ).toBe(true);
+    expect(
+      codexWindowsSandboxReady({
+        platform: "win32",
+        backend: "mxc",
+        codexExecutable: "C:\\Codex\\codex.exe",
+        helpersExist: true,
+        setupMarkerExists: true,
+        mxcSupported: false,
+      }),
+    ).toBe(false);
+    expect(
+      codexWindowsSandboxReady({
+        platform: "win32",
+        backend: "mxc",
+        codexExecutable: null,
+        mxcSupported: true,
       }),
     ).toBe(false);
   });
@@ -318,7 +362,7 @@ process.stdout.write('discarded-stdio-ok');`,
   });
 
   it("keeps network policy independent from the platform filesystem sandbox", async () => {
-    if (process.platform !== "darwin") return;
+    if (process.platform !== "darwin" && !codexWindowsSandboxReady()) return;
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-network-"));
     directories.push(workspace);
     const server = createServer((_request, response) => response.end("network-ok"));
@@ -339,28 +383,73 @@ process.stdout.write('discarded-stdio-ok');`,
       timeoutMs: 5_000,
       background: false,
     };
-    await expect(
-      adapter.execute(
-        { ...operation, allowNetwork: false, idempotencyKey: "shell-network-denied-0001" },
-        context(),
-      ),
-    ).rejects.toThrow(/SHELL_EXIT_/);
-    await expect(
-      adapter.execute(
-        { ...operation, allowNetwork: true, idempotencyKey: "shell-network-allowed-0001" },
-        context(),
-      ),
-    ).resolves.toMatchObject({ summary: "network-ok" });
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
-  });
+    try {
+      await expect(
+        adapter.execute(
+          { ...operation, allowNetwork: false, idempotencyKey: "shell-network-denied-0001" },
+          context(),
+        ),
+      ).rejects.toThrow(/SHELL_EXIT_/);
+      await expect(
+        adapter.execute(
+          { ...operation, allowNetwork: true, idempotencyKey: "shell-network-allowed-0001" },
+          context(),
+        ),
+      ).resolves.toMatchObject({ summary: "network-ok" });
+    } finally {
+      await adapter.stopAll();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  }, 20_000);
 
-  it("selects the Codex offline/online identity and keeps temp inside the workspace", async () => {
+  it("allows Windows workspace writes while denying writes outside the approved root", async () => {
+    if (!codexWindowsSandboxReady()) return;
+    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-writes-"));
+    const outside = mkdtempSync(path.join(tmpdir(), "openerx-shell-writes-outside-"));
+    directories.push(workspace, outside);
+    const outsideFile = path.join(outside, "private.txt");
+    writeFileSync(outsideFile, "private-unchanged");
+    const adapter = new ShellToolAdapter([workspace]);
+    try {
+      await expect(
+        adapter.execute(
+          {
+            operation: "shell_execute",
+            cwd: workspace,
+            command: process.execPath,
+            args: [
+              "-e",
+              `const fs=require('node:fs');fs.writeFileSync('inside.txt','inside-ok');let denied=false;try{fs.writeFileSync(process.argv[1],'outside-overwrite')}catch(e){denied=['EPERM','EACCES'].includes(e.code)}if(!denied)throw new Error('OUTSIDE_WRITE_ALLOWED');process.stdout.write('write-boundary-ok')`,
+              outsideFile,
+            ],
+            timeoutMs: 10_000,
+            background: false,
+            allowNetwork: false,
+            idempotencyKey: "shell-windows-write-boundary-0001",
+          },
+          context(),
+        ),
+      ).resolves.toMatchObject({ summary: "write-boundary-ok" });
+      expect(readFileSync(path.join(workspace, "inside.txt"), "utf8")).toBe("inside-ok");
+      expect(readFileSync(outsideFile, "utf8")).toBe("private-unchanged");
+    } finally {
+      await adapter.stopAll();
+    }
+  }, 20_000);
+
+  it("uses the selected Windows sandbox identity and isolates its temporary files", async () => {
     if (!codexWindowsSandboxReady()) return;
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-identity-"));
     directories.push(workspace);
     const adapter = new ShellToolAdapter([workspace]);
+    const backend = codexWindowsSandboxBackend();
+    const whoami = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe");
+    const hostIdentity =
+      backend === "mxc"
+        ? execFileSync(whoami, [], { encoding: "utf8", windowsHide: true }).trim().toLowerCase()
+        : null;
     for (const [allowNetwork, account] of [
       [false, "codexsandboxoffline"],
       [true, "codexsandboxonline"],
@@ -369,7 +458,7 @@ process.stdout.write('discarded-stdio-ok');`,
         {
           operation: "shell_execute",
           cwd: workspace,
-          command: path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"),
+          command: whoami,
           args: [],
           timeoutMs: 10_000,
           background: false,
@@ -378,14 +467,22 @@ process.stdout.write('discarded-stdio-ok');`,
         },
         context(),
       );
-      expect(identity.summary.trim().toLowerCase()).toMatch(new RegExp(`\\\\${account}$`, "u"));
+      if (backend === "mxc") expect(identity.summary.trim().toLowerCase()).toBe(hostIdentity);
+      else
+        expect(identity.summary.trim().toLowerCase()).toMatch(new RegExp(`\\\\${account}$`, "u"));
+      expect(identity.data).toMatchObject({
+        isolation: backend === "mxc" ? "codex-windows-mxc" : "codex-windows-restricted-token",
+      });
     }
     const environment = await adapter.execute(
       {
         operation: "shell_execute",
         cwd: workspace,
         command: process.execPath,
-        args: ["-e", "process.stdout.write(process.env.TEMP || '')"],
+        args: [
+          "-e",
+          "const fs=require('node:fs'),path=require('node:path');const file=path.join(process.env.TEMP,'openerx-private-temp.txt');fs.writeFileSync(file,'private-temp');process.stdout.write(JSON.stringify({temp:process.env.TEMP,file,writable:fs.readFileSync(file,'utf8')==='private-temp'}))",
+        ],
         timeoutMs: 10_000,
         background: false,
         allowNetwork: false,
@@ -393,7 +490,37 @@ process.stdout.write('discarded-stdio-ok');`,
       },
       context(),
     );
-    expect(path.resolve(environment.summary)).toBe(path.resolve(workspace));
+    const temporary = JSON.parse(environment.summary) as {
+      temp: string;
+      file: string;
+      writable: boolean;
+    };
+    expect(temporary.writable).toBe(true);
+    if (backend === "elevated") {
+      expect(path.resolve(temporary.temp)).toBe(path.resolve(workspace));
+    } else {
+      expect(path.resolve(temporary.temp)).not.toBe(path.resolve(tmpdir()));
+      const second = await adapter.execute(
+        {
+          operation: "shell_execute",
+          cwd: workspace,
+          command: process.execPath,
+          args: [
+            "-e",
+            "const fs=require('node:fs');let previousDenied=false;try{fs.readFileSync(process.argv[1],'utf8')}catch(e){previousDenied=['ENOENT','EACCES','EPERM'].includes(e.code)}process.stdout.write(JSON.stringify({temp:process.env.TEMP,previousDenied}))",
+            temporary.file,
+          ],
+          timeoutMs: 10_000,
+          background: false,
+          allowNetwork: false,
+          idempotencyKey: "shell-windows-private-temp-0002",
+        },
+        context(),
+      );
+      const isolated = JSON.parse(second.summary) as { temp: string; previousDenied: boolean };
+      expect(path.resolve(isolated.temp)).not.toBe(path.resolve(temporary.temp));
+      expect(isolated.previousDenied).toBe(true);
+    }
     await adapter.stopAll();
   }, 20_000);
 
@@ -416,7 +543,13 @@ process.stdout.write('discarded-stdio-ok');`,
         context(),
       ),
     ).resolves.toMatchObject({
-      data: { state: "completed", isolation: "codex-windows-restricted-token" },
+      data: {
+        state: "completed",
+        isolation:
+          codexWindowsSandboxBackend() === "mxc"
+            ? "codex-windows-mxc"
+            : "codex-windows-restricted-token",
+      },
     });
     await adapter.stopAll();
   }, 30_000);
