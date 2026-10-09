@@ -2519,7 +2519,9 @@ describe("M1 chat renderer", () => {
         await vi.advanceTimersByTimeAsync(1);
       });
       fireEvent.click(
-        within(screen.getByRole("navigation", { name: "主导航" })).getByRole("link", { name: /文件/u }),
+        within(screen.getByRole("navigation", { name: "主导航" })).getByRole("link", {
+          name: /文件/u,
+        }),
       );
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_001);
