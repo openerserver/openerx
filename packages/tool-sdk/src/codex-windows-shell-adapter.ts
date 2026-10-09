@@ -35,7 +35,7 @@ export interface WindowsSandboxCommandHandle {
 }
 
 export interface WindowsSandboxCommandHost {
-  readonly isolation?: "codex-windows-restricted-token" | "codex-windows-mxc";
+  readonly isolation?: CodexWindowsSandboxIsolation | undefined;
   start(input: {
     command: string[];
     cwd: string;
@@ -56,14 +56,35 @@ export interface CodexWindowsSandboxProbe {
   mxcSupported?: boolean;
 }
 
-export type CodexWindowsSandboxBackend = "elevated" | "mxc";
+export type CodexWindowsSandboxBackend = "auto" | "elevated" | "mxc";
+export type ResolvedCodexWindowsSandboxBackend = Exclude<CodexWindowsSandboxBackend, "auto">;
+export type CodexWindowsSandboxIsolation = "codex-windows-restricted-token" | "codex-windows-mxc";
 
 export function codexWindowsSandboxBackend(
   value = process.env.OPENERX_WINDOWS_SANDBOX_BACKEND,
 ): CodexWindowsSandboxBackend {
-  if (value === undefined || value === "" || value === "elevated") return "elevated";
-  if (value === "mxc") return "mxc";
+  if (value === undefined || value === "" || value === "auto") return "auto";
+  if (value === "elevated" || value === "mxc") return value;
   throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_BACKEND_INVALID");
+}
+
+export async function selectCodexWindowsSandboxBackend(
+  backend: CodexWindowsSandboxBackend,
+  probe: {
+    mxcSupported(): Promise<boolean>;
+    elevatedReady(): boolean;
+  },
+): Promise<ResolvedCodexWindowsSandboxBackend> {
+  if (backend !== "auto" && backend !== "mxc" && backend !== "elevated") {
+    throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_BACKEND_INVALID");
+  }
+  if (backend !== "elevated" && (await probe.mxcSupported())) return "mxc";
+  if (backend !== "mxc" && probe.elevatedReady()) return "elevated";
+  throw new Error(
+    backend === "mxc"
+      ? "SHELL_WINDOWS_CODEX_MXC_UNAVAILABLE"
+      : "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE",
+  );
 }
 
 const execFileAsync = promisify(execFile);
@@ -176,6 +197,7 @@ export function codexWindowsSandboxReady(probe: CodexWindowsSandboxProbe = {}): 
   // Installation readiness is synchronous; native capability validation happens
   // asynchronously before execution so catalog reads cannot block the UI.
   if (backend === "mxc") return probe.mxcSupported ?? true;
+  if (backend === "auto" && probe.mxcSupported !== false) return true;
   return (
     (probe.helpersExist ?? helpersExist(executable)) &&
     (probe.setupMarkerExists ?? setupMarkerExists())
@@ -235,8 +257,8 @@ export function resolveWindowsExecutable(
 
 export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost {
   readonly #codexExecutable: string;
-  readonly #backend: CodexWindowsSandboxBackend;
-  readonly isolation: "codex-windows-restricted-token" | "codex-windows-mxc";
+  readonly #backendPreference: CodexWindowsSandboxBackend;
+  #backend?: ResolvedCodexWindowsSandboxBackend;
   readonly #pending = new Map<number, PendingRequest>();
   #child?: ChildProcessWithoutNullStreams;
   #startPromise?: Promise<void>;
@@ -247,8 +269,12 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
   constructor(codexExecutable = findCodexExecutable(), backend = codexWindowsSandboxBackend()) {
     if (!codexExecutable) throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE");
     this.#codexExecutable = codexExecutable;
-    this.#backend = backend;
-    this.isolation = backend === "mxc" ? "codex-windows-mxc" : "codex-windows-restricted-token";
+    this.#backendPreference = backend;
+  }
+
+  get isolation(): CodexWindowsSandboxIsolation | undefined {
+    if (!this.#backend) return undefined;
+    return this.#backend === "mxc" ? "codex-windows-mxc" : "codex-windows-restricted-token";
   }
 
   async start(input: {
@@ -337,14 +363,19 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
     if (
       !codexWindowsSandboxReady({
         codexExecutable: this.#codexExecutable,
-        backend: this.#backend,
+        backend: this.#backendPreference,
       })
     ) {
       throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE");
     }
-    if (this.#backend === "mxc" && !(await mxcSupported(this.#codexExecutable))) {
-      throw new Error("SHELL_WINDOWS_CODEX_MXC_UNAVAILABLE");
-    }
+    this.#backend = await selectCodexWindowsSandboxBackend(this.#backendPreference, {
+      mxcSupported: () => mxcSupported(this.#codexExecutable),
+      elevatedReady: () =>
+        codexWindowsSandboxReady({
+          codexExecutable: this.#codexExecutable,
+          backend: "elevated",
+        }),
+    });
     this.#stderr = "";
     const child = spawn(
       this.#codexExecutable,
@@ -462,6 +493,7 @@ interface ProcessRecord {
   exitCode: number | null;
   startedAt: number;
   completedAt: number | null;
+  isolation: CodexWindowsSandboxIsolation;
 }
 
 function inside(root: string, target: string): boolean {
@@ -581,6 +613,7 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
       exitCode: null,
       startedAt,
       completedAt: null,
+      isolation: this.host.isolation ?? "codex-windows-restricted-token",
     };
     this.#processes.set(record.id, record);
     const abort = () => void this.#stop(record?.id ?? handle.processId);
@@ -651,7 +684,7 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
         state: record.state,
         exitCode: record.exitCode,
         outputTruncated: record.output.length >= OUTPUT_LIMIT,
-        isolation: this.host.isolation ?? "codex-windows-restricted-token",
+        isolation: record.isolation,
       },
       sources: [],
       artifacts: [],

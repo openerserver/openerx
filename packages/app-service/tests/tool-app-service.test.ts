@@ -1575,8 +1575,6 @@ describe("ToolAppService", () => {
       details:
         process.platform === "win32"
           ? expect.arrayContaining([
-              "Backend：Codex Windows restricted token",
-              "隔离：受限账户 / ACL / Job Object / WFP",
               "命令：argv 直传；网络默认拒绝",
               expect.stringContaining("默认工作区："),
             ])
@@ -1607,6 +1605,54 @@ describe("ToolAppService", () => {
     chat.close();
     await service.close();
   });
+
+  it.runIf(process.platform === "win32").each([
+    ["default", "Backend：Codex Windows 原生沙箱（自动兼容选择）", true],
+    ["auto", "Backend：Codex Windows 原生沙箱（自动兼容选择）", true],
+    ["mxc", "Backend：Codex Windows MXC", true],
+    ["elevated", "Backend：Codex Windows restricted token", true],
+    ["invalid", "Backend：Codex Windows 沙箱配置无效（未就绪）", false],
+  ] as const)(
+    "reports accurate Windows Shell isolation for the %s backend policy",
+    async (backend, label, available) => {
+      vi.stubEnv("OPENERX_WINDOWS_SANDBOX_BACKEND", backend === "default" ? undefined : backend);
+      let f: ReturnType<typeof fixture> | undefined;
+      try {
+        f = fixture({
+          shellAvailability: (): HostToolAvailability => ({
+            availableToolNames: available ? ["openerx_shell", "openerx_shell_process"] : [],
+            unavailableReasons: available
+              ? {}
+              : { openerx_shell: "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE" },
+          }),
+        });
+        const shell = (
+          await f.service.listRuntimeReadiness({ authenticated: false, platformConfigured: false })
+        ).find(({ capability }) => capability === "shell");
+        expect(shell).toMatchObject({
+          status: available ? "available" : "unavailable",
+          reason: available ? null : "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE",
+          availableToolNames: available ? ["openerx_shell", "openerx_shell_process"] : [],
+        });
+        expect(shell?.details).toContain(label);
+        expect(shell?.details).toContain("命令：argv 直传；网络默认拒绝");
+        if (backend === "elevated") {
+          expect(shell?.details).toContain("隔离：受限账户 / ACL / Job Object / WFP");
+        } else {
+          expect(shell?.details?.join(" ")).not.toMatch(/restricted token|受限账户|ACL|WFP/u);
+          expect(shell?.details).toContain(
+            backend === "invalid"
+              ? "隔离：后端配置无效；拒绝执行"
+              : "隔离：遵循已授权的工作区与网络限制；实际后端记录在执行结果中",
+          );
+        }
+      } finally {
+        f?.chat.close();
+        await f?.service.close();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("exposes only brokered bash when the default-off PBASH-001 flag is enabled", async () => {
     const { chat, service, base, directory } = fixture({

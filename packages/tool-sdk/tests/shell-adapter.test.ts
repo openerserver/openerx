@@ -6,10 +6,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CodexWindowsShellToolAdapter,
   codexWindowsSandboxBackend,
   codexWindowsSandboxReady,
   resolveWindowsExecutable,
   ShellToolAdapter,
+  selectCodexWindowsSandboxBackend,
   shellToolAvailability,
   ToolAdapterError,
 } from "../src";
@@ -94,8 +96,15 @@ describe("ShellToolAdapter", () => {
     ).toBe(false);
   });
 
-  it("requires an explicit supported MXC backend and never falls back to the legacy sandbox", () => {
-    expect(codexWindowsSandboxBackend("")).toBe("elevated");
+  it("defaults to automatic selection and validates explicit backend settings", () => {
+    expect(codexWindowsSandboxBackend("")).toBe("auto");
+    expect(codexWindowsSandboxBackend("auto")).toBe("auto");
+    vi.stubEnv("OPENERX_WINDOWS_SANDBOX_BACKEND", undefined);
+    try {
+      expect(codexWindowsSandboxBackend()).toBe("auto");
+    } finally {
+      vi.unstubAllEnvs();
+    }
     expect(codexWindowsSandboxBackend("elevated")).toBe("elevated");
     expect(codexWindowsSandboxBackend("mxc")).toBe("mxc");
     for (const backend of ["unelevated", "disabled", "MXC", "unknown"]) {
@@ -131,6 +140,109 @@ describe("ShellToolAdapter", () => {
         mxcSupported: true,
       }),
     ).toBe(false);
+  });
+
+  it("offers automatic startup without requiring legacy sandbox provisioning", () => {
+    const candidate = {
+      platform: "win32" as const,
+      backend: "auto" as const,
+      codexExecutable: "C:\\Codex\\codex.exe",
+      helpersExist: false,
+      setupMarkerExists: false,
+    };
+    expect(codexWindowsSandboxReady(candidate)).toBe(true);
+    expect(codexWindowsSandboxReady({ ...candidate, mxcSupported: true })).toBe(true);
+    expect(codexWindowsSandboxReady({ ...candidate, mxcSupported: false })).toBe(false);
+    expect(
+      codexWindowsSandboxReady({
+        ...candidate,
+        mxcSupported: false,
+        helpersExist: true,
+        setupMarkerExists: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("prefers compatible MXC and checks legacy readiness only before selecting an unavailable MXC alternative", async () => {
+    const probe = { mxcSupported: vi.fn(async () => true), elevatedReady: vi.fn(() => false) };
+    await expect(selectCodexWindowsSandboxBackend("auto", probe)).resolves.toBe("mxc");
+    expect(probe.elevatedReady).not.toHaveBeenCalled();
+    probe.mxcSupported.mockResolvedValue(false);
+    probe.elevatedReady.mockReturnValue(true);
+    await expect(selectCodexWindowsSandboxBackend("auto", probe)).resolves.toBe("elevated");
+    expect(probe.elevatedReady).toHaveBeenCalledTimes(1);
+    probe.elevatedReady.mockReturnValue(false);
+    await expect(selectCodexWindowsSandboxBackend("auto", probe)).rejects.toThrow(
+      "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE",
+    );
+  });
+
+  it("keeps explicit backends fixed and rejects unavailable execution without selecting another backend", async () => {
+    const probe = { mxcSupported: vi.fn(async () => false), elevatedReady: vi.fn(() => true) };
+    await expect(selectCodexWindowsSandboxBackend("mxc", probe)).rejects.toThrow(
+      "SHELL_WINDOWS_CODEX_MXC_UNAVAILABLE",
+    );
+    expect(probe.elevatedReady).not.toHaveBeenCalled();
+    probe.mxcSupported.mockClear();
+    await expect(selectCodexWindowsSandboxBackend("elevated", probe)).resolves.toBe("elevated");
+    expect(probe.mxcSupported).not.toHaveBeenCalled();
+    probe.elevatedReady.mockReturnValue(false);
+    await expect(selectCodexWindowsSandboxBackend("elevated", probe)).rejects.toThrow(
+      "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE",
+    );
+  });
+
+  it("preserves each process isolation metadata when a host later selects a different backend", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-isolation-"));
+    directories.push(workspace);
+    let isolation: NonNullable<WindowsSandboxCommandHost["isolation"]> = "codex-windows-mxc";
+    let runs = 0;
+    const host: WindowsSandboxCommandHost = {
+      get isolation() {
+        return isolation;
+      },
+      async start() {
+        return {
+          processId: `process-${++runs}`,
+          completion: Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }),
+          async write() {},
+          async stop() {},
+        };
+      },
+      async close() {},
+    };
+    const adapter = new CodexWindowsShellToolAdapter([workspace], undefined, host);
+    const operation = {
+      operation: "shell_execute" as const,
+      cwd: workspace,
+      command: process.execPath,
+      args: [],
+      timeoutMs: 1000,
+      background: false,
+      allowNetwork: false,
+      idempotencyKey: "isolation-first-command",
+    };
+    try {
+      const first = await adapter.execute(operation, context());
+      expect(first.data).toMatchObject({ isolation: "codex-windows-mxc" });
+      isolation = "codex-windows-restricted-token";
+      const second = await adapter.execute(
+        { ...operation, idempotencyKey: "isolation-second-command" },
+        context(),
+      );
+      expect(second.data).toMatchObject({ isolation: "codex-windows-restricted-token" });
+      const historical = await adapter.execute(
+        {
+          operation: "shell_status",
+          processId: "process-1",
+          idempotencyKey: "isolation-first-status",
+        },
+        context(),
+      );
+      expect(historical.data).toMatchObject({ isolation: "codex-windows-mxc" });
+    } finally {
+      await adapter.stopAll();
+    }
   });
 
   it("advertises Shell only when a supported platform sandbox is ready", () => {
@@ -193,7 +305,7 @@ describe("ShellToolAdapter", () => {
   );
 
   it.runIf(process.platform === "darwin" || codexWindowsSandboxReady())(
-    "retains failed command output as a typed failure result",
+    "retains failed command output without retrying the command",
     async () => {
       const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-failure-"));
       directories.push(workspace);
@@ -204,7 +316,10 @@ describe("ShellToolAdapter", () => {
             operation: "shell_execute",
             cwd: workspace,
             command: process.execPath,
-            args: ["-e", "process.stderr.write('failure-output'); process.exit(3)"],
+            args: [
+              "-e",
+              "const fs=require('node:fs');const file='attempts.txt';fs.writeFileSync(file,String((fs.existsSync(file)?Number(fs.readFileSync(file,'utf8')):0)+1));process.stderr.write('failure-output');process.exit(3)",
+            ],
             timeoutMs: 10_000,
             background: false,
             allowNetwork: false,
@@ -220,6 +335,7 @@ describe("ShellToolAdapter", () => {
           content: [{ type: "text", text: "failure-output" }],
           data: { exitCode: 3, state: "failed" },
         });
+        expect(readFileSync(path.join(workspace, "attempts.txt"), "utf8")).toBe("1");
       } finally {
         await adapter.stopAll();
       }
@@ -444,12 +560,11 @@ process.stdout.write('discarded-stdio-ok');`,
     const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-identity-"));
     directories.push(workspace);
     const adapter = new ShellToolAdapter([workspace]);
-    const backend = codexWindowsSandboxBackend();
     const whoami = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe");
-    const hostIdentity =
-      backend === "mxc"
-        ? execFileSync(whoami, [], { encoding: "utf8", windowsHide: true }).trim().toLowerCase()
-        : null;
+    const hostIdentity = execFileSync(whoami, [], { encoding: "utf8", windowsHide: true })
+      .trim()
+      .toLowerCase();
+    let backend: "elevated" | "mxc" | undefined;
     for (const [allowNetwork, account] of [
       [false, "codexsandboxoffline"],
       [true, "codexsandboxonline"],
@@ -467,6 +582,11 @@ process.stdout.write('discarded-stdio-ok');`,
         },
         context(),
       );
+      const isolation = (identity.data as { isolation: string }).isolation;
+      expect(["codex-windows-mxc", "codex-windows-restricted-token"]).toContain(isolation);
+      const selected = isolation === "codex-windows-mxc" ? "mxc" : "elevated";
+      if (backend) expect(selected).toBe(backend);
+      else backend = selected;
       if (backend === "mxc") expect(identity.summary.trim().toLowerCase()).toBe(hostIdentity);
       else
         expect(identity.summary.trim().toLowerCase()).toMatch(new RegExp(`\\\\${account}$`, "u"));
@@ -545,10 +665,7 @@ process.stdout.write('discarded-stdio-ok');`,
     ).resolves.toMatchObject({
       data: {
         state: "completed",
-        isolation:
-          codexWindowsSandboxBackend() === "mxc"
-            ? "codex-windows-mxc"
-            : "codex-windows-restricted-token",
+        isolation: expect.stringMatching(/^codex-windows-(?:mxc|restricted-token)$/u),
       },
     });
     await adapter.stopAll();

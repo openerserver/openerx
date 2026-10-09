@@ -46,7 +46,7 @@ npm run dev:desktop
 
 Skill 描述任务方法，工具提供执行能力。内置 Skill 位于 `packages/skills/src/builtins.ts`；修改资源后需要递增对应版本，再运行 `npm run update:builtin-skills:v2` 更新快照。
 
-Windows Shell 默认使用外部 Codex 的 `elevated` 沙箱。兼容设备可在启动应用或测试前设置 `OPENERX_WINDOWS_SANDBOX_BACKEND=mxc`，选择 MXC 进程隔离后端；已在 Codex CLI 0.162 上验证。工具就绪状态只做初步安装检查；实际执行前异步运行完整兼容性探针，成功结果缓存 60 秒，不支持时拒绝执行，不会回退到其他后端或修改 Codex 全局配置。`elevated` 使用独立的离线/在线账户，临时目录位于工作区；MXC 使用当前账户和每次命令独立的私有临时目录。两者均按授权限制工作区写入和网络，当前 `workspaceWrite` 策略不承诺工作区外的读取隔离。移除环境变量或设为 `elevated` 可恢复旧后端；其他值无效。外部程序路径可用 `OPENERX_CODEX_EXECUTABLE` 指定。
+Windows Shell 默认自动选择外部 Codex 的可用沙箱，无需设置环境变量。工具就绪状态只做初步安装检查；执行用户命令前异步检查 MXC 兼容性，成功结果缓存 60 秒，兼容时选择 MXC，否则检查已配置的 `elevated` 沙箱；两者均不可用时拒绝执行。选定后，初始化或命令失败均不会切换后端重试。MXC 使用 Windows 原生进程隔离、当前账户和每次命令独立的私有临时目录，已在 Codex CLI 0.162 上验证；`elevated` 使用独立的离线/在线账户，临时目录位于工作区，并保留旧 CLI 兼容性。需要固定后端时可设置 `OPENERX_WINDOWS_SANDBOX_BACKEND=mxc` 或 `elevated`；显式选择不可用时直接拒绝执行。`auto`、空值和未设置均使用自动选择，其他值无效。应用不修改 Codex 全局配置。两种后端均按授权限制工作区写入和网络，当前 `workspaceWrite` 策略不承诺工作区外的读取隔离。外部程序路径可用 `OPENERX_CODEX_EXECUTABLE` 指定。
 
 Chrome 扩展位于 `apps/desktop/browser-extension/`。已有标签页需显式配对授权；独立浏览器和系统辅助功能后端有不同的能力与平台权限要求。
 

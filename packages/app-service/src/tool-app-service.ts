@@ -72,6 +72,7 @@ import {
   brokeredBashNetworkPolicyDigest,
   type CapabilityAvailabilityHost,
   CapabilityBroker,
+  codexWindowsSandboxBackend,
   type CapabilityHost,
   type CredentialResolver,
   type CredentialStore,
@@ -98,6 +99,31 @@ import {
   WorkspaceToolAdapter,
 } from "@openerx/tool-sdk";
 import { defaultWorkspaceDirectory as resolveDefaultWorkspaceDirectory } from "./default-workspace";
+
+function windowsShellIsolationDetails(available: boolean): string[] {
+  let backend: string;
+  try {
+    backend = codexWindowsSandboxBackend();
+  } catch {
+    backend = "invalid";
+  }
+  const label =
+    backend === "elevated"
+      ? "Codex Windows restricted token"
+      : backend === "mxc"
+        ? "Codex Windows MXC"
+        : backend === "auto"
+          ? "Codex Windows 原生沙箱（自动兼容选择）"
+          : "Codex Windows 沙箱配置无效";
+  return [
+    `Backend：${label}${available ? "" : "（未就绪）"}`,
+    backend === "elevated"
+      ? "隔离：受限账户 / ACL / Job Object / WFP"
+      : backend === "invalid"
+        ? "隔离：后端配置无效；拒绝执行"
+        : "隔离：遵循已授权的工作区与网络限制；实际后端记录在执行结果中",
+  ];
+}
 
 class GenerationWebSearchAdapter implements ToolAdapter {
   readonly operations = ["web_search"] as const;
@@ -1090,8 +1116,7 @@ export class ToolAppService {
             ]
           : process.platform === "win32"
             ? [
-                `Backend：Codex Windows restricted token${shellHostAvailable ? "" : "（未就绪）"}`,
-                "隔离：受限账户 / ACL / Job Object / WFP",
+                ...windowsShellIsolationDetails(shellHostAvailable),
                 "命令：argv 直传；网络默认拒绝",
                 `默认工作区：${this.#defaultWorkspaceDirectory}`,
                 ...(this.#defaultWorkspaceFallback

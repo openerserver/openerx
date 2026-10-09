@@ -14,12 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ChatRepository, ToolRepository } from "@openerx/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  codexWindowsSandboxBackend,
-  codexWindowsSandboxReady,
-  ShellToolAdapter,
-  WorkspaceToolAdapter,
-} from "../src";
+import { codexWindowsSandboxReady, ShellToolAdapter, WorkspaceToolAdapter } from "../src";
 
 const directories: string[] = [];
 
@@ -482,10 +477,7 @@ describe("WorkspaceToolAdapter", () => {
         await expect(execution).resolves.toMatchObject({
           summary: expect.stringContaining("outside-secret"),
           data: {
-            isolation:
-              codexWindowsSandboxBackend() === "mxc"
-                ? "codex-windows-mxc"
-                : "codex-windows-restricted-token",
+            isolation: expect.stringMatching(/^codex-windows-(?:mxc|restricted-token)$/u),
           },
         });
       } else {
