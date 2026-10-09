@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type {
   HostToolAvailability,
   NormalizedToolResult,
@@ -66,6 +67,8 @@ interface ProcessRecord {
   command: string;
   cwd: string;
   output: string;
+  outputTruncated: boolean;
+  isolation: "macos-sandbox";
   state: "running" | "completed" | "failed" | "stopped" | "timed_out";
   exitCode: number | null;
   startedAt: number;
@@ -90,9 +93,14 @@ function shellEnvironment(cwd: string): NodeJS.ProcessEnv {
   } as NodeJS.ProcessEnv;
 }
 
-function appendOutput(record: ProcessRecord, chunk: Buffer): void {
-  if (record.output.length >= OUTPUT_LIMIT) return;
-  record.output += chunk.toString("utf8").slice(0, OUTPUT_LIMIT - record.output.length);
+function appendOutput(record: ProcessRecord, text: string): void {
+  const remaining = Math.max(0, OUTPUT_LIMIT - record.output.length);
+  let addition = text.slice(0, remaining);
+  if (addition.length < text.length) {
+    record.outputTruncated = true;
+    if (/[\uD800-\uDBFF]$/u.test(addition)) addition = addition.slice(0, -1);
+  }
+  record.output += addition;
 }
 
 function sandboxPath(value: string): string {
@@ -195,6 +203,8 @@ export class ShellToolAdapter implements ToolAdapter {
     operation: ToolOperation,
     context: ToolExecutionContext,
   ): Promise<NormalizedToolResult> {
+    if (operation.operation === "shell_execute" && context.signal.aborted)
+      throw new Error("SHELL_STOPPED");
     let baseline: WorkspaceWriteBaseline | undefined;
     if (
       operation.operation === "shell_execute" &&
@@ -231,10 +241,23 @@ export class ShellToolAdapter implements ToolAdapter {
     } finally {
       const data = result?.data as { processId?: string; state?: string } | undefined;
       if (baseline) {
-        if (data?.state === "running" && data.processId)
+        if (
+          data?.processId &&
+          (data.state === "running" ||
+            (this.#windowsAdapter &&
+              operation.operation === "shell_execute" &&
+              operation.background))
+        ) {
           this.#pendingWrites.set(data.processId, { baseline, context });
-        else this.#recordWrites(baseline, context);
-      } else if (data?.processId && data.state !== "running") {
+          if (this.#windowsAdapter) {
+            const processId = data.processId;
+            void this.#windowsAdapter
+              .whenProcessCompletes(processId)
+              .then(() => this.#finishWrites(processId))
+              .catch(() => this.#finishWrites(processId));
+          }
+        } else this.#recordWrites(baseline, context);
+      } else if (data?.processId && data.state !== "running" && !this.#windowsAdapter) {
         this.#finishWrites(data.processId);
       }
     }
@@ -354,6 +377,8 @@ export class ShellToolAdapter implements ToolAdapter {
       command: [operation.command, ...operation.args].join(" "),
       cwd,
       output: "",
+      outputTruncated: false,
+      isolation: command.isolation,
       state: "running",
       exitCode: null,
       startedAt: Date.now(),
@@ -364,23 +389,27 @@ export class ShellToolAdapter implements ToolAdapter {
       }, operation.timeoutMs),
     };
     this.#processes.set(record.id, record);
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     child.stdout.on("data", (chunk: Buffer) => {
-      appendOutput(record, chunk);
+      appendOutput(record, stdoutDecoder.write(chunk));
       context.update(record.output.slice(-2_000));
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      appendOutput(record, chunk);
+      appendOutput(record, stderrDecoder.write(chunk));
       context.update(record.output.slice(-2_000));
     });
     const completed = new Promise<void>((resolve, reject) => {
       child.once("error", (error) => {
         clearTimeout(record.timeout);
-        appendOutput(record, Buffer.from(error.message));
+        appendOutput(record, error.message);
         record.state = "failed";
         record.completedAt = Date.now();
         reject(error);
       });
       child.once("close", (exitCode) => {
+        appendOutput(record, stdoutDecoder.end());
+        appendOutput(record, stderrDecoder.end());
         clearTimeout(record.timeout);
         record.exitCode = exitCode;
         record.completedAt = Date.now();
@@ -390,6 +419,7 @@ export class ShellToolAdapter implements ToolAdapter {
     });
     const abort = () => void this.#stop(record.id);
     context.signal.addEventListener("abort", abort, { once: true });
+    if (context.signal.aborted) abort();
     if (operation.background) {
       void completed
         .then(
@@ -421,7 +451,7 @@ export class ShellToolAdapter implements ToolAdapter {
           processId: record.id,
           state: record.state,
           exitCode: record.exitCode,
-          outputTruncated: record.output.length >= OUTPUT_LIMIT,
+          outputTruncated: record.outputTruncated,
           isolation: command.isolation,
         },
         sources: [],
@@ -438,6 +468,7 @@ export class ShellToolAdapter implements ToolAdapter {
         state: record.state,
         exitCode: record.exitCode,
         isolation: command.isolation,
+        outputTruncated: record.outputTruncated,
       },
       sources: [],
       artifacts: [],
@@ -456,7 +487,8 @@ export class ShellToolAdapter implements ToolAdapter {
         processId: record.id,
         state: record.state,
         exitCode: record.exitCode,
-        outputTruncated: record.output.length >= OUTPUT_LIMIT,
+        outputTruncated: record.outputTruncated,
+        isolation: record.isolation,
       },
       sources: [],
       artifacts: [],

@@ -77,6 +77,16 @@ function browserSearchUrl(query: string, domains: readonly string[] | undefined)
   return url;
 }
 
+export function shellCommandDescription(platform: NodeJS.Platform = process.platform): string {
+  const contract =
+    "Run one executable with literal argv inside an explicitly authorized read-write workspace. Paths are relative to the grant root. Shell syntax, built-ins, pipes, redirects and environment expansion require an explicit shell executable.";
+  if (platform === "win32")
+    return `${contract} Host OS: Windows. Use powershell.exe with -NoLogo -NoProfile -NonInteractive -Command for PowerShell, or cmd.exe /d /c for cmd built-ins and .cmd/.bat programs such as npm. Do not use /bin/sh or bash unless separately installed. Programs must be installed in the app PATH. Output and stdin use UTF-8; legacy cmd codepage output is not decoded automatically. Prefer PowerShell for Unicode output. For Unicode output in Windows PowerShell 5, set [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false) inside the command. Use background=true for commands that need subsequent stdin input.`;
+  if (platform === "darwin")
+    return `${contract} Host OS: macOS. Use /bin/sh -c or an explicitly installed shell when shell syntax is needed. Use background=true for commands that need subsequent stdin input.`;
+  return `${contract} Host OS: ${platform}. This tool is unavailable without a supported OS sandbox; never substitute an unsandboxed command.`;
+}
+
 export function createProductCapabilityTools(input: {
   generationId: string;
   conversationId: string;
@@ -522,8 +532,7 @@ export function createProductCapabilityTools(input: {
     defineTool({
       name: "openerx_shell",
       label: "Run code or command",
-      description:
-        "Run one argv-based command inside an explicitly authorized read-write workspace. Paths are relative to the grant root.",
+      description: shellCommandDescription(),
       parameters: Type.Object(
         {
           workspaceGrantId: Type.String({ format: "uuid" }),
@@ -551,7 +560,8 @@ export function createProductCapabilityTools(input: {
     defineTool({
       name: "openerx_shell_process",
       label: "Control long process",
-      description: "Read, send input to, or stop a process created by openerx_shell.",
+      description:
+        "Read streamed output, send UTF-8 stdin, or stop one process created by openerx_shell. Commands use pipes, not a full interactive terminal; use non-interactive programs or background=true before sending input.",
       parameters: Type.Object(
         {
           action: Type.Union([Type.Literal("status"), Type.Literal("input"), Type.Literal("stop")]),

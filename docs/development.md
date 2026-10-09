@@ -46,9 +46,15 @@ npm run dev:desktop
 
 Skill 描述任务方法，工具提供执行能力。内置 Skill 位于 `packages/skills/src/builtins.ts`；修改资源后需要递增对应版本，再运行 `npm run update:builtin-skills:v2` 更新快照。
 
-Windows Shell 默认自动选择外部 Codex 的可用沙箱，无需设置环境变量。工具就绪状态只做初步安装检查；执行用户命令前异步检查 MXC 兼容性，成功结果缓存 60 秒，兼容时选择 MXC，否则检查已配置的 `elevated` 沙箱；两者均不可用时拒绝执行。选定后，初始化或命令失败均不会切换后端重试。MXC 使用 Windows 原生进程隔离、当前账户和每次命令独立的私有临时目录，已在 Codex CLI 0.162 上验证；`elevated` 使用独立的离线/在线账户，临时目录位于工作区，并保留旧 CLI 兼容性。需要固定后端时可设置 `OPENERX_WINDOWS_SANDBOX_BACKEND=mxc` 或 `elevated`；显式选择不可用时直接拒绝执行。`auto`、空值和未设置均使用自动选择，其他值无效。应用不修改 Codex 全局配置。两种后端均按授权限制工作区写入和网络，当前 `workspaceWrite` 策略不承诺工作区外的读取隔离。外部程序路径可用 `OPENERX_CODEX_EXECUTABLE` 指定。
+Windows Shell 默认自动选择外部 Codex 的可用沙箱，无需设置环境变量。工具就绪状态只做初步安装检查；执行用户命令前异步检查 MXC 兼容性，成功结果缓存 60 秒，兼容时选择 MXC，否则检查已配置的 `elevated` 沙箱；两者均不可用时拒绝执行。选定后，初始化或命令失败均不会切换后端重试。MXC 使用 Windows 原生进程隔离、当前账户和每次命令独立的私有临时目录，已在 Codex CLI 0.162 上验证；`elevated` 使用独立的离线/在线账户，临时目录位于工作区，仍需满足当前命令协议要求。需要固定后端时可设置 `OPENERX_WINDOWS_SANDBOX_BACKEND=mxc` 或 `elevated`；显式选择不可用时直接拒绝执行。`auto`、空值和未设置均使用自动选择，其他值无效。应用不修改 Codex 全局配置。两种后端均按授权限制工作区写入和网络，当前 `workspaceWrite` 策略不承诺工作区外的读取隔离。外部程序路径可用 `OPENERX_CODEX_EXECUTABLE` 指定。
 
 Chrome 扩展位于 `apps/desktop/browser-extension/`。已有标签页需显式配对授权；独立浏览器和系统辅助功能后端有不同的能力与平台权限要求。
+
+终端的 `command` 是可执行程序，`args` 按原始参数传递。Windows 内建命令、重定向和 npm 等批处理入口需显式使用 `cmd.exe /d /c`；PowerShell 使用 `powershell.exe -NoLogo -NoProfile -NonInteractive -Command`。Windows PowerShell 5 的默认代码页可能丢失 emoji 等字符，输出 Unicode 时在命令中设置 `[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)`。macOS 的 shell 语法需显式使用 `/bin/sh -c` 等解释器；Linux 的普通终端工具当前因缺少支持的 OS 沙箱而不可用。Node、npm、Git、Bash 等程序需安装并出现在应用启动时的 PATH 中；开发服务器附加的工具路径不会自动成为桌面应用的系统依赖。Skill 的 JavaScript 脚本依赖可用的 Node，Windows Store 的 Python 别名也不代表安装了 Python。
+
+进程输出与输入采用 UTF-8；原生流协议返回程序的原始字节，`cmd` 等程序的旧代码页输出不会自动转码，即使 `chcp 65001` 成功也不保证重定向输出为 UTF-8。需要中文等非 ASCII 输出时优先使用显式设置 UTF-8 的 PowerShell，旧编码输出当前属于已知限制。
+
+Windows 进程控制依赖外部 Codex 的沙箱命令流协议，执行前会核验协议字段，不支持时返回明确错误并要求更新外部程序。进程使用管道，可读取实时输出、发送 UTF-8 标准输入及停止单个后台命令；需要后续输入的程序应使用 `background=true`，完整交互式 TTY 程序另需终端能力。超时和取消结束对应命令，后台完成后自动收录工作区产物；输出截断会保留明确标志。
 
 ## 提交代码
 
