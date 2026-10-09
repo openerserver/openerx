@@ -291,7 +291,7 @@ try {
     mobile.accessToken,
   );
   assert.equal(beforeApproval.value.filter(({ status }) => status === "active").length, 0);
-  const inbox = page.getByRole("region", { name: "手机连接申请", exact: true });
+  const inbox = remotePanel.getByRole("region", { name: "手机连接申请", exact: true });
   await inbox.getByText("Remote E2E iPhone", { exact: true }).waitFor();
   await inbox.getByRole("button", { name: "允许此手机", exact: true }).click();
   await inbox.getByText("Remote E2E iPhone", { exact: true }).waitFor({ state: "hidden" });

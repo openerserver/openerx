@@ -131,7 +131,7 @@ try {
   const addAttachment = page.getByRole("button", { name: "添加附件", exact: true });
   assert.match(await addAttachment.getAttribute("title"), /XLS/);
   await addAttachment.click();
-  await page.getByText("未新增附件。", { exact: true }).waitFor();
+  await page.getByText("已取消文件选择。", { exact: true }).waitFor();
   assert.equal(await page.locator(".attachment-card-composer").count(), 0);
   await addAttachment.click();
   await page.getByText("已选择 3 个附件，将随本条消息发送。", { exact: true }).waitFor();

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { builtinModules, createRequire } from "node:module";
 import os from "node:os";
@@ -60,18 +61,33 @@ test.each(["vite.main.config.mts", "vite.app-service.config.mts"])(
       }
       expect(copiedNative).toBe(true);
       const bundle = path.join(root, "bundle/office-runtime.cjs");
-      const compiled = createRequire(bundle)(bundle).compileOfficeArtifact({
-        format: "docx",
-        title: "Native preview",
-        pages: [{ paragraphs: ["Amount 60"] }],
-      });
-      expect(compiled.bytes.subarray(0, 2).toString()).toBe("PK");
+      // Load the copied native renderer in a process that exits before cleanup;
+      // Windows keeps its .node binary locked for the importing process lifetime.
+      const compiled = JSON.parse(
+        execFileSync(
+          process.execPath,
+          [
+            "-e",
+            `const { compileOfficeArtifact } = require(process.argv[1]);
+const compiled = compileOfficeArtifact({
+  format: "docx",
+  title: "Native preview",
+  pages: [{ paragraphs: ["Amount 60"] }],
+});
+const png = Buffer.from(compiled.renderedSurfaces[0].modelImageDataUrl.split(",")[1], "base64");
+process.stdout.write(JSON.stringify({
+  officeSignature: compiled.bytes.subarray(0, 2).toString(),
+  parsedText: compiled.parsedText,
+  pngSignature: [...png.subarray(0, 8)],
+}));`,
+            bundle,
+          ],
+          { encoding: "utf8", timeout: 15_000 },
+        ),
+      ) as { officeSignature: string; parsedText: string; pngSignature: number[] };
+      expect(compiled.officeSignature).toBe("PK");
       expect(compiled.parsedText).toContain("Amount 60");
-      const png = Buffer.from(
-        compiled.renderedSurfaces[0].modelImageDataUrl.split(",")[1],
-        "base64",
-      );
-      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      expect(compiled.pngSignature).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
