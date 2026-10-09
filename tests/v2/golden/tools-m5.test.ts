@@ -10,6 +10,9 @@ interface GoldenTask {
 }
 
 const root = path.resolve(import.meta.dirname, "../../..");
+const regressions = JSON.parse(
+  readFileSync(path.join(import.meta.dirname, "regression-map.json"), "utf8"),
+) as Record<string, string[]>;
 const catalog = JSON.parse(
   readFileSync(path.join(import.meta.dirname, "catalog.json"), "utf8"),
 ) as { tasks: GoldenTask[] };
@@ -107,18 +110,11 @@ describe("M5 Tool Golden Tasks", () => {
     ).toMatchObject({ capability: "image.generate", risk: "L2", approval: "automatic" });
   });
 
-  it("keeps M5 evidence and recognizes the later M7 Skill evidence", () => {
-    for (const number of [1, 2, 3, 4, 5, 6, 10]) {
-      const id = `GT-TOOL-${String(number).padStart(2, "0")}`;
-      const evidence = path.join(root, "docs/v2/evidence/golden/local-implementation", `${id}.md`);
-      expect(existsSync(evidence), id).toBe(true);
-      expect(readFileSync(evidence, "utf8")).toContain("M5 local checkpoint");
-    }
-    for (const number of [7, 8, 9]) {
-      const id = `GT-TOOL-${String(number).padStart(2, "0")}`;
-      const evidence = path.join(root, "docs/v2/evidence/golden/local-implementation", `${id}.md`);
-      expect(existsSync(evidence), `${id} M7 evidence`).toBe(true);
-      expect(readFileSync(evidence, "utf8")).toContain("M7 local checkpoint");
+  it("keeps executable regression entries for every tool task", () => {
+    for (const { id } of toolTasks) {
+      expect(regressions[id]?.length, id).toBeGreaterThan(0);
+      for (const test of regressions[id] ?? [])
+        expect(existsSync(path.join(root, test)), test).toBe(true);
     }
   });
 });
