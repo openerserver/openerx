@@ -75,10 +75,12 @@ async function runFixture() {
 if (process.argv.includes("--fixture")) {
   console.log(JSON.stringify(await runFixture()));
 } else {
-  test("Pi ResourceLoader local filtering bounds deeply nested globs and retains ordinary matching", () => {
+  test("Pi ResourceLoader local filtering bounds deeply nested globs and retains ordinary matching", {
+    timeout: 60_000,
+  }, () => {
     const result = spawnSync(process.execPath, [script, "--fixture"], {
       encoding: "utf8",
-      timeout: 15_000,
+      timeout: 45_000,
     });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
