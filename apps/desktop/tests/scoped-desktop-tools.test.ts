@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ToolExecutionContext } from "@openerx/tool-sdk";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
@@ -99,7 +100,7 @@ test("reuses native screenshot/control with task-owned captures, owner and isola
   expect(await adapter.execute(capture, context(runId))).toEqual(output);
   expect(state.execute.mock.calls[0]?.[2]).toEqual({ conversationId: runId, generationId: runId });
   expect(state.paths[0]).toContain("openerx-desktop-task-");
-  expect(state.credentials[0]).toBe(`${state.paths[0]}/credentials.bin`);
+  expect(state.credentials[0]).toBe(join(hostDirectory(), "credentials.bin"));
   expect(existsSync(hostDirectory())).toBe(true);
   await adapter.execute(
     {
