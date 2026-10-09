@@ -1,4 +1,5 @@
 import type { ProjectDetail, ProjectSummary } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 
 export const projectKeys = {
@@ -10,14 +11,14 @@ export const projectKeys = {
 export function useProjectList(includeArchived = false): UseQueryResult<ProjectSummary[]> {
   return useQuery({
     queryKey: projectKeys.list(includeArchived),
-    queryFn: () => window.openerx.listProjects({ includeArchived }),
+    queryFn: () => desktopWorkspaceBridge().listProjects({ includeArchived }),
   });
 }
 
 export function useProject(projectId: string): UseQueryResult<ProjectDetail> {
   return useQuery({
     queryKey: projectKeys.detail(projectId),
-    queryFn: () => window.openerx.getProject({ projectId }),
+    queryFn: () => desktopWorkspaceBridge().getProject({ projectId }),
     enabled: projectId.length > 0,
   });
 }

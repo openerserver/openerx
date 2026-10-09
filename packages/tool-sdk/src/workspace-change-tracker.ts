@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import path from "node:path";
 import type {
   PlatformSandboxRoot,
@@ -15,6 +15,13 @@ const MAX_TEXT_FILE_BYTES = 1_000_000;
 const MAX_SNAPSHOT_TEXT_BYTES = 20_000_000;
 const MAX_TOTAL_DIFF_BYTES = 5_000_000;
 const MAX_MANIFEST_ENTRIES = 10_000;
+const APPLE_COMMAND_LINE_TOOLS_GIT = "/Library/Developer/CommandLineTools/usr/bin/git";
+const gitExecutable =
+  process.platform === "darwin" && existsSync(APPLE_COMMAND_LINE_TOOLS_GIT)
+    ? APPLE_COMMAND_LINE_TOOLS_GIT
+    : process.platform === "win32"
+      ? "git.exe"
+      : "/usr/bin/git";
 
 interface SnapshotEntry {
   relativePath: string;
@@ -126,7 +133,7 @@ function gitStatus(rootPath: string): {
   dirtyPaths: Set<string>;
 } {
   const result = spawnSync(
-    process.platform === "win32" ? "git.exe" : "/usr/bin/git",
+    gitExecutable,
     [
       "-c",
       "core.fsmonitor=false",

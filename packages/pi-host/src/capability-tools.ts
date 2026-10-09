@@ -14,7 +14,7 @@ import {
 import { Type } from "@sinclair/typebox";
 import { type BrokeredBashToolTransport, createProductBrokeredBashTool } from "./bash-tool";
 import { createWindowsDesktopTool } from "./desktop-tool";
-import { productToolResult } from "./tool-result";
+import { browserToolContent, productToolResult } from "./tool-result";
 
 export interface PiCapabilityToolTransport {
   request(
@@ -83,6 +83,7 @@ export function createProductCapabilityTools(input: {
   branchId: string;
   assistantMessageId: string;
   transport: PiCapabilityToolTransport;
+  imageInput?: boolean;
   browserComputerUseV2?: boolean;
   browserSearchFallback?: boolean;
   brokeredBashExecution?: BrokeredBashExecutionContext;
@@ -106,7 +107,13 @@ export function createProductCapabilityTools(input: {
         idempotencyKey: idempotencyKey(input.generationId, toolCallId, toolName),
       } as ToolOperation,
     });
-    return productToolResult(result);
+    const normalized = productToolResult(result);
+    return toolName === "openerx_browser"
+      ? {
+          ...normalized,
+          content: browserToolContent(normalized.content, input.imageInput !== false),
+        }
+      : normalized;
   };
 
   const semanticTarget = Type.Object(
@@ -376,21 +383,45 @@ export function createProductCapabilityTools(input: {
     defineTool({
       name: "openerx_calculate",
       label: "Calculate",
-      description: "Evaluate deterministic arithmetic without network access.",
+      description:
+        "Evaluate numeric arithmetic without network access. Supports finite numbers, prefix +/-, + - * /, % (remainder), ^ (power, right-associative), and parentheses. Exponentiation precedes a prefix sign: -2^2 = -4; 2^-3 = 0.125. Write multiplication explicitly, e.g. 2*(3+4). Does not execute JavaScript/Python, identifiers, functions, or date/time expressions. For today or the current weekday, use the runtime clock context in the system prompt.",
       parameters: Type.Object(
-        { expression: Type.String({ minLength: 1, maxLength: 2_000 }) },
+        {
+          expression: Type.String({
+            minLength: 1,
+            maxLength: 2_000,
+            description:
+              "Finite numeric arithmetic only, e.g. (12 + 3) * 4 or 2^-3; % is remainder and ^ is power. No implicit multiplication, code, or date functions.",
+          }),
+        },
         { additionalProperties: false },
       ),
-      execute: async (toolCallId, params) =>
-        await invoke(toolCallId, "openerx_calculate", {
-          operation: "compute",
-          expression: params.expression,
-        }),
+      execute: async (toolCallId, params) => {
+        try {
+          return await invoke(toolCallId, "openerx_calculate", {
+            operation: "compute",
+            expression: params.expression,
+          });
+        } catch (error) {
+          if (errorCode(error) === "COMPUTE_NON_FINITE_RESULT") {
+            throw new Error(
+              "COMPUTE_NON_FINITE_RESULT: The expression contains or produces a non-finite number. Check for division or remainder by zero, numeric overflow, or a power outside the real-number domain; correct the expression before retrying.",
+              { cause: error },
+            );
+          }
+          if (errorCode(error) !== "COMPUTE_INVALID_EXPRESSION") throw error;
+          throw new Error(
+            "COMPUTE_INVALID_EXPRESSION: Use numbers, + - * / % ^ and parentheses only, e.g. (12 + 3) * 4. Code and date/time functions are unsupported. For today or the current weekday, use the runtime clock context in the system prompt; do not retry date expressions.",
+            { cause: error },
+          );
+        }
+      },
     }),
     defineTool({
       name: "openerx_structured_data",
       label: "Transform structured data",
-      description: "Sort, select, or deduplicate JSON object rows deterministically.",
+      description:
+        "Sort, select, or deduplicate an array of at most 10,000 JSON object rows. sort is ascending by fields in order: missing/null values first, then numbers numerically, then other values as natural text. select keeps the named fields; unique keeps the first row for each combination of field values.",
       parameters: Type.Object(
         {
           action: Type.Union([
@@ -398,14 +429,33 @@ export function createProductCapabilityTools(input: {
             Type.Literal("select"),
             Type.Literal("unique"),
           ]),
-          rowsJson: Type.String({ maxLength: 5_000_000 }),
+          rowsJson: Type.String({
+            maxLength: 5_000_000,
+            description: 'JSON-encoded array of at most 10,000 objects, e.g. [{"value":1}].',
+          }),
           fields: Type.Array(Type.String({ minLength: 1 }), { maxItems: 100 }),
         },
         { additionalProperties: false },
       ),
       execute: async (toolCallId, params) => {
-        const rows = JSON.parse(params.rowsJson);
-        if (!Array.isArray(rows)) throw new Error("STRUCTURED_DATA_ROWS_REQUIRED");
+        let rows: unknown;
+        try {
+          rows = JSON.parse(params.rowsJson);
+        } catch (error) {
+          throw new Error(
+            'STRUCTURED_DATA_INVALID_JSON: rowsJson must contain a valid JSON array of objects, e.g. [{"value":1}]. Use double-quoted property names and no trailing commas.',
+            { cause: error },
+          );
+        }
+        if (
+          !Array.isArray(rows) ||
+          rows.length > 10_000 ||
+          rows.some((row) => row === null || typeof row !== "object" || Array.isArray(row))
+        ) {
+          throw new Error(
+            'STRUCTURED_DATA_ROWS_REQUIRED: rowsJson must be an array of JSON objects with at most 10,000 rows, e.g. [{"value":1}]; primitive values, null rows, and nested row arrays are unsupported.',
+          );
+        }
         return await invoke(toolCallId, "openerx_structured_data", {
           operation: "structured_data",
           action: params.action,

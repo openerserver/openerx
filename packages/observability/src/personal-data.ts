@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -63,10 +63,12 @@ function atomicJsonExport(
 export class PersonalDataExporter {
   readonly #databasePath: string;
   readonly #now: () => Date;
+  readonly #objectDirectory: string | undefined;
 
-  constructor(databasePath: string, now: () => Date = () => new Date()) {
+  constructor(databasePath: string, now: () => Date = () => new Date(), objectDirectory?: string) {
     this.#databasePath = databasePath;
     this.#now = now;
+    this.#objectDirectory = objectDirectory;
   }
 
   summary(): PersonalDataSummary {
@@ -114,6 +116,11 @@ export class PersonalDataExporter {
         !existsSync(objectPath)
       ) {
         continue;
+      }
+      if (this.#objectDirectory) {
+        if (!existsSync(this.#objectDirectory)) continue;
+        const allowedRoot = realpathSync(this.#objectDirectory);
+        if (!realpathSync(objectPath).startsWith(`${allowedRoot}${path.sep}`)) continue;
       }
       objectEntries[object.archivePath] = readFileSync(objectPath);
     }

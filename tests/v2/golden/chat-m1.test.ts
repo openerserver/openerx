@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AssistantMessage, TranscriptContext } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import type { PiHistoryMessage } from "@openerx/contracts";
 import { createProductPiSession, ModelRuntime } from "@openerx/pi-host";
@@ -111,7 +112,13 @@ async function runPrompt(
   const agentDir = path.join(root, "agent");
   mkdirSync(cwd, { recursive: true });
   mkdirSync(agentDir, { recursive: true });
-  const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+  const modelRuntime = await ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(),
+    modelsStore: new InMemoryModelsStore(),
+    modelsPath: null,
+    allowModelNetwork: false,
+    refreshOnCreate: false,
+  });
   const faux = fauxProvider({
     tokensPerSecond: options.tokensPerSecond ?? 10_000,
     tokenSize: { min: 1, max: 3 },

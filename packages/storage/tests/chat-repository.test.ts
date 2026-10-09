@@ -20,6 +20,31 @@ afterEach(() => {
 });
 
 describe("ChatRepository", () => {
+  it("defaults native tools off and persists each local profile independently", () => {
+    const file = databasePath();
+    let first = new ChatRepository(file, { ownerProfileId: "profile-one" });
+    const second = new ChatRepository(file, { ownerProfileId: "profile-two" });
+    try {
+      expect(first.piRuntimeSettings()).toEqual({
+        ownerProfileId: "profile-one",
+        nativeToolsEnabled: false,
+        updatedAt: null,
+      });
+      first.updatePiRuntimeSettings({ nativeToolsEnabled: true });
+      expect(second.piRuntimeSettings().nativeToolsEnabled).toBe(false);
+      first.close();
+      first = new ChatRepository(file, { ownerProfileId: "profile-one" });
+      expect(first.piRuntimeSettings().nativeToolsEnabled).toBe(true);
+      first.updatePiRuntimeSettings({ nativeToolsEnabled: false });
+      first.close();
+      first = new ChatRepository(file, { ownerProfileId: "profile-one" });
+      expect(first.piRuntimeSettings().nativeToolsEnabled).toBe(false);
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
   it("limits prompt history and attachment message IDs to the current queued request", () => {
     const repository = new ChatRepository(databasePath());
     try {

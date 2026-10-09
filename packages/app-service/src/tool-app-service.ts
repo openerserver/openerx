@@ -55,6 +55,7 @@ import {
   orderedLocalWebSearchProviders,
   piHostContractVersion,
 } from "@openerx/contracts";
+import { normalizeFileToolResult } from "@openerx/file-service";
 import type { ProjectWorkspaceBindingInput, ToolRepository } from "@openerx/storage";
 import {
   BaiduJsonSearchProvider,
@@ -209,56 +210,6 @@ function fileOperationSummary(frame: PiFileToolRequestFrame): {
   }
 }
 
-function withoutPreviewMedia(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutPreviewMedia);
-  if (!value || typeof value !== "object") return value;
-  const output: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (/^(bytesBase64|imageDataUrl|modelImageDataUrl)$/u.test(key)) continue;
-    output[key] = withoutPreviewMedia(entry);
-  }
-  return output;
-}
-
-function fileToolResult(
-  frame: PiFileToolRequestFrame,
-  result: unknown,
-  durationMs: number,
-): NormalizedToolResult {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : null;
-  const artifact =
-    record?.artifact && typeof record.artifact === "object"
-      ? (record.artifact as Record<string, unknown>)
-      : record;
-  const artifactId = typeof artifact?.id === "string" ? artifact.id : null;
-  const count = Array.isArray(result) ? result.length : null;
-  const summary =
-    frame.request.operation === "list"
-      ? `已列出 ${count ?? 0} 个附件`
-      : frame.request.operation === "search"
-        ? `已找到 ${count ?? 0} 条文件结果`
-        : frame.request.operation === "read"
-          ? "已读取附件内容"
-          : artifactId
-            ? `已写入成果 ${artifactId}`
-            : "文件工具已完成";
-  const serialized = JSON.stringify(withoutPreviewMedia(result));
-  return {
-    summary,
-    content: [
-      { type: "text", text: (serialized ?? summary).slice(0, 1_000_000) },
-      ...(artifactId ? [{ type: "artifact" as const, artifactId }] : []),
-    ],
-    data: withoutPreviewMedia(result),
-    sources: [],
-    artifacts: artifactId ? [artifactId] : [],
-    sideEffectCommitted:
-      frame.request.operation === "artifact.write" ||
-      frame.request.operation === "artifact.office.write",
-    durationMs,
-  };
-}
-
 export interface ToolAppServiceOptions {
   repository: ToolRepository;
   workspaceDirectory: string;
@@ -379,7 +330,10 @@ export class ToolAppService {
   >();
   readonly #brokeredBashNetworkPolicyByDigest = new Map<string, BrokeredBashNetworkPolicy>();
   readonly #abortByGeneration = new Map<string, AbortController>();
+  readonly #abortByRequest = new Map<string, AbortController>();
+  readonly #inactiveGenerations = new Set<string>();
   readonly #generationByRequest = new Map<string, string>();
+  #closed = false;
   readonly #mcp: McpToolAdapter;
   readonly #workspace: WorkspaceToolAdapter;
   readonly #host: CapabilityAvailabilityHost;
@@ -574,6 +528,8 @@ export class ToolAppService {
     skillInstallationIds?: string[];
     instructionSources?: WorkspaceInstructionSource[];
   }): ActiveProjection {
+    if (this.#closed || this.#inactiveGenerations.has(input.generationId))
+      throw new Error("GENERATION_NOT_ACTIVE");
     const active = this.#projectionByGeneration.get(input.generationId);
     if (active) return active;
     const projection = this.#repository.createProjection({
@@ -583,7 +539,7 @@ export class ToolAppService {
       title: "对话轮次",
       selectedModelRef: input.selectedModelRef,
       thinkingLevel: input.thinkingLevel,
-      piPackageVersion: "0.86.0",
+      piPackageVersion: "1.0.0",
       piHostContractVersion,
       piSessionRef: `branch:${input.branchId}`,
       initialToolNames: input.initialToolNames,
@@ -592,6 +548,7 @@ export class ToolAppService {
       instructionSources: input.instructionSources,
     });
     this.#projectionByGeneration.set(input.generationId, projection);
+    this.#abortByGeneration.set(input.generationId, new AbortController());
     this.#emit(
       "run.started",
       {
@@ -1388,6 +1345,8 @@ export class ToolAppService {
     authorization?: AppServiceAuthorization,
     onProgress: (delta: string, truncated: boolean) => void = () => undefined,
   ): Promise<NormalizedToolResult> {
+    if (this.#closed || this.#inactiveGenerations.has(frame.generationId))
+      throw new Error("GENERATION_NOT_ACTIVE");
     if (authorization) this.#authorizationByGeneration.set(frame.generationId, authorization);
     const projection = this.#ensureProjection(frame);
     const requirement = {
@@ -1397,6 +1356,7 @@ export class ToolAppService {
     const projected = this.#repository.createToolCall({
       runId: projection.run.id,
       piCallRef: frame.piToolCallId,
+      ...(frame.parentToolCallId ? { parentPiToolCallId: frame.parentToolCallId } : {}),
       toolName: frame.toolName,
       source: frame.operation.operation.startsWith("mcp_")
         ? "mcp"
@@ -1415,6 +1375,9 @@ export class ToolAppService {
     });
     const controller = this.#abortByGeneration.get(frame.generationId) ?? new AbortController();
     this.#abortByGeneration.set(frame.generationId, controller);
+    const requestController = new AbortController();
+    this.#abortByRequest.set(frame.requestId, requestController);
+    const signal = AbortSignal.any([controller.signal, requestController.signal]);
     this.#generationByRequest.set(frame.requestId, frame.generationId);
     try {
       const result = await this.#broker.executeAwaitingPermission(
@@ -1428,7 +1391,7 @@ export class ToolAppService {
           toolName: frame.toolName,
         },
         frame.operation,
-        controller.signal,
+        signal,
         (summary, truncated = false) => {
           const call = this.#repository.toolCallByPiRef(projection.run.id, frame.piToolCallId);
           if (call)
@@ -1479,24 +1442,28 @@ export class ToolAppService {
       throw error;
     } finally {
       this.#generationByRequest.delete(frame.requestId);
+      this.#abortByRequest.delete(frame.requestId);
     }
   }
 
   cancelToolRequest(requestId: string, generationId: string): void {
     if (this.#generationByRequest.get(requestId) !== generationId) return;
-    this.requestCancellation(generationId);
+    this.#abortByRequest.get(requestId)?.abort();
   }
 
   async handleFileRequest(
     frame: PiFileToolRequestFrame,
-    execute: () => Promise<unknown> | unknown,
+    execute: (signal: AbortSignal) => Promise<unknown> | unknown,
   ): Promise<unknown> {
+    if (this.#closed || this.#inactiveGenerations.has(frame.generationId))
+      throw new Error("GENERATION_NOT_ACTIVE");
     const projection = this.#projectionByGeneration.get(frame.generationId);
     if (!projection) throw new Error("GENERATION_RUN_NOT_FOUND");
     const summary = fileOperationSummary(frame);
     const projected = this.#repository.createToolCall({
       runId: projection.run.id,
       piCallRef: frame.piToolCallId,
+      ...(frame.parentToolCallId ? { parentPiToolCallId: frame.parentToolCallId } : {}),
       toolName: frame.toolName,
       source: "openerx",
       risk: summary.risk,
@@ -1510,10 +1477,17 @@ export class ToolAppService {
       step: projected.step,
     });
     this.#repository.markToolCall(projected.toolCall.id, "running");
+    const controller = this.#abortByGeneration.get(frame.generationId) ?? new AbortController();
+    this.#abortByGeneration.set(frame.generationId, controller);
+    const requestController = new AbortController();
+    this.#abortByRequest.set(frame.requestId, requestController);
+    this.#generationByRequest.set(frame.requestId, frame.generationId);
+    const signal = AbortSignal.any([controller.signal, requestController.signal]);
     const startedAt = Date.now();
     try {
-      const result = await execute();
-      const normalized = fileToolResult(frame, result, Date.now() - startedAt);
+      if (signal.aborted) throw new Error("TOOL_CANCELLED");
+      const result = await execute(signal);
+      const normalized = normalizeFileToolResult(frame.request, result, Date.now() - startedAt);
       const call = this.#repository.markToolCall(projected.toolCall.id, "completed", {
         resultSummary: normalized.summary,
         resultContent: normalized.content,
@@ -1526,14 +1500,21 @@ export class ToolAppService {
         error instanceof Error && /^[A-Z][A-Z0-9_]*$/u.test(error.message.split(":", 1)[0] ?? "")
           ? (error.message.split(":", 1)[0] ?? "FILE_TOOL_FAILED")
           : "FILE_TOOL_FAILED";
-      const call = this.#repository.markToolCall(projected.toolCall.id, "failed", {
-        errorCode: code,
-      });
+      const call = this.#repository.markToolCall(
+        projected.toolCall.id,
+        signal.aborted ? "cancelled" : "failed",
+        {
+          errorCode: code,
+        },
+      );
       this.#emit("tool.failed", frame, projection, {
         toolCall: call,
         reason: code,
       });
       throw error;
+    } finally {
+      this.#generationByRequest.delete(frame.requestId);
+      this.#abortByRequest.delete(frame.requestId);
     }
   }
 
@@ -1732,6 +1713,7 @@ export class ToolAppService {
     errorCode?: string,
     usageRecords: UsageRecord[] = [],
   ): void {
+    this.#inactiveGenerations.add(generationId);
     const projection = this.#projectionByGeneration.get(generationId);
     if (projection) {
       this.#workspace.releaseRun(projection.run.id);
@@ -1772,6 +1754,7 @@ export class ToolAppService {
   }
 
   requestCancellation(generationId: string): void {
+    this.#inactiveGenerations.add(generationId);
     const projection = this.#projectionByGeneration.get(generationId);
     if (projection) {
       const run = this.#repository.requestRunCancellation(projection.run.id);
@@ -1791,6 +1774,7 @@ export class ToolAppService {
   }
 
   async close(): Promise<void> {
+    this.#closed = true;
     for (const controller of this.#abortByGeneration.values()) controller.abort();
     await this.#broker.stopAll();
     this.#brokeredBashExecutionByGeneration.clear();
@@ -1967,6 +1951,8 @@ export class ToolAppService {
   }
 
   #ensureProjection(frame: PiToolRequestFrame): ActiveProjection {
+    if (this.#closed || this.#inactiveGenerations.has(frame.generationId))
+      throw new Error("GENERATION_NOT_ACTIVE");
     const active = this.#projectionByGeneration.get(frame.generationId);
     if (active) return active;
     const projection = this.#repository.createProjection({
@@ -1976,7 +1962,7 @@ export class ToolAppService {
       title: "对话轮次",
       selectedModelRef: this.#selectedModelRef(frame.assistantMessageId),
       thinkingLevel: "medium",
-      piPackageVersion: "0.86.0",
+      piPackageVersion: "1.0.0",
       piHostContractVersion,
       piSessionRef: `branch:${frame.branchId}`,
     });

@@ -11,8 +11,10 @@ export interface ConnectionRequestView {
 function Request({
   request,
   decide,
+  approvalDescription,
 }: {
   request: ConnectionRequestView;
+  approvalDescription: string;
   decide: (requestId: string, decision: "approve" | "reject") => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -43,7 +45,7 @@ function Request({
           </span>
         </div>
       </div>
-      <p>允许后，这台手机可远程发起和管理本机任务，具体操作仍按本机权限执行。</p>
+      <p>{approvalDescription}</p>
       <div className="settings-actions">
         <button type="button" disabled={busy} onClick={() => void submit("reject")}>
           拒绝
@@ -72,8 +74,10 @@ export function ConnectionRequestsPanel({
   decide,
   error,
   refresh,
+  approvalDescription = "允许后，这台手机可远程发起和管理本机任务，具体操作仍按本机权限执行。",
 }: {
   requests: readonly ConnectionRequestView[];
+  approvalDescription?: string;
   decide: (requestId: string, decision: "approve" | "reject") => Promise<void>;
   error?: string;
   refresh?: () => void;
@@ -91,7 +95,12 @@ export function ConnectionRequestsPanel({
       <strong>手机连接申请</strong>
       {pending.length ? (
         pending.map((request) => (
-          <Request key={request.requestId} request={request} decide={decide} />
+          <Request
+            key={request.requestId}
+            request={request}
+            decide={decide}
+            approvalDescription={approvalDescription}
+          />
         ))
       ) : (
         <p>在手机上登录同一账号，选择这台电脑并申请连接。允许后可在授权有效期内自动重连。</p>

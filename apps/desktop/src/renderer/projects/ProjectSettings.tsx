@@ -1,4 +1,8 @@
 import type { ProjectDetail, ProjectDirectoryState } from "@openerx/contracts";
+import {
+  desktopWorkspaceBridge,
+  desktopWorkspaceCapabilities,
+} from "@openerx/desktop-ui/workspace-bridge";
 import { FolderOpen, Plug, Trash, X } from "@phosphor-icons/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -21,6 +25,7 @@ export function ProjectSettings({
   detail: ProjectDetail;
   onClose: () => void;
 }): React.JSX.Element {
+  const capabilities = desktopWorkspaceCapabilities();
   const queryClient = useQueryClient();
   const [name, setName] = useState(detail.project.name);
   const [instructions, setInstructions] = useState(detail.project.instructions);
@@ -39,7 +44,7 @@ export function ProjectSettings({
   };
   const update = useMutation({
     mutationFn: () =>
-      window.openerx.updateProject({
+      desktopWorkspaceBridge().updateProject({
         operationId: operationId(),
         projectId: detail.project.id,
         expectedRevision: detail.project.revision,
@@ -55,12 +60,12 @@ export function ProjectSettings({
   const archive = useMutation({
     mutationFn: () =>
       detail.project.archivedAt
-        ? window.openerx.restoreProject({
+        ? desktopWorkspaceBridge().restoreProject({
             operationId: operationId(),
             projectId: detail.project.id,
             expectedRevision: detail.project.revision,
           })
-        : window.openerx.archiveProject({
+        : desktopWorkspaceBridge().archiveProject({
             operationId: operationId(),
             projectId: detail.project.id,
             expectedRevision: detail.project.revision,
@@ -75,7 +80,7 @@ export function ProjectSettings({
       projectDirectoryId: string | null;
       desiredAccess: "read_only" | "read_write";
     }) =>
-      window.openerx.chooseProjectDirectory({
+      desktopWorkspaceBridge().chooseProjectDirectory({
         operationId: operationId(),
         projectId: detail.project.id,
         projectDirectoryId: input.projectDirectoryId,
@@ -91,7 +96,7 @@ export function ProjectSettings({
   });
   const setPrimary = useMutation({
     mutationFn: (projectDirectoryId: string) =>
-      window.openerx.setPrimaryProjectDirectory({
+      desktopWorkspaceBridge().setPrimaryProjectDirectory({
         operationId: operationId(),
         projectId: detail.project.id,
         projectDirectoryId,
@@ -101,7 +106,7 @@ export function ProjectSettings({
   });
   const disconnect = useMutation({
     mutationFn: (projectDirectoryId: string) =>
-      window.openerx.disconnectProjectDirectory({
+      desktopWorkspaceBridge().disconnectProjectDirectory({
         operationId: operationId(),
         projectDirectoryId,
         expectedProjectRevision: detail.project.revision,
@@ -118,7 +123,7 @@ export function ProjectSettings({
           ? (detail.directories.find(({ directory }) => directory.id !== state.directory.id)
               ?.directory.id ?? null)
           : null;
-      return window.openerx.removeProjectDirectory({
+      return desktopWorkspaceBridge().removeProjectDirectory({
         operationId: operationId(),
         projectId: detail.project.id,
         projectDirectoryId: state.directory.id,
@@ -202,12 +207,15 @@ export function ProjectSettings({
           <div>
             <h3 id="project-directories-title">本机目录</h3>
             <p className="project-section-description">
-              第一个目录自动成为主目录。路径只保存在当前设备。
+              {capabilities.projectDirectories
+                ? "第一个目录自动成为主目录。路径只保存在当前设备。"
+                : "企业项目暂不支持绑定或继承目录。请在对话中单独授权主目录；文件读写授权不包含命令执行权限。"}
             </p>
           </div>
           <div className="project-add-directory-controls">
             <select
               aria-label="新目录访问权限"
+              disabled={!capabilities.projectDirectories}
               value={directoryAccess}
               onChange={(event) =>
                 setDirectoryAccess(event.target.value as "read_only" | "read_write")
@@ -219,7 +227,9 @@ export function ProjectSettings({
             <button
               type="button"
               className="project-secondary-button"
-              disabled={busy || Boolean(detail.project.archivedAt)}
+              disabled={
+                !capabilities.projectDirectories || busy || Boolean(detail.project.archivedAt)
+              }
               onClick={() =>
                 chooseDirectory.mutate({ projectDirectoryId: null, desiredAccess: directoryAccess })
               }
@@ -243,7 +253,9 @@ export function ProjectSettings({
                 {state.connectionState === "reconnect_required" ? (
                   <button
                     type="button"
-                    disabled={busy || Boolean(detail.project.archivedAt)}
+                    disabled={
+                      !capabilities.projectDirectories || busy || Boolean(detail.project.archivedAt)
+                    }
                     onClick={() =>
                       chooseDirectory.mutate({
                         projectDirectoryId: state.directory.id,
@@ -256,7 +268,7 @@ export function ProjectSettings({
                 ) : (
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={!capabilities.projectDirectories || busy}
                     onClick={() => disconnect.mutate(state.directory.id)}
                   >
                     断开
@@ -265,7 +277,9 @@ export function ProjectSettings({
                 {state.directory.role !== "primary" ? (
                   <button
                     type="button"
-                    disabled={busy || Boolean(detail.project.archivedAt)}
+                    disabled={
+                      !capabilities.projectDirectories || busy || Boolean(detail.project.archivedAt)
+                    }
                     onClick={() => setPrimary.mutate(state.directory.id)}
                   >
                     设为主目录
@@ -274,7 +288,9 @@ export function ProjectSettings({
                 <button
                   type="button"
                   className="project-danger-quiet"
-                  disabled={busy || Boolean(detail.project.archivedAt)}
+                  disabled={
+                    !capabilities.projectDirectories || busy || Boolean(detail.project.archivedAt)
+                  }
                   onClick={() => remove.mutate(state)}
                 >
                   <Trash size={15} /> 移出
@@ -301,7 +317,9 @@ export function ProjectSettings({
         </h3>
         <p className="project-archive-description">
           {detail.project.archivedAt
-            ? "恢复后可以继续创建项目对话和管理目录。"
+            ? capabilities.projectDirectories
+              ? "恢复后可以继续创建项目对话和管理目录。"
+              : "恢复后可以继续创建项目对话。"
             : "归档不会删除对话或磁盘中的文件。"}
         </p>
         <button type="button" disabled={busy} onClick={() => archive.mutate()}>

@@ -1,3 +1,9 @@
+import { isByokModelRef } from "@openerx/contracts";
+import { HttpPlatformModelTransport } from "@openerx/pi-host/platform-provider";
+import { HostedModelAccess } from "./hosted-model-access";
+import { LegacyPersonalDataReader } from "./legacy-personal-data";
+import { assertWorkspaceExecutionAllowed } from "./workspace-execution-policy";
+
 declare const __OPENERX_BUILD_INFO__: { version: string; buildId: string };
 
 import { existsSync, mkdirSync } from "node:fs";
@@ -94,6 +100,7 @@ import {
   permissionListInputSchema,
   permissionResolveInputSchema,
   personalDataSummarySchema,
+  piRuntimeSettingsUpdateInputSchema,
   projectArchiveCommandInputSchema,
   projectCommandEnvelopeSchema,
   projectCreateInputSchema,
@@ -268,6 +275,19 @@ configureDesktopProfile(app);
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
 
+const hostedModelAccess = new HostedModelAccess();
+async function hostedTransport() {
+  const auth = await hostedModelAccess.authorization();
+  return new HttpPlatformModelTransport(auth.platformBaseUrl, auth.accessToken, {
+    apiVersion: "v3",
+    authorize: async (rejected) =>
+      (await hostedModelAccess.authorization(auth.accountId, rejected)).accessToken,
+  });
+}
+async function effectiveModelSettings(store: ModelServiceSettingsStore) {
+  return hostedModelAccess.settings(await store.state());
+}
+
 function registerIpcHandlers(
   supervisor: AppServiceSupervisor,
   accounts: AccountSessionManager,
@@ -410,6 +430,37 @@ function registerIpcHandlers(
       }),
     );
   });
+  const legacyPersonalData = new LegacyPersonalDataReader(baseProfileDirectory);
+  ipcMain.handle(ipcChannels.legacyPersonalDataSummary, (event) => {
+    assertTrustedIpcSender(event);
+    return legacyPersonalData.summary();
+  });
+  ipcMain.handle(ipcChannels.legacyChatList, (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    return legacyPersonalData.list(chatListInputSchema.parse(input ?? {}).includeArchived);
+  });
+  ipcMain.handle(ipcChannels.legacyChatGet, (event, input: unknown) => {
+    assertTrustedIpcSender(event);
+    return legacyPersonalData.get(chatGetInputSchema.parse(input).conversationId);
+  });
+  ipcMain.handle(ipcChannels.legacyPersonalDataExport, async (event) => {
+    assertTrustedIpcSender(event);
+    const e2eDirectory = process.env.OPENERX_E2E_EXPORT_DIR;
+    const e2ePath =
+      process.env.OPENERX_E2E === "1" && e2eDirectory
+        ? path.join(e2eDirectory, "openerx-legacy-personal-data.zip")
+        : null;
+    const selection = e2ePath
+      ? { canceled: false, filePath: e2ePath }
+      : await dialog.showSaveDialog({
+          title: "导出旧版数据",
+          defaultPath: path.join(app.getPath("documents"), "openerx-legacy-personal-data.zip"),
+          filters: [{ name: "旧版数据", extensions: ["zip"] }],
+        });
+    if (selection.canceled || !selection.filePath) return null;
+    return legacyPersonalData.export(selection.filePath);
+  });
+
   ipcMain.handle(ipcChannels.personalDataSummary, (event) => {
     assertTrustedIpcSender(event);
     return personalDataSummarySchema.parse(
@@ -520,7 +571,7 @@ function registerIpcHandlers(
 
   ipcMain.handle(ipcChannels.modelList, async (event) => {
     assertTrustedIpcSender(event);
-    const settings = await modelSettings.state();
+    const settings = await effectiveModelSettings(modelSettings);
     const presetModels = configuredByokProviders(settings.providerModels).flatMap((provider) =>
       provider.models.map((model) => ({
         modelRef: byokModelRef(provider.id, model.id),
@@ -571,20 +622,24 @@ function registerIpcHandlers(
     if (settings.mode === "byok") {
       return customByokModel ? [...presetModels, customByokModel] : presetModels;
     }
+    if (hostedModelAccess.configured()) return (await hostedTransport()).catalog();
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     const hostedModels = await platformClient.listModels(await accounts.accessToken());
     return customByokModel ? [...hostedModels, customByokModel] : hostedModels;
   });
   ipcMain.handle(ipcChannels.modelServiceSettingsGet, async (event) => {
     assertTrustedIpcSender(event);
-    return await modelSettings.state();
+    return await effectiveModelSettings(modelSettings);
   });
   ipcMain.handle(ipcChannels.modelServiceSettingsUpdate, async (event, raw: unknown) => {
     assertTrustedIpcSender(event);
-    return await modelSettings.update(modelServiceSettingsUpdateSchema.parse(raw));
+    await modelSettings.update(modelServiceSettingsUpdateSchema.parse(raw));
+    for (const window of mainWindows) window.webContents.send(ipcChannels.modelCatalogChanged);
+    return await effectiveModelSettings(modelSettings);
   });
   ipcMain.handle(ipcChannels.modelServiceConnectionTest, async (event, raw: unknown) => {
     assertTrustedIpcSender(event);
+    assertWorkspaceExecutionAllowed("personal", "model.connection.test");
     return await modelSettings.test(modelServiceSettingsUpdateSchema.parse(raw));
   });
   ipcMain.handle(ipcChannels.modelServiceApiKeyClear, async (event, raw: unknown) => {
@@ -593,13 +648,23 @@ function registerIpcHandlers(
       raw === undefined ? undefined : byokProviderIdSchema.parse(raw),
     );
   });
+  ipcMain.handle(ipcChannels.hostedModelUsage, async (event) => {
+    assertTrustedIpcSender(event);
+    return (await hostedTransport()).usage({});
+  });
   ipcMain.handle(ipcChannels.usageGet, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const query = usageQueryInputSchema.parse(input ?? {});
-    const local = await localByokUsage(query, (await modelSettings.state()).mode, (input) =>
-      supervisor.request({ command: "usage.byok.list", input }),
+    const local = await localByokUsage(
+      query,
+      (await effectiveModelSettings(modelSettings)).mode,
+      (input) => supervisor.request({ command: "usage.byok.list", input }),
     );
     if (local !== null) return aggregateByokUsage(local, query);
+    if (hostedModelAccess.configured()) {
+      const data = await (await hostedTransport()).usage(query);
+      return data.aggregate;
+    }
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     return await platformClient.usage(
       await accounts.accessToken(),
@@ -609,10 +674,14 @@ function registerIpcHandlers(
   ipcMain.handle(ipcChannels.usageRecords, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
     const query = usageQueryInputSchema.parse(input ?? {});
-    const local = await localByokUsage(query, (await modelSettings.state()).mode, (input) =>
-      supervisor.request({ command: "usage.byok.list", input }),
+    const local = await localByokUsage(
+      query,
+      (await effectiveModelSettings(modelSettings)).mode,
+      (input) => supervisor.request({ command: "usage.byok.list", input }),
     );
     if (local !== null) return local;
+    if (hostedModelAccess.configured())
+      return (await (await hostedTransport()).usage(query)).records;
     if (!platformUrl || !platformClient) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     return usageRecordSchema
       .array()
@@ -696,7 +765,10 @@ function registerIpcHandlers(
         command,
         input: inputSchema.parse(input),
       });
-      const modelService = needsAuthorization ? await modelSettings.state() : undefined;
+      assertWorkspaceExecutionAllowed("personal", request.command);
+      const modelService = needsAuthorization
+        ? await effectiveModelSettings(modelSettings)
+        : undefined;
       const launchesGeneration =
         request.command === "chat.send" ||
         request.command === "chat.regenerate" ||
@@ -720,16 +792,21 @@ function registerIpcHandlers(
           }
         }
       }
+      const usesByok = selectedModelRef
+        ? isByokModelRef(selectedModelRef)
+        : modelService?.mode === "byok";
       const byok =
-        modelService?.mode === "byok" && launchesGeneration
+        usesByok && launchesGeneration
           ? await modelSettings.execution(selectedModelRef)
           : undefined;
       const authorization =
-        (needsAccountAuthorization || (needsAuthorization && modelService?.mode !== "byok")) &&
-        platformUrl &&
-        accounts.state().status === "signed_in"
-          ? await accounts.authorization(platformUrl)
-          : undefined;
+        hostedModelAccess.configured() && launchesGeneration && !usesByok
+          ? await hostedModelAccess.authorization()
+          : (needsAccountAuthorization || (needsAuthorization && modelService?.mode !== "byok")) &&
+              platformUrl &&
+              accounts.state().status === "signed_in"
+            ? await accounts.authorization(platformUrl)
+            : undefined;
       const result = await supervisor.request(request, authorization, 15_000, byok);
       return request.command === "artifact.preview" || request.command === "file.preview"
         ? htmlPreviews.prepare(result)
@@ -748,6 +825,7 @@ function registerIpcHandlers(
         command,
         input: inputSchema.parse(input),
       });
+      assertWorkspaceExecutionAllowed("personal", request.command);
       const authorization =
         platformUrl && accounts.state().status === "signed_in"
           ? await accounts.authorization(platformUrl)
@@ -767,6 +845,7 @@ function registerIpcHandlers(
         command,
         input: inputSchema.parse(input),
       });
+      assertWorkspaceExecutionAllowed("personal", request.command);
       const authorization =
         platformUrl && accounts.state().status === "signed_in"
           ? await accounts.authorization(platformUrl)
@@ -777,14 +856,16 @@ function registerIpcHandlers(
 
   ipcMain.handle(ipcChannels.toolRuntimeReadiness, async (event) => {
     assertTrustedIpcSender(event);
-    const modelService = await modelSettings.state();
+    const modelService = await effectiveModelSettings(modelSettings);
     const hosted = modelService.mode === "hosted";
     return await supervisor.request(
       chatCommandEnvelopeSchema.parse({
         command: "tool.runtime.readiness",
         input: {
-          authenticated: hosted && accounts.state().status === "signed_in",
-          platformConfigured: hosted && Boolean(platformUrl),
+          authenticated:
+            hosted &&
+            (Boolean(hostedModelAccess.accountId()) || accounts.state().status === "signed_in"),
+          platformConfigured: hosted && (hostedModelAccess.configured() || Boolean(platformUrl)),
         },
       }),
       undefined,
@@ -836,6 +917,16 @@ function registerIpcHandlers(
     true,
   );
   registerChatHandler(ipcChannels.localCacheClear, "cache.clear", emptyInputSchema);
+  registerChatHandler(
+    ipcChannels.piRuntimeSettingsGet,
+    "pi.runtime.settings.get",
+    emptyInputSchema,
+  );
+  registerChatHandler(
+    ipcChannels.piRuntimeSettingsUpdate,
+    "pi.runtime.settings.update",
+    piRuntimeSettingsUpdateInputSchema,
+  );
   registerChatHandler(ipcChannels.memorySettingsGet, "memory.settings.get", emptyInputSchema);
   registerChatHandler(
     ipcChannels.memorySettingsUpdate,
@@ -1012,6 +1103,7 @@ function registerIpcHandlers(
   });
   ipcMain.handle(ipcChannels.projectDirectoryChoose, async (event, input: unknown) => {
     assertTrustedIpcSender(event);
+    assertWorkspaceExecutionAllowed("personal", "project.directory.choose");
     const parsed = projectDirectoryChooseInputSchema.parse(input ?? {});
     const selection = await dialog.showOpenDialog({
       title: parsed.projectDirectoryId ? "重新连接项目目录" : "添加项目目录",
@@ -1523,17 +1615,23 @@ app.whenReady().then(async () => {
     process.execPath,
     Boolean(process.windowsStore),
   );
+  supervisor.setModelAuthorizationProvider((request) =>
+    hostedModelAccess.authorization(request.accountId, request.rejectedAccessToken),
+  );
   supervisor.setAutomationExecutionContextProvider(async (modelRef) => {
-    const settings = await modelSettings.state();
+    assertWorkspaceExecutionAllowed("personal", "automation.execution");
+    const settings = await effectiveModelSettings(modelSettings);
     const authorization =
       platformUrl && accounts.state().status === "signed_in"
         ? await accounts.authorization(platformUrl)
         : undefined;
-    if (settings.mode === "byok") {
+    if (modelRef ? isByokModelRef(modelRef) : settings.mode === "byok") {
       const byok = await modelSettings.execution(modelRef);
       if (!byok) throw new Error("BYOK_API_KEY_REQUIRED");
       return { ...(authorization ? { authorization } : {}), byok };
     }
+    if (hostedModelAccess.configured())
+      return { authorization: await hostedModelAccess.authorization() };
     if (!platformUrl) throw new Error("PLATFORM_ENDPOINT_NOT_CONFIGURED");
     if (!authorization) throw new Error("AUTHENTICATION_REQUIRED");
     return { authorization };

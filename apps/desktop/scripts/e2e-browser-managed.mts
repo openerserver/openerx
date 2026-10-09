@@ -89,6 +89,61 @@ void app
       const x = Math.floor(((password.bounds.x + 5) * size.width) / current.viewport.width),
         y = Math.floor(((password.bounds.y + 5) * size.height) / current.viewport.height);
       assert.equal(screenshot.toBitmap().readUInt32LE((y * size.width + x) * 4), 0xff303030);
+      // Exercise concurrent background windows without taking focus or sharing
+      // the adapter's active observation references with the stress captures.
+      const captureBindings = await Promise.all([
+        driver.openDedicatedWindow(url, signal, "e2e-generation"),
+        driver.openDedicatedWindow(url, signal, "e2e-generation"),
+      ]);
+      try {
+        for (let round = 0; round < 8; round++) {
+          await Promise.all(
+            captureBindings.map(async (binding) => {
+              const captured = await driver.observe(binding, signal);
+              assert(captured.image?.redacted);
+              const passwordElement = captured.elements.find(
+                (el) => el.sensitiveKind === "password",
+              );
+              assert(passwordElement);
+              const picture = nativeImage.createFromBuffer(
+                Buffer.from(captured.image.content.data, "base64"),
+              );
+              assert(!picture.isEmpty());
+              const dimensions = picture.getSize();
+              const px = Math.floor(
+                ((passwordElement.bounds.x + 5) * dimensions.width) /
+                  captured.surface.viewport.width,
+              );
+              const py = Math.floor(
+                ((passwordElement.bounds.y + 5) * dimensions.height) /
+                  captured.surface.viewport.height,
+              );
+              assert.equal(
+                picture.toBitmap().readUInt32LE((py * dimensions.width + px) * 4),
+                0xff303030,
+              );
+              const window = BrowserWindow.getAllWindows().find(
+                (candidate) =>
+                  binding.descriptor.nativeWindowId === `managed_window_${candidate.id}`,
+              );
+              assert(window && !window.isVisible());
+            }),
+          );
+        }
+        console.log(
+          "MANAGED_CAPTURE_STRESS_OK: 16 concurrent background captures; password redaction and hidden windows preserved",
+        );
+      } finally {
+        await Promise.all(
+          captureBindings.map((binding) => driver.closeOwnedWindow(binding, signal)),
+        );
+      }
+      current = observe(
+        await adapter.execute(
+          { contractVersion, action: "observe", sessionId: current.sessionId },
+          signal,
+        ),
+      );
       const old = current;
       const search = current.elements.find(
         (el) => el.name === "Search" && el.actions.includes("setValue"),

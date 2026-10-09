@@ -26,6 +26,155 @@ function request(values: Partial<ModelGatewayRequestDto> = {}): ModelGatewayRequ
   };
 }
 
+describe("DeepSeek reasoning replay", () => {
+  it("maps named choices while refusing schema guarantees on the stable local endpoint", async () => {
+    expect(
+      createDeepSeekModelCatalog().every((entry) => !entry.capabilities.structuredOutput),
+    ).toBe(true);
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        model: "deepseek-v4-flash",
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              content: "",
+              tool_calls: [
+                { id: "1", type: "function", function: { name: "inspect", arguments: "{}" } },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    const executor = new DeepSeekModelExecutor({
+      apiKey: "sk-synthetic-key-1234567890",
+      fetch: fetcher,
+    });
+    const req = request({
+      toolChoice: { type: "function", name: "inspect" },
+      context: {
+        messages: [{ role: "user", content: "Inspect" }],
+        tools: [{ name: "inspect", description: "Inspect", parameters: { type: "object" } }],
+      },
+    });
+    await executor.execute(req, undefined);
+    expect(
+      JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)
+        .tool_choice,
+    ).toEqual({ type: "function", function: { name: "inspect" } });
+    await expect(
+      executor.execute(
+        {
+          ...req,
+          responseFormat: { type: "json_schema", name: "answer", schema: { type: "object" } },
+        },
+        undefined,
+      ),
+    ).rejects.toThrow("MODEL_CAPABILITY_UNSUPPORTED");
+    await expect(
+      executor.execute(
+        {
+          ...req,
+          context: {
+            messages: [{ role: "user", content: "Inspect" }],
+            tools: [
+              {
+                name: "inspect",
+                description: "Inspect",
+                parameters: { type: "object" },
+                constrainedSampling: { type: "json_schema", strict: "require" },
+              },
+            ],
+          },
+        },
+        undefined,
+      ),
+    ).rejects.toThrow("MODEL_CAPABILITY_UNSUPPORTED");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it.each(["execute", "stream"] as const)(
+    "retains same-route reasoning and tool state in %s",
+    async (mode) => {
+      const payload = {
+        model: "deepseek-v4-flash",
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              content: "",
+              reasoning_content: "Inspect first.",
+              tool_calls: [
+                { id: "c1", type: "function", function: { name: "inspect", arguments: "{}" } },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 4, completion_tokens: 5, total_tokens: 9 },
+      };
+      const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+        mode === "execute"
+          ? Response.json(payload)
+          : new Response(
+              `data: ${JSON.stringify({ model: payload.model, choices: [{ index: 0, delta: { ...payload.choices[0]!.message, tool_calls: payload.choices[0]!.message.tool_calls.map((call) => ({ ...call, index: 0 })) }, finish_reason: "tool_calls" }], usage: payload.usage })}\n\ndata: [DONE]\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+      );
+      const executor = new DeepSeekModelExecutor({
+        apiKey: "sk-synthetic-key-1234567890",
+        fetch: fetcher,
+      });
+      const tools = [
+        { name: "inspect", description: "Inspect", parameters: { type: "object", properties: {} } },
+      ];
+      const messages: unknown[] = [{ role: "user", content: "Inspect" }];
+      const req = request({
+        thinkingLevel: "medium",
+        reasoningReplay: true,
+        toolChoice: "auto",
+        context: { messages, tools },
+      });
+      const run = () =>
+        mode === "execute"
+          ? executor.execute(req, undefined)
+          : executor.stream(req, () => {}, undefined);
+      const out = await run();
+      expect(out.reasoning).toMatchObject({ text: "Inspect first." });
+      messages.push(
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: out.reasoning!.text,
+              thinkingSignature: out.reasoning!.signature,
+            },
+            { type: "thinking", thinking: "DO NOT LEAK", thinkingSignature: "another-provider" },
+            { type: "toolCall", ...out.toolCalls![0] },
+          ],
+        },
+        { role: "toolResult", toolCallId: "c1", content: "OK" },
+      );
+      req.toolChoice = "none";
+      await run();
+      const body = JSON.parse(fetcher.mock.calls[1]![1]!.body as string);
+      expect(body.messages[1]).toMatchObject({
+        content: "",
+        reasoning_content: "Inspect first.",
+        tool_calls: [{ function: { arguments: "{}" } }],
+      });
+      expect(body.tool_choice).toBe("none");
+      expect(JSON.stringify(body)).not.toContain("DO NOT LEAK");
+      await expect(executor.execute({ ...req, toolChoice: "required" }, undefined)).rejects.toThrow(
+        "MODEL_CAPABILITY_UNSUPPORTED",
+      );
+      await expect(executor.execute({ ...req, reasoningReplay: false }, undefined)).rejects.toThrow(
+        "MODEL_CAPABILITY_UNSUPPORTED",
+      );
+    },
+  );
+});
+
 function successResponse(): Response {
   return Response.json({
     model: "deepseek-v4-flash",

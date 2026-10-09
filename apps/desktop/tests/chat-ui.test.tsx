@@ -16,11 +16,15 @@ import type {
   WorkItem,
   WorkItemDetail,
 } from "@openerx/contracts";
+import {
+  enterpriseWorkspaceCapabilities,
+  setDesktopWorkspaceBridge,
+} from "@openerx/desktop-ui/workspace-bridge";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter, useLocation } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/renderer/App";
 
 const conversationId = "11111111-1111-4111-8111-111111111111";
@@ -200,6 +204,16 @@ const snapshot: ConversationSnapshot = {
 
 function createBridge(): DesktopBridge {
   return {
+    getPiRuntimeSettings: vi.fn().mockResolvedValue({
+      ownerProfileId: "local-default",
+      nativeToolsEnabled: false,
+      updatedAt: null,
+    }),
+    updatePiRuntimeSettings: vi.fn().mockImplementation(async (input) => ({
+      ownerProfileId: "local-default",
+      ...input,
+      updatedAt: new Date().toISOString(),
+    })),
     updateBrowserPermission: vi.fn(),
     getBrowserConnectionState: vi.fn().mockResolvedValue({
       mode: "auto",
@@ -298,6 +312,10 @@ function createBridge(): DesktopBridge {
       memories: 0,
     }),
     exportPersonalData: vi.fn(),
+    getLegacyPersonalDataSummary: vi.fn(),
+    exportLegacyPersonalData: vi.fn(),
+    listLegacyConversations: vi.fn().mockResolvedValue([]),
+    getLegacyConversation: vi.fn().mockResolvedValue(snapshot),
     getAccountState: vi.fn().mockResolvedValue({
       status: "signed_out",
       account: null,
@@ -534,6 +552,10 @@ describe("M1 chat renderer", () => {
     ["MODEL_RATE_LIMITED", "模型请求受到限流，请稍后重试或降低并发。"],
     ["MODEL_CONTEXT_LIMIT_REACHED", "上下文超过模型限制，请缩短对话或切换到更大上下文的模型。"],
     ["MODEL_RESPONSE_INVALID", "模型返回的内容或工具调用格式无效，请检查模型兼容性。"],
+    [
+      "MODEL_CAPABILITY_UNSUPPORTED",
+      "当前模型不支持本次请求所需的能力，请选择支持相应输入和工具的模型。",
+    ],
   ])("shows the specific recovery action for %s", async (errorCode, label) => {
     const bridge = createBridge();
     vi.mocked(bridge.getConversation).mockResolvedValue({
@@ -1051,6 +1073,81 @@ describe("M1 chat renderer", () => {
     },
   );
 
+  it("explains an empty hosted catalog without asking for a supplier key", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.getModelServiceSettings).mockResolvedValue({
+      ...(await bridge.getModelServiceSettings()),
+      mode: "hosted",
+      hostedAvailable: true,
+      hostedAccountId: "00000000-0000-4000-8000-000000000003",
+    });
+    vi.mocked(bridge.listModels).mockResolvedValue([]);
+    renderApp(bridge, "/chat/new");
+    expect(await screen.findByRole("heading", { name: "服务器暂无可用模型" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "先配置模型 API" })).toBeNull();
+    expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+  });
+
+  it("uses the server default and clears model choices when the central account changes", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const accountA = "00000000-0000-4000-8000-000000000001";
+    const accountB = "00000000-0000-4000-8000-000000000002";
+    const first = { ...thinkingModel, modelRef: "platform/model-a", displayName: "服务器默认 A" };
+    const second = { ...thinkingModel, modelRef: "platform/model-b", displayName: "服务器默认 B" };
+    const settings = {
+      ...(await bridge.getModelServiceSettings()),
+      mode: "hosted" as const,
+      hostedAvailable: true,
+      hostedAccountId: accountA,
+    };
+    vi.mocked(bridge.getModelServiceSettings).mockResolvedValue(settings);
+    vi.mocked(bridge.listModels).mockResolvedValue([first, second]);
+    let changed: (() => void) | undefined;
+    bridge.onModelsChanged = (callback) => {
+      changed = callback;
+      return () => {};
+    };
+    const keyA = `openerx.defaultModelRef:account:${accountA}`;
+    const keyB = `openerx.defaultModelRef:account:${accountB}`;
+    window.localStorage.setItem(keyA, first.modelRef);
+    window.localStorage.removeItem(keyB);
+    try {
+      renderApp(bridge, "/chat/new");
+      await waitFor(() =>
+        expect((screen.getByLabelText("新任务模型") as HTMLSelectElement).value).toBe(
+          first.modelRef,
+        ),
+      );
+      vi.mocked(bridge.getModelServiceSettings).mockResolvedValue({
+        ...settings,
+        hostedAccountId: accountB,
+      });
+      vi.mocked(bridge.listModels).mockResolvedValue([second]);
+      await act(async () => {
+        changed?.();
+      });
+      await waitFor(() =>
+        expect((screen.getByLabelText("新任务模型") as HTMLSelectElement).value).toBe(
+          second.modelRef,
+        ),
+      );
+      const user = userEvent.setup();
+      await user.type(screen.getByLabelText("发送消息"), "使用当前账户模型");
+      await user.click(screen.getByRole("button", { name: "发送" }));
+      expect(bridge.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ modelRef: second.modelRef }),
+      );
+      expect(window.localStorage.getItem(keyA)).toBe(first.modelRef);
+    } finally {
+      cleanup();
+      window.localStorage.removeItem(keyA);
+      window.localStorage.removeItem(keyB);
+    }
+  });
+
   it.each(["new", "existing"] as const)(
     "shows only available models in the %s conversation picker",
     async (entry) => {
@@ -1083,13 +1180,20 @@ describe("M1 chat renderer", () => {
       expect(nativeSelect.querySelectorAll("option")).toHaveLength(1);
       expect((nativeSelect as HTMLSelectElement).value).toBe(thinkingModel.modelRef);
       await user.keyboard("{Escape}");
+      // Escape restores focus on the next animation frame; let that finish
+      // before typing so the menu cannot steal the input's focus mid-keystroke.
+      await act(async () => {
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      });
       await user.type(screen.getByLabelText("发送消息"), "使用已配置模型");
       await user.click(screen.getByRole("button", { name: "发送" }));
-      expect(bridge.sendMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          conversationId: entry === "new" ? null : conversationId,
-          ...(entry === "new" ? { modelRef: thinkingModel.modelRef } : {}),
-        }),
+      await waitFor(() =>
+        expect(bridge.sendMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            conversationId: entry === "new" ? null : conversationId,
+            ...(entry === "new" ? { modelRef: thinkingModel.modelRef } : {}),
+          }),
+        ),
       );
     },
   );
@@ -1176,7 +1280,7 @@ describe("M1 chat renderer", () => {
     await userEvent.setup().click(await screen.findByRole("link", { name: "前往设置 → 模型" }));
 
     expect(await screen.findByLabelText("模型设置")).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "模型", level: 1 })).toBeNull();
+    expect(screen.getByRole("heading", { name: "模型", level: 1 })).toBeTruthy();
     expect(screen.getByRole("button", { name: "模型" }).getAttribute("aria-current")).toBe("page");
     expect(await screen.findByLabelText("运行模式")).toBeTruthy();
   });
@@ -2122,6 +2226,77 @@ describe("M1 chat renderer", () => {
     expect(bridge.installReleaseUpdate).toHaveBeenCalledOnce();
   });
 
+  it("recovers a failed update-state read without leaving the update page loading forever", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.getReleaseUpdateState)
+      .mockRejectedValueOnce(new Error("IPC_READ_FAILED"))
+      .mockResolvedValue({
+        status: "idle",
+        channel: "stable",
+        currentVersion: "2.0.0",
+        availableVersion: null,
+        progressPercentage: null,
+        lastCheckedAt: null,
+        reason: null,
+      });
+    renderApp(bridge, "/settings/account?section=update");
+    const panel = await screen.findByLabelText("应用更新");
+    expect((await within(panel).findByRole("alert")).textContent).toBe(
+      "无法读取更新状态，请重新读取后重试。",
+    );
+    expect(within(panel).getByText("读取更新状态失败")).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "检查更新" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    await userEvent.setup().click(within(panel).getByRole("button", { name: "重新读取更新状态" }));
+    expect(await within(panel).findByText("可以检查更新")).toBeTruthy();
+    expect(within(panel).queryByRole("alert")).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "重新读取更新状态" })).toBeNull();
+    expect(within(panel).getByRole("button", { name: "检查更新" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(bridge.getReleaseUpdateState).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["checkForReleaseUpdate", "idle", "检查更新", "检查更新失败，请稍后重试。"],
+    ["installReleaseUpdate", "downloaded", "安装并重启", "安装更新失败，请重试安装。"],
+  ] as const)(
+    "shows and recovers a rejected %s request",
+    async (method, status, label, message) => {
+      cleanup();
+      const bridge = createBridge();
+      const state = {
+        status,
+        channel: "stable" as const,
+        currentVersion: "2.0.0",
+        availableVersion: status === "downloaded" ? "2.0.1" : null,
+        progressPercentage: status === "downloaded" ? 100 : null,
+        lastCheckedAt: timestamp,
+        reason: null,
+      };
+      vi.mocked(bridge.getReleaseUpdateState).mockResolvedValue(state);
+      vi.mocked(bridge[method])
+        .mockRejectedValueOnce(new Error("IPC_UPDATE_FAILED"))
+        .mockResolvedValue(state);
+      renderApp(bridge, "/settings/account?section=update");
+      const panel = await screen.findByLabelText("应用更新");
+      const user = userEvent.setup();
+      const action = await within(panel).findByRole("button", { name: label });
+      await waitFor(() => expect(action).toHaveProperty("disabled", false));
+      await user.click(action);
+      expect((await within(panel).findByRole("alert")).textContent).toBe(message);
+      expect(panel.textContent).not.toContain("IPC_UPDATE_FAILED");
+      expect(action).toHaveProperty("disabled", false);
+      await user.click(action);
+      await waitFor(() => expect(within(panel).queryByRole("alert")).toBeNull());
+      expect(bridge[method]).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("selects an enabled Skill in the composer and exposes lifecycle metadata", async () => {
     cleanup();
     const bridge = createBridge();
@@ -2204,6 +2379,60 @@ describe("M1 chat renderer", () => {
     expect(await screen.findByText("内置", { selector: ".skill-trust" })).toBeTruthy();
     expect(screen.getByText("已验证来源", { selector: ".skill-trust" })).toBeTruthy();
     expect(screen.getByText("未验证来源", { selector: ".skill-trust" })).toBeTruthy();
+  });
+
+  it("distinguishes a failed library read from an empty library and retries it", async () => {
+    cleanup();
+    const bridge = createBridge();
+    vi.mocked(bridge.listFiles).mockRejectedValue(new Error("网络暂时不可用"));
+    renderApp(bridge, "/files");
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("文件列表读取失败")).toBeTruthy();
+    expect(screen.queryByText("还没有文件或成果")).toBeNull();
+    vi.mocked(bridge.listFiles).mockResolvedValue([]);
+    await userEvent.setup().click(within(alert).getByRole("button", { name: "重新读取文件" }));
+    await screen.findByText("还没有文件或成果");
+    expect(screen.queryByText("文件列表读取失败")).toBeNull();
+    cleanup();
+  });
+
+  it("cancels adding library files without refreshing or hiding existing failure feedback", async () => {
+    cleanup();
+    const bridge = createBridge();
+    renderApp(bridge, "/files");
+    await screen.findByText("还没有文件或成果");
+    const reads = vi.mocked(bridge.listFiles).mock.calls.length;
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^添加文件$/ }));
+    await screen.findByText("已取消文件选择。");
+    expect(bridge.listFiles).toHaveBeenCalledTimes(reads);
+    vi.mocked(bridge.chooseFiles).mockRejectedValue(new Error("文件选择服务不可用"));
+    await user.click(screen.getByRole("button", { name: /^添加文件$/ }));
+    await screen.findByText("添加文件未完成");
+    expect(screen.queryByText("已取消文件选择。")).toBeNull();
+    cleanup();
+  });
+
+  it("replaces an earlier picker error with the latest file or folder result", async () => {
+    cleanup();
+    setDesktopWorkspaceBridge(null);
+    const bridge = createBridge();
+    vi.mocked(bridge.chooseDirectory).mockRejectedValue(new Error("文件夹读取失败"));
+    renderApp(bridge, "/files");
+    await screen.findByText("还没有文件或成果");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^添加文件夹$/ }));
+    await screen.findByRole("button", { name: "重新选择文件夹" });
+    await user.click(screen.getByRole("button", { name: /^添加文件$/ }));
+    await screen.findByText("已取消文件选择。");
+    expect(screen.queryByRole("alert")).toBeNull();
+    vi.mocked(bridge.chooseFiles).mockRejectedValue(new Error("文件选择失败"));
+    await user.click(screen.getByRole("button", { name: /^添加文件$/ }));
+    await screen.findByRole("button", { name: "重新选择文件" });
+    await user.click(screen.getByRole("button", { name: /^添加文件夹$/ }));
+    await screen.findByRole("button", { name: "重新选择文件夹" });
+    expect(screen.queryByRole("button", { name: "重新选择文件" })).toBeNull();
+    cleanup();
   });
 
   it("groups personal files and deliverables by conversation in the library", async () => {
@@ -2526,7 +2755,10 @@ describe("M1 chat renderer", () => {
     expect(screen.queryByText("This fallback must stay hidden")).toBeNull();
   });
 
-  it("exposes M2 device, sync, usage and data boundaries in account settings", async () => {
+  it("exposes M2 device, sync, usage and data boundaries in account settings", async ({
+    onTestFinished,
+  }) => {
+    cleanup();
     const bridge = createBridge();
     const accountId = crypto.randomUUID();
     const currentSessionId = crypto.randomUUID();
@@ -2593,13 +2825,25 @@ describe("M1 chat renderer", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(bridge.clearLocalCache).mockResolvedValue({ clearedAt: timestamp });
 
-    renderApp(bridge, "/settings/account");
+    const scrollIntoView = vi.fn();
+    const previousScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    onTestFinished(() => {
+      HTMLElement.prototype.scrollIntoView = previousScrollIntoView;
+    });
+    renderApp(bridge, "/settings?section=account&target=devices");
     expect(await screen.findByText("Current Mac", { exact: false })).toBeTruthy();
     expect(await screen.findByText("Other Windows", { exact: false })).toBeTruthy();
     expect(await screen.findByText("总计 17")).toBeTruthy();
     expect(await screen.findByText(/待上传 0 · 冲突 0/)).toBeTruthy();
+    await waitFor(() => expect(document.activeElement?.id).toBe("account-devices"));
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
 
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "外观" }));
+    await user.type(screen.getByRole("searchbox", { name: "搜索设置" }), "设备");
+    await user.click(screen.getByRole("button", { name: "登录设备" }));
+    await waitFor(() => expect(document.activeElement?.id).toBe("account-devices"));
     await user.click(screen.getByRole("button", { name: "撤销设备" }));
     expect(bridge.revokeDevice).toHaveBeenCalledWith({ sessionId: otherSessionId });
     await user.click(screen.getByRole("button", { name: "清理本机缓存" }));
@@ -2929,6 +3173,37 @@ describe("M1 chat renderer", () => {
     },
   );
 
+  it("preserves section and nested targets when opening the settings shortcut route", async () => {
+    cleanup();
+    const bridge = createBridge();
+    Object.defineProperty(window, "openerx", { configurable: true, value: bridge });
+    function SettingsLocation(): React.JSX.Element {
+      const location = useLocation();
+      return (
+        <output aria-label="设置链接">
+          {location.pathname}
+          {location.search}
+        </output>
+      );
+    }
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <MemoryRouter
+          initialEntries={["/settings?section=appearance&panel=devices&target=security"]}
+        >
+          <App />
+          <SettingsLocation />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole("heading", { name: "主题模式" })).toBeTruthy();
+    expect(screen.getByLabelText("设置链接").textContent).toBe(
+      "/settings/account?section=appearance&panel=devices&target=security",
+    );
+  });
+
   it("keeps HashRouter section navigation on settings and moves focus to the target", async () => {
     cleanup();
     renderApp(createBridge(), "/settings/account");
@@ -2955,7 +3230,7 @@ describe("M1 chat renderer", () => {
     await user.click(screen.getByRole("button", { name: "外观" }));
     await waitFor(() => expect(document.activeElement?.id).toBe("appearance-section"));
     expect(screen.getByLabelText("外观设置")).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "外观", level: 1 })).toBeNull();
+    expect(screen.getByRole("heading", { name: "外观", level: 1 })).toBeTruthy();
     expect(screen.getByRole("button", { name: "外观" }).getAttribute("aria-current")).toBe("page");
 
     await user.click(screen.getByRole("button", { name: "诊断与数据" }));
@@ -4220,80 +4495,111 @@ describe("M1 chat renderer", () => {
     },
   );
 
-  it("keeps local Web Search Provider choice and runtime reset in the trusted tool center", async () => {
-    cleanup();
-    const bridge = createBridge();
-    const initial = await bridge.getLocalWebSearchSettings();
-    const backedOff: LocalWebSearchSettingsState = {
-      ...initial,
-      providers: initial.providers.map((provider) =>
-        provider.descriptor.providerId === "direct:bing-html"
-          ? {
-              ...provider,
-              status: "backed_off",
-              consecutiveThrottleFailures: 2,
-              backedOffUntil: "2026-08-29T03:30:00.000Z",
-              lastErrorCode: "LOCAL_SEARCH_RATE_LIMITED",
-              lastFailureAt: "2026-08-29T03:00:00.000Z",
-            }
-          : provider,
-      ),
-    };
-    const updated: LocalWebSearchSettingsState = {
-      ...backedOff,
-      providerId: "direct:bing-html",
-      locale: "en-US",
-      safeSearch: "strict",
-      updatedAt: "2026-08-29T03:01:00.000Z",
-      providers: backedOff.providers.map((provider) => ({
-        ...provider,
-        selected: provider.descriptor.providerId === "direct:bing-html",
-      })),
-    };
-    vi.mocked(bridge.getLocalWebSearchSettings).mockClear();
-    vi.mocked(bridge.getLocalWebSearchSettings).mockResolvedValue(backedOff);
-    vi.mocked(bridge.updateLocalWebSearchSettings).mockResolvedValue(updated);
-    vi.mocked(bridge.resetLocalWebSearchRuntime).mockResolvedValue({
-      ...updated,
-      providers: updated.providers.map((provider) => ({
-        ...provider,
-        status: "available",
-        consecutiveThrottleFailures: 0,
-        backedOffUntil: null,
-        lastErrorCode: null,
-        lastFailureAt: null,
-      })),
-    });
-    renderApp(bridge, "/settings/account?section=tools");
-    const user = userEvent.setup();
-
-    const searchRow = (await screen.findByText("本地 Web Search")).closest("article");
-    if (!searchRow) throw new Error("local Web Search row missing");
-    await user.click(within(searchRow).getByRole("button", { name: "设置" }));
-    const panel = await screen.findByRole("dialog", { name: "本地 Web Search" });
-    expect(within(panel).getByText("退避中")).toBeTruthy();
-    expect(within(panel).getByText(/LOCAL_SEARCH_RATE_LIMITED/u)).toBeTruthy();
-
-    await user.selectOptions(
-      within(panel).getByLabelText("Web Search Provider"),
-      "direct:bing-html",
-    );
-    await user.selectOptions(within(panel).getByLabelText("Web Search 结果语言"), "en-US");
-    await user.selectOptions(within(panel).getByLabelText("Web Search SafeSearch"), "strict");
-    await user.click(within(panel).getByRole("button", { name: "保存设置" }));
-    await waitFor(() =>
-      expect(bridge.updateLocalWebSearchSettings).toHaveBeenCalledWith({
+  it.each([
+    ["LOCAL_SEARCH_RATE_LIMITED", /搜索请求过于频繁/u],
+    ["LOCAL_SEARCH_PROVIDER_CHALLENGE", /搜索服务要求访问验证/u],
+  ] as const)(
+    "keeps recovery from %s under user control in the trusted tool center",
+    async (errorCode, explanation) => {
+      cleanup();
+      const bridge = createBridge();
+      const initial = await bridge.getLocalWebSearchSettings();
+      const backedOff: LocalWebSearchSettingsState = {
+        ...initial,
+        providers: initial.providers.map((provider) =>
+          provider.descriptor.providerId === "direct:bing-html"
+            ? {
+                ...provider,
+                status: "backed_off",
+                consecutiveThrottleFailures: 2,
+                backedOffUntil: "2026-08-29T03:30:00.000Z",
+                lastErrorCode: errorCode,
+                lastFailureAt: "2026-08-29T03:00:00.000Z",
+              }
+            : provider,
+        ),
+      };
+      const updated: LocalWebSearchSettingsState = {
+        ...backedOff,
         providerId: "direct:bing-html",
         locale: "en-US",
         safeSearch: "strict",
+        updatedAt: "2026-08-29T03:01:00.000Z",
+        providers: backedOff.providers.map((provider) => ({
+          ...provider,
+          selected: provider.descriptor.providerId === "direct:bing-html",
+        })),
+      };
+      vi.mocked(bridge.getLocalWebSearchSettings).mockClear();
+      vi.mocked(bridge.getLocalWebSearchSettings).mockResolvedValue(backedOff);
+      vi.mocked(bridge.updateLocalWebSearchSettings).mockResolvedValue(updated);
+      vi.mocked(bridge.resetLocalWebSearchRuntime).mockResolvedValue({
+        ...updated,
+        providers: updated.providers.map((provider) => ({
+          ...provider,
+          status: "available",
+          consecutiveThrottleFailures: 0,
+          backedOffUntil: null,
+          lastErrorCode: null,
+          lastFailureAt: null,
+        })),
+      });
+      renderApp(bridge, "/settings/account?section=tools");
+      const user = userEvent.setup();
+
+      const searchRow = (await screen.findByText("本地 Web Search")).closest("article");
+      if (!searchRow) throw new Error("local Web Search row missing");
+      await user.click(within(searchRow).getByRole("button", { name: "设置" }));
+      const panel = await screen.findByRole("dialog", { name: "本地 Web Search" });
+      expect(within(panel).getByText("退避中")).toBeTruthy();
+      expect(within(panel).getByText(explanation)).toBeTruthy();
+      expect(within(panel).queryByText(errorCode)).toBeNull();
+      expect(bridge.updateLocalWebSearchSettings).not.toHaveBeenCalled();
+      expect(bridge.resetLocalWebSearchRuntime).not.toHaveBeenCalled();
+
+      await user.selectOptions(
+        within(panel).getByLabelText("Web Search Provider"),
+        "direct:bing-html",
+      );
+      await user.selectOptions(within(panel).getByLabelText("Web Search 结果语言"), "en-US");
+      await user.selectOptions(within(panel).getByLabelText("Web Search SafeSearch"), "strict");
+      await user.click(within(panel).getByRole("button", { name: "保存设置" }));
+      await waitFor(() =>
+        expect(bridge.updateLocalWebSearchSettings).toHaveBeenCalledWith({
+          providerId: "direct:bing-html",
+          locale: "en-US",
+          safeSearch: "strict",
+        }),
+      );
+      expect(await within(panel).findByText("搜索设置已保存。")).toBeTruthy();
+
+      await user.click(within(panel).getByRole("button", { name: "重置搜索服务" }));
+      await waitFor(() => expect(bridge.resetLocalWebSearchRuntime).toHaveBeenCalledWith());
+      expect(await within(panel).findByText("已清除缓存并重置搜索服务。")).toBeTruthy();
+      expect(within(panel).queryByText("退避中")).toBeNull();
+    },
+  );
+
+  it("requires explicit opt-in for native batch tools and allows disabling them", async () => {
+    cleanup();
+    const bridge = createBridge();
+    renderApp(bridge, "/settings/account?section=tools");
+    const user = userEvent.setup();
+    const toggle = await screen.findByRole("checkbox", { name: "启用工具批量编排" });
+    await waitFor(() => expect((toggle as HTMLInputElement).disabled).toBe(false));
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    await user.click(toggle);
+    await waitFor(() =>
+      expect(bridge.updatePiRuntimeSettings).toHaveBeenCalledWith({ nativeToolsEnabled: true }),
+    );
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
+    await user.click(toggle);
+    await waitFor(() =>
+      expect(bridge.updatePiRuntimeSettings).toHaveBeenLastCalledWith({
+        nativeToolsEnabled: false,
       }),
     );
-    expect(await within(panel).findByText("搜索设置已保存。")).toBeTruthy();
-
-    await user.click(within(panel).getByRole("button", { name: "重置搜索服务" }));
-    await waitFor(() => expect(bridge.resetLocalWebSearchRuntime).toHaveBeenCalledWith());
-    expect(await within(panel).findByText("已清除缓存并重置搜索服务。")).toBeTruthy();
-    expect(within(panel).queryByText("退避中")).toBeNull();
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false));
   });
 
   it("shows browser as a configurable tool without exposing active browser sessions", async () => {
@@ -4352,7 +4658,7 @@ describe("M1 chat renderer", () => {
     const user = userEvent.setup();
 
     expect(await screen.findByLabelText("工具设置")).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "工具", level: 1 })).toBeNull();
+    expect(screen.getByRole("heading", { name: "工具", level: 1 })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "工具" })).toBeNull();
     expect(screen.getByRole("button", { name: "工具" })).toBeTruthy();
     expect(screen.queryByText("最近添加")).toBeNull();
@@ -4477,7 +4783,7 @@ describe("M1 chat renderer", () => {
       name: "每日巡检",
       prompt: "检查项目并运行测试",
       kind: "standalone",
-      execution: { modelRef: "platform/byok.deepseek.flash", catchUpPolicy: "latest_once" },
+      execution: { modelRef: thinkingModel.modelRef, catchUpPolicy: "latest_once" },
       schedule: { mode: "rrule", expression: "FREQ=DAILY" },
     });
   });
@@ -4646,7 +4952,7 @@ describe("M1 chat renderer", () => {
     const user = userEvent.setup();
 
     const startup = await screen.findByRole("checkbox", {
-      name: "登录 Windows 后自动运行",
+      name: "系统登录后自动运行",
     });
     expect((startup as HTMLInputElement).checked).toBe(false);
     await user.click(startup);
@@ -4666,7 +4972,7 @@ describe("M1 chat renderer", () => {
       ownerProfileId: "local-default",
       name: "每日巡检",
       prompt: "检查项目并运行测试",
-      kind: "standalone" as const,
+      kind: "heartbeat" as const,
       status: "active" as const,
       schedule: {
         mode: "rrule" as const,
@@ -4674,7 +4980,7 @@ describe("M1 chat renderer", () => {
         timezone: "UTC",
         startAt: "2026-08-30T01:00:00.000Z",
       },
-      target: { conversationId: null, branchId: null, workspaceGrantIds: [] },
+      target: { conversationId, branchId, workspaceGrantIds: [] },
       execution: {
         modelRef: "platform/byok",
         thinkingLevel: "medium" as const,
@@ -4689,6 +4995,17 @@ describe("M1 chat renderer", () => {
       updatedAt: "2026-08-29T01:00:00.000Z",
       revision: 3,
     };
+    vi.mocked(bridge.listModels).mockResolvedValue([
+      { ...thinkingModel, modelRef: automation.execution.modelRef },
+    ]);
+    vi.mocked(bridge.listConversations).mockResolvedValue([
+      {
+        ...snapshot.conversation,
+        activeBranchId: "different-active-branch",
+        lastMessagePreview: "",
+        messageCount: snapshot.messages.length,
+      },
+    ]);
     vi.mocked(bridge.listAutomations).mockResolvedValue([automation]);
     vi.mocked(bridge.previewAutomationSchedule).mockResolvedValue({
       occurrences: ["2026-08-30T01:00:00.000Z", "2026-08-31T01:00:00.000Z"],
@@ -4724,6 +5041,9 @@ describe("M1 chat renderer", () => {
           }),
         }),
       ),
+    );
+    expect(vi.mocked(bridge.updateAutomation).mock.calls[0]![0].changes).not.toHaveProperty(
+      "target",
     );
   });
 
@@ -5137,5 +5457,233 @@ describe("M1 chat renderer", () => {
       }),
     );
     expect(await screen.findByRole("button", { name: "工作目录 private-notes" })).toBeTruthy();
+  });
+});
+
+// The enterprise edition mounts this same App with a scoped execution/data adapter.
+describe("existing workspace bridge injection", () => {
+  it("renders the original chat, projects and composer using only the registered bridge", async () => {
+    const personal = createBridge();
+    const scoped = createBridge();
+    setDesktopWorkspaceBridge(scoped);
+    try {
+      renderApp(personal, `/chat/${conversationId}`);
+      expect(await screen.findByRole("heading", { name: "Markdown 验收" })).toBeTruthy();
+      expect(await screen.findByRole("textbox", { name: "发送消息" })).toBeTruthy();
+      await waitFor(() => expect(scoped.listProjects).toHaveBeenCalled());
+      expect(scoped.getConversation).toHaveBeenCalledWith({ conversationId });
+      expect(scoped.onChatEvent).toHaveBeenCalled();
+      for (const method of Object.values(personal)) {
+        if (vi.isMockFunction(method)) expect(method).not.toHaveBeenCalled();
+      }
+    } finally {
+      cleanup();
+      setDesktopWorkspaceBridge(null);
+    }
+  });
+});
+
+describe("workspace drafts through the original pages", () => {
+  it("retains draft text and selected attachments through settings and clears both after sending", async () => {
+    cleanup();
+    const bridge = createBridge();
+    const file: PersonalFile = {
+      id: crypto.randomUUID(),
+      ownerProfileId: "local-default",
+      displayName: "draft-notes.txt",
+      format: "text",
+      mediaType: "text/plain",
+      sizeBytes: 12,
+      checksumSha256: "a".repeat(64),
+      objectRef: `objects/sha256/aa/${"a".repeat(64)}`,
+      sourceScopeId: crypto.randomUUID(),
+      sourceRelativePath: "draft-notes.txt",
+      parseStatus: "ready",
+      parseErrorCode: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    };
+    vi.mocked(bridge.chooseFiles).mockResolvedValue([file]);
+    renderApp(bridge);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "发送消息" }), "保留这份草稿及附件");
+    await user.click(screen.getByRole("button", { name: "添加附件" }));
+    expect(await screen.findByRole("button", { name: "移除附件 draft-notes.txt" })).toBeTruthy();
+    await user.click(screen.getByRole("link", { name: "设置" }));
+    await user.click(await screen.findByRole("button", { name: "返回应用" }));
+    expect(
+      ((await screen.findByRole("textbox", { name: "发送消息" })) as HTMLTextAreaElement).value,
+    ).toBe("保留这份草稿及附件");
+    expect(screen.getByRole("button", { name: "移除附件 draft-notes.txt" })).toBeTruthy();
+    expect(bridge.chooseFiles).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() =>
+      expect(bridge.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "保留这份草稿及附件", personalFileIds: [file.id] }),
+      ),
+    );
+    await screen.findByRole("heading", { name: "Markdown 验收" });
+    await user.click(screen.getByRole("link", { name: "新对话" }));
+    expect(
+      ((await screen.findByRole("textbox", { name: "发送消息" })) as HTMLTextAreaElement).value,
+    ).toBe("");
+    expect(screen.queryByRole("button", { name: "移除附件 draft-notes.txt" })).toBeNull();
+  });
+
+  it("does not restore the preceding workspace's draft after a bridge identity change", async () => {
+    cleanup();
+    const personal = createBridge(),
+      first = createBridge(),
+      next = createBridge();
+    setDesktopWorkspaceBridge(first);
+    try {
+      renderApp(personal);
+      fireEvent.change(await screen.findByRole("textbox", { name: "发送消息" }), {
+        target: { value: "仅属于前一个企业的草稿" },
+      });
+      cleanup();
+      setDesktopWorkspaceBridge(next);
+      renderApp(personal);
+      expect(
+        ((await screen.findByRole("textbox", { name: "发送消息" })) as HTMLTextAreaElement).value,
+      ).toBe("");
+      expect(personal.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      setDesktopWorkspaceBridge(null);
+    }
+  });
+});
+
+it("renders saved tool evidence in the original conversation without requesting fabricated live-run detail", async () => {
+  cleanup();
+  const bridge = createBridge(),
+    runId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  bridge.listWorkItems = vi.fn().mockResolvedValue([
+    {
+      id: runId,
+      ownerProfileId: "member",
+      conversationId,
+      messageId: assistantMessageId,
+      title: "企业报告 · 执行记录",
+      status: "completed",
+      activeRunId: runId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      completedAt: timestamp,
+      revision: 2,
+      recordedActivity: {
+        runId,
+        modelRef: "platform/saved-run",
+        status: "completed",
+        createdAt: timestamp,
+        completedAt: timestamp,
+        errorCode: null,
+        bindings: [
+          {
+            installationId: skillInstallation.id,
+            name: "report",
+            version: "1.2.3",
+            source: "enterprise",
+            digest: "a".repeat(64),
+          },
+        ],
+        tools: [
+          {
+            callId: "saved-tool-call",
+            name: "openerx_skill_script",
+            status: "completed",
+            summary: "已生成已保存报告",
+            errorCode: null,
+            permission: "once",
+          },
+        ],
+      },
+    },
+  ]);
+  bridge.getWorkItem = vi.fn().mockRejectedValue(new Error("LIVE_RUN_DETAIL_NOT_RECORDED"));
+  setDesktopWorkspaceBridge(bridge);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[`/chat/${conversationId}`]}>
+        <App />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: /用时|企业报告.*执行记录/ }));
+  expect(await screen.findByText("已生成已保存报告")).toBeTruthy();
+  expect(screen.getByText("已挂载技能")).toBeTruthy();
+  expect(screen.getByText("report · 1.2.3")).toBeTruthy();
+  expect(bridge.getWorkItem).not.toHaveBeenCalled();
+  expect(screen.queryByText("暂时无法读取工具活动。")).toBeNull();
+  cleanup();
+  client.clear();
+  setDesktopWorkspaceBridge(null);
+});
+
+describe("enterprise page follow-ups in the common App", () => {
+  afterEach(() => {
+    cleanup();
+    setDesktopWorkspaceBridge(null);
+  });
+  it("opens and focuses the search hit on its branch instead of the current branch", async () => {
+    const bridge = createBridge();
+    const hitBranch = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const next = {
+      ...snapshot,
+      conversation: { ...snapshot.conversation, activeBranchId: hitBranch },
+      branches: [...snapshot.branches, { ...snapshot.branches[0]!, id: hitBranch }],
+      messages: snapshot.messages.map((item) => ({ ...item, branchId: hitBranch })),
+    };
+    vi.mocked(bridge.getConversation).mockResolvedValue({ ...snapshot, branches: next.branches });
+    vi.mocked(bridge.activateBranch).mockResolvedValue(next);
+    vi.mocked(bridge.search).mockResolvedValue([
+      {
+        conversationId,
+        branchId: hitBranch,
+        messageId: userMessageId,
+        title: "命中另一分支",
+        excerpt: "分支中的消息",
+        updatedAt: timestamp,
+      },
+    ]);
+    renderApp(bridge, "/search");
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("搜索关键词"), "分支");
+    await user.click(screen.getByRole("button", { name: "搜索" }));
+    const link = await screen.findByRole("link", { name: /命中另一分支/ });
+    expect(link.getAttribute("href")).toContain(`branch=${hitBranch}`);
+    expect(link.getAttribute("href")).toContain(`message=${userMessageId}`);
+    await user.click(link);
+    await waitFor(() =>
+      expect(bridge.activateBranch).toHaveBeenCalledWith({ conversationId, branchId: hitBranch }),
+    );
+    await waitFor(() => expect(document.activeElement?.id).toBe(`chat-message-${userMessageId}`));
+  });
+  it("disables enterprise folder imports and inference retries without hiding personal choices", async () => {
+    const bridge = createBridge();
+    setDesktopWorkspaceBridge(bridge, undefined, enterpriseWorkspaceCapabilities);
+    renderApp(bridge, "/files");
+    expect(await screen.findByRole("button", { name: /添加文件夹/ })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByText(/聊天附件和生成成果自动同步到企业/)).toBeTruthy();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: /^搜索/ }));
+    expect(await screen.findByText("企业历史")).toBeTruthy();
+    expect(screen.getByText(/查找已同步到本机的企业聊天/)).toBeTruthy();
+    await user.click(screen.getByRole("link", { name: "自动化" }));
+    await user.click(await screen.findByRole("button", { name: "新建自动化" }));
+    expect(screen.getByLabelText("启动失败重试")).toHaveProperty("disabled", true);
+    expect(screen.queryByRole("option", { name: /3 次/ })).toBeNull();
+    expect(await screen.findByRole("option", { name: thinkingModel.displayName })).toBeTruthy();
   });
 });

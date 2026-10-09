@@ -9,6 +9,8 @@ import {
   automationSchedulerReconcileFrameSchema,
   chatCommandEnvelopeSchema,
   type ErrorEnvelope,
+  modelAccountChangedSchema,
+  modelAuthorizationResponseSchema,
   projectCommandEnvelopeSchema,
   remoteApplyCommandRequestFrameSchema,
   remoteConnectorAuthorizationFrameSchema,
@@ -54,6 +56,7 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
 
   const piHost = new MessagePortPiHostClient(piHostPort, bootstrap.piHostNonce);
   const mainCapabilities = new MainCapabilityClient(mainPort);
+  piHost.forwardModelAuthorization((request) => mainPort.postMessage(request));
   await piHost.ready();
   const repository = new ChatRepository(
     path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),
@@ -249,6 +252,16 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
   remotePort.start();
 
   mainPort.on("message", async (event) => {
+    const modelAuthorization = modelAuthorizationResponseSchema.safeParse(event.data);
+    if (modelAuthorization.success) {
+      piHost.respondModelAuthorization(modelAuthorization.data);
+      return;
+    }
+    const modelAccount = modelAccountChangedSchema.safeParse(event.data);
+    if (modelAccount.success) {
+      await service.invalidateModelAccount(modelAccount.data.accountId);
+      return;
+    }
     if (mainCapabilities.handleMessage(event.data)) return;
     const automationReconcile = automationSchedulerReconcileFrameSchema.safeParse(event.data);
     if (automationReconcile.success) {

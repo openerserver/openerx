@@ -22,8 +22,21 @@ export default defineConfig({
       },
     },
   ],
+  resolve: {
+    alias: {
+      "@openerx/desktop-ui/workspace-bridge": fileURLToPath(
+        new URL("../../packages/desktop-ui/src/workspace-bridge.ts", import.meta.url),
+      ),
+      // Watch shared presentation at its source path instead of the node_modules symlink.
+      "@openerx/desktop-ui/workspace": fileURLToPath(
+        new URL("../../packages/desktop-ui/src/workspace.tsx", import.meta.url),
+      ),
+    },
+  },
   optimizeDeps: {
-    exclude: ["@openerx/contracts"],
+    // Linked desktop-ui uses Markdown outside this app root. Prebundle its CJS dependencies.
+    include: ["react-markdown", "remark-gfm"],
+    exclude: ["@openerx/contracts", "@openerx/desktop-ui/workspace-bridge"],
   },
   server: {
     headers: { "Cache-Control": "no-store" },

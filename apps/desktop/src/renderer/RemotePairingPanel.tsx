@@ -1,3 +1,4 @@
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { QrCode } from "@phosphor-icons/react";
 import { useMutation } from "@tanstack/react-query";
 import QRCode from "qrcode";
@@ -14,7 +15,7 @@ export function RemotePairingPanel(): React.JSX.Element {
     error,
   } = useMutation({
     mutationFn: async () => {
-      const challenge = await window.openerx.createRemotePairingChallenge();
+      const challenge = await desktopWorkspaceBridge().createRemotePairingChallenge();
       const pairingUrl = `openerx://remote/pair?payload=${encodeURIComponent(JSON.stringify(challenge))}`;
       // SVG keeps the dense pairing payload sharp at the displayed size and
       // avoids depending on a canvas context in the desktop renderer.

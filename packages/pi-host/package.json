@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/agent-session.ts",
+    "./codemode-worker": "./src/codemode-worker.ts",
     "./host": "./src/host.ts",
     "./memory-background": "./src/memory-background.ts",
     "./platform-provider": "./src/platform-provider.ts",
@@ -16,8 +17,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.86.0",
-    "@earendil-works/pi-coding-agent": "0.86.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-codemode": "1.0.0",
     "@openerx/contracts": "0.0.0",
     "@sinclair/typebox": "0.34.52"
   },

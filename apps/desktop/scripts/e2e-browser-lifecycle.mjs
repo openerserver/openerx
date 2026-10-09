@@ -110,6 +110,12 @@ try {
   await page.waitForLoadState("domcontentloaded");
   await page.waitForFunction(() => Boolean(window.openerx));
   await page.evaluate(async (baseUrl) => {
+    // Grant the test-owned loopback site through the real settings API.
+    await window.openerx.updateBrowserPermission({
+      action: "site",
+      host: "127.0.0.1",
+      decision: "allow",
+    });
     await window.openerx.updateModelServiceSettings({
       mode: "byok",
       apiKey: "synthetic-browser-lifecycle-key",

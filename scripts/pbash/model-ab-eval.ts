@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import {
   automaticModelRef,
   BROKERED_BASH_CONTRACT_VERSION,
@@ -404,7 +405,13 @@ async function runTask(task: EvalTask, variant: Variant, repetition: number): Pr
         { value: directories.agentDir, replacement: "<private-pi-agent-directory>" },
       ],
     });
-    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     runtime.registerNativeProvider(platform.provider);
     const created = await createProductPiSession({
       cwd: directories.piCwd,

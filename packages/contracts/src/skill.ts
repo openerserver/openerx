@@ -11,16 +11,41 @@ export const skillVersionSchema = z
   .min(1)
   .max(100)
   .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
-export const skillScopeSchema = z.enum(["builtin", "personal", "workspace"]);
+export const skillScopeSchema = z.enum(["builtin", "personal", "workspace", "enterprise"]);
 export const skillSourceKindSchema = z.enum([
   "built_in",
   "local_directory",
   "archive",
   "platform_catalog",
+  "enterprise_catalog",
 ]);
 export const skillTrustSchema = z.enum(["bundled", "signed", "unverified"]);
 export const skillPackageStateSchema = z.enum(["installed", "missing", "damaged"]);
 export const skillPlatformSchema = z.enum(["darwin", "win32"]);
+
+// Source attribution for authenticated distribution, not a signing certificate.
+export const enterpriseSkillScopeSchema = z
+  .object({
+    authorityOrigin: z.string().url().max(2_048),
+    accountId: z.string().uuid(),
+    tenantId: z.string().uuid(),
+    credentialId: z.string().uuid(),
+    membershipEpisode: z.string().uuid(),
+  })
+  .strict();
+export const enterpriseSkillSourceSchema = enterpriseSkillScopeSchema
+  .extend({
+    skillId: z.string().uuid(),
+    version: skillVersionSchema,
+    catalogRevision: z.string().regex(/^(?:0|[1-9][0-9]{0,18})$/),
+    archiveSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    sizeBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(20 * 1024 * 1024),
+  })
+  .strict();
 
 export const skillPermissionDeclarationSchema = z
   .object({
@@ -44,6 +69,7 @@ const skillInstallationBaseSchema = z
     workspaceId: z.string().min(1).max(500).nullable(),
     sourceKind: skillSourceKindSchema,
     sourceLabel: z.string().min(1).max(500),
+    enterpriseSource: enterpriseSkillSourceSchema.optional(),
     checksumSha256: z.string().regex(/^[a-f0-9]{64}$/),
     trust: skillTrustSchema,
     enabled: z.boolean(),
@@ -67,7 +93,14 @@ const skillInstallationBaseSchema = z
   .strict();
 
 function validateSkillScope(
-  skill: { scope: "builtin" | "personal" | "workspace"; workspaceId: string | null },
+  skill: {
+    scope: z.infer<typeof skillScopeSchema>;
+    workspaceId: string | null;
+    sourceKind?: string;
+    trust?: string;
+    enterpriseSource?: z.infer<typeof enterpriseSkillSourceSchema>;
+    version?: string;
+  },
   context: z.RefinementCtx,
 ): void {
   if (skill.scope === "workspace" && !skill.workspaceId) {
@@ -78,6 +111,26 @@ function validateSkillScope(
       code: "custom",
       path: ["workspaceId"],
       message: "Workspace only applies to workspace scope",
+    });
+  }
+  if (skill.scope === "enterprise") {
+    if (
+      !skill.enterpriseSource ||
+      skill.sourceKind !== "enterprise_catalog" ||
+      skill.trust !== "unverified" ||
+      skill.enterpriseSource.version !== skill.version
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["enterpriseSource"],
+        message: "Enterprise source required",
+      });
+    }
+  } else if (skill.enterpriseSource || skill.sourceKind === "enterprise_catalog") {
+    context.addIssue({
+      code: "custom",
+      path: ["enterpriseSource"],
+      message: "Enterprise source only applies to enterprise scope",
     });
   }
 }
@@ -109,6 +162,10 @@ export const skillInstallationSyncSchema = skillInstallationBaseSchema
     installedAt: true,
     updatedAt: true,
     revision: true,
+  })
+  .extend({
+    scope: z.enum(["builtin", "personal", "workspace"]),
+    sourceKind: z.enum(["built_in", "local_directory", "archive", "platform_catalog"]),
   })
   .strict()
   .superRefine(validateSkillScope);
@@ -219,6 +276,8 @@ export const piSkillMountSchema = z
   .strict();
 
 export type SkillInstallation = z.infer<typeof skillInstallationSchema>;
+export type EnterpriseSkillScope = z.infer<typeof enterpriseSkillScopeSchema>;
+export type EnterpriseSkillSource = z.infer<typeof enterpriseSkillSourceSchema>;
 export type SkillInstallationSync = z.infer<typeof skillInstallationSyncSchema>;
 export type SkillInvocation = z.infer<typeof skillInvocationSchema>;
 export type SkillPackageManifest = z.infer<typeof skillPackageManifestSchema>;

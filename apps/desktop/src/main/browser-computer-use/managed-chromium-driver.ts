@@ -228,13 +228,7 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
   ): Promise<SystemBrowserDriverObservation> {
     const state = this.#required(binding, signal);
     this.#assertAllowed(state);
-    const data = (await this.#evaluate(
-      state,
-      "globalThis.__openerxPageAgent.snapshot()",
-    )) as PageSnapshot;
-    this.#acceptStatus(state, data);
-    this.#assertAllowed(state, data.url);
-    const captured = await state.window.webContents.capturePage();
+    const { data, captured } = await this.#captureSnapshot(binding, signal);
     const size = captured.getSize();
     const bitmap = captured.toBitmap();
     // Redact password/payment/OTP controls and embedded frames before bytes leave the main process.
@@ -261,7 +255,10 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
     this.#acceptStatus(state, after);
     this.#assertAllowed(state, after.url);
     if (signal.aborted) throw new BrowserObservationError("BROWSER_CANCELLED");
-    const stable = after.pageRevision === data.pageRevision;
+    const stable =
+      after.documentId === data.documentId &&
+      after.url === data.url &&
+      after.pageRevision === data.pageRevision;
     return {
       surface: {
         identity: browserSurfaceIdentity(binding.descriptor),
@@ -286,6 +283,39 @@ export class ManagedChromiumDriver implements SystemDefaultBrowserDriver {
           }
         : {}),
     };
+  }
+
+  async #captureSnapshot(binding: SystemBrowserBinding, signal: AbortSignal) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const state = this.#required(binding, signal);
+      this.#assertAllowed(state);
+      const data = (await this.#evaluate(
+        state,
+        "globalThis.__openerxPageAgent.snapshot()",
+      )) as PageSnapshot;
+      this.#acceptStatus(state, data);
+      this.#assertAllowed(state, data.url);
+      try {
+        // Background/hidden windows may not have a compositor surface yet.
+        // Capture without raising the window; retry with a fresh redaction map.
+        const captured = await state.window.webContents.capturePage(undefined, {
+          stayHidden: true,
+          stayAwake: true,
+        });
+        this.#required(binding, signal);
+        this.#assertAllowed(state);
+        const size = captured.getSize();
+        if (!captured.isEmpty() && size.width > 0 && size.height > 0) return { data, captured };
+      } catch (error) {
+        this.#required(binding, signal);
+        this.#assertAllowed(state);
+        if (error instanceof BrowserObservationError) throw error;
+        if (!(error instanceof Error) || !/UnknownVizError|Failed to capture/u.test(error.message))
+          throw new BrowserObservationError("BROWSER_BACKEND_UNAVAILABLE");
+      }
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+    throw new BrowserObservationError("BROWSER_BACKEND_UNAVAILABLE");
   }
 
   async performSemantic(

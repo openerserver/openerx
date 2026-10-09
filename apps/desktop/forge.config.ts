@@ -235,6 +235,8 @@ const config: ForgeConfig = {
       }
       copyRuntimePackage(buildPath, "@resvg/resvg-js");
       copyRuntimePackage(buildPath, resvgNativePackage);
+      // The worker receives a compiled module; Pi reads this WASM payload at runtime.
+      copyRuntimePackage(buildPath, "quickjs-wasi");
 
       const releaseDirectory = path.join(buildPath, "release");
       mkdirSync(releaseDirectory, { recursive: true });
@@ -299,6 +301,11 @@ const config: ForgeConfig = {
         {
           entry: "src/utility/pi-host.ts",
           config: "vite.pi-host.config.mts",
+          target: "main",
+        },
+        {
+          entry: "src/utility/codemode-worker.ts",
+          config: "vite.codemode-worker.config.mts",
           target: "main",
         },
         {

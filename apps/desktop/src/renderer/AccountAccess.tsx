@@ -1,4 +1,5 @@
 import type { AccountState, EmailChallenge } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { ArrowRight, CheckCircle, Desktop } from "@phosphor-icons/react";
 import { useMutation } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -101,7 +102,7 @@ export function AccountAccess({
       if (action === "verify" && challenge) {
         // Read the visible field so native OTP autofill is included in submission.
         const visibleCode = codeInput.current?.value ?? code;
-        const result = await window.openerx.verifyEmailCode({
+        const result = await desktopWorkspaceBridge().verifyEmailCode({
           challengeId: challenge.challengeId,
           code: visibleCode,
         });
@@ -109,7 +110,7 @@ export function AccountAccess({
         setChallenge(null);
         setCode("");
       } else {
-        const next = await window.openerx.requestEmailCode({
+        const next = await desktopWorkspaceBridge().requestEmailCode({
           email: challenge?.email ?? email.trim(),
         });
         setNow(Date.now());

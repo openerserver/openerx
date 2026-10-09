@@ -15,6 +15,8 @@ export function inScope(file) {
       file,
     ) ||
     /^tests\/v2\/remote-[^/]+\.test\.ts$/u.test(file) ||
+    /^scripts\/security\/[^/]+\.(?:cjs|mjs|py)$/u.test(file) ||
+    /^vendor\/security\/[^/]+\.(?:tgz|json|md)$/u.test(file) ||
     file === "tests/v2/fixtures/platform-alpha.ts" ||
     [
       "scripts/desktop-parity.mjs",

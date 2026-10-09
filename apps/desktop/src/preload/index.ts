@@ -75,6 +75,7 @@ import {
   filePreviewInputSchema,
   fileRevokeScopeInputSchema,
   fileSearchInputSchema,
+  hostedModelUsageSchema,
   ipcChannels,
   ledgerTransactionSchema,
   localExportResultSchema,
@@ -107,6 +108,7 @@ import {
   permissionListInputSchema,
   permissionResolveInputSchema,
   personalDataSummarySchema,
+  piRuntimeSettingsUpdateInputSchema,
   projectArchiveCommandInputSchema,
   projectCreateInputSchema,
   projectDirectoryChooseInputSchema,
@@ -274,6 +276,18 @@ const bridge: DesktopBridge = {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.diagnosticsExport);
     return result === null ? null : localExportResultSchema.parse(result);
   },
+  getLegacyPersonalDataSummary: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.legacyPersonalDataSummary);
+    return personalDataSummarySchema.parse(result);
+  },
+  exportLegacyPersonalData: async () => {
+    const result: unknown = await ipcRenderer.invoke(ipcChannels.legacyPersonalDataExport);
+    return result === null ? null : localExportResultSchema.parse(result);
+  },
+  listLegacyConversations: async (input = {}) =>
+    invokeChat(ipcChannels.legacyChatList, "chat.list", chatListInputSchema.parse(input)),
+  getLegacyConversation: async (input) =>
+    invokeChat(ipcChannels.legacyChatGet, "chat.get", chatGetInputSchema.parse(input)),
   getPersonalDataSummary: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.personalDataSummary);
     return personalDataSummarySchema.parse(result);
@@ -356,6 +370,11 @@ const bridge: DesktopBridge = {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.modelList);
     return modelCatalogEntrySchema.array().parse(result);
   },
+  onModelsChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on(ipcChannels.modelCatalogChanged, handler);
+    return () => ipcRenderer.removeListener(ipcChannels.modelCatalogChanged, handler);
+  },
   getModelServiceSettings: async () => {
     const result: unknown = await ipcRenderer.invoke(ipcChannels.modelServiceSettingsGet);
     return modelServiceSettingsSchema.parse(result);
@@ -381,6 +400,8 @@ const bridge: DesktopBridge = {
     );
     return modelServiceSettingsSchema.parse(result);
   },
+  getHostedModelUsage: async () =>
+    hostedModelUsageSchema.parse(await ipcRenderer.invoke(ipcChannels.hostedModelUsage)),
   getUsage: async (input = {}) => {
     const result: unknown = await ipcRenderer.invoke(
       ipcChannels.usageGet,
@@ -449,6 +470,14 @@ const bridge: DesktopBridge = {
       syncResolveConflictInputSchema.parse(input),
     ),
   clearLocalCache: async () => invokeChat(ipcChannels.localCacheClear, "cache.clear", {}),
+  getPiRuntimeSettings: async () =>
+    invokeChat(ipcChannels.piRuntimeSettingsGet, "pi.runtime.settings.get", {}),
+  updatePiRuntimeSettings: async (input) =>
+    invokeChat(
+      ipcChannels.piRuntimeSettingsUpdate,
+      "pi.runtime.settings.update",
+      piRuntimeSettingsUpdateInputSchema.parse(input),
+    ),
   getMemorySettings: async () =>
     invokeChat(ipcChannels.memorySettingsGet, "memory.settings.get", {}),
   updateMemorySettings: async (input) =>

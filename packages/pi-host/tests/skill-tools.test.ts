@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { TranscriptContext } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import type { PiSkillMount } from "@openerx/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -61,7 +62,13 @@ describe("Pi native Skill alignment", () => {
       transport: { request },
     });
     const contexts: TranscriptContext[] = [];
-    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     runtime.registerNativeProvider(faux.provider);
     faux.setResponses([
@@ -145,5 +152,63 @@ describe("Pi native Skill alignment", () => {
     expect(() =>
       validateSkillMounts(root, [{ ...auto, baseDir: path.join(root, "outside") }]),
     ).toThrow("SKILL_MOUNT_SCOPE_VIOLATION");
+  });
+
+  it("advertises binary reads and output collection only when the host provides them", async () => {
+    const { auto } = fixture();
+    const request = vi.fn(async () => ({
+      summary: "ok",
+      content: [],
+      sources: [],
+      artifacts: [],
+      sideEffectCommitted: true,
+      durationMs: 0,
+    }));
+    const input = {
+      generationId: randomUUID(),
+      conversationId: randomUUID(),
+      branchId: randomUUID(),
+      assistantMessageId: randomUUID(),
+      mounts: [auto],
+      transport: { request },
+    };
+    const basic = createProductSkillTools(input).find(
+      (tool) => tool.name === "openerx_skill_script",
+    )!;
+    expect(basic.parameters).not.toHaveProperty("properties.outputs");
+    const tools = createProductSkillTools({
+      ...input,
+      binaryResourcesAvailable: true,
+      scriptOutputsAvailable: true,
+    });
+    expect(tools.find((tool) => tool.name === "read")?.description).toContain("parsed text");
+    const script = tools.find((tool) => tool.name === "openerx_skill_script")!;
+    const args = {
+      skill: auto.name,
+      script: "scripts/helper.mjs",
+      args: [],
+      outputs: [{ relativePath: "outputs/report.docx", displayName: "report.docx" }],
+    };
+    await script.execute("output", args, undefined, undefined, {} as never);
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: expect.objectContaining({
+          outputs: [{ ...args.outputs[0], purpose: "deliverable" }],
+        }),
+      }),
+    );
+    await expect(
+      script.execute(
+        "escape",
+        { ...args, outputs: [{ ...args.outputs[0], relativePath: "outputs/../host.docx" }] },
+        undefined,
+        undefined,
+        {} as never,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      basic.execute("unsupported", args, undefined, undefined, {} as never),
+    ).rejects.toThrow("SKILL_OUTPUTS_NOT_AVAILABLE");
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

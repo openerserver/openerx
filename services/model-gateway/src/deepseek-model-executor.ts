@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   automaticModelRef,
   type ModelCatalogEntry,
@@ -59,7 +60,7 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
       imageInput: false,
       fileInput: false,
       functionCalling: true,
-      structuredOutput: true,
+      structuredOutput: false,
     },
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
@@ -78,7 +79,7 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
       imageInput: false,
       fileInput: false,
       functionCalling: true,
-      structuredOutput: true,
+      structuredOutput: false,
     },
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
@@ -97,7 +98,7 @@ const deepSeekProviderModelCatalog: ModelCatalogEntry[] = [
       imageInput: true,
       fileInput: false,
       functionCalling: true,
-      structuredOutput: true,
+      structuredOutput: false,
     },
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
@@ -170,7 +171,12 @@ type DeepSeekUserContentPart = DeepSeekTextContentPart | DeepSeekImageContentPar
 type DeepSeekMessage =
   | { role: "system"; content: string }
   | { role: "user"; content: string | DeepSeekUserContentPart[] }
-  | { role: "assistant"; content: string | null; tool_calls?: DeepSeekWireToolCall[] }
+  | {
+      role: "assistant";
+      content: string | null;
+      tool_calls?: DeepSeekWireToolCall[];
+      reasoning_content?: string;
+    }
   | { role: "tool"; content: string; tool_call_id: string };
 
 interface DeepSeekUsage {
@@ -187,7 +193,7 @@ interface DeepSeekResponse {
   model?: unknown;
   choices?: Array<{
     finish_reason?: unknown;
-    message?: { content?: unknown; tool_calls?: unknown };
+    message?: { content?: unknown; tool_calls?: unknown; reasoning_content?: unknown };
   }>;
   usage?: DeepSeekUsage;
 }
@@ -359,6 +365,14 @@ function toDeepSeekTools(context: unknown): DeepSeekFunctionTool[] {
   }
   return context.tools.map((raw) => {
     if (!plainRecord(raw)) throw new Error("DEEPSEEK_TOOL_DEFINITION_INVALID");
+    if (
+      raw.strict === true ||
+      (plainRecord(raw.constrainedSampling) &&
+        (raw.constrainedSampling.type === "grammar" ||
+          raw.constrainedSampling.strict === "require"))
+    ) {
+      throw new Error("MODEL_CAPABILITY_UNSUPPORTED");
+    }
     const { name, description, parameters } = raw;
     if (
       typeof name !== "string" ||
@@ -375,7 +389,15 @@ function toDeepSeekTools(context: unknown): DeepSeekFunctionTool[] {
   });
 }
 
-function toDeepSeekMessages(context: unknown, allowImages: boolean): DeepSeekMessage[] {
+function reasoningSignature(model: DeepSeekModelId): string {
+  return `openerx-deepseek-v1:${createHash("sha256").update(`${deepSeekApiBaseUrl}/chat/completions:${model}`).digest("hex")}`;
+}
+
+function toDeepSeekMessages(
+  context: unknown,
+  allowImages: boolean,
+  replaySignature?: string,
+): DeepSeekMessage[] {
   if (!plainRecord(context)) throw new Error("DEEPSEEK_CONTEXT_INVALID");
   const candidate = context as { systemPrompt?: unknown; messages?: unknown };
   if (!Array.isArray(candidate.messages)) throw new Error("DEEPSEEK_CONTEXT_INVALID");
@@ -413,7 +435,24 @@ function toDeepSeekMessages(context: unknown, allowImages: boolean): DeepSeekMes
       if (!content.text && content.toolCalls.length === 0) continue;
       messages.push({
         role: "assistant",
-        content: content.text || null,
+        content: content.text,
+        ...(replaySignature
+          ? {
+              reasoning_content: Array.isArray(message.content)
+                ? message.content
+                    .filter(
+                      (part) =>
+                        plainRecord(part) &&
+                        part.type === "thinking" &&
+                        part.redacted !== true &&
+                        part.thinkingSignature === replaySignature &&
+                        typeof part.thinking === "string",
+                    )
+                    .map((part) => part.thinking)
+                    .join("")
+                : "",
+            }
+          : {}),
         ...(content.toolCalls.length > 0
           ? { tool_calls: content.toolCalls.map(wireToolCall) }
           : {}),
@@ -458,6 +497,46 @@ function thinkingModeForRequest(
 ): DeepSeekThinkingMode {
   if (request.thinkingLevel === undefined) return fallback;
   return request.thinkingLevel === "off" ? "disabled" : "enabled";
+}
+
+function prepareDeepSeekRequest(
+  request: ModelGatewayRequestDto,
+  model: DeepSeekModelId,
+  fallback: DeepSeekThinkingMode,
+) {
+  // This legacy local executor targets DeepSeek's stable Chat endpoint. Schema
+  // guarantees require its beta endpoint or a tested central-model route.
+  if (request.responseFormat && request.responseFormat.type !== "text") {
+    throw new Error("MODEL_CAPABILITY_UNSUPPORTED");
+  }
+  const thinking = thinkingModeForRequest(request, fallback);
+  const tools = toDeepSeekTools(request.context);
+  if (
+    thinking === "enabled" &&
+    tools.length &&
+    (!request.reasoningReplay ||
+      request.toolChoice === "required" ||
+      typeof request.toolChoice === "object")
+  ) {
+    throw new Error("MODEL_CAPABILITY_UNSUPPORTED");
+  }
+  if (request.toolChoice && !tools.length) throw new Error("MODEL_REQUEST_INVALID");
+  const named = typeof request.toolChoice === "object" ? request.toolChoice : undefined;
+  if (named && !tools.some((tool) => tool.function.name === named.name))
+    throw new Error("MODEL_REQUEST_INVALID");
+  const messages = toDeepSeekMessages(
+    request.context,
+    model === "deepseek-v4-flash-vision-exp",
+    thinking === "enabled" && tools.length ? reasoningSignature(model) : undefined,
+  );
+  return {
+    messages,
+    tools,
+    thinking,
+    toolChoice: named
+      ? { type: "function", function: { name: named.name } }
+      : (request.toolChoice ?? "auto"),
+  };
 }
 
 function providerError(body: unknown, status: number): Error {
@@ -643,8 +722,11 @@ export class DeepSeekModelExecutor implements ModelExecutor {
     signal: AbortSignal | undefined,
   ): Promise<ModelExecutionResult> {
     const model = modelForRequest(request, this.#defaultModel);
-    const messages = toDeepSeekMessages(request.context, model === "deepseek-v4-flash-vision-exp");
-    const tools = toDeepSeekTools(request.context);
+    const { messages, tools, thinking, toolChoice } = prepareDeepSeekRequest(
+      request,
+      model,
+      this.#thinking,
+    );
     const timeout = AbortSignal.timeout(this.#timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response: Response;
@@ -658,8 +740,8 @@ export class DeepSeekModelExecutor implements ModelExecutor {
         body: JSON.stringify({
           model,
           messages,
-          ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-          thinking: { type: thinkingModeForRequest(request, this.#thinking) },
+          ...(tools.length > 0 ? { tools, tool_choice: toolChoice } : {}),
+          thinking: { type: thinking },
           max_tokens: deepSeekProviderMaxOutputTokens,
           stream: false,
           user_id: request.accountId,
@@ -705,6 +787,14 @@ export class DeepSeekModelExecutor implements ModelExecutor {
       responseModel === model ? undefined : `provider_response_model:${model}->${responseModel}`;
     return {
       text,
+      ...(request.reasoningReplay && typeof choice?.message?.reasoning_content === "string"
+        ? {
+            reasoning: {
+              text: choice.message.reasoning_content,
+              signature: reasoningSignature(responseModel),
+            },
+          }
+        : {}),
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
       effectiveModelRef,
       ...(fallbackReason ? { fallbackReason } : {}),
@@ -719,8 +809,11 @@ export class DeepSeekModelExecutor implements ModelExecutor {
     signal: AbortSignal | undefined,
   ): Promise<ModelExecutionResult> {
     const model = modelForRequest(request, this.#defaultModel);
-    const messages = toDeepSeekMessages(request.context, model === "deepseek-v4-flash-vision-exp");
-    const tools = toDeepSeekTools(request.context);
+    const { messages, tools, thinking, toolChoice } = prepareDeepSeekRequest(
+      request,
+      model,
+      this.#thinking,
+    );
     const timeout = AbortSignal.timeout(this.#timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response: Response;
@@ -734,8 +827,8 @@ export class DeepSeekModelExecutor implements ModelExecutor {
         body: JSON.stringify({
           model,
           messages,
-          ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-          thinking: { type: thinkingModeForRequest(request, this.#thinking) },
+          ...(tools.length > 0 ? { tools, tool_choice: toolChoice } : {}),
+          thinking: { type: thinking },
           max_tokens: deepSeekProviderMaxOutputTokens,
           stream: true,
           stream_options: { include_usage: true },
@@ -763,6 +856,7 @@ export class DeepSeekModelExecutor implements ModelExecutor {
     if (!response.body) throw new Error("DEEPSEEK_STREAM_BODY_MISSING");
 
     let text = "";
+    let reasoningText = "";
     let finishReason: string | undefined;
     let responseModel: DeepSeekModelId | null = null;
     let usage: DeepSeekUsage | undefined;
@@ -793,6 +887,8 @@ export class DeepSeekModelExecutor implements ModelExecutor {
         }
         if (chunk.usage) usage = chunk.usage;
         const choice = chunk.choices?.[0];
+        if (typeof choice?.delta?.reasoning_content === "string")
+          reasoningText += choice.delta.reasoning_content;
         const delta = choice?.delta?.content;
         if (typeof delta === "string" && delta.length > 0) {
           text += delta;
@@ -828,6 +924,9 @@ export class DeepSeekModelExecutor implements ModelExecutor {
       responseModel === model ? undefined : `provider_response_model:${model}->${responseModel}`;
     return {
       text,
+      ...(request.reasoningReplay && reasoningText
+        ? { reasoning: { text: reasoningText, signature: reasoningSignature(responseModel) } }
+        : {}),
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
       effectiveModelRef,
       ...(fallbackReason ? { fallbackReason } : {}),

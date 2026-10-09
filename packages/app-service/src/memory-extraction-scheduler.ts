@@ -94,6 +94,9 @@ export class PiMemoryExtractor implements MemoryExtractor {
               accountId: authorization.accountId,
               accessToken: authorization.accessToken,
               platformBaseUrl: authorization.platformBaseUrl,
+              ...(authorization.modelApiVersion
+                ? { modelApiVersion: authorization.modelApiVersion }
+                : {}),
               selectedModelRef: request.snapshot.conversation.selectedModelRef,
               approvedFallbackModelRef: null,
               requestDedupeKey: `memory-extract:${request.job.id}`,

@@ -1,4 +1,35 @@
+import { PiRuntimeSettingsPanel } from "@openerx/desktop-ui/pi-runtime";
 import { AppVersion, type VersionInfo } from "@openerx/desktop-ui/version";
+import {
+  ComposerSelect,
+  WorkspaceComposerFrame,
+  WorkspaceContentPreview,
+  WorkspaceEmptyState,
+  WorkspaceHeader,
+  WorkspaceInspector,
+  WorkspaceMarkdown,
+  WorkspaceMessage,
+  WorkspaceShell,
+  WorkspaceSidebar,
+  WorkspaceTextarea,
+  WorkspaceThread,
+} from "@openerx/desktop-ui/workspace";
+import {
+  desktopWorkspaceBridge,
+  desktopWorkspaceCapabilities,
+} from "@openerx/desktop-ui/workspace-bridge";
+import { conversationTargetHref } from "./conversation-target";
+import { LocalDataExportSettings } from "./LocalDataExportSettings";
+import { defaultModelNotice, resolveDefaultModel } from "./model-catalog";
+import { RecordedToolActivity } from "./RecordedToolActivity";
+import {
+  settingsSearchTarget,
+  settingsSectionSearch,
+  settingsSectionUrl,
+} from "./settings-navigation";
+import { useConversationTarget } from "./use-conversation-target";
+import { useWorkspaceComposerDraft } from "./workspace-drafts";
+import { workspaceHomePath } from "./workspace-navigation";
 
 declare const __OPENERX_BUILD_INFO__: VersionInfo | undefined;
 const appBuildInfo =
@@ -11,7 +42,6 @@ import type {
   BillingOverview,
   ChargeRecord,
   ChatEvent,
-  ContentPreview,
   ConversationSnapshot,
   ConversationSummary,
   DesktopNativePermission,
@@ -29,6 +59,7 @@ import type {
   ModelServiceSettingsUpdate,
   ModelUsageRecord,
   PersonalFile,
+  PiRuntimeSettingsUpdateInput,
   RechargeOrder,
   RefundOrder,
   ReleaseUpdateState,
@@ -62,7 +93,6 @@ import {
   Brain,
   CaretDown,
   ChatCircle,
-  Check,
   CheckCircle,
   Copy,
   Desktop,
@@ -94,8 +124,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, type RefObject, useEffect, useId, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import {
   Navigate,
   NavLink,
@@ -105,7 +134,6 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import remarkGfm from "remark-gfm";
 import { AccountAccess } from "./AccountAccess";
 import { AssistantCompanion, AssistantPage } from "./AssistantPage";
 import { AutomationsPage } from "./AutomationsPage";
@@ -134,6 +162,7 @@ import {
 } from "./projects";
 import { RemoteConnectionNotice } from "./RemoteConnections";
 import { RemoteSettings } from "./RemoteSettings";
+import { skillSummary } from "./skill-summary";
 import { withUiTimeout } from "./ui-timeout";
 import { WorkspaceLocation, WorkspaceSection } from "./WorkspaceContext";
 import { WorkItemWorkspaceEdits } from "./WorkspaceEdits";
@@ -399,6 +428,22 @@ const localWebSearchProviderStatusLabels: Record<
   unavailable: "不可用",
 };
 
+function localWebSearchFailureMessage(code: string): string {
+  switch (code) {
+    case "LOCAL_SEARCH_PROVIDER_CHALLENGE":
+      return "搜索服务要求访问验证，暂时无法完成搜索。可在上方选择其他搜索服务并保存。";
+    case "LOCAL_SEARCH_RATE_LIMITED":
+      return "搜索请求过于频繁，正在等待服务恢复。可稍后重试或选择其他搜索服务。";
+    case "LOCAL_SEARCH_TIMEOUT":
+      return "搜索服务响应超时，请稍后重试。";
+    case "LOCAL_SEARCH_RESULT_SURFACE_UNRECOGNIZED":
+    case "LOCAL_SEARCH_RESULT_PARSE_FAILED":
+      return "搜索服务返回的页面无法解析。可选择其他搜索服务并保存。";
+    default:
+      return "搜索服务暂时不可用，请稍后重试或选择其他搜索服务。";
+  }
+}
+
 const mcpAuthorizationLabels: Record<McpServerAuthorizationState["status"], string> = {
   not_required: "无需 OAuth",
   authorization_required: "需要浏览器授权",
@@ -446,25 +491,11 @@ function formatUpdatedAt(value: string): string {
 }
 
 function skillName(skill: SkillInstallation): string {
-  const names: Record<string, string> = {
-    documents: "文档",
-    pdf: "PDF",
-    presentations: "演示文稿",
-    spreadsheets: "电子表格",
-    "structured-report": "结构化报告",
-  };
-  return names[skill.name] ?? skill.displayName;
+  return skillSummary(skill).name;
 }
 
 function skillDescription(skill: SkillInstallation): string {
-  const descriptions: Record<string, string> = {
-    documents: "创建或编辑真实 DOCX，并逐页检查视觉结果。",
-    pdf: "创建或编辑真实 PDF，并逐页检查视觉结果。",
-    presentations: "创建或编辑真实 PPTX，并逐张检查幻灯片。",
-    spreadsheets: "创建或编辑真实 XLSX，并逐张检查工作表。",
-    "structured-report": "把材料整理成包含摘要、关键发现、证据和下一步的简明报告。",
-  };
-  return descriptions[skill.name] ?? skill.description;
+  return skillSummary(skill).description;
 }
 
 function userFacingError(error: unknown, fallback: string): string {
@@ -576,9 +607,6 @@ function userFacingError(error: unknown, fallback: string): string {
 function messageFailureLabel(errorCode: string): string {
   const classified = modelFailureMessage(errorCode);
   if (classified) return classified;
-  if (errorCode === "MODEL_CAPABILITY_UNSUPPORTED") {
-    return "当前模型不支持图片输入，请切换到自动或 DeepSeek V4 Flash Vision（实验）后重试。";
-  }
   if (errorCode === "FILE_TOO_LARGE") {
     return "图片总大小超过视觉模型限制，请压缩图片或减少附件后重试。";
   }
@@ -659,226 +687,6 @@ function trapFocus(event: React.KeyboardEvent<HTMLElement>): void {
   }
 }
 
-type ComposerSelectOption = {
-  value: string;
-  label: string;
-  description?: string;
-  disabled?: boolean;
-};
-
-type ComposerSelectGroup = {
-  label: string;
-  options: readonly ComposerSelectOption[];
-};
-
-function ComposerSelect({
-  ariaLabel,
-  className = "",
-  disabled = false,
-  icon,
-  id,
-  label,
-  onChange,
-  options,
-  groups,
-  renderNativeSelect = true,
-  selectedValues,
-  title,
-  value,
-}: {
-  ariaLabel: string;
-  className?: string;
-  disabled?: boolean;
-  icon?: ReactNode;
-  id?: string;
-  label: string;
-  onChange: (value: string) => void;
-  options?: readonly ComposerSelectOption[];
-  groups?: readonly ComposerSelectGroup[];
-  renderNativeSelect?: boolean;
-  selectedValues?: readonly string[];
-  title?: string;
-  value: string;
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const openingFocusRef = useRef<"selected" | "first" | "last">("selected");
-  const menuId = useId();
-  const normalizedGroups = useMemo(
-    () => groups ?? [{ label: "", options: options ?? [] }],
-    [groups, options],
-  );
-  const flattenedOptions = useMemo(
-    () => normalizedGroups.flatMap((group) => group.options),
-    [normalizedGroups],
-  );
-  const activeValues = useMemo(() => selectedValues ?? [value], [selectedValues, value]);
-  const enabledIndexes = useMemo(
-    () => flattenedOptions.flatMap((option, index) => (option.disabled ? [] : [index])),
-    [flattenedOptions],
-  );
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePress = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePress);
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePress);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const selectedIndex = flattenedOptions.findIndex(
-      (option) => activeValues.includes(option.value) && !option.disabled,
-    );
-    const targetIndex =
-      openingFocusRef.current === "first"
-        ? enabledIndexes[0]
-        : openingFocusRef.current === "last"
-          ? enabledIndexes.at(-1)
-          : selectedIndex >= 0
-            ? selectedIndex
-            : enabledIndexes[0];
-    window.requestAnimationFrame(() => {
-      if (targetIndex !== undefined) optionRefs.current[targetIndex]?.focus();
-    });
-  }, [activeValues, enabledIndexes, flattenedOptions, open]);
-
-  const openMenu = (focus: "selected" | "first" | "last" = "selected") => {
-    if (disabled || enabledIndexes.length === 0) return;
-    openingFocusRef.current = focus;
-    setOpen(true);
-  };
-
-  const closeMenu = (restoreFocus = false) => {
-    setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
-  };
-
-  const moveOptionFocus = (currentIndex: number, direction: 1 | -1) => {
-    const position = enabledIndexes.indexOf(currentIndex);
-    const nextPosition = (position + direction + enabledIndexes.length) % enabledIndexes.length;
-    const nextIndex = enabledIndexes[nextPosition];
-    if (nextIndex !== undefined) optionRefs.current[nextIndex]?.focus();
-  };
-
-  return (
-    <div
-      ref={rootRef}
-      className={`composer-select ${open ? "is-open" : ""} ${className}`.trim()}
-      title={title}
-    >
-      <button
-        ref={triggerRef}
-        type="button"
-        className="composer-select-trigger"
-        aria-label={`${ariaLabel}菜单`}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={menuId}
-        disabled={disabled}
-        onClick={() => (open ? closeMenu() : openMenu())}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            openMenu(event.key === "ArrowDown" ? "first" : "last");
-          } else if (event.key === "Escape" && open) {
-            event.preventDefault();
-            closeMenu(true);
-          }
-        }}
-      >
-        {icon}
-        <span className="composer-select-label">{label}</span>
-        <CaretDown className="composer-select-caret" size={13} weight="bold" aria-hidden="true" />
-      </button>
-      {renderNativeSelect ? (
-        <select
-          id={id}
-          className="composer-native-select"
-          aria-label={ariaLabel}
-          tabIndex={-1}
-          value={value}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-        >
-          {flattenedOptions.map((option) => (
-            <option key={option.value} value={option.value} disabled={option.disabled}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      ) : null}
-      {open ? (
-        <div id={menuId} className="composer-select-menu" role="listbox" aria-label={ariaLabel}>
-          {normalizedGroups.map((group, groupIndex) => {
-            const offset = normalizedGroups
-              .slice(0, groupIndex)
-              .reduce((total, current) => total + current.options.length, 0);
-            return (
-              <div className="composer-select-group" key={group.label || "options"}>
-                {group.label ? (
-                  <span className="composer-select-group-label">{group.label}</span>
-                ) : null}
-                {group.options.map((option, optionIndex) => {
-                  const index = offset + optionIndex;
-                  const selected = activeValues.includes(option.value);
-                  return (
-                    <button
-                      key={option.value}
-                      ref={(element) => {
-                        optionRefs.current[index] = element;
-                      }}
-                      type="button"
-                      className={`composer-select-option ${selected ? "is-selected" : ""}`}
-                      role="option"
-                      aria-selected={selected}
-                      aria-disabled={option.disabled || undefined}
-                      disabled={option.disabled}
-                      onClick={() => {
-                        if (option.disabled) return;
-                        if (!selected) onChange(option.value);
-                        closeMenu(true);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                          event.preventDefault();
-                          moveOptionFocus(index, event.key === "ArrowDown" ? 1 : -1);
-                        } else if (event.key === "Home" || event.key === "End") {
-                          event.preventDefault();
-                          const target =
-                            event.key === "Home" ? enabledIndexes[0] : enabledIndexes.at(-1);
-                          if (target !== undefined) optionRefs.current[target]?.focus();
-                        } else if (event.key === "Escape") {
-                          event.preventDefault();
-                          closeMenu(true);
-                        } else if (event.key === "Tab") {
-                          closeMenu();
-                        }
-                      }}
-                    >
-                      <span className="composer-select-option-copy">
-                        <strong>{option.label}</strong>
-                        {option.description ? <small>{option.description}</small> : null}
-                      </span>
-                      <span className="composer-select-check" aria-hidden="true">
-                        {selected ? <Check size={15} weight="bold" /> : null}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function HighlightedText({ text, query }: { text: string; query: string }): React.JSX.Element {
   const normalized = query.trim();
   if (!normalized) return <>{text}</>;
@@ -914,7 +722,7 @@ function AttachmentCard({
   const imageFile = imageFileFormats.has(file.format);
   const preview = useQuery({
     queryKey: ["files", "image-preview", file.id],
-    queryFn: () => window.openerx.previewFile({ personalFileId: file.id }),
+    queryFn: () => desktopWorkspaceBridge().previewFile({ personalFileId: file.id }),
     enabled: imageFile,
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
@@ -972,45 +780,37 @@ function Composer({
   defaultModelRef?: string;
   projectId?: string;
 }): React.JSX.Element {
-  const [draft, setDraft] = useState("");
+  const attachmentTarget = `${conversationId ?? "new"}:${projectId ?? ""}`;
+  const { draft, setDraft, pendingFiles, setPendingFiles } =
+    useWorkspaceComposerDraft(attachmentTarget);
   const [skillInstallationId, setSkillInstallationId] = useState("");
   const [newConversationModelRef, setNewConversationModelRef] = useState(defaultModelRef);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(defaultThinkingLevel);
   const [newConversationPermissionMode, setNewConversationPermissionMode] =
     useState<ToolPermissionMode>("ask");
-  const [pendingFiles, setPendingFiles] = useState<PersonalFile[]>([]);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
-  const attachmentTarget = `${conversationId ?? "new"}:${projectId ?? ""}`;
   const attachmentTargetRef = useRef(attachmentTarget);
   attachmentTargetRef.current = attachmentTarget;
-  const previousConversationIdRef = useRef(conversationId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  useEffect(() => {
-    if (previousConversationIdRef.current === conversationId) return;
-    previousConversationIdRef.current = conversationId;
-    setPendingFiles([]);
-    setAttachmentNotice(null);
-  }, [conversationId]);
   useEffect(() => {
     if (!conversationId) setNewConversationModelRef(defaultModelRef);
   }, [conversationId, defaultModelRef]);
   const chooseFiles = useMutation({
-    mutationFn: () => window.openerx.chooseFiles({ conversationId: null }),
+    mutationFn: () => desktopWorkspaceBridge().chooseFiles({ conversationId: null }),
+    onMutate: () => setAttachmentNotice(null),
     onSuccess: async (selectedFiles) => {
-      if (selectedFiles.length > 0) {
-        setPendingFiles((current) => {
-          const merged = new Map(current.map((file) => [file.id, file]));
-          for (const file of selectedFiles) merged.set(file.id, file);
-          return [...merged.values()];
-        });
+      if (selectedFiles.length === 0) {
+        setAttachmentNotice("已取消文件选择。");
+        return;
       }
+      setPendingFiles((current) => {
+        const merged = new Map(current.map((file) => [file.id, file]));
+        for (const file of selectedFiles) merged.set(file.id, file);
+        return [...merged.values()];
+      });
       await queryClient.invalidateQueries({ queryKey: ["files"] });
-      setAttachmentNotice(
-        selectedFiles.length > 0
-          ? `已选择 ${selectedFiles.length} 个附件，将随本条消息发送。`
-          : "未新增附件。",
-      );
+      setAttachmentNotice(`已选择 ${selectedFiles.length} 个附件，将随本条消息发送。`);
     },
   });
   const pasteFiles = useMutation({
@@ -1018,7 +818,7 @@ function Composer({
       if (files.length + pendingFiles.length > maxPastedAttachmentCount) {
         throw new Error("FILE_TOO_LARGE");
       }
-      return await window.openerx.importPastedFiles({
+      return await desktopWorkspaceBridge().importPastedFiles({
         conversationId: null,
         files: await serializePastedFiles(files),
       });
@@ -1034,19 +834,27 @@ function Composer({
   const isImportingAttachments = chooseFiles.isPending || pasteFiles.isPending;
   const skills = useQuery({
     queryKey: ["skills", "composer"],
-    queryFn: () => window.openerx.listSkills(),
+    queryFn: () => desktopWorkspaceBridge().listSkills(),
     retry: false,
   });
+  const modelService = useQuery({
+    queryKey: ["model-service", "settings"],
+    queryFn: () => desktopWorkspaceBridge().getModelServiceSettings(),
+    retry: false,
+  });
+  const hosted = modelService.data?.hostedAvailable && modelService.data.mode === "hosted";
+  const centralSignedOut = modelService.data?.hostedAvailable && !modelService.data.hostedAccountId;
   const models = useQuery({
     queryKey: ["models", "catalog"],
-    queryFn: () => window.openerx.listModels(),
+    queryFn: () => desktopWorkspaceBridge().listModels(),
+    refetchInterval: 30_000,
     retry: false,
   });
   const permissionMode = useQuery({
     queryKey: ["tools", "permission-mode", conversationId],
     queryFn: () => {
       if (!conversationId) throw new Error("CONVERSATION_REQUIRED");
-      return window.openerx.getToolPermissionMode({ conversationId });
+      return desktopWorkspaceBridge().getToolPermissionMode({ conversationId });
     },
     enabled: Boolean(conversationId),
   });
@@ -1056,7 +864,7 @@ function Composer({
         setNewConversationPermissionMode(mode);
         return null;
       }
-      return await window.openerx.setToolPermissionMode({ conversationId, mode });
+      return await desktopWorkspaceBridge().setToolPermissionMode({ conversationId, mode });
     },
     onSuccess: (state) => {
       if (!state || !conversationId) return;
@@ -1086,7 +894,7 @@ function Composer({
   const selectConversationModel = useMutation({
     mutationFn: async (modelRef: string) => {
       if (!conversation) throw new Error("CONVERSATION_REQUIRED");
-      const updated = await window.openerx.selectConversationModel({
+      const updated = await desktopWorkspaceBridge().selectConversationModel({
         conversationId: conversation.id,
         modelRef,
       });
@@ -1094,7 +902,7 @@ function Composer({
       if (!nextModel) return updated;
       const levels = modelThinkingLevels(nextModel);
       if (levels.includes(updated.thinkingLevel)) return updated;
-      return await window.openerx.selectConversationThinkingLevel({
+      return await desktopWorkspaceBridge().selectConversationThinkingLevel({
         conversationId: conversation.id,
         thinkingLevel: preferredThinkingLevel(levels),
       });
@@ -1110,7 +918,7 @@ function Composer({
   const selectConversationThinking = useMutation({
     mutationFn: async (nextThinkingLevel: ThinkingLevel) => {
       if (!conversation) throw new Error("CONVERSATION_REQUIRED");
-      return await window.openerx.selectConversationThinkingLevel({
+      return await desktopWorkspaceBridge().selectConversationThinkingLevel({
         conversationId: conversation.id,
         thinkingLevel: nextThinkingLevel,
       });
@@ -1123,13 +931,10 @@ function Composer({
       );
     },
   });
-  const newConversationModel =
-    availableModels.find(({ modelRef }) => modelRef === newConversationModelRef) ??
-    availableModels.find(({ modelRef }) => modelRef === automaticModelRef) ??
-    availableModels[0];
+  const newConversationModel = resolveDefaultModel(models.data ?? [], newConversationModelRef);
   const modelRequiresConfiguration =
     models.isSuccess && (conversation ? !selectedConversationModel : !newConversationModel);
-  const sendingBlockedByModel = models.isPending || modelRequiresConfiguration;
+  const sendingBlockedByModel = models.isPending || models.isError || modelRequiresConfiguration;
   const selectedPermissionMode = conversationId
     ? selectPermissionMode.isPending
       ? selectPermissionMode.variables
@@ -1153,7 +958,7 @@ function Composer({
   const send = useMutation({
     mutationFn: (text: string) =>
       withUiTimeout(
-        window.openerx.sendMessage({
+        desktopWorkspaceBridge().sendMessage({
           conversationId: conversationId ?? null,
           ...(!conversationId && projectId ? { projectId } : {}),
           text,
@@ -1187,7 +992,7 @@ function Composer({
     ) ?? false;
 
   return (
-    <form
+    <WorkspaceComposerFrame
       ref={formRef}
       className="composer"
       onSubmit={(event) => {
@@ -1214,7 +1019,7 @@ function Composer({
           ))}
         </ul>
       ) : null}
-      <textarea
+      <WorkspaceTextarea
         id={`message-${conversationId ?? "new"}`}
         rows={3}
         placeholder="输入你的需求…"
@@ -1228,15 +1033,6 @@ function Composer({
           chooseFiles.reset();
           setAttachmentNotice(null);
           pasteFiles.mutate({ files, target: attachmentTarget });
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            const text = draft.trim();
-            if (text && !send.isPending && !sendingBlockedByModel && !isImportingAttachments) {
-              send.mutate(text);
-            }
-          }
         }}
       />
       <div className="composer-actions">
@@ -1286,6 +1082,9 @@ function Composer({
               <ComposerSelect
                 className="composer-footer-control composer-model-thinking-select"
                 ariaLabel="模型与思考"
+                onOpen={() => {
+                  void models.refetch();
+                }}
                 icon={<Lightning size={15} weight="fill" />}
                 label={`${newConversationModel?.displayName ?? "选择模型"} · ${thinkingLevelLabels[thinkingLevel]}`}
                 value={`model:${newConversationModel?.modelRef ?? newConversationModelRef}`}
@@ -1301,7 +1100,7 @@ function Composer({
                     options: availableModels.map((model) => ({
                       value: `model:${model.modelRef}`,
                       label: model.displayName,
-                      description: `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`,
+                      description: `${model.recommended ? "推荐 · " : ""}${model.version} · ${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`,
                     })),
                   },
                   {
@@ -1356,6 +1155,9 @@ function Composer({
               <ComposerSelect
                 className="composer-footer-control composer-model-thinking-select"
                 ariaLabel="模型与思考"
+                onOpen={() => {
+                  void models.refetch();
+                }}
                 icon={<Lightning size={15} weight="fill" />}
                 label={
                   selectedConversationModel
@@ -1367,7 +1169,11 @@ function Composer({
                   `model:${conversation.selectedModelRef}`,
                   `thinking:${conversation.thinkingLevel}`,
                 ]}
-                disabled={selectConversationModel.isPending || selectConversationThinking.isPending}
+                disabled={
+                  hasActiveReply ||
+                  selectConversationModel.isPending ||
+                  selectConversationThinking.isPending
+                }
                 renderNativeSelect={false}
                 groups={[
                   {
@@ -1375,7 +1181,7 @@ function Composer({
                     options: compatibleConversationModels.map((model) => ({
                       value: `model:${model.modelRef}`,
                       label: model.displayName,
-                      description: `${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`,
+                      description: `${model.recommended ? "推荐 · " : ""}${model.version} · ${modelCapabilities(model)} · 上下文 ${model.contextWindow.toLocaleString()}`,
                     })),
                   },
                   {
@@ -1469,7 +1275,7 @@ function Composer({
                 .map((skill) => ({
                   value: skill.id,
                   label: skillName(skill),
-                  description: skill.description,
+                  description: skillDescription(skill),
                 })),
             ]}
             onChange={setSkillInstallationId}
@@ -1531,13 +1337,22 @@ function Composer({
         ) : null}
         {!conversationId && modelRequiresConfiguration ? (
           <p className="inline-error">
-            使用前需要配置 OpenAI-compatible API。请前往
+            {hosted
+              ? "当前账户暂无可用服务器模型。请检查"
+              : centralSignedOut
+                ? "可先登录使用服务器模型，或配置自己的 API。请前往"
+                : "使用前需要配置 OpenAI-compatible API。请前往"}
             <NavLink to="/settings/account?section=model">设置 → 模型</NavLink>。
           </p>
         ) : null}
         {chooseFiles.error ? (
           <p className="inline-error">
             {userFacingError(chooseFiles.error, "暂时无法添加文件，请重新选择。")}
+          </p>
+        ) : null}
+        {models.isError ? (
+          <p className="inline-error">
+            {userFacingError(models.error, "暂时无法读取模型列表，请检查账号和模型服务连接。")}
           </p>
         ) : null}
         {selectConversationModel.error || selectConversationThinking.error ? (
@@ -1549,7 +1364,7 @@ function Composer({
           </p>
         ) : null}
       </div>
-    </form>
+    </WorkspaceComposerFrame>
   );
 }
 
@@ -1562,59 +1377,107 @@ function NewChat({
   projectId?: string;
   projectName?: string;
 }): React.JSX.Element {
-  const models = useQuery({
-    queryKey: ["models", "catalog"],
-    queryFn: () => window.openerx.listModels(),
+  const modelService = useQuery({
+    queryKey: ["model-service", "settings"],
+    queryFn: () => desktopWorkspaceBridge().getModelServiceSettings(),
     retry: false,
   });
-  const availableModels = (models.data ?? []).filter(({ status }) => status === "available");
-  const defaultModel =
-    availableModels.find(({ modelRef }) => modelRef === defaultModelRef) ??
-    availableModels.find(({ modelRef }) => modelRef === automaticModelRef) ??
-    availableModels[0];
+  const hosted = modelService.data?.hostedAvailable && modelService.data.mode === "hosted";
+  const centralSignedOut = modelService.data?.hostedAvailable && !modelService.data.hostedAccountId;
+  const models = useQuery({
+    queryKey: ["models", "catalog"],
+    queryFn: () => desktopWorkspaceBridge().listModels(),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+  const defaultModel = resolveDefaultModel(models.data ?? [], defaultModelRef);
+  const defaultNotice = defaultModelNotice(models.data ?? [], defaultModelRef);
   const suggestionThinkingLevel = defaultModel
     ? preferredThinkingLevel(modelThinkingLevels(defaultModel))
     : defaultThinkingLevel;
   const modelRequiresConfiguration = models.isSuccess && !defaultModel;
   return (
     <main className="new-chat-page">
-      <header className="new-chat-topbar">
+      <WorkspaceHeader className="new-chat-topbar">
         <span className="topbar-product">{projectName ? `${projectName} · 新任务` : "新任务"}</span>
         <span className="topbar-state">
-          {defaultModel?.displayName ?? (models.isPending ? "正在读取模型配置" : "需要配置 API")}
+          {defaultModel?.displayName ??
+            (models.isPending
+              ? "正在读取模型配置"
+              : hosted
+                ? "尚无可用服务器模型"
+                : centralSignedOut
+                  ? "登录或配置 API"
+                  : "需要配置 API")}
         </span>
-      </header>
-      <section className="welcome" aria-labelledby="welcome-title">
-        <p className="eyebrow">{projectName ? `项目 · ${projectName}` : "个人 AI 工作区"}</p>
-        <h1 id="welcome-title">{projectName ? "在这个项目中做什么？" : "今天想完成什么？"}</h1>
-        <p>
-          {projectName
+      </WorkspaceHeader>
+      <WorkspaceEmptyState
+        titleId="welcome-title"
+        eyebrow={projectName ? `项目 · ${projectName}` : "个人 AI 工作区"}
+        title={projectName ? "在这个项目中做什么？" : "今天想完成什么？"}
+        description={
+          projectName
             ? "新对话会继承项目说明和当前设备已连接的目录；权限扩大或高影响操作仍需确认。"
-            : "描述目标，或附上文件；已授权范围内自动执行，越出范围或产生高影响副作用时再确认。"}
-        </p>
-      </section>
-      {modelRequiresConfiguration ? (
+            : "描述目标，或附上文件；已授权范围内自动执行，越出范围或产生高影响副作用时再确认。"
+        }
+      />
+      {modelRequiresConfiguration || models.isError ? (
         <section className="settings-card" aria-label="配置模型 API">
-          <h2>先配置模型 API</h2>
-          <p>此安装包默认使用 BYOK，不依赖 openerx 服务器。配置 API Key 后即可开始任务。</p>
+          <h2>
+            {hosted
+              ? models.isError
+                ? "暂时无法读取服务器模型"
+                : "服务器暂无可用模型"
+              : centralSignedOut
+                ? "登录后使用服务器模型"
+                : "先配置模型 API"}
+          </h2>
+          {hosted ? (
+            <p>
+              服务器负责提供模型，无需填写供应商
+              Key。请检查登录状态，或联系管理员检查模型权限与服务状态。
+            </p>
+          ) : centralSignedOut ? (
+            <p>登录账号后即可选择服务器提供的模型，也可以配置自己的 API Key。</p>
+          ) : (
+            <p>此安装包默认使用 BYOK，不依赖 openerx 服务器。配置 API Key 后即可开始任务。</p>
+          )}
+          {centralSignedOut ? (
+            <NavLink className="primary-link" to="/settings/account?section=extension">
+              前往登录
+            </NavLink>
+          ) : null}
           <NavLink className="primary-link" to="/settings/account?section=model">
             前往设置 → 模型
           </NavLink>
         </section>
-      ) : defaultModel ? (
-        <section className="suggestion-grid" aria-label="常用任务建议">
-          {suggestions.map((suggestion) => (
-            <Suggestion
-              key={suggestion}
-              text={suggestion}
-              thinkingLevel={suggestionThinkingLevel}
-              modelRef={defaultModel?.modelRef ?? defaultModelRef}
-              projectId={projectId}
-            />
-          ))}
-        </section>
       ) : null}
-      <Composer defaultModelRef={defaultModelRef} projectId={projectId} />
+      {defaultNotice ? (
+        <p className="inline-error" role="status">
+          {defaultNotice}
+        </p>
+      ) : null}
+      <Composer
+        key={`new:${projectId ?? ""}`}
+        defaultModelRef={defaultModelRef}
+        projectId={projectId}
+      />
+      {defaultModel && !modelRequiresConfiguration && !models.isError ? (
+        <details className="new-chat-suggestions">
+          <summary>查看任务示例</summary>
+          <section className="suggestion-grid" aria-label="常用任务建议">
+            {suggestions.map((suggestion) => (
+              <Suggestion
+                key={suggestion}
+                text={suggestion}
+                thinkingLevel={suggestionThinkingLevel}
+                modelRef={defaultModel.modelRef}
+                projectId={projectId}
+              />
+            ))}
+          </section>
+        </details>
+      ) : null}
     </main>
   );
 }
@@ -1634,7 +1497,7 @@ function Suggestion({
   const send = useMutation({
     mutationFn: () =>
       withUiTimeout(
-        window.openerx.sendMessage({
+        desktopWorkspaceBridge().sendMessage({
           conversationId: null,
           ...(projectId ? { projectId } : {}),
           text,
@@ -1699,18 +1562,18 @@ function ContextDock({
   useEffect(() => closeButtonRef.current?.focus(), []);
   const conversation = useQuery({
     queryKey: chatKeys.conversation(conversationId),
-    queryFn: () => window.openerx.getConversation({ conversationId }),
+    queryFn: () => desktopWorkspaceBridge().getConversation({ conversationId }),
     enabled: Boolean(conversationId),
   });
   const contextProject = useProject(conversation.data?.conversation.projectId ?? "");
   const files = useQuery({
     queryKey: ["files", conversationId],
-    queryFn: () => withUiTimeout(window.openerx.listFiles({ conversationId })),
+    queryFn: () => withUiTimeout(desktopWorkspaceBridge().listFiles({ conversationId })),
     enabled: Boolean(conversationId),
     retry: false,
   });
   const chooseFiles = useMutation({
-    mutationFn: () => window.openerx.chooseFiles({ conversationId }),
+    mutationFn: () => desktopWorkspaceBridge().chooseFiles({ conversationId }),
     onSuccess: async (selectedFiles) => {
       await queryClient.invalidateQueries({ queryKey: ["files"] });
       setContextNotice(
@@ -1722,7 +1585,7 @@ function ContextDock({
     onSettled: () => window.requestAnimationFrame(() => chooseFilesButtonRef.current?.focus()),
   });
   const chooseDirectory = useMutation({
-    mutationFn: () => window.openerx.chooseDirectory({ conversationId }),
+    mutationFn: () => desktopWorkspaceBridge().chooseDirectory({ conversationId }),
     onSuccess: async (selectedFiles) => {
       await queryClient.invalidateQueries({ queryKey: ["files"] });
       setContextNotice(
@@ -1734,7 +1597,7 @@ function ContextDock({
     onSettled: () => window.requestAnimationFrame(() => chooseDirectoryButtonRef.current?.focus()),
   });
   const revoke = useMutation({
-    mutationFn: (scopeId: string) => window.openerx.revokeFileScope({ scopeId }),
+    mutationFn: (scopeId: string) => desktopWorkspaceBridge().revokeFileScope({ scopeId }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["files"] });
       setContextNotice("已撤销原始路径权限；受控副本仍保留在当前对话中。");
@@ -1817,7 +1680,12 @@ function ContextDock({
             ref={chooseDirectoryButtonRef}
             type="button"
             onClick={() => chooseDirectory.mutate()}
-            disabled={chooseDirectory.isPending}
+            disabled={chooseDirectory.isPending || !desktopWorkspaceCapabilities().directoryImport}
+            title={
+              desktopWorkspaceCapabilities().directoryImport
+                ? "将所选文件夹内的文件作为附件加入对话"
+                : "企业模式支持添加单个文件；工作目录请在对话资源中授权"
+            }
           >
             <FolderSimple size={16} aria-hidden="true" />
             {chooseDirectory.isPending ? "正在选择…" : "导入文件夹"}
@@ -1947,61 +1815,6 @@ function libraryTextMatches(query: string, values: Array<string | null | undefin
   return values.some((value) => value?.toLocaleLowerCase("zh-CN").includes(query));
 }
 
-function ContentPreviewRenderer({
-  preview,
-  previewMode,
-  ariaLabel,
-}: {
-  preview: ContentPreview;
-  previewMode: "preview" | "source";
-  ariaLabel: string;
-}): React.JSX.Element {
-  if (preview.renderedSurfaces.length > 0 && previewMode === "preview") {
-    return (
-      <section className="office-preview-surfaces" aria-label={ariaLabel}>
-        {preview.renderedSurfaces.map((surface) => (
-          <figure key={`${surface.kind}-${surface.index}`}>
-            <figcaption>{surface.label}</figcaption>
-            <img src={surface.imageDataUrl} alt={`${preview.displayName} ${surface.label}`} />
-          </figure>
-        ))}
-      </section>
-    );
-  }
-
-  if (preview.imageDataUrl && previewMode === "preview") {
-    return (
-      <img
-        className="standalone-image-preview"
-        src={preview.imageDataUrl}
-        alt={preview.displayName}
-      />
-    );
-  }
-
-  if (preview.format === "html" && previewMode === "preview" && preview.source) {
-    return (
-      <iframe
-        title="HTML 隔离预览"
-        sandbox={preview.htmlPreviewUrl ? "allow-scripts allow-same-origin" : "allow-scripts"}
-        referrerPolicy="no-referrer"
-        src={preview.htmlPreviewUrl}
-        srcDoc={preview.htmlPreviewUrl ? undefined : preview.source}
-      />
-    );
-  }
-
-  if (preview.format === "markdown" && previewMode === "preview") {
-    return (
-      <article className="markdown-body artifact-markdown-preview">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{preview.parsedText}</ReactMarkdown>
-      </article>
-    );
-  }
-
-  return <pre>{previewMode === "source" ? preview.source : preview.parsedText}</pre>;
-}
-
 function FilesAndArtifacts(): React.JSX.Element {
   const [selected, setSelected] = useState<{
     kind: "personal_file" | "artifact";
@@ -2011,14 +1824,17 @@ function FilesAndArtifacts(): React.JSX.Element {
   const [fileNotice, setFileNotice] = useState<string | null>(null);
   const [librarySearch, setLibrarySearch] = useState("");
   const [libraryPage, setLibraryPage] = useState(1);
-  const files = useQuery({ queryKey: ["files", "all"], queryFn: () => window.openerx.listFiles() });
+  const files = useQuery({
+    queryKey: ["files", "all"],
+    queryFn: () => desktopWorkspaceBridge().listFiles(),
+  });
   const artifacts = useQuery({
     queryKey: ["artifacts"],
-    queryFn: () => window.openerx.listArtifacts(),
+    queryFn: () => desktopWorkspaceBridge().listArtifacts(),
   });
   const conversations = useQuery({
     queryKey: chatKeys.list(true),
-    queryFn: () => window.openerx.listConversations({ includeArchived: true }),
+    queryFn: () => desktopWorkspaceBridge().listConversations({ includeArchived: true }),
   });
   const conversationSignature =
     conversations.data?.map(({ id, revision }) => `${id}:${revision}`).join("|") ?? "pending";
@@ -2029,8 +1845,8 @@ function FilesAndArtifacts(): React.JSX.Element {
       const groups = await Promise.all(
         (conversations.data ?? []).map(async (conversation) => {
           const [conversationFiles, conversationArtifacts] = await Promise.all([
-            window.openerx.listFiles({ conversationId: conversation.id }),
-            window.openerx.listArtifacts({ conversationId: conversation.id }),
+            desktopWorkspaceBridge().listFiles({ conversationId: conversation.id }),
+            desktopWorkspaceBridge().listArtifacts({ conversationId: conversation.id }),
           ]);
           return {
             conversation,
@@ -2145,8 +1961,16 @@ function FilesAndArtifacts(): React.JSX.Element {
     if (libraryPage > libraryPageCount) setLibraryPage(libraryPageCount);
   }, [libraryPage, libraryPageCount]);
   const chooseFiles = useMutation({
-    mutationFn: () => window.openerx.chooseFiles(),
+    mutationFn: () => desktopWorkspaceBridge().chooseFiles(),
+    onMutate: (): void => {
+      setFileNotice("");
+      chooseDirectory.reset();
+    },
     onSuccess: async (selectedFiles) => {
+      if (selectedFiles.length === 0) {
+        setFileNotice("已取消文件选择。");
+        return;
+      }
       await files.refetch();
       setFileNotice(
         selectedFiles.length > 0 ? `已添加 ${selectedFiles.length} 个文件。` : "已取消文件选择。",
@@ -2154,8 +1978,16 @@ function FilesAndArtifacts(): React.JSX.Element {
     },
   });
   const chooseDirectory = useMutation({
-    mutationFn: () => window.openerx.chooseDirectory(),
+    mutationFn: () => desktopWorkspaceBridge().chooseDirectory(),
+    onMutate: (): void => {
+      setFileNotice("");
+      chooseFiles.reset();
+    },
     onSuccess: async (selectedFiles) => {
+      if (selectedFiles.length === 0) {
+        setFileNotice("已取消文件夹选择。");
+        return;
+      }
       await files.refetch();
       setFileNotice(
         selectedFiles.length > 0
@@ -2169,30 +2001,50 @@ function FilesAndArtifacts(): React.JSX.Element {
     queryFn: () => {
       if (!selected) throw new Error("No preview selected");
       return selected.kind === "personal_file"
-        ? window.openerx.previewFile({ personalFileId: selected.id })
-        : window.openerx.previewArtifact({ artifactId: selected.id });
+        ? desktopWorkspaceBridge().previewFile({ personalFileId: selected.id })
+        : desktopWorkspaceBridge().previewArtifact({ artifactId: selected.id });
     },
     enabled: selected !== null,
     retry: false,
   });
   const saveArtifact = useMutation({
-    mutationFn: async (artifactId: string) => await window.openerx.saveArtifact({ artifactId }),
+    mutationFn: async (artifactId: string) =>
+      await desktopWorkspaceBridge().saveArtifact({ artifactId }),
   });
+  const libraryReadError =
+    files.error ?? artifacts.error ?? conversations.error ?? conversationLibrary.error;
+  const libraryActionError = chooseFiles.error ?? chooseDirectory.error;
   return (
     <main className={`library-page ${selected ? "preview-is-open" : ""}`}>
       <div className="library-browser-pane">
         <header className="library-header">
           <div>
-            <p className="eyebrow">本地优先 · 可同步对象</p>
-            <h1>个人文件与成果</h1>
+            <p className="eyebrow">
+              {desktopWorkspaceCapabilities().mode === "enterprise"
+                ? "企业自动同步 · 加密本机副本"
+                : "本地优先 · 可同步对象"}
+            </p>
+            <h1>
+              {desktopWorkspaceCapabilities().mode === "enterprise"
+                ? "企业文件与成果"
+                : "个人文件与成果"}
+            </h1>
             <p>按对话集中查看附件与生成成果；成果按版本保留，不静默覆盖。</p>
           </div>
           <div className="library-header-actions">
             <button
               type="button"
               onClick={() => chooseDirectory.mutate()}
-              disabled={chooseDirectory.isPending}
-              title="仅授权读取你选择的目录；之后可撤销原始路径权限"
+              disabled={
+                chooseDirectory.isPending ||
+                chooseFiles.isPending ||
+                !desktopWorkspaceCapabilities().directoryImport
+              }
+              title={
+                desktopWorkspaceCapabilities().directoryImport
+                  ? "仅授权读取你选择的目录；之后可撤销原始路径权限"
+                  : "企业文件库支持添加文件；工作目录请在对话中单独授权"
+              }
             >
               <FolderSimple size={17} />
               {chooseDirectory.isPending ? "正在选择…" : "添加文件夹"}
@@ -2201,14 +2053,19 @@ function FilesAndArtifacts(): React.JSX.Element {
               type="button"
               className="primary-action"
               onClick={() => chooseFiles.mutate()}
-              disabled={chooseFiles.isPending}
+              disabled={chooseFiles.isPending || chooseDirectory.isPending}
             >
               <Plus size={17} /> {chooseFiles.isPending ? "正在选择…" : "添加文件"}
             </button>
           </div>
         </header>
         <p className="library-scope-note">
-          同一文件用于多个对话时会分别显示；直接从本页添加的内容会先归入“未关联对话”。
+          {desktopWorkspaceCapabilities().mode === "enterprise"
+            ? "从本页添加的文件会建立企业文件任务并自动同步。"
+            : "同一文件用于多个对话时会分别显示；直接从本页添加的内容会先归入“未关联对话”。"}
+          {desktopWorkspaceCapabilities().mode === "enterprise"
+            ? " 聊天附件和生成成果自动同步到企业；目录授权在对话中设置，不会继承到项目。"
+            : null}
         </p>
         <div className="library-toolbar">
           <label className="library-search" htmlFor="library-search-input">
@@ -2246,23 +2103,41 @@ function FilesAndArtifacts(): React.JSX.Element {
           {fileNotice && !chooseFiles.error && !chooseDirectory.error ? (
             <p className="inline-success">{fileNotice}</p>
           ) : null}
-          {files.error ||
-          artifacts.error ||
-          conversations.error ||
-          conversationLibrary.error ||
-          chooseFiles.error ||
-          chooseDirectory.error ? (
-            <p className="inline-error">
-              {userFacingError(
-                files.error ??
-                  artifacts.error ??
-                  conversations.error ??
-                  conversationLibrary.error ??
-                  chooseFiles.error ??
-                  chooseDirectory.error,
-                "暂时无法读取或添加文件，请重试。",
-              )}
-            </p>
+          {libraryReadError || libraryActionError ? (
+            <section className="page-state-message is-error" role="alert">
+              <strong>{libraryReadError ? "文件列表读取失败" : "添加文件未完成"}</strong>
+              <p>
+                {userFacingError(
+                  libraryReadError ?? libraryActionError,
+                  "暂时无法读取或添加文件，请重试。",
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (libraryReadError) {
+                    void Promise.all([
+                      files.refetch(),
+                      artifacts.refetch(),
+                      conversations.refetch(),
+                      conversationLibrary.refetch(),
+                    ]);
+                  } else if (chooseFiles.error) {
+                    chooseFiles.reset();
+                    chooseFiles.mutate();
+                  } else {
+                    chooseDirectory.reset();
+                    chooseDirectory.mutate();
+                  }
+                }}
+              >
+                {libraryReadError
+                  ? "重新读取文件"
+                  : chooseFiles.error
+                    ? "重新选择文件"
+                    : "重新选择文件夹"}
+              </button>
+            </section>
           ) : null}
         </div>
         <section className="library-section" aria-labelledby="conversation-files-title">
@@ -2454,6 +2329,7 @@ function FilesAndArtifacts(): React.JSX.Element {
           </section>
         ) : null}
         {!conversationLibrary.isPending &&
+        !libraryReadError &&
         normalizedLibrarySearch &&
         filteredConversationLibrary.length === 0 &&
         filteredUnlinkedFiles.length === 0 &&
@@ -2469,6 +2345,7 @@ function FilesAndArtifacts(): React.JSX.Element {
         {!files.isPending &&
         !artifacts.isPending &&
         !conversationLibrary.isPending &&
+        !libraryReadError &&
         totalItemCount === 0 ? (
           <div className="empty-state empty-state-compact">
             <FolderSimple size={25} />
@@ -2528,7 +2405,7 @@ function FilesAndArtifacts(): React.JSX.Element {
           ) : null}
           <div className="content-preview-body">
             {preview.data ? (
-              <ContentPreviewRenderer
+              <WorkspaceContentPreview
                 preview={preview.data}
                 previewMode={previewMode}
                 ariaLabel="成果视觉预览"
@@ -2584,11 +2461,11 @@ function MessageCard({
   };
   const stop = useMutation({
     mutationFn: () =>
-      window.openerx.stopGeneration({ conversationId, assistantMessageId: message.id }),
+      desktopWorkspaceBridge().stopGeneration({ conversationId, assistantMessageId: message.id }),
   });
   const regenerate = useMutation({
     mutationFn: () =>
-      window.openerx.regenerateMessage({
+      desktopWorkspaceBridge().regenerateMessage({
         conversationId,
         assistantMessageId: message.id,
         idempotencyKey: idempotencyKey("regenerate"),
@@ -2600,7 +2477,7 @@ function MessageCard({
   });
   const edit = useMutation({
     mutationFn: () =>
-      window.openerx.editMessage({
+      desktopWorkspaceBridge().editMessage({
         conversationId,
         messageId: message.id,
         text: editText,
@@ -2627,13 +2504,13 @@ function MessageCard({
   const assistantTimelineVisible = activities.length === 0 || activitiesOpen || running;
   const usage = useQuery({
     queryKey: ["usage", "message", message.id],
-    queryFn: () => window.openerx.getUsage({ messageId: message.id }),
+    queryFn: () => desktopWorkspaceBridge().getUsage({ messageId: message.id }),
     enabled: message.role === "assistant" && !running,
     retry: false,
   });
   const usageRecords = useQuery({
     queryKey: ["usage", "records", "message", message.id],
-    queryFn: () => window.openerx.getUsageRecords({ messageId: message.id }),
+    queryFn: () => desktopWorkspaceBridge().getUsageRecords({ messageId: message.id }),
     enabled: message.role === "assistant" && !running,
     retry: false,
   });
@@ -2672,39 +2549,17 @@ function MessageCard({
   };
 
   const assistantMarkdown = (value: string): ReactNode => (
-    <div className="markdown-body">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-          pre: ({ children }) => (
-            <div className="code-block">
-              <button
-                type="button"
-                onClick={(event) => {
-                  const code = event.currentTarget.nextElementSibling?.textContent ?? "";
-                  void copyText(code, "代码已复制到剪贴板。");
-                }}
-              >
-                {actionNotice === "代码已复制到剪贴板。" ? "已复制" : "复制代码"}
-              </button>
-              <pre>{children}</pre>
-            </div>
-          ),
-        }}
-      >
-        {value}
-      </ReactMarkdown>
-    </div>
+    <WorkspaceMarkdown
+      text={value}
+      copied={actionNotice === "代码已复制到剪贴板。"}
+      onCopy={(code) => copyText(code, "代码已复制到剪贴板。")}
+    />
   );
 
   return (
-    <article
-      className={`message message-${message.role} ${running ? "message-is-streaming" : ""}`}
+    <WorkspaceMessage
+      kind={message.role}
+      className={running ? "message-is-streaming" : ""}
       data-message-status={message.status}
       aria-busy={running || undefined}
     >
@@ -2825,13 +2680,15 @@ function MessageCard({
                 </section>
               </div>
             ) : null}
-            {activities.map((workItem) => (
-              <WorkItemWorkspaceEdits
-                key={workItem.id}
-                workItemId={workItem.id}
-                runId={selectedActivityRunIds[workItem.id] ?? workItem.activeRunId}
-              />
-            ))}
+            {activities
+              .filter((workItem) => !workItem.recordedActivity)
+              .map((workItem) => (
+                <WorkItemWorkspaceEdits
+                  key={workItem.id}
+                  workItemId={workItem.id}
+                  runId={selectedActivityRunIds[workItem.id] ?? workItem.activeRunId}
+                />
+              ))}
           </>
         ) : (
           <p className="user-text">{text}</p>
@@ -2954,7 +2811,7 @@ function MessageCard({
           </p>
         ) : null}
       </div>
-    </article>
+    </WorkspaceMessage>
   );
 }
 
@@ -3303,11 +3160,15 @@ function ToolActivity({
   const detail = useQuery({
     queryKey: ["tools", "work-item", workItem.id, selectedRunId],
     queryFn: () =>
-      window.openerx.getWorkItem({
+      desktopWorkspaceBridge().getWorkItem({
         workItemId: workItem.id,
         ...(selectedRunId ? { runId: selectedRunId } : {}),
       }),
+    enabled: !workItem.recordedActivity,
   });
+  if (workItem.recordedActivity) {
+    return segment && segment.index > 0 ? <></> : <RecordedToolActivity workItem={workItem} />;
+  }
   const value: WorkItemDetail | undefined = detail.data;
   const toolCalls = new Map(value?.toolCalls.map((call) => [call.id, call]) ?? []);
   const permissions = new Map(
@@ -3782,6 +3643,7 @@ function ConversationToolbar({
   onOpenWorkspace: () => void;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const conversation = snapshot.conversation;
   const [renaming, setRenaming] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -3817,7 +3679,7 @@ function ConversationToolbar({
   }, [renaming]);
   const rename = useMutation({
     mutationFn: (title: string) =>
-      window.openerx.renameConversation({ conversationId: conversation.id, title }),
+      desktopWorkspaceBridge().renameConversation({ conversationId: conversation.id, title }),
     onSuccess: async (updated) => {
       queryClient.setQueryData<ConversationSnapshot>(
         chatKeys.conversation(conversation.id),
@@ -3830,7 +3692,7 @@ function ConversationToolbar({
   });
   const archive = useMutation({
     mutationFn: () =>
-      window.openerx.setConversationArchived({
+      desktopWorkspaceBridge().setConversationArchived({
         conversationId: conversation.id,
         archived: conversation.archivedAt === null,
       }),
@@ -3845,9 +3707,15 @@ function ConversationToolbar({
   });
   const activate = useMutation({
     mutationFn: (branchId: string) =>
-      window.openerx.activateBranch({ conversationId: conversation.id, branchId }),
+      desktopWorkspaceBridge().activateBranch({ conversationId: conversation.id, branchId }),
     onSuccess: (next) => {
       setSelectedBranchId(next.conversation.activeBranchId);
+      navigate(
+        conversationTargetHref({
+          conversationId: conversation.id,
+          branchId: next.conversation.activeBranchId,
+        }),
+      );
       queryClient.setQueryData(chatKeys.conversation(conversation.id), next);
       setToolbarNotice(
         `已切换到${next.branches.find(({ id }) => id === next.conversation.activeBranchId)?.label ?? "所选分支"}。`,
@@ -3856,7 +3724,7 @@ function ConversationToolbar({
     onError: () => setSelectedBranchId(conversation.activeBranchId),
   });
   return (
-    <header className="conversation-toolbar">
+    <WorkspaceHeader>
       <div className="conversation-heading">
         <h1>{conversation.title}</h1>
         <div className="conversation-heading-context">
@@ -4015,7 +3883,7 @@ function ConversationToolbar({
           </p>
         ) : null}
       </div>
-    </header>
+    </WorkspaceHeader>
   );
 }
 
@@ -4050,7 +3918,7 @@ function BrowserPreviewRail({
   onClose: () => void;
 }): React.JSX.Element {
   return (
-    <aside
+    <WorkspaceInspector
       className="conversation-rail conversation-rail-preview browser-preview-rail"
       aria-label="浏览器画面"
     >
@@ -4112,7 +3980,7 @@ function BrowserPreviewRail({
           ) : null}
         </dl>
       </section>
-    </aside>
+    </WorkspaceInspector>
   );
 }
 
@@ -4177,7 +4045,7 @@ function ConversationRail({
         return `${workItemStatusLabel[item.status]}${duration ? ` · 用时 ${duration}` : ""}`;
       }}
       renderPreview={(preview, previewMode) => (
-        <ContentPreviewRenderer
+        <WorkspaceContentPreview
           preview={preview}
           previewMode={previewMode}
           ariaLabel={`${preview.displayName} 视觉预览`}
@@ -4209,20 +4077,36 @@ function ChatPage({
   );
   const snapshot = useQuery({
     queryKey: chatKeys.conversation(conversationId),
-    queryFn: () => window.openerx.getConversation({ conversationId }),
+    queryFn: () => desktopWorkspaceBridge().getConversation({ conversationId }),
     enabled: Boolean(conversationId),
   });
   const conversationFiles = useQuery({
     queryKey: ["files", "conversation", conversationId],
-    queryFn: () => window.openerx.listFiles({ conversationId }),
+    queryFn: () => desktopWorkspaceBridge().listFiles({ conversationId }),
     enabled: Boolean(conversationId),
   });
   const artifacts = useQuery({
     queryKey: ["artifacts", "conversation", conversationId],
-    queryFn: () => window.openerx.listArtifacts({ conversationId }),
+    queryFn: () => desktopWorkspaceBridge().listArtifacts({ conversationId }),
     enabled: Boolean(conversationId),
   });
   const ready = Boolean(snapshot.data);
+  const target = useConversationTarget(
+    conversationId,
+    ready,
+    chatKeys.conversation(conversationId),
+  );
+  useEffect(() => {
+    if (!target.messageId || target.loading || target.error) return;
+    followingRef.current = false;
+    setFollowing(false);
+    const frame = window.requestAnimationFrame(() => {
+      const node = document.getElementById(`chat-message-${target.messageId}`);
+      node?.scrollIntoView?.({ block: "center" });
+      node?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [target.messageId, target.loading, target.error]);
   const hasRunningMessage =
     snapshot.data?.messages.some(
       (message) =>
@@ -4291,9 +4175,25 @@ function ChatPage({
   }, [ready]);
   const workItems = useQuery({
     queryKey: ["tools", "work-items", conversationId],
-    queryFn: () => window.openerx.listWorkItems({ conversationId, limit: 100 }),
+    queryFn: () => desktopWorkspaceBridge().listWorkItems({ conversationId, limit: 100 }),
     enabled: Boolean(conversationId),
   });
+  if (target.error)
+    return (
+      <main className="center-state" role="alert">
+        <p>{target.error}</p>
+        <button type="button" onClick={target.retry}>
+          重新定位
+        </button>
+        <NavLink to="/search">返回搜索</NavLink>
+      </main>
+    );
+  if (target.loading && ready)
+    return (
+      <main className="center-state" role="status">
+        正在定位目标分支和消息…
+      </main>
+    );
   if (snapshot.isPending) return <main className="center-state">正在恢复对话…</main>;
   if (snapshot.error || !snapshot.data) {
     return (
@@ -4305,7 +4205,7 @@ function ChatPage({
     <main
       className={`conversation-workspace ${railOpen ? "rail-is-open" : ""} ${selectedResult ? "artifact-preview-is-open" : ""} ${selectedBrowserPreview ? "browser-preview-is-open" : ""}`}
     >
-      <section className="conversation-page" aria-label="对话工作区">
+      <WorkspaceThread className="conversation-page" aria-label="对话工作区">
         <ConversationToolbar
           snapshot={snapshot.data}
           railOpen={railOpen}
@@ -4326,7 +4226,13 @@ function ChatPage({
                 (workItem) => workItem.messageId === message.id,
               );
               return (
-                <section className={`message-stack message-stack-${message.role}`} key={message.id}>
+                <section
+                  className={`message-stack message-stack-${message.role}`}
+                  key={message.id}
+                  id={`chat-message-${message.id}`}
+                  tabIndex={-1}
+                  data-search-match={message.id === target.messageId ? "true" : undefined}
+                >
                   {message.role === "user" ? (
                     <time className="turn-timestamp" dateTime={message.createdAt}>
                       {messageTimestamp(message.createdAt)}
@@ -4384,13 +4290,14 @@ function ChatPage({
           anchorRef={composerRef}
         />
         <Composer
+          key={`composer:${conversationId}`}
           formRef={composerRef}
           conversationId={conversationId}
           conversationSnapshot={snapshot.data}
           onOpenContext={onToggleContext}
           contextOpen={contextOpen}
         />
-      </section>
+      </WorkspaceThread>
       {railOpen ? (
         <ConversationRail
           key={conversationId}
@@ -4427,6 +4334,7 @@ function ChatPage({
 }
 
 function SearchPage(): React.JSX.Element {
+  const enterprise = desktopWorkspaceCapabilities().mode === "enterprise";
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
@@ -4436,14 +4344,18 @@ function SearchPage(): React.JSX.Element {
   }, []);
   const results = useQuery({
     queryKey: ["chat", "search", query, includeArchived],
-    queryFn: () => window.openerx.search({ query, includeArchived }),
+    queryFn: () => desktopWorkspaceBridge().search({ query, includeArchived }),
     enabled: Boolean(query),
   });
   return (
     <main className="search-page">
-      <p className="eyebrow">本地历史</p>
+      <p className="eyebrow">{enterprise ? "企业历史" : "本地历史"}</p>
       <h1>搜索对话</h1>
-      <p className="page-intro">查找标题和消息正文；结果保留在本机工作区中。</p>
+      <p className="page-intro">
+        {enterprise
+          ? "查找已同步到本机的企业聊天标题和正文，打开结果会定位到对应分支和消息。"
+          : "查找标题和消息正文；结果保留在本机工作区中。"}
+      </p>
       <form
         className="search-form"
         onSubmit={(event) => {
@@ -4472,10 +4384,19 @@ function SearchPage(): React.JSX.Element {
         同时搜索已归档对话
       </label>
       <div className="search-results">
+        {query && results.isFetching ? <p role="status">正在搜索…</p> : null}
+        {results.error ? (
+          <div role="alert">
+            <p>暂时无法读取搜索结果，请重试。</p>
+            <button type="button" onClick={() => void results.refetch()}>
+              重新搜索
+            </button>
+          </div>
+        ) : null}
         {results.data?.map((result) => (
           <NavLink
-            key={`${result.conversationId}-${result.messageId}`}
-            to={`/chat/${result.conversationId}`}
+            key={`${result.conversationId}-${result.branchId}-${result.messageId}`}
+            to={conversationTargetHref(result)}
           >
             <div className="search-result-heading">
               <strong>
@@ -4496,7 +4417,7 @@ function SearchPage(): React.JSX.Element {
             <p>按 ⌘K 可以随时来到这里。输入完整词组通常能得到更精确的结果。</p>
           </div>
         ) : null}
-        {query && results.data?.length === 0 ? (
+        {query && !results.isFetching && !results.error && results.data?.length === 0 ? (
           <div className="empty-state">
             <strong>没有找到“{query}”</strong>
             <p>尝试更短的关键词，或开启“同时搜索已归档对话”。</p>
@@ -4597,14 +4518,14 @@ function SkillCenter(): React.JSX.Element {
   const [skillNotice, setSkillNotice] = useState<string | null>(null);
   const skills = useQuery({
     queryKey: ["skills"],
-    queryFn: () => window.openerx.listSkills(),
+    queryFn: () => desktopWorkspaceBridge().listSkills(),
   });
   const refresh = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey: ["skills"] });
   };
   const install = useMutation({
     mutationFn: () =>
-      window.openerx.chooseAndInstallSkill({
+      desktopWorkspaceBridge().chooseAndInstallSkill({
         scope,
         workspaceId: scope === "workspace" ? "default" : null,
       }),
@@ -4615,17 +4536,17 @@ function SkillCenter(): React.JSX.Element {
   });
   const enable = useMutation({
     mutationFn: ({ installationId, enabled }: { installationId: string; enabled: boolean }) =>
-      window.openerx.setSkillEnabled({ installationId, enabled }),
+      desktopWorkspaceBridge().setSkillEnabled({ installationId, enabled }),
     onSuccess: refresh,
   });
   const autoInvoke = useMutation({
     mutationFn: ({ installationId, value }: { installationId: string; value: boolean }) =>
-      window.openerx.setSkillAutoInvoke({ installationId, autoInvoke: value }),
+      desktopWorkspaceBridge().setSkillAutoInvoke({ installationId, autoInvoke: value }),
     onSuccess: refresh,
   });
   const approve = useMutation({
     mutationFn: (skill: SkillInstallation) =>
-      window.openerx.approveSkillPermissions({
+      desktopWorkspaceBridge().approveSkillPermissions({
         installationId: skill.id,
         permissionDigest: skill.permissionDigest,
       }),
@@ -4633,7 +4554,7 @@ function SkillCenter(): React.JSX.Element {
   });
   const reset = useMutation({
     mutationFn: (installationId: string) =>
-      window.openerx.resetSkillPermissions({ installationId }),
+      desktopWorkspaceBridge().resetSkillPermissions({ installationId }),
     onSuccess: async () => {
       await refresh();
       setSkillNotice("已撤销权限并停用该 Skill；重新审核批准后才能再次启用。");
@@ -4641,16 +4562,18 @@ function SkillCenter(): React.JSX.Element {
     },
   });
   const update = useMutation({
-    mutationFn: (installationId: string) => window.openerx.chooseAndUpdateSkill({ installationId }),
+    mutationFn: (installationId: string) =>
+      desktopWorkspaceBridge().chooseAndUpdateSkill({ installationId }),
     onSuccess: refresh,
   });
   const rollback = useMutation({
     mutationFn: ({ installationId, version }: { installationId: string; version: string }) =>
-      window.openerx.rollbackSkill({ installationId, version }),
+      desktopWorkspaceBridge().rollbackSkill({ installationId, version }),
     onSuccess: refresh,
   });
   const uninstall = useMutation({
-    mutationFn: (installationId: string) => window.openerx.uninstallSkill({ installationId }),
+    mutationFn: (installationId: string) =>
+      desktopWorkspaceBridge().uninstallSkill({ installationId }),
     onSuccess: refresh,
   });
   const mutationError =
@@ -4677,7 +4600,7 @@ function SkillCenter(): React.JSX.Element {
     >
       <header className="skill-center-header">
         <div>
-          <h2>Skill</h2>
+          <h2>可用 Skill</h2>
           <p>Skill 会为助手增加专门的工作方式。仅在任务需要时加载，并始终遵循当前权限。</p>
         </div>
         <button
@@ -4936,7 +4859,7 @@ function ThemeSettings({
     <section className="settings-card settings-stack theme-settings" aria-label="外观主题">
       <div className="settings-heading">
         <div>
-          <h2>外观</h2>
+          <h2>主题模式</h2>
           <p>选择工作区主题，修改会立即生效。</p>
         </div>
       </div>
@@ -4977,16 +4900,15 @@ function ModelSettings({
 }): React.JSX.Element {
   const models = useQuery({
     queryKey: ["models", "catalog"],
-    queryFn: () => window.openerx.listModels(),
+    queryFn: () => desktopWorkspaceBridge().listModels(),
+    refetchInterval: 30_000,
     retry: false,
   });
   const availableModels = (models.data ?? []).filter(({ status }) => status === "available");
   const visibleModels = availableModels.length > 0 ? availableModels : (models.data ?? []);
   const effectiveValue = visibleModels.some(({ modelRef }) => modelRef === value)
     ? value
-    : (visibleModels.find(({ modelRef }) => modelRef === automaticModelRef)?.modelRef ??
-      visibleModels[0]?.modelRef ??
-      value);
+    : (resolveDefaultModel(visibleModels, value)?.modelRef ?? visibleModels[0]?.modelRef ?? value);
 
   return (
     <section className="settings-card settings-stack" aria-label="默认模型">
@@ -4999,17 +4921,28 @@ function ModelSettings({
       <label htmlFor="default-model-setting">新任务默认模型</label>
       <select
         id="default-model-setting"
+        onFocus={() => {
+          void models.refetch();
+        }}
         value={effectiveValue}
         disabled={models.isPending || visibleModels.length === 0 || availableModels.length === 0}
         onChange={(event) => onChange(event.target.value)}
       >
         {visibleModels.map((model) => (
           <option key={model.modelRef} value={model.modelRef}>
-            {model.displayName} · {model.priceSummary}
-            {model.status === "unavailable" ? " · 需要配置 API" : ""}
+            {model.displayName}
+            {model.recommended ? " · 推荐" : ""} · {model.version} · {model.priceSummary}
+            {model.status === "unavailable"
+              ? model.catalogVersion
+                ? " · 暂不可用"
+                : " · 需要配置 API"
+              : ""}
           </option>
         ))}
       </select>
+      {defaultModelNotice(models.data ?? [], value) ? (
+        <p role="status">{defaultModelNotice(models.data ?? [], value)}</p>
+      ) : null}
       {models.error ? (
         <p className="inline-error">{userFacingError(models.error, "模型目录暂时不可用。")}</p>
       ) : null}
@@ -5021,8 +4954,15 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
   const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: ["model-service", "settings"],
-    queryFn: () => window.openerx.getModelServiceSettings(),
+    queryFn: () => desktopWorkspaceBridge().getModelServiceSettings(),
     retry: false,
+  });
+  const quota = useQuery({
+    queryKey: ["model-service", "quota", settings.data?.hostedAccountId],
+    queryFn: () => desktopWorkspaceBridge().getHostedModelUsage?.() ?? null,
+    enabled: settings.data?.mode === "hosted" && Boolean(settings.data?.hostedAccountId),
+    retry: false,
+    refetchInterval: 30_000,
   });
   const [draft, setDraft] = useState<ModelServiceSettingsUpdate>({
     mode: "byok",
@@ -5055,7 +4995,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
           .map(([providerId, apiKey]) => [providerId, apiKey?.trim()] as const)
           .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
       ) as Partial<Record<ByokProviderId, string>>;
-      return window.openerx.updateModelServiceSettings({
+      return desktopWorkspaceBridge().updateModelServiceSettings({
         ...draft,
         ...(Object.keys(providerApiKeys).length > 0 ? { providerApiKeys } : {}),
         ...(recoverUnreadableCredentials ? { recoverUnreadableCredentials: true as const } : {}),
@@ -5085,7 +5025,7 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       providerId: ByokProviderId;
       configuration: NonNullable<ModelServiceSettingsUpdate["byok"]>;
     }) =>
-      window.openerx.testByokConnection({
+      desktopWorkspaceBridge().testByokConnection({
         mode: "byok",
         byok: configuration,
         ...(providerKeys[providerId]?.trim()
@@ -5121,14 +5061,15 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
   });
   const customTest = useMutation({
     mutationFn: () =>
-      window.openerx.testByokConnection({
+      desktopWorkspaceBridge().testByokConnection({
         mode: "byok",
         byok: draft.byok,
         ...(draft.apiKey?.trim() ? { apiKey: draft.apiKey.trim() } : {}),
       }),
   });
   const clearKey = useMutation({
-    mutationFn: (providerId?: ByokProviderId) => window.openerx.clearByokApiKey(providerId),
+    mutationFn: (providerId?: ByokProviderId) =>
+      desktopWorkspaceBridge().clearByokApiKey(providerId),
     onSuccess: (value, providerId) => {
       queryClient.setQueryData(["model-service", "settings"], value);
       if (providerId) {
@@ -5155,7 +5096,11 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
       <div className="settings-heading">
         <div>
           <h2>模型服务</h2>
-          <p>各厂商地址和模型均已预置。可同时保存多个 Key，请求从本机直连对应厂商。</p>
+          <p>
+            {draft.mode === "hosted" && settings.data?.hostedAvailable
+              ? "登录后可使用服务器提供的模型，并在对话中切换；无需填写 API Key。"
+              : "各厂商地址和模型均已预置。可同时保存多个 Key，请求从本机直连对应厂商。"}
+          </p>
         </div>
       </div>
       {credentialIssue ? (
@@ -5176,9 +5121,24 @@ function ModelServiceSettingsPanel(): React.JSX.Element {
         value={draft.mode}
         onChange={(event) => setDraft({ ...draft, mode: event.target.value as "hosted" | "byok" })}
       >
-        <option value="byok">单安装包 / BYOK（默认）</option>
-        <option value="hosted">托管服务（需要部署服务端）</option>
+        <option value="byok">
+          {settings.data?.hostedAvailable ? "自有 API Key / BYOK" : "单安装包 / BYOK（默认）"}
+        </option>
+        <option value="hosted">
+          {settings.data?.hostedAvailable
+            ? "账号模型（由服务器提供）"
+            : "托管服务（需要部署服务端）"}
+        </option>
       </select>
+      {draft.mode === "hosted" && settings.data?.hostedAccountId ? (
+        <p role="status">
+          {quota.data
+            ? `今日剩余 ${quota.data.remainingTokens.toLocaleString()} Token · 已用 ${quota.data.usedTokens.toLocaleString()} · 处理中及待对账 ${quota.data.reservedTokens.toLocaleString()} · ${new Date(quota.data.resetAt).toLocaleString()} 重置`
+            : quota.isError
+              ? "暂时无法读取账户额度，请检查登录和服务器连接。"
+              : "正在读取账户额度…"}
+        </p>
+      ) : null}
       {draft.mode === "byok" && byok ? (
         <>
           <fieldset className="model-provider-grid">
@@ -5566,22 +5526,22 @@ function ReleaseUpdateSettings(): React.JSX.Element {
   const queryClient = useQueryClient();
   const update = useQuery({
     queryKey: ["release", "update"],
-    queryFn: () => window.openerx.getReleaseUpdateState(),
+    queryFn: () => desktopWorkspaceBridge().getReleaseUpdateState(),
     retry: false,
   });
   useEffect(
     () =>
-      window.openerx.onReleaseUpdateState((state) => {
+      desktopWorkspaceBridge().onReleaseUpdateState((state) => {
         queryClient.setQueryData(["release", "update"], state);
       }),
     [queryClient],
   );
   const check = useMutation({
-    mutationFn: () => window.openerx.checkForReleaseUpdate(),
+    mutationFn: () => desktopWorkspaceBridge().checkForReleaseUpdate(),
     onSuccess: (state) => queryClient.setQueryData(["release", "update"], state),
   });
   const install = useMutation({
-    mutationFn: () => window.openerx.installReleaseUpdate(),
+    mutationFn: () => desktopWorkspaceBridge().installReleaseUpdate(),
     onSuccess: (state) => queryClient.setQueryData(["release", "update"], state),
   });
   const state = update.data;
@@ -5590,10 +5550,14 @@ function ReleaseUpdateSettings(): React.JSX.Element {
       <div className="settings-heading">
         <div>
           <h2>应用更新</h2>
-          <p>仅接受与当前平台、架构和发布通道匹配的 Ed25519 签名更新清单。</p>
+          <p>检查适用于这台电脑的版本；更新会验证发布来源。</p>
         </div>
         <span className={`release-status status-${state?.status ?? "checking"}`}>
-          {state ? releaseUpdateStatusLabels[state.status] : "正在读取"}
+          {state
+            ? releaseUpdateStatusLabels[state.status]
+            : update.error
+              ? "读取更新状态失败"
+              : "正在读取"}
         </span>
       </div>
       <div className="release-update-summary">
@@ -5607,28 +5571,61 @@ function ReleaseUpdateSettings(): React.JSX.Element {
       <div className="settings-actions">
         <button
           type="button"
-          onClick={() => check.mutate()}
+          onClick={() => {
+            install.reset();
+            check.mutate();
+          }}
           disabled={
             !state ||
             state.status === "disabled" ||
             state.status === "checking" ||
             state.status === "downloading" ||
-            check.isPending
+            check.isPending ||
+            install.isPending
           }
         >
           <ArrowClockwise size={16} /> 检查更新
         </button>
+        {update.error ? (
+          <button type="button" onClick={() => void update.refetch()} disabled={update.isFetching}>
+            {update.isFetching ? "正在重新读取…" : "重新读取更新状态"}
+          </button>
+        ) : null}
         {state?.status === "downloaded" ? (
-          <button type="button" onClick={() => install.mutate()} disabled={install.isPending}>
+          <button
+            type="button"
+            onClick={() => {
+              check.reset();
+              install.mutate();
+            }}
+            disabled={install.isPending || check.isPending}
+          >
             安装并重启
           </button>
         ) : null}
       </div>
       {state?.status === "disabled" ? (
-        <p className="settings-note">正式签名包才会内置更新公钥和 HTTPS Manifest 地址。</p>
+        <p className="settings-note">
+          此安装版本暂未启用自动更新。可从原安装来源获取新版，再运行安装程序；已有账号和数据会保留。
+        </p>
       ) : null}
       {state?.reason && state.status === "error" ? (
         <p className="inline-error">更新错误：{state.reason}</p>
+      ) : null}
+      {update.error ? (
+        <p className="inline-error" role="alert">
+          无法读取更新状态，请重新读取后重试。
+        </p>
+      ) : null}
+      {check.error ? (
+        <p className="inline-error" role="alert">
+          检查更新失败，请稍后重试。
+        </p>
+      ) : null}
+      {install.error ? (
+        <p className="inline-error" role="alert">
+          安装更新失败，请重试安装。
+        </p>
       ) : null}
     </section>
   );
@@ -5637,22 +5634,13 @@ function ReleaseUpdateSettings(): React.JSX.Element {
 function DiagnosticsSettings(): React.JSX.Element {
   const diagnostics = useQuery({
     queryKey: ["diagnostics", "preview"],
-    queryFn: () => window.openerx.getDiagnosticsPreview(),
-    retry: false,
-  });
-  const personalData = useQuery({
-    queryKey: ["personal-data", "summary"],
-    queryFn: () => window.openerx.getPersonalDataSummary(),
+    queryFn: () => desktopWorkspaceBridge().getDiagnosticsPreview(),
     retry: false,
   });
   const exportDiagnostics = useMutation({
-    mutationFn: () => window.openerx.exportDiagnostics(),
-  });
-  const exportPersonalData = useMutation({
-    mutationFn: () => window.openerx.exportPersonalData(),
+    mutationFn: () => desktopWorkspaceBridge().exportDiagnostics(),
   });
   const preview = diagnostics.data;
-  const summary = personalData.data;
 
   return (
     <section
@@ -5661,7 +5649,7 @@ function DiagnosticsSettings(): React.JSX.Element {
     >
       <div className="settings-heading">
         <div>
-          <h2>诊断与数据</h2>
+          <h2>运行状态与本机数据</h2>
           <p>先预览脱敏范围，再决定是否保存；个人内容使用独立导出。</p>
         </div>
         <span className={`diagnostic-health health-${preview?.health ?? "collecting"}`}>
@@ -5706,17 +5694,7 @@ function DiagnosticsSettings(): React.JSX.Element {
         已记录 {preview?.eventCount ?? 0} 条脱敏事件 · {preview?.restartCount ?? 0} 次服务重启 ·{" "}
         {preview?.errorCount ?? 0} 个错误
       </p>
-      <section className="personal-data-summary" aria-label="本机个人数据摘要">
-        <div>
-          <strong>本机个人数据</strong>
-          <span>
-            {summary?.conversations ?? 0} 个对话 · {summary?.messages ?? 0} 条消息 ·{" "}
-            {summary?.files ?? 0} 个文件 · {summary?.artifacts ?? 0} 个成果 ·{" "}
-            {summary?.memories ?? 0} 条记忆
-          </span>
-          <small>Token、报价、费用和账单只读取服务端记录，不写入此本地导出。</small>
-        </div>
-      </section>
+      <LocalDataExportSettings />
       <div className="settings-actions">
         <button
           type="button"
@@ -5725,30 +5703,10 @@ function DiagnosticsSettings(): React.JSX.Element {
         >
           <DownloadSimple size={16} /> 导出脱敏诊断包
         </button>
-        <button
-          type="button"
-          onClick={() => exportPersonalData.mutate()}
-          disabled={!summary || exportPersonalData.isPending}
-        >
-          <DownloadSimple size={16} /> 导出个人数据
-        </button>
       </div>
       {exportDiagnostics.data ? <p>诊断包已保存：{exportDiagnostics.data.fileName}</p> : null}
-      {exportPersonalData.data ? <p>个人数据已保存：{exportPersonalData.data.fileName}</p> : null}
-      {diagnostics.error ||
-      personalData.error ||
-      exportDiagnostics.error ||
-      exportPersonalData.error ? (
-        <p className="inline-error">
-          {
-            (
-              diagnostics.error ??
-              personalData.error ??
-              exportDiagnostics.error ??
-              exportPersonalData.error
-            )?.message
-          }
-        </p>
+      {diagnostics.error || exportDiagnostics.error ? (
+        <p className="inline-error">{(diagnostics.error ?? exportDiagnostics.error)?.message}</p>
       ) : null}
     </section>
   );
@@ -5766,7 +5724,7 @@ function MemorySourceDetails({ memory }: { memory: MemoryEntry }): React.JSX.Ele
   const navigate = useNavigate();
   const sources = useQuery({
     queryKey: ["memory", memory.id, "sources"],
-    queryFn: () => window.openerx.listMemorySources({ memoryId: memory.id }),
+    queryFn: () => desktopWorkspaceBridge().listMemorySources({ memoryId: memory.id }),
     enabled: expanded,
     retry: false,
   });
@@ -5827,13 +5785,13 @@ function MemorySettingsPanel(): React.JSX.Element {
   const [editingId, setEditingId] = useState<string | null>(null);
   const settings = useQuery({
     queryKey: ["memory", "settings"],
-    queryFn: () => window.openerx.getMemorySettings(),
+    queryFn: () => desktopWorkspaceBridge().getMemorySettings(),
     retry: false,
   });
   const memories = useQuery({
     queryKey: ["memory", "list", query.trim(), filterKind],
     queryFn: () =>
-      window.openerx.listMemories({
+      desktopWorkspaceBridge().listMemories({
         status: "active",
         limit: 100,
         ...(query.trim() ? { query: query.trim() } : {}),
@@ -5843,17 +5801,18 @@ function MemorySettingsPanel(): React.JSX.Element {
   });
   const mergeReviews = useQuery({
     queryKey: ["memory", "merge-reviews", "pending"],
-    queryFn: () => window.openerx.listMemoryMergeReviews({ status: "pending", limit: 50 }),
+    queryFn: () =>
+      desktopWorkspaceBridge().listMemoryMergeReviews({ status: "pending", limit: 50 }),
     enabled: settings.data?.memoriesEnabled === true,
     retry: false,
   });
   const updateSettings = useMutation({
-    mutationFn: window.openerx.updateMemorySettings,
+    mutationFn: desktopWorkspaceBridge().updateMemorySettings,
     onSuccess: (next) => queryClient.setQueryData(["memory", "settings"], next),
   });
   const saveMemory = useMutation({
     mutationFn: () =>
-      window.openerx.upsertMemory({
+      desktopWorkspaceBridge().upsertMemory({
         ...(editingId ? { id: editingId } : {}),
         kind,
         content: content.trim(),
@@ -5867,7 +5826,7 @@ function MemorySettingsPanel(): React.JSX.Element {
   });
   const deleteMemory = useMutation({
     mutationFn: (memoryId: string) =>
-      window.openerx.deleteMemory({
+      desktopWorkspaceBridge().deleteMemory({
         memoryId,
         idempotencyKey: `memory-ui-delete:${crypto.randomUUID()}`,
       }),
@@ -5877,7 +5836,7 @@ function MemorySettingsPanel(): React.JSX.Element {
   });
   const resolveMergeReview = useMutation({
     mutationFn: (input: { reviewId: string; resolution: "accept" | "dismiss" }) =>
-      window.openerx.resolveMemoryMergeReview({
+      desktopWorkspaceBridge().resolveMemoryMergeReview({
         ...input,
         idempotencyKey: `memory-merge-review:${crypto.randomUUID()}`,
       }),
@@ -5895,7 +5854,7 @@ function MemorySettingsPanel(): React.JSX.Element {
       if (!window.confirm(`删除${scope}？若已开启同步，此操作也会同步到其他设备。`)) {
         return null;
       }
-      return await window.openerx.clearMemories({
+      return await desktopWorkspaceBridge().clearMemories({
         ...(filterKind === "all" ? {} : { kind: filterKind }),
         idempotencyKey: `memory-ui-clear:${crypto.randomUUID()}`,
       });
@@ -6265,6 +6224,34 @@ const accountSettingsSectionLabels: Record<AccountSettingsSection, string> = {
   diagnostics: "诊断与数据",
 };
 
+const settingsSectionTitles: Partial<Record<AccountSettingsSection, string>> = {
+  remote: "远程连接",
+  billing: "费用与账单",
+  appearance: "外观",
+  model: "模型",
+  assistants: "Skill",
+  tools: "工具",
+  memory: "记忆",
+  update: "更新",
+  diagnostics: "诊断与数据",
+};
+
+function revealSettingsNavigationButton(navigation: HTMLElement, button: HTMLElement): void {
+  const viewport = navigation.getBoundingClientRect();
+  const target = button.getBoundingClientRect();
+  const padding = 5;
+  if (target.left < viewport.left + padding) {
+    navigation.scrollLeft += target.left - viewport.left - padding;
+  } else if (target.right > viewport.right - padding) {
+    navigation.scrollLeft += target.right - viewport.right + padding;
+  }
+  if (target.top < viewport.top + padding) {
+    navigation.scrollTop += target.top - viewport.top - padding;
+  } else if (target.bottom > viewport.bottom - padding) {
+    navigation.scrollTop += target.bottom - viewport.bottom + padding;
+  }
+}
+
 function requestedSettingsSection(search: string): AccountSettingsSection | null {
   const value = new URLSearchParams(search).get("section");
   return value === "remote" ||
@@ -6296,17 +6283,44 @@ function AccountSettings({
 }): React.JSX.Element {
   const queryClient = useQueryClient();
   const location = useLocation();
+  const navigate = useNavigate();
   const account = useQuery({
     queryKey: accountKey,
-    queryFn: () => window.openerx.getAccountState(),
+    queryFn: () => desktopWorkspaceBridge().getAccountState(),
   });
   const [activeSection, setActiveSection] = useState<AccountSettingsSection>(
     () => requestedSettingsSection(location.search) ?? "account",
   );
   const [settingsSearch, setSettingsSearch] = useState("");
+  const settingsNavigationRef = useRef<HTMLDivElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Section changes update the selected DOM button that this effect reveals.
+  useEffect(() => {
+    if (account.isPending || account.isError) return;
+    const navigation = settingsNavigationRef.current;
+    if (!navigation) return;
+    let frame: number | null = null;
+    const revealCurrentSection = (): void => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const button = navigation.querySelector<HTMLElement>('button[aria-current="page"]');
+        if (button) revealSettingsNavigationButton(navigation, button);
+      });
+    };
+    revealCurrentSection();
+    const observer =
+      typeof ResizeObserver === "function" ? new ResizeObserver(revealCurrentSection) : null;
+    observer?.observe(navigation);
+    window.addEventListener("resize", revealCurrentSection);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", revealCurrentSection);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [activeSection, account.isPending, account.isError]);
   useEffect(() => {
     const requested = requestedSettingsSection(location.search);
-    if (requested) setActiveSection(requested);
+    setActiveSection(requested ?? "account");
   }, [location.search]);
   const settingsFocusFrame = useRef<number | null>(null);
   useEffect(
@@ -6316,17 +6330,29 @@ function AccountSettings({
     },
     [],
   );
-  const openSettingsSection = (section: AccountSettingsSection): void => {
+  const openSettingsSection = (
+    section: AccountSettingsSection,
+    target = settingsSearchTarget(section, settingsSearch),
+  ): void => {
     const previousFocus = document.activeElement;
     if (settingsFocusFrame.current !== null)
       window.cancelAnimationFrame(settingsFocusFrame.current);
     setActiveSection(section);
+    navigate({
+      pathname: location.pathname,
+      search: settingsSectionUrl(location.search, section, target),
+    });
+    setSettingsSearch("");
     settingsFocusFrame.current = window.requestAnimationFrame(() => {
       settingsFocusFrame.current = window.requestAnimationFrame(() => {
         settingsFocusFrame.current = null;
         // Do not steal focus after the user has already started editing a field.
         if (document.activeElement === previousFocus || document.activeElement === document.body) {
-          document.getElementById(`${section}-section`)?.focus({ preventScroll: true });
+          const destination = document.getElementById(
+            target?.target === "devices" ? "account-devices" : `${section}-section`,
+          );
+          destination?.focus({ preventScroll: true });
+          if (target?.target === "devices") destination?.scrollIntoView?.({ block: "start" });
         }
       });
     });
@@ -6334,13 +6360,14 @@ function AccountSettings({
   const normalizedSettingsSearch = settingsSearch.trim().toLocaleLowerCase();
   const settingsSectionMatches = (section: AccountSettingsSection): boolean =>
     !normalizedSettingsSearch ||
-    accountSettingsSectionLabels[section].toLocaleLowerCase().includes(normalizedSettingsSearch);
+    settingsSectionSearch(section, normalizedSettingsSearch, accountSettingsSectionLabels[section]);
   const renderSettingsNavButton = (
     section: AccountSettingsSection,
     icon: ReactNode,
   ): React.JSX.Element | null => {
     if (!settingsSectionMatches(section)) return null;
-    const label = accountSettingsSectionLabels[section];
+    const target = settingsSearchTarget(section, normalizedSettingsSearch);
+    const label = target?.label ?? accountSettingsSectionLabels[section];
     return (
       <button
         type="button"
@@ -6357,21 +6384,38 @@ function AccountSettings({
     Object.keys(accountSettingsSectionLabels) as AccountSettingsSection[]
   ).some(settingsSectionMatches);
   const signedIn = account.data?.status === "signed_in";
+  useEffect(() => {
+    if (
+      activeSection !== "account" ||
+      !signedIn ||
+      new URLSearchParams(location.search).get("target") !== "devices"
+    )
+      return;
+    const previousFocus = document.activeElement;
+    const frame = window.requestAnimationFrame(() => {
+      if (document.activeElement !== previousFocus && document.activeElement !== document.body)
+        return;
+      const destination = document.getElementById("account-devices");
+      destination?.focus({ preventScroll: true });
+      destination?.scrollIntoView?.({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeSection, signedIn, location.search]);
   const devices = useQuery({
     queryKey: ["account", "devices"],
-    queryFn: () => window.openerx.listDevices(),
+    queryFn: () => desktopWorkspaceBridge().listDevices(),
     enabled: signedIn,
     retry: false,
   });
   const sync = useQuery({
     queryKey: ["sync", "status"],
-    queryFn: () => window.openerx.syncNow(),
+    queryFn: () => desktopWorkspaceBridge().syncNow(),
     enabled: signedIn,
     retry: false,
   });
   const conflicts = useQuery({
     queryKey: ["sync", "conflicts"],
-    queryFn: () => window.openerx.listSyncConflicts(),
+    queryFn: () => desktopWorkspaceBridge().listSyncConflicts(),
     enabled: signedIn,
     retry: false,
   });
@@ -6385,7 +6429,7 @@ function AccountSettings({
   }, [queryClient, sync.data]);
   const accountUsage = useQuery({
     queryKey: ["usage", "account"],
-    queryFn: () => window.openerx.getUsage(),
+    queryFn: () => desktopWorkspaceBridge().getUsage(),
     enabled: signedIn,
     retry: false,
   });
@@ -6394,7 +6438,7 @@ function AccountSettings({
     void queryClient.invalidateQueries({ queryKey: ["chat"] });
   }, [queryClient, sync.data?.syncedAt]);
   const signOut = useMutation({
-    mutationFn: () => window.openerx.signOut(),
+    mutationFn: () => desktopWorkspaceBridge().signOut(),
     onSuccess: async (state) => {
       queryClient.setQueryData(accountKey, state);
       await queryClient.invalidateQueries({ queryKey: ["chat"] });
@@ -6405,7 +6449,7 @@ function AccountSettings({
       if (!window.confirm("退出全部设备后，所有设备都需要重新验证邮箱。是否继续？")) {
         return null;
       }
-      return await window.openerx.signOutAll();
+      return await desktopWorkspaceBridge().signOutAll();
     },
     onSuccess: async (state) => {
       if (!state) return;
@@ -6415,7 +6459,7 @@ function AccountSettings({
     },
   });
   const revokeDevice = useMutation({
-    mutationFn: (sessionId: string) => window.openerx.revokeDevice({ sessionId }),
+    mutationFn: (sessionId: string) => desktopWorkspaceBridge().revokeDevice({ sessionId }),
     onSuccess: async (state) => {
       queryClient.setQueryData(accountKey, state);
       await queryClient.invalidateQueries({ queryKey: ["account", "devices"] });
@@ -6423,7 +6467,7 @@ function AccountSettings({
   });
   const resolveConflict = useMutation({
     mutationFn: (input: { conflictId: string; resolution: "local" | "cloud" }) =>
-      window.openerx.resolveSyncConflict(input),
+      desktopWorkspaceBridge().resolveSyncConflict(input),
     onSuccess: async (status) => {
       queryClient.setQueryData(["sync", "status"], status);
       await Promise.all([
@@ -6437,7 +6481,7 @@ function AccountSettings({
   const clearLocalCache = useMutation({
     mutationFn: async () => {
       if (!window.confirm("仅清理本机缓存；云端对话会在下次同步时恢复。是否继续？")) return null;
-      return await window.openerx.clearLocalCache();
+      return await desktopWorkspaceBridge().clearLocalCache();
     },
     onSuccess: async (result) => {
       if (!result) return;
@@ -6458,7 +6502,7 @@ function AccountSettings({
       ) {
         return null;
       }
-      return await window.openerx.deleteCloudData();
+      return await desktopWorkspaceBridge().deleteCloudData();
     },
     onSuccess: async (result) => {
       if (!result) return;
@@ -6491,7 +6535,16 @@ function AccountSettings({
               onChange={(event) => setSettingsSearch(event.target.value)}
             />
           </label>
-          <div className="settings-nav-scroll">
+          <div
+            className="settings-nav-scroll"
+            ref={settingsNavigationRef}
+            onFocusCapture={(event) => {
+              if (event.target instanceof HTMLElement) {
+                const button = event.target.closest("button");
+                if (button) revealSettingsNavigationButton(event.currentTarget, button);
+              }
+            }}
+          >
             {settingsSectionMatches("account") ||
             settingsSectionMatches("appearance") ||
             settingsSectionMatches("billing") ||
@@ -6533,6 +6586,11 @@ function AccountSettings({
           className="settings-section-content"
           aria-label={`${accountSettingsSectionLabels[activeSection]}设置`}
         >
+          {settingsSectionTitles[activeSection] ? (
+            <header className="settings-section-heading">
+              <h1>{settingsSectionTitles[activeSection]}</h1>
+            </header>
+          ) : null}
           {activeSection === "account" ? (
             <AccountAccess
               state={state}
@@ -6588,7 +6646,7 @@ function AccountSettings({
             </div>
           ) : null}
           {activeSection === "assistants" ? <SkillCenter /> : null}
-          {activeSection === "tools" ? <ToolCenter /> : null}
+          {activeSection === "tools" ? <ToolCenter showTitle={false} /> : null}
           {activeSection === "memory" ? (
             <div className="settings-section-panel" id="memory-section" tabIndex={-1}>
               <MemorySettingsPanel />
@@ -6606,7 +6664,12 @@ function AccountSettings({
           ) : null}
           {activeSection === "account" && state?.status === "signed_in" && state.session ? (
             <>
-              <section className="settings-card settings-stack" aria-label="设备会话">
+              <section
+                className="settings-card settings-stack"
+                id="account-devices"
+                tabIndex={-1}
+                aria-label="设备会话"
+              >
                 <div className="settings-heading">
                   <div>
                     <h2>设备会话</h2>
@@ -6872,47 +6935,47 @@ function BillingSettings(): React.JSX.Element {
   const queryClient = useQueryClient();
   const account = useQuery({
     queryKey: accountKey,
-    queryFn: () => window.openerx.getAccountState(),
+    queryFn: () => desktopWorkspaceBridge().getAccountState(),
   });
   const signedIn = account.data?.status === "signed_in";
   const terms = useQuery({
     queryKey: [...billingKey, "terms"],
-    queryFn: () => window.openerx.getBillingTerms(),
+    queryFn: () => desktopWorkspaceBridge().getBillingTerms(),
     enabled: signedIn,
     retry: false,
     refetchOnMount: "always",
   });
   const overview = useQuery({
     queryKey: [...billingKey, "overview"],
-    queryFn: () => window.openerx.getBillingOverview(),
+    queryFn: () => desktopWorkspaceBridge().getBillingOverview(),
     enabled: signedIn,
     retry: false,
     refetchOnMount: "always",
   });
   const charges = useQuery({
     queryKey: [...billingKey, "charges"],
-    queryFn: () => window.openerx.listCharges(),
+    queryFn: () => desktopWorkspaceBridge().listCharges(),
     enabled: signedIn,
     retry: false,
     refetchOnMount: "always",
   });
   const ledger = useQuery({
     queryKey: [...billingKey, "ledger"],
-    queryFn: () => window.openerx.listLedger(),
+    queryFn: () => desktopWorkspaceBridge().listLedger(),
     enabled: signedIn,
     retry: false,
     refetchOnMount: "always",
   });
   const orders = useQuery({
     queryKey: [...billingKey, "orders"],
-    queryFn: () => window.openerx.listRechargeOrders(),
+    queryFn: () => desktopWorkspaceBridge().listRechargeOrders(),
     enabled: signedIn,
     retry: false,
     refetchOnMount: "always",
   });
   const refunds = useQuery({
     queryKey: [...billingKey, "refunds"],
-    queryFn: () => window.openerx.listRefunds(),
+    queryFn: () => desktopWorkspaceBridge().listRefunds(),
     enabled: signedIn,
     retry: false,
     refetchOnMount: "always",
@@ -6920,7 +6983,7 @@ function BillingSettings(): React.JSX.Element {
   const acceptTerms = useMutation({
     mutationFn: () => {
       if (!terms.data) throw new Error("收费条款尚未加载");
-      return window.openerx.acceptBillingTerms(terms.data.terms.version);
+      return desktopWorkspaceBridge().acceptBillingTerms(terms.data.terms.version);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [...billingKey, "terms"] }),
   });
@@ -6928,7 +6991,7 @@ function BillingSettings(): React.JSX.Element {
   const [provider, setProvider] = useState<"alipay" | "wechat">("alipay");
   const createOrder = useMutation({
     mutationFn: () =>
-      window.openerx.createRechargeOrder({
+      desktopWorkspaceBridge().createRechargeOrder({
         amountMinor: rechargeMinor,
         provider,
         idempotencyKey: idempotencyKey("recharge"),
@@ -6937,7 +7000,7 @@ function BillingSettings(): React.JSX.Element {
   });
   const [statementMonth, setStatementMonth] = useState(previousMonth);
   const statement = useMutation({
-    mutationFn: () => window.openerx.exportBillingStatement(statementMonth),
+    mutationFn: () => desktopWorkspaceBridge().exportBillingStatement(statementMonth),
   });
 
   if (account.isPending) return <main className="center-state">正在读取账户状态…</main>;
@@ -7150,6 +7213,34 @@ function BillingSettings(): React.JSX.Element {
 
 type ToolCenterCategory = "all" | "builtin" | "mcp" | "browser" | "search" | "system";
 
+function NativeToolSettings(): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const settings = useQuery({
+    queryKey: ["pi", "runtime", "settings"],
+    queryFn: () => desktopWorkspaceBridge().getPiRuntimeSettings(),
+  });
+  const update = useMutation({
+    mutationFn: (input: PiRuntimeSettingsUpdateInput) =>
+      desktopWorkspaceBridge().updatePiRuntimeSettings(input),
+    onSuccess: (next) => queryClient.setQueryData(["pi", "runtime", "settings"], next),
+  });
+  return (
+    <PiRuntimeSettingsPanel
+      enabled={settings.data?.nativeToolsEnabled === true}
+      pending={settings.isPending || update.isPending || !settings.data}
+      {...(settings.error || update.error
+        ? {
+            error: userFacingError(
+              settings.error ?? update.error,
+              settings.error ? "暂时无法读取工具编排设置。" : "工具编排设置保存失败。",
+            ),
+          }
+        : {})}
+      onChange={(nativeToolsEnabled) => update.mutate({ nativeToolsEnabled })}
+    />
+  );
+}
+
 type ToolCenterRow = {
   id: string;
   name: string;
@@ -7164,8 +7255,18 @@ type ToolCenterRow = {
   mcpServerId?: string;
 };
 
-function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.JSX.Element {
+export function ToolCenter({
+  showTitle = true,
+  managed = desktopWorkspaceCapabilities().mode === "enterprise",
+}: {
+  showTitle?: boolean;
+  managed?: boolean;
+} = {}): React.JSX.Element {
   const queryClient = useQueryClient();
+  const workspaceCapabilities = desktopWorkspaceCapabilities();
+  const providerSettings =
+    !managed ||
+    (workspaceCapabilities.mode === "enterprise" && workspaceCapabilities.toolProviderSettings);
   const [searchText, setSearchText] = useState("");
   const [activeCategory, setActiveCategory] = useState<ToolCenterCategory>("all");
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
@@ -7183,7 +7284,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
 
   const runtimeReadiness = useQuery({
     queryKey: ["tools", "runtime-readiness"],
-    queryFn: () => window.openerx.listToolRuntimeReadiness(),
+    queryFn: () => desktopWorkspaceBridge().listToolRuntimeReadiness(),
   });
   useEffect(() => {
     const refreshPermissions = () => {
@@ -7194,15 +7295,18 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
   }, [queryClient]);
   const localWebSearchSettings = useQuery({
     queryKey: ["tools", "local-web-search", "settings"],
-    queryFn: () => window.openerx.getLocalWebSearchSettings(),
+    queryFn: () => desktopWorkspaceBridge().getLocalWebSearchSettings(),
+    enabled: providerSettings,
   });
   const mcpServers = useQuery({
     queryKey: ["tools", "mcp-servers"],
-    queryFn: () => window.openerx.listMcpServers(),
+    queryFn: () => desktopWorkspaceBridge().listMcpServers(),
+    enabled: providerSettings,
   });
   const mcpAuthorization = useQuery({
     queryKey: ["tools", "mcp-authorization"],
-    queryFn: () => window.openerx.listMcpServerAuthorizationStates(),
+    queryFn: () => desktopWorkspaceBridge().listMcpServerAuthorizationStates(),
+    enabled: providerSettings,
   });
 
   useEffect(() => {
@@ -7216,7 +7320,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
 
   const saveLocalWebSearchSettings = useMutation({
     mutationFn: (input: LocalWebSearchSettingsSelection) =>
-      window.openerx.updateLocalWebSearchSettings(input),
+      desktopWorkspaceBridge().updateLocalWebSearchSettings(input),
     onSuccess: async (state) => {
       queryClient.setQueryData<LocalWebSearchSettingsState>(
         ["tools", "local-web-search", "settings"],
@@ -7227,7 +7331,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
     },
   });
   const resetLocalWebSearchRuntime = useMutation({
-    mutationFn: () => window.openerx.resetLocalWebSearchRuntime(),
+    mutationFn: () => desktopWorkspaceBridge().resetLocalWebSearchRuntime(),
     onSuccess: async (state) => {
       queryClient.setQueryData<LocalWebSearchSettingsState>(
         ["tools", "local-web-search", "settings"],
@@ -7239,7 +7343,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
   });
   const requestNativePermission = useMutation({
     mutationFn: (permission: "screen_capture" | "accessibility") =>
-      window.openerx.requestDesktopNativePermission({ permission }),
+      desktopWorkspaceBridge().requestDesktopNativePermission({ permission }),
     onSuccess: async (state) => {
       await queryClient.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
       setNativePermissionNotice(
@@ -7259,7 +7363,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
     await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-authorization"] });
   };
   const testMcp = useMutation({
-    mutationFn: (serverId: string) => window.openerx.testMcpServer({ serverId }),
+    mutationFn: (serverId: string) => desktopWorkspaceBridge().testMcpServer({ serverId }),
     onSuccess: async (result) => {
       setMcpTests((current) => ({ ...current, [result.serverId]: result }));
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-authorization"] });
@@ -7267,7 +7371,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
   });
   const toggleMcp = useMutation({
     mutationFn: (server: McpServerConfig) =>
-      window.openerx.saveMcpServer({ config: { ...server, enabled: !server.enabled } }),
+      desktopWorkspaceBridge().saveMcpServer({ config: { ...server, enabled: !server.enabled } }),
     onSuccess: async (saved) => {
       setMcpTests((current) => {
         const next = { ...current };
@@ -7278,7 +7382,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
     },
   });
   const authorizeMcp = useMutation({
-    mutationFn: (serverId: string) => window.openerx.authorizeMcpServer({ serverId }),
+    mutationFn: (serverId: string) => desktopWorkspaceBridge().authorizeMcpServer({ serverId }),
     onSuccess: async (state) => {
       setMcpTests((current) => {
         const next = { ...current };
@@ -7294,7 +7398,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
     },
   });
   const removeMcp = useMutation({
-    mutationFn: (serverId: string) => window.openerx.removeMcpServer({ serverId }),
+    mutationFn: (serverId: string) => desktopWorkspaceBridge().removeMcpServer({ serverId }),
     onSuccess: async () => {
       setSelectedToolId(null);
       await queryClient.invalidateQueries({ queryKey: ["tools", "mcp-servers"] });
@@ -7340,7 +7444,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
         return {
           id: `capability:${tool.capability}`,
           name: tool.name,
-          detail: tool.detail,
+          detail: managed && readiness?.details?.length ? readiness.details.join(" ") : tool.detail,
           permissionSummary: missingPermissions.length
             ? `缺少系统权限：${missingPermissions.map((permission) => systemPermissionLabels[permission]).join("、")}`
             : undefined,
@@ -7354,7 +7458,9 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
               : status === "degraded"
                 ? "部分可用"
                 : status === "authorization_required"
-                  ? "未配置"
+                  ? managed
+                    ? "按任务授权"
+                    : "未配置"
                   : status === "unavailable"
                     ? "不可用"
                     : runtimeReadiness.isFetching
@@ -7408,6 +7514,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
     mcpTests,
     readinessByCapability,
     runtimeReadiness.isFetching,
+    managed,
   ]);
 
   const filteredRows = useMemo(() => {
@@ -7461,13 +7568,48 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
       <header className="tool-library-header">
         <div>
           {showTitle ? <h2>工具</h2> : null}
-          <p>添加、设置并管理 openerx 可以使用的工具</p>
+          <p>
+            {managed
+              ? "管理企业任务使用的工具连接、搜索和系统权限，具体操作按任务授权。"
+              : "添加、设置并管理 openerx 可以使用的工具"}
+          </p>
         </div>
-        <button type="button" className="tool-add-button" onClick={() => setAddDialogOpen(true)}>
+        <button
+          type="button"
+          className="tool-add-button"
+          disabled={!providerSettings}
+          title={!providerSettings ? "当前工作区未开放工具连接设置" : undefined}
+          onClick={() => setAddDialogOpen(true)}
+        >
           <Plus size={18} weight="bold" />
           添加工具
         </button>
       </header>
+
+      {managed ? (
+        <section className="settings-card settings-stack" aria-label="企业工具授权">
+          <p>
+            企业工具随 Skill 和任务使用，具体操作仍需审批。在对话上下文中设置工作目录或浏览器授权。
+          </p>
+          <p>
+            {providerSettings
+              ? "MCP 与搜索设置保存在当前企业账号下。桌面操作需要系统授权，图像生成取决于企业服务配置。"
+              : "当前工作区的工具连接由企业管理；请根据工具状态查看可用能力。"}
+          </p>
+          <button
+            type="button"
+            onClick={() => void runtimeReadiness.refetch()}
+            disabled={runtimeReadiness.isFetching}
+          >
+            {runtimeReadiness.isFetching ? "正在读取工具状态…" : "刷新工具状态"}
+          </button>
+        </section>
+      ) : null}
+      {runtimeReadiness.error ? (
+        <p className="inline-error" role="alert">
+          暂时无法读取工具状态，请刷新后重试。
+        </p>
+      ) : null}
 
       <div className="tool-library-toolbar">
         <div className="tool-category-tabs" role="tablist" aria-label="工具分类">
@@ -7538,18 +7680,22 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
               <p>{row.detail}</p>
               <span className="tool-library-source">{row.source}</span>
               <span className={`tool-library-status is-${row.statusTone}`}>{row.status}</span>
-              <label className="tool-library-switch">
-                <span className="visually-hidden">启用 {row.name}</span>
-                <input
-                  type="checkbox"
-                  checked={row.enabled}
-                  disabled={!mcpServer || toggleMcp.isPending}
-                  readOnly={!mcpServer}
-                  onChange={() => {
-                    if (mcpServer) toggleMcp.mutate(mcpServer);
-                  }}
-                />
-              </label>
+              {managed && !(mcpServer && providerSettings) ? (
+                <span>{row.enabled ? "已就绪" : row.status}</span>
+              ) : (
+                <label className="tool-library-switch">
+                  <span className="visually-hidden">启用 {row.name}</span>
+                  <input
+                    type="checkbox"
+                    checked={row.enabled}
+                    disabled={!mcpServer || toggleMcp.isPending}
+                    readOnly={!mcpServer}
+                    onChange={() => {
+                      if (mcpServer) toggleMcp.mutate(mcpServer);
+                    }}
+                  />
+                </label>
+              )}
               <button
                 type="button"
                 className="tool-row-settings"
@@ -7560,7 +7706,9 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                 }}
               >
                 <GearSix size={17} />
-                设置
+                {managed && !(providerSettings && (mcpServer || row.capability === "web.search"))
+                  ? "查看详情"
+                  : "设置"}
               </button>
             </article>
           );
@@ -7573,6 +7721,8 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
           </div>
         ) : null}
       </section>
+
+      {!managed ? <NativeToolSettings /> : null}
 
       {selectedRow ? (
         <div className="tool-modal-backdrop" role="presentation">
@@ -7612,9 +7762,29 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
               </div>
             </div>
 
-            {selectedRow.capability === "browser" ? <BrowserSettingsPanel /> : null}
+            {!managed && selectedRow.capability === "browser" ? <BrowserSettingsPanel /> : null}
 
-            {selectedRow.capability === "web.search" ? (
+            {managed &&
+            selectedRow.capability !== "desktop" &&
+            !(
+              providerSettings &&
+              (selectedMcp || ["web.search", "mcp"].includes(selectedRow.capability))
+            ) ? (
+              <section className="tool-settings-section" aria-label="企业工具详情">
+                <h3>使用说明</h3>
+                <ul>
+                  {(selectedReadiness?.details ?? []).map((detail) => (
+                    <li key={detail}>{detail}</li>
+                  ))}
+                </ul>
+                {selectedRow.status === "按任务授权" ? (
+                  <NavLink to="/chat/new">进入对话设置任务权限</NavLink>
+                ) : null}
+                {selectedRow.enabled ? (
+                  <NavLink to="/settings/account?section=enterprise">查看企业 Skill</NavLink>
+                ) : null}
+              </section>
+            ) : selectedRow.capability === "web.search" ? (
               <section className="tool-settings-section" aria-label="本地 Web Search">
                 <div className="tool-settings-heading">
                   <div>
@@ -7705,7 +7875,9 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                       <span className={`is-${provider.status}`}>
                         {localWebSearchProviderStatusLabels[provider.status]}
                       </span>
-                      {provider.lastErrorCode ? <small>{provider.lastErrorCode}</small> : null}
+                      {provider.lastErrorCode ? (
+                        <small>{localWebSearchFailureMessage(provider.lastErrorCode)}</small>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -7896,7 +8068,8 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
                     ))}
                   </ul>
                 ) : null}
-                {selectedRow.capability === "mcp" ? (
+                {managed ? <NavLink to="/chat/new">进入对话设置任务权限</NavLink> : null}
+                {providerSettings && selectedRow.capability === "mcp" ? (
                   <button
                     type="button"
                     className="primary-action"
@@ -7942,7 +8115,7 @@ function ToolCenter({ showTitle = true }: { showTitle?: boolean } = {}): React.J
         </div>
       ) : null}
 
-      {addDialogOpen ? (
+      {addDialogOpen && providerSettings ? (
         <McpServerEditor
           server={editingMcp}
           existingNames={mcpServers.data?.map(({ name }) => name) ?? []}
@@ -7983,11 +8156,11 @@ function Sidebar({
   const [showArchived, setShowArchived] = useState(false);
   const history = useQuery({
     queryKey: chatKeys.list(showArchived),
-    queryFn: () => window.openerx.listConversations({ includeArchived: showArchived }),
+    queryFn: () => desktopWorkspaceBridge().listConversations({ includeArchived: showArchived }),
   });
   const account = useQuery({
     queryKey: accountKey,
-    queryFn: () => window.openerx.getAccountState(),
+    queryFn: () => desktopWorkspaceBridge().getAccountState(),
   });
   const unassignedConversations = (history.data ?? []).filter(
     ({ projectId }) => projectId === null,
@@ -7996,135 +8169,137 @@ function Sidebar({
     ({ archivedAt }) => archivedAt !== null,
   ).length;
   return (
-    <aside
-      className="sidebar"
+    <WorkspaceSidebar
       inert={backgroundInert ? true : undefined}
       aria-hidden={backgroundInert || undefined}
-    >
-      <div className="sidebar-top">
-        <div className="brand-row">
-          <div className="brand">
-            <span className="brand-mark">
-              <img src="/assets/openerx-mark.svg" alt="openerx 标志" />
-            </span>
-            <span className="brand-copy">
-              <strong>openerx</strong>
-              <small>personal AI workspace</small>
-            </span>
-          </div>
-          <button
-            type="button"
-            className="icon-button sidebar-collapse"
-            aria-label="收起侧栏"
-            onClick={onCollapse}
-          >
-            <SidebarSimple size={18} weight="regular" />
-          </button>
-        </div>
-        <nav aria-label="新对话" className="main-nav sidebar-primary-nav">
-          <NavLink to="/chat/new" className="new-chat-link">
-            <Plus size={17} weight="bold" />
-            <span>新对话</span>
-          </NavLink>
-        </nav>
-      </div>
-      <div className="sidebar-scroll" data-testid="sidebar-scroll">
-        <nav aria-label="主导航" className="main-nav">
-          <NavLink to="/search">
-            <MagnifyingGlass size={17} />
-            <span>搜索</span>
-            <kbd>⌘K</kbd>
-          </NavLink>
-          <NavLink to="/files">
-            <FolderSimple size={17} />
-            <span>个人文件</span>
-          </NavLink>
-          <NavLink to="/automations">
-            <ArrowClockwise size={17} />
-            <span>自动化</span>
-          </NavLink>
-          {assistantFeatureEnabled ? (
-            <NavLink to="/assistant">
-              <PawPrint size={17} />
-              <span>助手</span>
-            </NavLink>
-          ) : null}
-          <NavLink to="/settings">
-            <GearSix size={17} />
-            <span>设置</span>
-          </NavLink>
-        </nav>
-        <ProjectSidebar conversations={history} />
-        <section className="history-list" aria-label="对话历史">
-          <div className="history-heading">
-            <span>{showArchived ? "对话 · 含归档" : "对话"}</span>
+      scrollProps={{ "data-testid": "sidebar-scroll" }}
+      header={
+        <>
+          <div className="brand-row">
+            <div className="brand">
+              <span className="brand-mark">
+                <img src="/assets/openerx-mark.svg" alt="openerx 标志" />
+              </span>
+              <span className="brand-copy">
+                <strong>openerx</strong>
+                <small>personal AI workspace</small>
+              </span>
+            </div>
             <button
               type="button"
-              aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"}
-              aria-pressed={showArchived}
-              onClick={() => setShowArchived((value) => !value)}
+              className="icon-button sidebar-collapse"
+              aria-label="收起侧栏"
+              onClick={onCollapse}
             >
-              <SlidersHorizontal size={15} />
+              <SidebarSimple size={18} weight="regular" />
             </button>
           </div>
-          {unassignedConversations.map((conversation: ConversationSummary) => (
-            <div className="conversation-list-row" key={conversation.id}>
-              <NavLink
-                to={`/chat/${conversation.id}`}
-                title={conversation.title}
-                className={({ isActive }) =>
-                  `history-item${isActive ? " active history-item-active" : ""}`
-                }
-              >
-                <ChatCircle size={16} weight="regular" />
-                <strong>{conversation.title}</strong>
-                <span className="history-item-meta">
-                  {conversation.archivedAt ? (
-                    "已归档"
-                  ) : (
-                    <time dateTime={conversation.updatedAt}>
-                      {formatUpdatedAt(conversation.updatedAt)}
-                    </time>
-                  )}
-                </span>
-              </NavLink>
-              <ConversationDeleteButton conversation={conversation} />
-            </div>
-          ))}
-          {history.isSuccess && unassignedConversations.length === 0 ? (
-            <p className="history-empty">
-              {history.data.length > 0
-                ? "项目对话已收纳到对应项目中。"
-                : showArchived
-                  ? "还没有活动或归档对话。"
-                  : "还没有活动对话。"}
-            </p>
-          ) : null}
-          {showArchived &&
-          history.isSuccess &&
-          unassignedConversations.length > 0 &&
-          archivedCount === 0 ? (
-            <p className="history-mode-note" role="status">
-              目前没有项目外的归档对话。
-            </p>
-          ) : null}
-        </section>
-      </div>
-      <NavLink className="sidebar-account" to="/settings/account">
-        <UserCircle size={23} weight="regular" />
-        <strong>
-          {account.data?.account?.displayName ??
-            (account.data?.reason === "PLATFORM_ENDPOINT_NOT_CONFIGURED" ? "本机模式" : "未登录")}
-        </strong>
-        <span>
-          {account.data?.status === "signed_in"
-            ? account.data.account?.email
-            : account.data?.reason === "PLATFORM_ENDPOINT_NOT_CONFIGURED"
-              ? "无需登录即可使用"
-              : "登录以同步数据"}
-        </span>
-      </NavLink>
-    </aside>
+          <nav aria-label="新对话" className="main-nav sidebar-primary-nav">
+            <NavLink to="/chat/new" className="new-chat-link">
+              <Plus size={17} weight="bold" />
+              <span>新对话</span>
+            </NavLink>
+          </nav>
+        </>
+      }
+      footer={
+        <NavLink className="sidebar-account" to="/settings/account">
+          <UserCircle size={23} weight="regular" />
+          <strong>
+            {account.data?.account?.displayName ??
+              (account.data?.reason === "PLATFORM_ENDPOINT_NOT_CONFIGURED" ? "本机模式" : "未登录")}
+          </strong>
+          <span>
+            {account.data?.status === "signed_in"
+              ? account.data.account?.email
+              : account.data?.reason === "PLATFORM_ENDPOINT_NOT_CONFIGURED"
+                ? "无需登录即可使用"
+                : "登录以同步数据"}
+          </span>
+        </NavLink>
+      }
+    >
+      <nav aria-label="主导航" className="main-nav">
+        <NavLink to="/search">
+          <MagnifyingGlass size={17} />
+          <span>搜索</span>
+          <kbd>⌘K</kbd>
+        </NavLink>
+        <NavLink to="/files">
+          <FolderSimple size={17} />
+          <span>个人文件</span>
+        </NavLink>
+        <NavLink to="/automations">
+          <ArrowClockwise size={17} />
+          <span>自动化</span>
+        </NavLink>
+        {assistantFeatureEnabled ? (
+          <NavLink to="/assistant">
+            <PawPrint size={17} />
+            <span>助手</span>
+          </NavLink>
+        ) : null}
+        <NavLink to="/settings">
+          <GearSix size={17} />
+          <span>设置</span>
+        </NavLink>
+      </nav>
+      <ProjectSidebar conversations={history} />
+      <section className="history-list" aria-label="对话历史">
+        <div className="history-heading">
+          <span>{showArchived ? "对话 · 含归档" : "对话"}</span>
+          <button
+            type="button"
+            aria-label={showArchived ? "仅显示活动对话" : "显示归档对话"}
+            aria-pressed={showArchived}
+            onClick={() => setShowArchived((value) => !value)}
+          >
+            <SlidersHorizontal size={15} />
+          </button>
+        </div>
+        {unassignedConversations.map((conversation: ConversationSummary) => (
+          <div className="conversation-list-row" key={conversation.id}>
+            <NavLink
+              to={`/chat/${conversation.id}`}
+              title={conversation.title}
+              className={({ isActive }) =>
+                `history-item${isActive ? " active history-item-active" : ""}`
+              }
+            >
+              <ChatCircle size={16} weight="regular" />
+              <strong>{conversation.title}</strong>
+              <span className="history-item-meta">
+                {conversation.archivedAt ? (
+                  "已归档"
+                ) : (
+                  <time dateTime={conversation.updatedAt}>
+                    {formatUpdatedAt(conversation.updatedAt)}
+                  </time>
+                )}
+              </span>
+            </NavLink>
+            <ConversationDeleteButton conversation={conversation} />
+          </div>
+        ))}
+        {history.isSuccess && unassignedConversations.length === 0 ? (
+          <p className="history-empty">
+            {history.data.length > 0
+              ? "项目对话已收纳到对应项目中。"
+              : showArchived
+                ? "还没有活动或归档对话。"
+                : "还没有活动对话。"}
+          </p>
+        ) : null}
+        {showArchived &&
+        history.isSuccess &&
+        unassignedConversations.length > 0 &&
+        archivedCount === 0 ? (
+          <p className="history-mode-note" role="status">
+            目前没有项目外的归档对话。
+          </p>
+        ) : null}
+      </section>
+    </WorkspaceSidebar>
   );
 }
 
@@ -8140,7 +8315,13 @@ function AppShell(): React.JSX.Element {
   const [contextOpen, setContextOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
-  const [defaultModelRef, setDefaultModelRef] = useState(initialDefaultModelRef);
+  const [modelPreference, setModelPreference] = useState(() => ({
+    scope: defaultModelStorageKey,
+    value: initialDefaultModelRef(),
+  }));
+  const defaultModelRef = modelPreference.value;
+  const setDefaultModelRef = (value: string) =>
+    setModelPreference((current) => ({ ...current, value }));
   const [assistantCompanionEnabled, setAssistantCompanionEnabled] = useState(
     initialAssistantCompanionEnabled,
   );
@@ -8154,7 +8335,7 @@ function AppShell(): React.JSX.Element {
   const navigate = useNavigate();
   const settingsOpen =
     location.pathname.startsWith("/settings") || location.pathname === "/assistants";
-  const lastNonSettingsLocation = useRef("/chat/new");
+  const lastNonSettingsLocation = useRef(workspaceHomePath("personal"));
   const contextConversationId = /^\/chat\/([^/]+)$/u.exec(location.pathname)?.[1] ?? null;
   useEffect(() => {
     if (!settingsOpen) {
@@ -8207,11 +8388,11 @@ function AppShell(): React.JSX.Element {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(defaultModelStorageKey, defaultModelRef);
+      window.localStorage.setItem(modelPreference.scope, modelPreference.value);
     } catch {
       // The current session still uses the selected model when storage is unavailable.
     }
-  }, [defaultModelRef]);
+  }, [modelPreference]);
 
   useEffect(() => {
     try {
@@ -8224,21 +8405,58 @@ function AppShell(): React.JSX.Element {
   const sequenceByConversation = useRef(new Map<string, number>());
   const queryClient = useQueryClient();
   useEffect(() => {
-    const unsubscribeRun = window.openerx.onAutomationRun((run) => {
+    let active = true;
+    let revision = 0;
+    const refresh = async () => {
+      const requested = ++revision;
+      try {
+        const settings = await desktopWorkspaceBridge().getModelServiceSettings();
+        if (!active || requested !== revision) return;
+        const hosted = settings.mode === "hosted" && settings.hostedAccountId;
+        const scope = hosted
+          ? `${defaultModelStorageKey}:account:${settings.hostedAccountId}`
+          : defaultModelStorageKey;
+        let value = hosted ? "" : defaultByokModelRef;
+        try {
+          value = window.localStorage.getItem(scope) ?? value;
+        } catch {
+          /* Session-only preference. */
+        }
+        setModelPreference((current) => (current.scope === scope ? current : { scope, value }));
+        queryClient.setQueryData(["model-service", "settings"], settings);
+        await queryClient.cancelQueries({ queryKey: ["models", "catalog"] });
+        await queryClient.resetQueries({ queryKey: ["models", "catalog"] });
+        await queryClient.resetQueries({ queryKey: ["model-service", "quota"] });
+      } catch {
+        /* Catalogue reports actionable authorization failures. */
+      }
+    };
+    void refresh();
+    const remove = desktopWorkspaceBridge().onModelsChanged?.(() => {
+      void refresh();
+    });
+    return () => {
+      active = false;
+      remove?.();
+    };
+  }, [queryClient]);
+
+  useEffect(() => {
+    const unsubscribeRun = desktopWorkspaceBridge().onAutomationRun((run) => {
       void queryClient.invalidateQueries({ queryKey: ["automations"] });
       void queryClient.invalidateQueries({
         queryKey: ["automations", run.automationId, "runs"],
       });
     });
-    const unsubscribeNavigate = window.openerx.onAutomationNavigate((automationId) => {
+    const unsubscribeNavigate = desktopWorkspaceBridge().onAutomationNavigate((automationId) => {
       navigate(`/automations?automation=${encodeURIComponent(automationId)}`);
     });
-    const unsubscribeMemory = window.openerx.onAutomaticMemoryCreated((event) => {
+    const unsubscribeMemory = desktopWorkspaceBridge().onAutomaticMemoryCreated((event) => {
       setAutomaticMemoryNotice(event);
       setMemoryUndoError(null);
       void queryClient.invalidateQueries({ queryKey: ["memory", "list"] });
     });
-    const unsubscribeMemoryNavigate = window.openerx.onMemoryNavigate((memoryId) => {
+    const unsubscribeMemoryNavigate = desktopWorkspaceBridge().onMemoryNavigate((memoryId) => {
       navigate(`/settings/account?section=memory&memory=${encodeURIComponent(memoryId)}`);
     });
     return () => {
@@ -8256,7 +8474,7 @@ function AppShell(): React.JSX.Element {
     try {
       await Promise.all(
         notice.memories.map((memory) =>
-          window.openerx.deleteMemory({
+          desktopWorkspaceBridge().deleteMemory({
             memoryId: memory.id,
             idempotencyKey: `memory-notification-undo:${notice.eventId}:${memory.id}`,
           }),
@@ -8302,7 +8520,7 @@ function AppShell(): React.JSX.Element {
       const conversationId = event.conversationId;
       const previous = sequenceByConversation.current.get(conversationId) ?? 0;
       if (event.sequence > previous + 1) {
-        void window.openerx
+        void desktopWorkspaceBridge()
           .getChatEvents({ conversationId, afterSequence: previous })
           .then((events) => {
             sequenceByConversation.current.set(conversationId, events.at(-1)?.sequence ?? previous);
@@ -8332,14 +8550,14 @@ function AppShell(): React.JSX.Element {
         void queryClient.invalidateQueries({ queryKey: ["artifacts"] });
       }
     };
-    const unsubscribe = window.openerx.onChatEvent(applyEvent);
+    const unsubscribe = desktopWorkspaceBridge().onChatEvent(applyEvent);
     return () => {
       unsubscribe();
     };
   }, [queryClient]);
 
   return (
-    <div
+    <WorkspaceShell
       className={`app-shell ${sidebarOpen ? "" : "sidebar-is-collapsed"} ${contextOpen ? "context-is-open" : ""} ${settingsOpen ? "settings-is-open" : ""}`}
     >
       <button
@@ -8374,10 +8592,15 @@ function AppShell(): React.JSX.Element {
         aria-hidden={contextOpen || undefined}
       >
         <Routes>
-          <Route path="/chat/new" element={<NewChat defaultModelRef={defaultModelRef} />} />
+          <Route
+            path="/chat/new"
+            element={<NewChat key={modelPreference.scope} defaultModelRef={defaultModelRef} />}
+          />
           <Route
             path="/projects/:projectId/new"
-            element={<ProjectNewChat defaultModelRef={defaultModelRef} />}
+            element={
+              <ProjectNewChat key={modelPreference.scope} defaultModelRef={defaultModelRef} />
+            }
           />
           <Route path="/projects/:projectId" element={<ProjectHome />} />
           <Route
@@ -8411,7 +8634,12 @@ function AppShell(): React.JSX.Element {
             path="/assistants"
             element={<Navigate to="/settings/account?section=assistants" replace />}
           />
-          <Route path="/settings" element={<Navigate to="/settings/account" replace />} />
+          <Route
+            path="/settings"
+            element={
+              <Navigate to={{ pathname: "/settings/account", search: location.search }} replace />
+            }
+          />
           <Route path="/settings/billing" element={<BillingSettings />} />
           <Route
             path="/settings/account"
@@ -8491,6 +8719,6 @@ function AppShell(): React.JSX.Element {
           <ContextDock conversationId={contextConversationId} onClose={closeContext} />
         </>
       ) : null}
-    </div>
+    </WorkspaceShell>
   );
 }

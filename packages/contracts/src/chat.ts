@@ -60,6 +60,7 @@ import {
 } from "./memory";
 import { defaultThinkingLevel, thinkingLevelSchema, usageQueryInputSchema } from "./model";
 import { byokUsageQueryResultSchema } from "./model-usage";
+import { piRuntimeSettingsSchema, piRuntimeSettingsUpdateInputSchema } from "./pi-runtime";
 import {
   type SkillInstallation,
   type SkillInvocation,
@@ -377,6 +378,13 @@ export const chatCommandEnvelopeSchema = z.discriminatedUnion("command", [
   z.object({ command: z.literal("memory.delete"), input: memoryDeleteInputSchema }).strict(),
   z.object({ command: z.literal("memory.clear"), input: memoryClearInputSchema }).strict(),
   z.object({ command: z.literal("chat.list"), input: chatListInputSchema }).strict(),
+  z.object({ command: z.literal("pi.runtime.settings.get"), input: emptyInputSchema }).strict(),
+  z
+    .object({
+      command: z.literal("pi.runtime.settings.update"),
+      input: piRuntimeSettingsUpdateInputSchema,
+    })
+    .strict(),
   z.object({ command: z.literal("chat.get"), input: chatGetInputSchema }).strict(),
   z.object({ command: z.literal("chat.send"), input: chatSendInputSchema }).strict(),
   z.object({ command: z.literal("chat.stop"), input: chatStopInputSchema }).strict(),
@@ -613,6 +621,8 @@ export interface ChatCommandResultMap {
   "memory.delete": MemoryEntry;
   "memory.clear": MemoryClearResult;
   "chat.list": ConversationSummary[];
+  "pi.runtime.settings.get": z.infer<typeof piRuntimeSettingsSchema>;
+  "pi.runtime.settings.update": z.infer<typeof piRuntimeSettingsSchema>;
   "chat.get": ConversationSnapshot;
   "chat.send": GenerationReceipt;
   "chat.stop": Message;
@@ -723,6 +733,10 @@ export function parseChatCommandResult<C extends keyof ChatCommandResultMap>(
       break;
     case "chat.list":
       parsed = z.array(conversationSummarySchema).parse(value);
+      break;
+    case "pi.runtime.settings.get":
+    case "pi.runtime.settings.update":
+      parsed = piRuntimeSettingsSchema.parse(value);
       break;
     case "chat.get":
     case "chat.activateBranch":
@@ -886,6 +900,10 @@ export interface ChatBridge {
   clearMemories(input: z.input<typeof memoryClearInputSchema>): Promise<MemoryClearResult>;
   onAutomaticMemoryCreated(listener: (event: AutomaticMemoryCreatedEvent) => void): () => void;
   onMemoryNavigate(listener: (memoryId: string) => void): () => void;
+  listLegacyConversations(
+    input?: z.input<typeof chatListInputSchema>,
+  ): Promise<ConversationSummary[]>;
+  getLegacyConversation(input: z.input<typeof chatGetInputSchema>): Promise<ConversationSnapshot>;
   listConversations(input?: z.input<typeof chatListInputSchema>): Promise<ConversationSummary[]>;
   getConversation(input: z.input<typeof chatGetInputSchema>): Promise<ConversationSnapshot>;
   sendMessage(input: z.input<typeof chatSendInputSchema>): Promise<GenerationReceipt>;

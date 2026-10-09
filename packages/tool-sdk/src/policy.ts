@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   BROKERED_BASH_DENY_NETWORK_POLICY_ID,
   type CapabilityScope,
+  type PiFileToolRequestFrame,
   type ToolOperation,
 } from "@openerx/contracts";
 import { riskAtMost } from "@openerx/domain";
@@ -317,7 +318,7 @@ export function capabilityRequirement(operation: ToolOperation): CapabilityRequi
         resourceType: "skill",
         resource: `${operation.installationId}:${operation.relativePath}`,
         actions: operation.allowNetwork ? ["execute", "external_write"] : ["execute"],
-        reason: `执行 Skill 脚本：${operation.relativePath}`,
+        reason: `执行 Skill 脚本：${operation.relativePath}${operation.outputs?.length ? `；保存成果：${operation.outputs.map((output) => output.displayName).join("、")}` : ""}`,
         approval: "per_call",
       };
     case "memory_search":
@@ -419,7 +420,9 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function operationDigest(operation: ToolOperation): string {
+export function operationDigest(
+  operation: ToolOperation | PiFileToolRequestFrame["request"],
+): string {
   return createHash("sha256").update(canonical(operation)).digest("hex");
 }
 

@@ -55,6 +55,8 @@ export const modelCatalogEntrySchema = z
     priceSummary: z.string().min(1),
     free: z.boolean(),
     thinkingLevels: supportedThinkingLevelsSchema.optional(),
+    recommended: z.boolean().optional(),
+    catalogVersion: z.string().min(1).max(200).optional(),
   })
   .strict();
 
@@ -144,6 +146,37 @@ export interface ModelGatewayRequest {
   context: unknown;
 }
 
+export const modelResponseFormatSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text") }).strict(),
+  z.object({ type: z.literal("json_object") }).strict(),
+  z
+    .object({
+      type: z.literal("json_schema"),
+      name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u),
+      description: z.string().max(4096).optional(),
+      schema: z.record(z.string(), z.unknown()),
+      strict: z.boolean().optional(),
+    })
+    .strict(),
+]);
+
+export const modelToolChoiceSchema = z.union([
+  z.enum(["auto", "none", "required"]),
+  z
+    .object({
+      type: z.literal("function"),
+      name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u),
+    })
+    .strict(),
+]);
+
+export const modelProviderStateSchema = z
+  .object({
+    signature: z.string().min(1).max(200),
+    items: z.array(z.record(z.string(), z.unknown())).max(256),
+  })
+  .strict();
+
 export const modelGatewayRequestSchema = z
   .object({
     accountId: entityIdSchema,
@@ -152,6 +185,10 @@ export const modelGatewayRequestSchema = z
     selectedModelRef: z.string().min(1),
     approvedFallbackModelRef: z.string().min(1).nullable(),
     thinkingLevel: thinkingLevelSchema.optional(),
+    reasoningReplay: z.boolean().optional(),
+    responsesReplay: z.boolean().optional(),
+    responseFormat: modelResponseFormatSchema.optional(),
+    toolChoice: modelToolChoiceSchema.optional(),
     requestDedupeKey: z.string().min(8).max(240),
     requirements: modelRequirementSchema,
     context: z.unknown(),
@@ -173,6 +210,11 @@ export const modelGatewayResponseSchema = z
     effectiveModelRef: z.string().min(1),
     fallbackReason: z.string().min(1).nullable(),
     finishReason: z.string().min(1).max(80).nullable().optional(),
+    reasoning: z
+      .object({ text: z.string(), signature: z.string().min(1).max(200) })
+      .strict()
+      .optional(),
+    providerState: modelProviderStateSchema.optional(),
     usage: usageRecordSchema,
   })
   .strict();
@@ -213,6 +255,8 @@ export const usageQueryInputSchema = z
 export const automaticModelRef = "platform/auto" as const;
 
 export interface ModelUsageBridge {
+  onModelsChanged?(listener: () => void): () => void;
+  getHostedModelUsage?(): Promise<import("./hosted-model").HostedModelUsage>;
   listModels(): Promise<ModelCatalogEntry[]>;
   getUsage(input?: z.input<typeof usageQueryInputSchema>): Promise<ModelUsageAggregate>;
   getUsageRecords(input?: z.input<typeof usageQueryInputSchema>): Promise<ModelUsageRecord[]>;

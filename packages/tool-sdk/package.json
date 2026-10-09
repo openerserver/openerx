@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./broker": "./src/broker.ts",
+    "./builtin-adapter": "./src/builtin-adapter.ts"
   },
   "types": "./src/index.ts",
   "scripts": {

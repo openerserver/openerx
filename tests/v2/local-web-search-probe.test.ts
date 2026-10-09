@@ -175,7 +175,7 @@ describe("LWS-006 daily probe and history gate", () => {
   });
 
   it("keeps the committed gate derived from every dated probe report", () => {
-    const evidenceDirectory = new URL("./fixtures/lws-probes/", import.meta.url);
+    const evidenceDirectory = new URL("../../docs/v2/evidence/lws-probes/", import.meta.url);
     const reports = readdirSync(evidenceDirectory)
       .filter((name) => /^\d{4}-\d{2}-\d{2}\.json$/u.test(name))
       .map((name) =>

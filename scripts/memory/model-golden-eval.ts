@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import {
   automaticMemoryExtractionOutputSchema,
   memorySemanticClusterOutputSchema,
@@ -190,7 +191,13 @@ async function runCase(
         { value: agentDirectory, replacement: "<private-memory-eval-agent>" },
       ],
     });
-    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     runtime.registerNativeProvider(platform.provider);
     const created = await createProductPiSession({
       cwd: sessionDirectory,

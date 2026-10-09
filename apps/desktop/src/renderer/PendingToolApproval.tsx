@@ -1,4 +1,6 @@
 import type { PermissionRequest, WorkItem } from "@openerx/contracts";
+import { ToolPermissionPrompt } from "@openerx/desktop-ui/tool-permission";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { ShieldWarning } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type RefObject, useEffect, useRef } from "react";
@@ -76,8 +78,8 @@ function ApprovalRequest({
   const decision = useMutation({
     mutationFn: async (choice: Decision) =>
       choice === "full_access"
-        ? window.openerx.setToolPermissionMode({ conversationId, mode: "full_access" })
-        : window.openerx.resolvePermission({
+        ? desktopWorkspaceBridge().setToolPermissionMode({ conversationId, mode: "full_access" })
+        : desktopWorkspaceBridge().resolvePermission({
             permissionRequestId: permission.id,
             payloadDigest: permission.payloadDigest,
             decision: choice,
@@ -108,60 +110,17 @@ function ApprovalRequest({
     decision.mutate(choice);
   };
   return (
-    <>
-      <div className="pending-approval-heading" role="alert" aria-atomic="true">
-        <ShieldWarning size={22} aria-hidden="true" />
-        <div>
-          <strong>需要你的允许</strong>
-          <p>当前操作正在等待确认{pendingCount > 1 ? ` · 共 ${pendingCount} 项待处理` : ""}</p>
-        </div>
-      </div>
-      <section className="pending-approval-details" aria-label="工具权限确认">
-        <strong>{permission.reason}</strong>
-        <span>{permission.resource}</span>
-        <small>
-          {permission.capability} · {permission.risk}
-        </small>
-      </section>
-      <footer className="pending-approval-footer">
-        {decision.error ? (
-          <p className="inline-error" role="alert">
-            权限设置失败，请重试。
-          </p>
-        ) : null}
-        <div className="pending-approval-actions">
-          <button
-            type="button"
-            disabled={decision.isPending}
-            title="允许当前待审批操作，并在此对话中不再逐次询问；可在输入框恢复请求审批"
-            onClick={() => choose("full_access")}
-          >
-            {decision.isPending && decision.variables === "full_access"
-              ? "正在开启完全访问…"
-              : "完全访问"}
-          </button>
-          {["L1", "L2", "L3"].includes(permission.risk) ? (
-            <button type="button" disabled={decision.isPending} onClick={() => choose("session")}>
-              在此对话中允许
-            </button>
-          ) : null}
-          <button type="button" disabled={decision.isPending} onClick={() => choose("deny")}>
-            拒绝
-          </button>
-          <button
-            type="button"
-            className="primary-action"
-            disabled={decision.isPending}
-            onClick={() => choose("once")}
-          >
-            {decision.isPending && decision.variables !== "full_access"
-              ? "正在处理…"
-              : "仅本次允许"}
-          </button>
-        </div>
-        <p className="pending-approval-scope">“完全访问”仅对当前对话生效。</p>
-      </footer>
-    </>
+    <ToolPermissionPrompt
+      permission={permission}
+      pendingCount={pendingCount}
+      busy={decision.isPending}
+      choice={decision.variables}
+      error={decision.error ? "权限设置失败，请重试。" : undefined}
+      onDecision={choose}
+      fullAccess
+      session
+      icon={<ShieldWarning size={22} aria-hidden="true" />}
+    />
   );
 }
 
@@ -176,7 +135,7 @@ export function PendingToolApproval({
 }): React.JSX.Element | null {
   const permissions = useQuery({
     queryKey: pendingPermissionsKey,
-    queryFn: () => window.openerx.listPermissionRequests({ status: "pending" }),
+    queryFn: () => desktopWorkspaceBridge().listPermissionRequests({ status: "pending" }),
   });
   const selectedId = useRef<string | null>(null);
   const activeWorkItems = new Map(

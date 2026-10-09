@@ -1,6 +1,8 @@
 import {
   type AssistantMessage,
   getCurrentSystemPrompt,
+  InMemoryCredentialStore,
+  InMemoryModelsStore,
   type JsonObject,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
@@ -11,6 +13,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@openerx/pi-host";
 import { startPiHostProcess } from "@openerx/pi-host/host";
+import { desktopFixtureTitle, matchesDesktopFixtureCapture } from "./desktop-capture";
 
 function contentText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -66,6 +69,31 @@ function responseFor(context: TranscriptContext): AssistantMessage {
   const toolResults = context.messages
     .slice(lastUserIndex + 1)
     .filter(({ role }) => role === "toolResult");
+  if (latestUser.includes("[PI_TEST_NATIVE]")) {
+    if (toolResults.length === 0)
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "tool_search",
+          { query: "openerx_calculate arithmetic" },
+          { id: "native-discover" },
+        ),
+      );
+    if (!toolResults.some((result) => "toolName" in result && result.toolName === "codemode")) {
+      return fauxAssistantMessage(
+        fauxToolCall(
+          "codemode",
+          {
+            code: 'const values = await Promise.all([tools.openerx_calculate({expression:"11+22"}), tools.openerx_calculate({expression:"33+44"})]); text({sum:values.reduce((sum,value)=>sum+value.data.value,0),modelsEnabled:typeof models!=="undefined"});',
+          },
+          { id: "native-compose" },
+        ),
+      );
+    }
+    const result = toolResults.find(
+      (result) => "toolName" in result && result.toolName === "codemode",
+    );
+    return fauxAssistantMessage(`PI_NATIVE_RESULT ${contentText(result?.content)}`);
+  }
   if (latestUser.includes("[PI_TEST_WORKSPACE_PATCH]")) {
     const workspaceGrantId = getCurrentSystemPrompt(context.messages)?.match(
       /\(grant ([0-9a-f-]{36}), read_write/u,
@@ -322,17 +350,19 @@ function responseFor(context: TranscriptContext): AssistantMessage {
     );
   }
   if (latestUser.includes("[PI_TEST_DESKTOP]")) {
+    const expectedTitle = desktopFixtureTitle(latestUser);
+    if (!expectedTitle) return fauxAssistantMessage("DESKTOP_FIXTURE_TARGET_REQUIRED");
     if (process.platform === "win32") {
       const call = (params: Record<string, string>, id: string) =>
         fauxAssistantMessage(fauxToolCall("openerx_desktop", params, { id }), {
           stopReason: "toolUse",
         });
       if (toolResults.length === 0) return call({ action: "list_apps" }, "desktop-list");
-      const expectedTitle = JSON.parse(latestUser.split("WINDOW_TITLE=")[1] ?? '""');
       const windows = toolResultData(toolResults[0]).windows as
         | Array<{ title: string; applicationId: string; windowRef: string }>
         | undefined;
-      const target = windows?.find(({ title }) => title === expectedTitle);
+      const targets = windows?.filter(({ title }) => title === expectedTitle);
+      const target = targets?.length === 1 ? targets[0] : undefined;
       if (!target)
         return fauxAssistantMessage(
           `DESKTOP_FIXTURE_WINDOW_NOT_FOUND ${JSON.stringify(toolResultSafeSummary(toolResults[0]))}`,
@@ -375,19 +405,26 @@ function responseFor(context: TranscriptContext): AssistantMessage {
       const detached = toolResultData(toolResults[2]).session as { state: string } | undefined;
       if (detached?.state !== "stopped")
         return fauxAssistantMessage("DESKTOP_FIXTURE_DETACH_FAILED");
-      return fauxAssistantMessage("桌面窗口捕获完成：已捕获目标应用窗口（Windows native）");
+      return fauxAssistantMessage(
+        `桌面窗口捕获完成：已捕获目标应用窗口（Windows native）：${expectedTitle}`,
+      );
     }
     if (toolResults.length === 0) {
       return fauxAssistantMessage(
         fauxToolCall(
           "openerx_desktop",
-          { action: "screenshot", application: "openerx" },
+          { action: "screenshot", application: expectedTitle },
           { id: "desktop-screenshot" },
         ),
         { stopReason: "toolUse" },
       );
     }
-    return fauxAssistantMessage(`桌面窗口捕获完成：${contentText(toolResults.at(-1)?.content)}`);
+    const captured = toolResults.at(-1);
+    if (!matchesDesktopFixtureCapture(captured, expectedTitle))
+      return fauxAssistantMessage(
+        `DESKTOP_FIXTURE_CAPTURE_FAILED ${JSON.stringify(toolResultSafeSummary(captured))}`,
+      );
+    return fauxAssistantMessage(`桌面窗口捕获完成：已捕获目标应用窗口：${expectedTitle}`);
   }
   if (latestUser.includes("法国的首都")) return fauxAssistantMessage("巴黎。");
   if (latestUser.includes("代码块") && latestUser.includes("表格")) {
@@ -399,7 +436,7 @@ function responseFor(context: TranscriptContext): AssistantMessage {
         "",
         "| 项目 | 状态 | 版本 |",
         "| --- | --- | --- |",
-        "| Pi AgentSession | ready | 0.86.0 |",
+        "| Pi AgentSession | ready | 1.0.0 |",
       ].join("\n"),
     );
   }
@@ -420,7 +457,13 @@ function responseFor(context: TranscriptContext): AssistantMessage {
 const parentPort = process.parentPort;
 if (!parentPort) throw new Error("Pi E2E Host requires an Electron parent port");
 
-const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+const modelRuntime = await ModelRuntime.create({
+  credentials: new InMemoryCredentialStore(),
+  modelsStore: new InMemoryModelsStore(),
+  modelsPath: null,
+  allowModelNetwork: false,
+  refreshOnCreate: false,
+});
 const faux = fauxProvider({ tokensPerSecond: 1_000, tokenSize: { min: 2, max: 6 } });
 modelRuntime.registerNativeProvider(faux.provider);
 faux.setResponses(Array.from({ length: 100 }, () => responseFor));

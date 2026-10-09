@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { VERSION as PI_CODING_AGENT_VERSION } from "@earendil-works/pi-coding-agent";
 import {
@@ -59,8 +60,8 @@ afterEach(() => {
 });
 
 describe("Pi runtime dependency", () => {
-  it("loads the pinned 0.86.0 coding-agent runtime", () => {
-    expect(PI_CODING_AGENT_VERSION).toBe("0.86.0");
+  it("loads the pinned 1.0.0 coding-agent runtime", () => {
+    expect(PI_CODING_AGENT_VERSION).toBe("1.0.0");
   });
 });
 
@@ -162,7 +163,13 @@ describe("Pi persistent SessionManager boundary", () => {
 describe("Pi native Broker tools", () => {
   it("registers the product bash name without restoring Pi builtin filesystem tools", async () => {
     const { cwd, agentDir } = directories();
-    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     runtime.registerNativeProvider(faux.provider);
     const customTools = createProductCapabilityTools({
@@ -213,7 +220,13 @@ describe("Pi native Broker tools", () => {
       assistantMessageId,
       transport: { request },
     });
-    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     runtime.registerNativeProvider(faux.provider);
     const { session } = await createProductPiSession({
@@ -299,7 +312,7 @@ describe("Pi native Broker tools", () => {
     );
 
     expect(result?.content).toEqual([
-      expect.objectContaining({ type: "text", text: expect.stringContaining("2 visual-review") }),
+      expect.objectContaining({ type: "text", text: expect.stringContaining("2 rendered") }),
       { type: "image", mimeType: "image/png", data: expect.any(String) },
       { type: "image", mimeType: "image/png", data: expect.any(String) },
     ]);

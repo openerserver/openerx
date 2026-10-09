@@ -31,6 +31,8 @@ export interface ModelExecutionUsage {
 
 export interface ModelExecutionResult {
   text: string;
+  reasoning?: ModelGatewayResponse["reasoning"];
+  providerState?: ModelGatewayResponse["providerState"];
   toolCalls?: ModelGatewayToolCall[];
   effectiveModelRef: string;
   fallbackReason?: string;
@@ -192,7 +194,10 @@ export class ModelGatewayService {
     const replay = this.#responses.get(responseKey);
     if (replay) {
       if (onDelta && replay.text) onDelta(replay.text);
-      return structuredClone(replay);
+      const response = structuredClone(replay);
+      if (!request.reasoningReplay) delete response.reasoning;
+      if (!request.responsesReplay) delete response.providerState;
+      return response;
     }
     const selection = this.checkSelection(
       request.selectedModelRef,
@@ -252,6 +257,12 @@ export class ModelGatewayService {
       }
       const response = modelGatewayResponseSchema.parse({
         text: execution.text,
+        ...(request.responsesReplay && execution.providerState
+          ? { providerState: execution.providerState }
+          : {}),
+        ...(request.reasoningReplay && execution.reasoning
+          ? { reasoning: execution.reasoning }
+          : {}),
         ...(execution.toolCalls && execution.toolCalls.length > 0
           ? { toolCalls: execution.toolCalls }
           : {}),

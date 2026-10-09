@@ -59,6 +59,8 @@ export type PersonalDataSummary = z.infer<typeof personalDataSummarySchema>;
 export type LocalExportResult = z.infer<typeof localExportResultSchema>;
 
 export interface DiagnosticsBridge {
+  getLegacyPersonalDataSummary(): Promise<PersonalDataSummary>;
+  exportLegacyPersonalData(): Promise<LocalExportResult | null>;
   getDiagnosticsPreview(): Promise<DiagnosticsPreview>;
   exportDiagnostics(): Promise<LocalExportResult | null>;
   getPersonalDataSummary(): Promise<PersonalDataSummary>;

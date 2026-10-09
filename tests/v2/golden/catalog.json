@@ -1,7 +1,7 @@
 {
   "catalogVersion": "2026-08-25.v1",
   "platforms": ["windows-x64", "macos-arm64", "macos-x64"],
-  "evidencePathTemplate": "artifacts/golden/{platform}/{taskId}/",
+  "evidencePathTemplate": "docs/v2/evidence/golden/{platform}/{taskId}/",
   "tasks": [
     {
       "id": "GT-CHAT-01",

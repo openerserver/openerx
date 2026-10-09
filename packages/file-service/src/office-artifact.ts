@@ -1,13 +1,18 @@
-import type {
-  OfficeArtifactSpec,
-  OfficeCell,
-  OfficeCellValue,
-  RenderedSurface,
-  SupportedFileFormat,
-} from "@openerx/contracts";
+import type { OfficeArtifactSpec, RenderedSurface, SupportedFileFormat } from "@openerx/contracts";
 import { officeArtifactSpecSchema } from "@openerx/contracts";
 import { Resvg } from "@resvg/resvg-js";
-import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import { strFromU8, unzipSync } from "fflate";
+import {
+  appProperties,
+  cellDisplayValue,
+  coreProperties,
+  displayWidth,
+  encodedSpec,
+  escapeXml,
+  packageRelationships,
+  zipXml,
+} from "./office-ooxml";
+import { compileOfficeSpreadsheet } from "./office-spreadsheet";
 
 const officeMediaTypes = {
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -40,7 +45,7 @@ export function compileOfficeArtifact(
     spec.format === "docx"
       ? compileDocx(spec)
       : spec.format === "xlsx"
-        ? compileXlsx(spec)
+        ? compileOfficeSpreadsheet(spec)
         : spec.format === "pptx"
           ? compilePptx(spec)
           : compilePdf(spec);
@@ -93,10 +98,6 @@ function embeddedSpec(bytes: Uint8Array, format: "docx" | "xlsx" | "pptx" | "pdf
   } catch {
     return null;
   }
-}
-
-function encodedSpec(spec: OfficeArtifactSpec): string {
-  return Buffer.from(JSON.stringify(spec), "utf8").toString("base64");
 }
 
 function renderOfficeSpec(
@@ -288,7 +289,7 @@ function slideSurface(
     720,
     `<rect width="1280" height="720" fill="${theme.backgroundColor}"/>
      <rect x="0" y="0" width="1280" height="18" fill="${theme.accentColor}"/>
-     <text x="78" y="76" font-size="16" font-weight="700" fill="${theme.accentColor}">OPENERX PRESENTATION</text>
+     <text x="78" y="76" font-size="16" font-weight="700" fill="${theme.accentColor}">openerx · 演示文稿</text>
      ${title}
      <rect x="82" y="305" width="128" height="6" fill="${theme.accentColor}"/>
      ${body}
@@ -380,82 +381,6 @@ function compileDocx(spec: Extract<OfficeArtifactSpec, { format: "docx" }>): Buf
 
 function wordParagraph(text: string, style?: string): string {
   return `<w:p>${style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : ""}<w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
-}
-
-function compileXlsx(spec: Extract<OfficeArtifactSpec, { format: "xlsx" }>): Buffer {
-  const accent = spec.theme.accentColor.slice(1).toUpperCase();
-  const entries: Record<string, string> = {
-    "[Content_Types].xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-      <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-        <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>
-        <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-        <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-        ${spec.sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}
-        <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-      </Types>`,
-    "_rels/.rels": packageRelationships("xl/workbook.xml"),
-    "docProps/app.xml": appProperties("Microsoft Excel"),
-    "docProps/core.xml": coreProperties(spec.title),
-    "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-      ${spec.sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}
-      <Relationship Id="rId${spec.sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
-    "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-      <!-- openerx-spec:${encodedSpec(spec)} -->
-      <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>
-      ${spec.sheets.map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}
-      </sheets><calcPr calcId="191029" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>`,
-    "xl/styles.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-      <fonts count="2"><font><sz val="11"/><name val="${officeCjkFont}"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="${officeCjkFont}"/></font></fonts>
-      <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF${accent}"/><bgColor indexed="64"/></patternFill></fill></fills>
-      <borders count="2"><border/><border><left style="thin"><color rgb="FFCBD5E1"/></left><right style="thin"><color rgb="FFCBD5E1"/></right><top style="thin"><color rgb="FFCBD5E1"/></top><bottom style="thin"><color rgb="FFCBD5E1"/></bottom></border></borders>
-      <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-      <cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/></cellXfs>
-      <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
-  };
-  spec.sheets.forEach((sheet, sheetIndex) => {
-    const columns = Math.max(1, ...sheet.rows.map((row) => row.length));
-    const columnXml = Array.from({ length: columns }, (_, index) => {
-      const max = Math.max(
-        4,
-        ...sheet.rows.map((row) => displayWidth(cellDisplayValue(row[index] ?? null))),
-      );
-      return `<col min="${index + 1}" max="${index + 1}" width="${Math.min(40, Math.max(10, max + 2))}" customWidth="1"/>`;
-    }).join("");
-    const rows = sheet.rows
-      .map(
-        (row, rowIndex) =>
-          `<row r="${rowIndex + 1}" ht="24" customHeight="1">${row.map((cell, columnIndex) => xlsxCell(cell, columnIndex, rowIndex, rowIndex < sheet.headerRows)).join("")}</row>`,
-      )
-      .join("");
-    entries[`xl/worksheets/sheet${sheetIndex + 1}.xml`] =
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="${sheet.headerRows}" topLeftCell="A${sheet.headerRows + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${columnXml}</cols><sheetData>${rows}</sheetData></worksheet>`;
-  });
-  return zipXml(entries);
-}
-
-function xlsxCell(
-  cell: OfficeCell,
-  columnIndex: number,
-  rowIndex: number,
-  header: boolean,
-): string {
-  const reference = `${columnName(columnIndex + 1)}${rowIndex + 1}`;
-  const structured =
-    cell !== null && typeof cell === "object" && !Array.isArray(cell)
-      ? cell
-      : { value: cell as OfficeCellValue };
-  const style = header ? 1 : 2;
-  const formula = structured.formula?.replace(/^=/, "");
-  const value = structured.value;
-  if (formula) {
-    const type =
-      typeof value === "string" ? ' t="str"' : typeof value === "boolean" ? ' t="b"' : "";
-    return `<c r="${reference}" s="${style}"${type}><f>${escapeXml(formula)}</f><v>${escapeXml(value === null ? "" : String(value))}</v></c>`;
-  }
-  if (typeof value === "number") return `<c r="${reference}" s="${style}"><v>${value}</v></c>`;
-  if (typeof value === "boolean")
-    return `<c r="${reference}" s="${style}" t="b"><v>${value ? 1 : 0}</v></c>`;
-  return `<c r="${reference}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(value ?? "")}</t></is></c>`;
 }
 
 function compilePptx(spec: Extract<OfficeArtifactSpec, { format: "pptx" }>): Buffer {
@@ -614,28 +539,6 @@ function pdfPageLines(
   return lines;
 }
 
-function zipXml(entries: Record<string, string>): Buffer {
-  return Buffer.from(
-    zipSync(
-      Object.fromEntries(Object.entries(entries).map(([name, value]) => [name, strToU8(value)])),
-      { level: 6 },
-    ),
-  );
-}
-
-function packageRelationships(documentTarget: string): string {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="${documentTarget}"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`;
-}
-
-function coreProperties(title: string): string {
-  const now = new Date().toISOString();
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${escapeXml(title)}</dc:title><dc:creator>openerx</dc:creator><cp:lastModifiedBy>openerx</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
-}
-
-function appProperties(application: string, slides = 0): string {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>${application}</Application>${slides ? `<Slides>${slides}</Slides>` : ""}<AppVersion>16.0000</AppVersion></Properties>`;
-}
-
 function pptxContentTypes(slideCount: number): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/>${Array.from({ length: slideCount }, (_, index) => `<Override PartName="/ppt/slides/slide${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join("")}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
 }
@@ -656,27 +559,6 @@ function pptxTheme(accent: string): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="openerx"><a:themeElements><a:clrScheme name="openerx"><a:dk1><a:srgbClr val="172033"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="475569"/></a:dk2><a:lt2><a:srgbClr val="F8FAFC"/></a:lt2><a:accent1><a:srgbClr val="${accent}"/></a:accent1><a:accent2><a:srgbClr val="14B8A6"/></a:accent2><a:accent3><a:srgbClr val="F59E0B"/></a:accent3><a:accent4><a:srgbClr val="8B5CF6"/></a:accent4><a:accent5><a:srgbClr val="EC4899"/></a:accent5><a:accent6><a:srgbClr val="64748B"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="openerx"><a:majorFont><a:latin typeface="Arial"/><a:ea typeface="${officeCjkFont}"/><a:cs typeface="Arial"/></a:majorFont><a:minorFont><a:latin typeface="Arial"/><a:ea typeface="${officeCjkFont}"/><a:cs typeface="Arial"/></a:minorFont></a:fontScheme><a:fmtScheme name="openerx"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`;
 }
 
-function cellDisplayValue(cell: OfficeCell): string {
-  if (cell !== null && typeof cell === "object" && !Array.isArray(cell)) {
-    const value = cell.value === null ? "" : String(cell.value);
-    return cell.formula
-      ? `${cell.formula.startsWith("=") ? cell.formula : `=${cell.formula}`} → ${value}`
-      : value;
-  }
-  return cell === null ? "" : String(cell);
-}
-
-function columnName(index: number): string {
-  let value = index;
-  let result = "";
-  while (value > 0) {
-    value -= 1;
-    result = String.fromCharCode(65 + (value % 26)) + result;
-    value = Math.floor(value / 26);
-  }
-  return result;
-}
-
 function wrapText(value: string, width: number): string[] {
   const lines: string[] = [];
   for (const sourceLine of value.split(/\r?\n/)) {
@@ -694,13 +576,6 @@ function wrapText(value: string, width: number): string[] {
     lines.push(line);
   }
   return lines.filter((line, index, all) => line || index === all.length - 1);
-}
-
-function displayWidth(value: string): number {
-  return [...value].reduce(
-    (sum, character) => sum + ((character.codePointAt(0) ?? 0) <= 0xff ? 1 : 2),
-    0,
-  );
 }
 
 function truncateText(value: string, pixelWidth: number): string {
@@ -751,13 +626,4 @@ function hexRgb(value: string): [number, number, number] {
     Number.parseInt(value.slice(3, 5), 16) / 255,
     Number.parseInt(value.slice(5, 7), 16) / 255,
   ];
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
 }

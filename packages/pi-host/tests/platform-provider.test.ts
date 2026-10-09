@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { normalizeContext } from "@earendil-works/pi-ai";
+import {
+  InMemoryCredentialStore,
+  InMemoryModelsStore,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import {
   automaticModelRef,
@@ -12,7 +16,7 @@ import {
 } from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProductPiSession, ModelRuntime } from "../src/agent-session";
+import { createProductPiSession, ModelRuntime, SettingsManager } from "../src/agent-session";
 import { createPlatformModelProvider } from "../src/platform-provider";
 
 const temporaryDirectories: string[] = [];
@@ -51,6 +55,70 @@ const visionModel: ModelCatalogEntry = {
 };
 
 describe("Platform Model Pi Provider", () => {
+  it.each(["MODEL_REQUEST_TIMEOUT", "MODEL_UPSTREAM_ERROR"])(
+    "keeps the first terminal gateway error without replaying its billed request: %s",
+    async (code) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openerx-platform-retry-"));
+      temporaryDirectories.push(root);
+      const cwd = path.join(root, "workspace");
+      const agentDir = path.join(root, "agent");
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(agentDir, { recursive: true });
+      const execute = vi
+        .fn()
+        .mockRejectedValueOnce(new Error(code))
+        .mockRejectedValue(new Error("MODEL_RESULT_UNAVAILABLE"));
+      const platform = createPlatformModelProvider({
+        catalog: [model],
+        transport: { execute },
+        request: {
+          accountId: randomUUID(),
+          conversationId: randomUUID(),
+          messageId: randomUUID(),
+          selectedModelRef: model.modelRef,
+          approvedFallbackModelRef: null,
+          requestDedupeKey: "model-call-terminal-error",
+        },
+      });
+      const runtime = await ModelRuntime.create({
+        credentials: new InMemoryCredentialStore(),
+        modelsStore: new InMemoryModelsStore(),
+        modelsPath: null,
+        allowModelNetwork: false,
+        refreshOnCreate: false,
+      });
+      runtime.registerNativeProvider(platform.provider);
+      const settingsManager = SettingsManager.inMemory({
+        retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 },
+      });
+      const { session } = await createProductPiSession({
+        cwd,
+        agentDir,
+        history: [],
+        modelRuntime: runtime,
+        model: platform.model,
+        settingsManager,
+      });
+      const events: string[] = [];
+      session.subscribe((event) => events.push(event.type));
+      try {
+        await session.prompt("生成工作簿", { expandPromptTemplates: false });
+        await session.waitForIdle();
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(session.messages.at(-1)).toMatchObject({
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: code,
+        });
+        expect(events).not.toContain("auto_retry_start");
+        expect(session.autoRetryEnabled).toBe(false);
+        expect(settingsManager.getGlobalSettings().retry?.enabled).toBe(true);
+      } finally {
+        session.dispose();
+      }
+    },
+  );
+
   it("binds the automatic product selection to a concrete Pi model", () => {
     const automatic: ModelCatalogEntry = {
       ...model,
@@ -188,7 +256,11 @@ describe("Platform Model Pi Provider", () => {
             role: "user",
             content: [
               { type: "text", text: "图片里有什么？" },
-              { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+              {
+                type: "image",
+                data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR4nO3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4unIZ5cAAAAASUVORK5CYII=",
+                mimeType: "image/png",
+              },
             ],
             timestamp: Date.now(),
           },
@@ -373,7 +445,13 @@ describe("Platform Model Pi Provider", () => {
       onUsage,
       streamChunkSize: 4,
     });
-    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     runtime.registerNativeProvider(platform.provider);
     const { session } = await createProductPiSession({
       cwd,
@@ -583,12 +661,22 @@ describe("Platform Model Pi Provider", () => {
       onUsage,
       streamChunkSize: 1_000,
     });
-    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     runtime.registerNativeProvider(platform.provider);
     const executeTool = vi.fn(async () => ({
       content: [
         { type: "text" as const, text: "package.json" },
-        { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" },
+        {
+          type: "image" as const,
+          data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR4nO3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4unIZ5cAAAAASUVORK5CYII=",
+          mimeType: "image/png",
+        },
       ],
       details: { entries: ["package.json"] },
     }));
@@ -640,7 +728,11 @@ describe("Platform Model Pi Provider", () => {
     const toolResult = continuationContext?.messages?.find(({ role }) => role === "toolResult");
     expect(toolResult?.content).toEqual([
       { type: "text", text: "package.json" },
-      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      {
+        type: "image",
+        data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR4nO3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4unIZ5cAAAAASUVORK5CYII=",
+        mimeType: "image/png",
+      },
     ]);
     expect(session.messages.at(-1)).toMatchObject({
       role: "assistant",

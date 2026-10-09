@@ -20,6 +20,10 @@ import {
   memorySettingsSchema,
   messageSchema,
   type PiHistoryMessage,
+  type PiRuntimeSettings,
+  type PiRuntimeSettingsUpdateInput,
+  piRuntimeSettingsSchema,
+  piRuntimeSettingsUpdateInputSchema,
   projectDirectorySyncPayloadSchema,
   projectSyncPayloadSchema,
   type SearchResult,
@@ -43,6 +47,8 @@ import { migrateDatabase } from "./migrations";
 type SqlRow = Record<string, unknown>;
 
 interface RepositoryOptions {
+  /** Browse an existing snapshot without migrations or mutation access. */
+  readOnly?: boolean;
   ownerProfileId?: string;
   selectedModelRef?: string;
   thinkingLevel?: ThinkingLevel;
@@ -71,6 +77,7 @@ export interface PiProductEvent {
 
 export class ChatRepository {
   readonly #database: DatabaseSync;
+  readonly #ownsDatabase: boolean;
   readonly #ownerProfileId: string;
   readonly #selectedModelRef: string;
   readonly #thinkingLevel: ThinkingLevel;
@@ -78,8 +85,12 @@ export class ChatRepository {
   readonly #idFactory: () => string;
   readonly #deviceId: string | null;
 
-  constructor(databasePath: string, options: RepositoryOptions = {}) {
-    this.#database = new DatabaseSync(databasePath);
+  constructor(databasePath: string | DatabaseSync, options: RepositoryOptions = {}) {
+    this.#ownsDatabase = typeof databasePath === "string";
+    this.#database =
+      typeof databasePath === "string"
+        ? new DatabaseSync(databasePath, { readOnly: options.readOnly ?? false })
+        : databasePath;
     this.#ownerProfileId = options.ownerProfileId ?? "local-default";
     this.#selectedModelRef = options.selectedModelRef ?? "pi/default";
     this.#thinkingLevel = options.thinkingLevel ?? defaultThinkingLevel;
@@ -87,15 +98,41 @@ export class ChatRepository {
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#deviceId = options.deviceId ?? null;
     try {
-      migrateDatabase(this.#database);
+      if (options.readOnly) this.#database.exec("PRAGMA query_only = ON");
+      else migrateDatabase(this.#database);
     } catch (error) {
-      this.#database.close();
+      if (this.#ownsDatabase) this.#database.close();
       throw error;
     }
   }
 
   close(): void {
-    this.#database.close();
+    if (this.#ownsDatabase) this.#database.close();
+  }
+
+  piRuntimeSettings(): PiRuntimeSettings {
+    const row = this.#database
+      .prepare("SELECT * FROM pi_runtime_settings WHERE owner_profile_id = ?")
+      .get(this.#ownerProfileId) as SqlRow | undefined;
+    return piRuntimeSettingsSchema.parse({
+      ownerProfileId: this.#ownerProfileId,
+      nativeToolsEnabled: row ? Number(row.native_tools_enabled) === 1 : false,
+      updatedAt: row?.updated_at ?? null,
+    });
+  }
+
+  updatePiRuntimeSettings(input: PiRuntimeSettingsUpdateInput): PiRuntimeSettings {
+    const update = piRuntimeSettingsUpdateInputSchema.parse(input);
+    this.#database
+      .prepare(
+        `INSERT INTO pi_runtime_settings (owner_profile_id, native_tools_enabled, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(owner_profile_id) DO UPDATE SET
+           native_tools_enabled = excluded.native_tools_enabled,
+           updated_at = excluded.updated_at`,
+      )
+      .run(this.#ownerProfileId, update.nativeToolsEnabled ? 1 : 0, this.#now());
+    return this.piRuntimeSettings();
   }
 
   listConversations(includeArchived = false): ConversationSummary[] {
@@ -424,6 +461,7 @@ export class ChatRepository {
   requestStopMessage(
     conversationId: string,
     assistantMessageId: string,
+    reason: "USER_CANCEL_REQUESTED" | "PI_NATIVE_TOOLS_DISABLED" = "USER_CANCEL_REQUESTED",
   ): { message: Message; event: ChatEvent | null } {
     return this.#transaction(() => {
       const before = this.#message(assistantMessageId);
@@ -436,17 +474,17 @@ export class ChatRepository {
       this.#database
         .prepare(
           `UPDATE messages SET cancellation_requested_at = COALESCE(cancellation_requested_at, ?),
-           updated_at = ?, revision = revision + 1
+           error_code = COALESCE(?, error_code), updated_at = ?, revision = revision + 1
            WHERE id = ?`,
         )
-        .run(now, now, assistantMessageId);
+        .run(now, reason === "USER_CANCEL_REQUESTED" ? null : reason, now, assistantMessageId);
       this.#touchConversation(conversationId, now);
       const message = this.#message(assistantMessageId);
       const event = this.#appendEvent({
         type: "message.cancelling",
         conversationId,
         messageId: assistantMessageId,
-        payload: { message, reason: "USER_CANCEL_REQUESTED" },
+        payload: { message, reason },
       });
       this.#queueSyncUpsert("message", message.id, message, now);
       return { message, event };

@@ -4,15 +4,12 @@ import { capabilityRequirement } from "@openerx/tool-sdk";
 import { describe, expect, it } from "vitest";
 
 const root = path.resolve(import.meta.dirname, "../../..");
-const regressions = JSON.parse(
-  readFileSync(path.join(import.meta.dirname, "regression-map.json"), "utf8"),
-) as Record<string, string[]>;
 const catalog = JSON.parse(
   readFileSync(path.join(import.meta.dirname, "catalog.json"), "utf8"),
 ) as { tasks: Array<{ id: string; input: { fixture: string } }> };
 
 describe("M7 Skill Golden Tasks", () => {
-  it("keeps explicit, lifecycle and cross-device fixtures linked to executable regressions", () => {
+  it("freezes the explicit, lifecycle and cross-device fixtures with checkpoint evidence", () => {
     expect(
       catalog.tasks
         .filter(({ id }) => ["GT-TOOL-07", "GT-TOOL-08", "GT-TOOL-09"].includes(id))
@@ -23,9 +20,9 @@ describe("M7 Skill Golden Tasks", () => {
       ["GT-TOOL-09", "tool.skill-cross-device.v1"],
     ]);
     for (const id of ["GT-TOOL-07", "GT-TOOL-08", "GT-TOOL-09"]) {
-      expect(regressions[id]).toContain("apps/desktop/scripts/e2e-skills.mjs");
-      for (const test of regressions[id] ?? [])
-        expect(existsSync(path.join(root, test)), test).toBe(true);
+      const evidence = path.join(root, "docs/v2/evidence/golden/local-implementation", `${id}.md`);
+      expect(existsSync(evidence), id).toBe(true);
+      expect(readFileSync(evidence, "utf8")).toContain("PASS for the M7 local checkpoint");
     }
   });
 

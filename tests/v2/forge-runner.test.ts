@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +9,24 @@ import {
 } from "../../scripts/forge-runner.mjs";
 
 describe("Forge 7 to Packager 20 hook adapter", () => {
+  it("executes the make CLI parser and propagates invalid directory failures", () => {
+    const runner = path.resolve(import.meta.dirname, "../../scripts/forge-runner.mjs");
+    const help = spawnSync(process.execPath, [runner, "make", "--help"], { encoding: "utf8" });
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("--skip-package");
+    const root = mkdtempSync(path.join(tmpdir(), "openerx-forge-make-"));
+    try {
+      const invalid = spawnSync(process.execPath, [runner, "make", path.join(root, "missing")], {
+        encoding: "utf8",
+      });
+      expect(invalid.status).not.toBe(0);
+      expect(invalid.stdout + invalid.stderr).toContain(
+        "Failed to locate startable Electron application",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("finds hoisted Electron above a core submodule lockfile", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openerx-forge-resolution-"));
     try {

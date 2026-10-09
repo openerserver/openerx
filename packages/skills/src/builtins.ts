@@ -42,8 +42,16 @@ process.stdout.write(JSON.stringify({ title, sections: ["Executive summary", "Fi
   },
 } as const;
 
+const officeReviewGuidance = `
+Review the returned parsed text against the requested content and check page, sheet, or slide counts and structure. For spreadsheets, independently check totals and formula logic; cached values alone do not prove recalculation.
+
+If the tool supplies images that the selected model can receive, inspect every supplied image and correct clipping, crowding, or unclear hierarchy by creating another version. If the model accepts only text or no images are supplied, use parsed text and structural checks and explicitly report that visual review was not performed. The user can inspect the rendered previews in the app. Never claim that preview images were inspected without receiving and inspecting them.
+
+For image-only or scanned source material with no extracted text, request a searchable document or a text transcription. Do not infer image content or claim OCR was performed.
+`;
+
 function officeManifest(displayName: string): string {
-  return `version: 1.0.2
+  return `version: 1.0.3
 display_name: ${displayName}
 publisher: openerx
 tools:
@@ -59,7 +67,7 @@ export const builtInDocumentSkill = {
   files: {
     "SKILL.md": `---
 name: documents
-description: Create or edit a polished DOCX document as a real versioned binary with page-by-page visual review.
+description: Create or edit a real versioned DOCX document with text and structure checks and rendered previews.
 ---
 
 # Documents
@@ -68,8 +76,10 @@ Use \`openerx_office_artifact\` with \`format: docx\`.
 
 1. Structure the requested deliverable into deliberately bounded pages.
 2. For edits, pass the existing Artifact id and a complete replacement specification; this appends an immutable version.
-3. Inspect every returned page image. If any page is crowded, clipped, or visually unbalanced, shorten or split it and create another version.
-4. Report the Artifact id, version, filename, and number of pages only after visual review.
+3. Check the generated text, page structure, and completeness using the review guidance below.
+4. Report the Artifact id, version, filename, page count, and checks performed.
+
+${officeReviewGuidance}
 `,
     "agents/openai.yaml": officeManifest("Documents"),
   },
@@ -80,7 +90,7 @@ export const builtInSpreadsheetSkill = {
   files: {
     "SKILL.md": `---
 name: spreadsheets
-description: Create or edit a real XLSX workbook with formulas, immutable versions, and visual review of every worksheet.
+description: Create or edit a real XLSX workbook with formulas, immutable versions, data checks, and rendered previews.
 ---
 
 # Spreadsheets
@@ -90,7 +100,9 @@ Use \`openerx_office_artifact\` with \`format: xlsx\`.
 1. Give every worksheet a unique, meaningful name and use a header row unless the data has no header.
 2. Formula cells must include both \`formula\` and the expected cached \`value\` so the preview and unopened workbook remain auditable.
 3. For edits, pass the existing Artifact id and a complete workbook specification.
-4. Inspect every returned worksheet image and correct truncation, accidental empty rows, or unclear headings before reporting completion.
+4. Check worksheet names, headers, row counts, values, and formula logic using the review guidance below. Report the Artifact id, version, filename, sheet count, and checks performed.
+
+${officeReviewGuidance}
 `,
     "agents/openai.yaml": officeManifest("Spreadsheets"),
   },
@@ -101,7 +113,7 @@ export const builtInPresentationSkill = {
   files: {
     "SKILL.md": `---
 name: presentations
-description: Create or edit a real PPTX presentation with slide-by-slide visual review and immutable versions.
+description: Create or edit a real PPTX presentation with immutable versions, text and slide structure checks, and rendered previews.
 ---
 
 # Presentations
@@ -110,8 +122,10 @@ Use \`openerx_office_artifact\` with \`format: pptx\`.
 
 1. Keep one argument per slide and prefer concise titles with a short body or bullets.
 2. For edits, pass the existing Artifact id and the full revised slide deck.
-3. Inspect every returned slide image in sequence. Split crowded slides and fix hierarchy before reporting completion.
-4. Report the Artifact id, version, filename, and slide count after visual review.
+3. Check the generated text, slide sequence, and completeness using the review guidance below.
+4. Report the Artifact id, version, filename, slide count, and checks performed.
+
+${officeReviewGuidance}
 `,
     "agents/openai.yaml": officeManifest("Presentations"),
   },
@@ -122,7 +136,7 @@ export const builtInPdfSkill = {
   files: {
     "SKILL.md": `---
 name: pdf
-description: Create or edit a real PDF deliverable with immutable versions and page-by-page visual review.
+description: Create or edit a real PDF deliverable with immutable versions, text and page structure checks, and rendered previews.
 ---
 
 # PDF
@@ -131,8 +145,10 @@ Use \`openerx_office_artifact\` with \`format: pdf\`.
 
 1. Structure content into bounded pages and keep footers short.
 2. For edits, pass the existing Artifact id and a complete replacement specification.
-3. Inspect every returned page image and retry if content is clipped, crowded, or incorrectly split.
-4. Report the Artifact id, version, filename, and page count only after visual review.
+3. Check the generated text, page structure, and completeness using the review guidance below.
+4. Report the Artifact id, version, filename, page count, and checks performed.
+
+${officeReviewGuidance}
 `,
     "agents/openai.yaml": officeManifest("PDF"),
   },

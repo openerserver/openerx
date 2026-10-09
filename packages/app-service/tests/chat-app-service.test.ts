@@ -166,6 +166,32 @@ class DeferredPiHostClient implements PiHostClient {
   }
 }
 
+class RevocationPiHostClient extends DeferredPiHostClient {
+  readonly aborted: string[] = [];
+  requestTool: ((frame: PiToolRequestFrame) => Promise<unknown>) | undefined;
+  requestFile: ((frame: PiFileToolRequestFrame) => Promise<unknown>) | undefined;
+  releaseAbort: (() => void) | undefined;
+
+  override async abort(generationId?: string): Promise<void> {
+    if (generationId) this.aborted.push(generationId);
+    await new Promise<void>((resolve) => {
+      this.releaseAbort = resolve;
+    });
+  }
+
+  override onToolRequest(listener: (frame: PiToolRequestFrame) => Promise<unknown>): () => void {
+    this.requestTool = listener;
+    return () => undefined;
+  }
+
+  override onFileToolRequest(
+    listener: (frame: PiFileToolRequestFrame) => Promise<unknown>,
+  ): () => void {
+    this.requestFile = listener;
+    return () => undefined;
+  }
+}
+
 describe("same-branch message queue", () => {
   it("releases queued sends on shutdown without starting another model session", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-queue-close-"));
@@ -525,6 +551,82 @@ async function waitForTerminal(service: ChatAppService, conversationId: string):
 }
 
 describe("ChatAppService", () => {
+  it("keeps the stable path off by default and revokes only opted-in generations before abort", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-native-tools-control-"));
+    temporaryDirectories.push(directory);
+    const repository = new ChatRepository(path.join(directory, "chat.sqlite"));
+    const pi = new RevocationPiHostClient();
+    const service = trackedService(repository, pi);
+    await service.handle({
+      command: "chat.send",
+      input: { text: "stable", idempotencyKey: "native-stable" },
+    });
+    await vi.waitFor(() => expect(pi.prompts).toHaveLength(1));
+    expect(pi.prompts[0]?.nativeToolsEnabled).toBeUndefined();
+    await service.handle({
+      command: "pi.runtime.settings.update",
+      input: { nativeToolsEnabled: true },
+    });
+    await service.handle({
+      command: "chat.send",
+      input: { text: "native", idempotencyKey: "native-opted-in" },
+    });
+    await vi.waitFor(() => expect(pi.prompts).toHaveLength(2));
+    const frame = pi.prompts[1];
+    if (!frame) throw new Error("native generation missing");
+    expect(frame.nativeToolsEnabled).toBe(true);
+    const disabling = service.handle({
+      command: "pi.runtime.settings.update",
+      input: { nativeToolsEnabled: false },
+    });
+    expect(pi.aborted).toEqual([frame.generationId]);
+    expect(repository.message(frame.assistantMessageId)).toMatchObject({
+      status: "cancelling",
+      errorCode: "PI_NATIVE_TOOLS_DISABLED",
+    });
+    const request = {
+      requestId: crypto.randomUUID(),
+      generationId: frame.generationId,
+      conversationId: frame.conversationId,
+      branchId: frame.branchId,
+      assistantMessageId: frame.assistantMessageId,
+      piToolCallId: "nested-call",
+    };
+    await expect(
+      pi.requestTool?.({
+        ...request,
+        kind: "pi.tool.request",
+        toolName: "openerx_memory_list",
+        operation: { operation: "memory_list", limit: 50, idempotencyKey: "native-revoked-call" },
+      }),
+    ).rejects.toThrow("PI_NATIVE_TOOLS_DISABLED");
+    await expect(
+      pi.requestFile?.({
+        ...request,
+        kind: "pi.file-tool.request",
+        toolName: "openerx_file_list",
+        request: { operation: "list", input: {} },
+      }),
+    ).rejects.toThrow("PI_NATIVE_TOOLS_DISABLED");
+    // Re-enabling may authorize new tasks, but cannot revive the canceled task.
+    await service.handle({
+      command: "pi.runtime.settings.update",
+      input: { nativeToolsEnabled: true },
+    });
+    await expect(
+      pi.requestTool?.({
+        ...request,
+        kind: "pi.tool.request",
+        toolName: "openerx_memory_list",
+        operation: { operation: "memory_list", limit: 50, idempotencyKey: "native-revoked-call" },
+      }),
+    ).rejects.toThrow("PI_NATIVE_TOOLS_DISABLED");
+    pi.releaseAbort?.();
+    await disabling;
+    expect(pi.aborted).not.toContain(pi.prompts[0]?.generationId);
+    pi.release();
+  });
+
   it("waits for tool shutdown and releases each repository only once", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "openerx-service-shutdown-"));
     temporaryDirectories.push(directory);

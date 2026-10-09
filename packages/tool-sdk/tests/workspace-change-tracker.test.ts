@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -162,6 +170,13 @@ describe("workspace write change evidence", () => {
     const root = temporaryRoot();
     const tracked = path.join(root.rootPath, "tracked.txt");
     writeFileSync(tracked, "committed\n");
+    const appleGit = "/Library/Developer/CommandLineTools/usr/bin/git";
+    const gitExecutable =
+      process.platform === "darwin" && existsSync(appleGit)
+        ? appleGit
+        : process.platform === "win32"
+          ? "git.exe"
+          : "/usr/bin/git";
     for (const args of [
       ["init", "-q"],
       ["add", "tracked.txt"],
@@ -175,13 +190,9 @@ describe("workspace write change evidence", () => {
         "baseline",
       ],
     ]) {
-      const result = spawnSync(
-        process.platform === "win32" ? "git.exe" : "/usr/bin/git",
-        ["-C", root.rootPath, ...args],
-        {
-          encoding: "utf8",
-        },
-      );
+      const result = spawnSync(gitExecutable, ["-C", root.rootPath, ...args], {
+        encoding: "utf8",
+      });
       expect(result.status, result.stderr).toBe(0);
     }
     writeFileSync(tracked, "user-dirty\n");

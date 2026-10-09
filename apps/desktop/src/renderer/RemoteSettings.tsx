@@ -1,3 +1,4 @@
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import "./RemoteSettings.css";
 import type { RemoteDesktopState } from "@openerx/contracts";
 import { ArrowClockwise, Desktop, DeviceMobile } from "@phosphor-icons/react";
@@ -42,13 +43,13 @@ export function RemoteSettings({ accountId }: { accountId: string | null }): Rea
   const queryKey = ["remote", "state", accountId];
   const remote = useQuery({
     queryKey,
-    queryFn: () => window.openerx.getRemoteState(),
+    queryFn: () => desktopWorkspaceBridge().getRemoteState(),
     enabled: Boolean(accountId),
     retry: false,
     refetchInterval: (query) => (query.state.data?.enabled ? 5_000 : false),
   });
   const enable = useMutation({
-    mutationFn: (enabled: boolean) => window.openerx.setRemoteEnabled({ enabled }),
+    mutationFn: (enabled: boolean) => desktopWorkspaceBridge().setRemoteEnabled({ enabled }),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey });
     },
@@ -60,7 +61,7 @@ export function RemoteSettings({ accountId }: { accountId: string | null }): Rea
     onError: () => queryClient.invalidateQueries({ queryKey }),
   });
   const revoke = useMutation({
-    mutationFn: (pairingId: string) => window.openerx.revokeRemotePairing({ pairingId }),
+    mutationFn: (pairingId: string) => desktopWorkspaceBridge().revokeRemotePairing({ pairingId }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
   const state = remote.data;

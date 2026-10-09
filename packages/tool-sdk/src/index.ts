@@ -16,6 +16,7 @@ export * from "./local-web-search-http";
 export * from "./macos-sandbox-engine";
 export * from "./mcp-adapter";
 export * from "./mcp-oauth-provider";
+export * from "./mcp-settings";
 export * from "./platform-sandbox-engine";
 export * from "./policy";
 export * from "./shell-adapter";

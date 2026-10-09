@@ -52,6 +52,7 @@ export function createProductFileTools(input: {
   conversationId: string;
   branchId: string;
   assistantMessageId: string;
+  imageInput?: boolean;
   transport: PiFileToolTransport;
 }): ToolDefinition[] {
   const request = async (
@@ -161,9 +162,11 @@ export function createProductFileTools(input: {
       name: "openerx_office_artifact",
       label: "Create or edit Office artifact",
       description:
-        "Compile a bounded document, workbook, presentation, or PDF specification into a real binary ArtifactVersion with rendered visual-review surfaces.",
+        "Compile a bounded document, workbook, presentation, or PDF specification into a real binary ArtifactVersion with parsed text and rendered previews.",
       promptSnippet:
-        "Create DOCX, XLSX, PPTX, or PDF deliverables and inspect every returned page, sheet, or slide before reporting completion.",
+        input.imageInput === false
+          ? "Create DOCX, XLSX, PPTX, or PDF deliverables and check the returned parsed text and artifact metadata against the request. This model cannot inspect preview images; do not claim visual review."
+          : "Create DOCX, XLSX, PPTX, or PDF deliverables and inspect every returned page, sheet, or slide before reporting completion.",
       promptGuidelines: [
         "Use an existing artifactId to edit by appending a complete immutable version; never claim an in-place overwrite.",
         "Keep each requested page or slide within its bounded layout. If visual validation reports overflow, shorten or split the content and retry.",
@@ -257,7 +260,7 @@ export function createProductFileTools(input: {
           operation: "artifact.office.write",
           input: officeInput,
         });
-        return officeArtifactToolResult(result);
+        return officeArtifactToolResult(result, input.imageInput !== false);
       },
     }),
   ];

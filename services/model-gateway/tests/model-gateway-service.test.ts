@@ -107,6 +107,15 @@ function setup(effectiveModelRef = "platform/standard") {
 }
 
 describe("ModelGatewayService", () => {
+  it("only returns reasoning to clients that opt into replay", async () => {
+    const { gateway, execute } = setup();
+    const result = { ...(await execute()), reasoning: { text: "Trace", signature: "route" } };
+    execute.mockResolvedValue(result);
+    expect(await gateway.execute(request())).not.toHaveProperty("reasoning");
+    expect(await gateway.execute(request({ reasoningReplay: true }))).toMatchObject({
+      reasoning: result.reasoning,
+    });
+  });
   it("publishes an automatic model and records its resolved effective model", async () => {
     const { gateway } = setup();
     expect(gateway.catalog()[0]).toMatchObject({

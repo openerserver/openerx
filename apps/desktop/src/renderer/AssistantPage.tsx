@@ -4,6 +4,7 @@ import type {
   PermissionRequest,
   WorkItem,
 } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import {
   ArrowRight,
   Bell,
@@ -235,22 +236,22 @@ export function AssistantPage({
   const [activityCutoff] = useState(readAssistantLastSeenAt);
   const automations = useQuery({
     queryKey: ["automations"],
-    queryFn: () => window.openerx.listAutomations(),
+    queryFn: () => desktopWorkspaceBridge().listAutomations(),
     refetchInterval: assistantRefreshIntervalMs,
   });
   const conversations = useQuery({
     queryKey: ["chat", "list", false],
-    queryFn: () => window.openerx.listConversations({ includeArchived: false }),
+    queryFn: () => desktopWorkspaceBridge().listConversations({ includeArchived: false }),
     refetchInterval: assistantRefreshIntervalMs,
   });
   const workItems = useQuery({
     queryKey: ["work-items", "assistant"],
-    queryFn: () => window.openerx.listWorkItems({ limit: 50 }),
+    queryFn: () => desktopWorkspaceBridge().listWorkItems({ limit: 50 }),
     refetchInterval: assistantRefreshIntervalMs,
   });
   const pendingPermissions = useQuery({
     queryKey: ["permissions", "pending"],
-    queryFn: () => window.openerx.listPermissionRequests({ status: "pending" }),
+    queryFn: () => desktopWorkspaceBridge().listPermissionRequests({ status: "pending" }),
     refetchInterval: assistantRefreshIntervalMs,
   });
 
@@ -576,17 +577,17 @@ export function AssistantPage({
 export function AssistantCompanion({ onOpen }: { onOpen: () => void }): React.JSX.Element {
   const automations = useQuery({
     queryKey: ["automations"],
-    queryFn: () => window.openerx.listAutomations(),
+    queryFn: () => desktopWorkspaceBridge().listAutomations(),
     refetchInterval: assistantRefreshIntervalMs,
   });
   const workItems = useQuery({
     queryKey: ["work-items", "assistant"],
-    queryFn: () => window.openerx.listWorkItems({ limit: 50 }),
+    queryFn: () => desktopWorkspaceBridge().listWorkItems({ limit: 50 }),
     refetchInterval: assistantRefreshIntervalMs,
   });
   const pendingPermissions = useQuery({
     queryKey: ["permissions", "pending"],
-    queryFn: () => window.openerx.listPermissionRequests({ status: "pending" }),
+    queryFn: () => desktopWorkspaceBridge().listPermissionRequests({ status: "pending" }),
     refetchInterval: assistantRefreshIntervalMs,
   });
   const disabledAutomationCount = (automations.data ?? []).filter(

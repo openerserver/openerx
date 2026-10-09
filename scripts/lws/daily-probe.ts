@@ -230,8 +230,8 @@ async function main(): Promise<void> {
   validateCurrentProbeDate(options.probeDate);
   const userAgent = process.env.OPENERX_LWS_PROBE_UA?.trim();
   if (!userAgent) throw new Error("OPENERX_LWS_PROBE_UA_REQUIRED");
-  const outputDirectory = path.join(repositoryRoot, "artifacts", "lws-probes");
-  const gateOutput = path.join(repositoryRoot, "artifacts", "lws-probes", "gate.json");
+  const outputDirectory = path.join(repositoryRoot, "docs", "v2", "evidence", "lws-probes");
+  const gateOutput = path.join(repositoryRoot, "tests", "v2", "golden", "lws-006-gate-status.json");
   const jsonOutput = path.join(outputDirectory, `${options.probeDate}.json`);
   const markdownOutput = path.join(outputDirectory, `${options.probeDate}.md`);
   if (existsSync(jsonOutput) || existsSync(markdownOutput)) {

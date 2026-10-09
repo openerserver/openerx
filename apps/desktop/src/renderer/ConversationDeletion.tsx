@@ -1,4 +1,5 @@
 import type { Conversation, ConversationSummary } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { Trash } from "@phosphor-icons/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useContext, useRef, useState } from "react";
@@ -70,7 +71,7 @@ export function ConversationDeletionProvider({
       conversation: ConversationTarget;
       forgetMemories: boolean;
     }) =>
-      window.openerx.deleteConversation({
+      desktopWorkspaceBridge().deleteConversation({
         conversationId: conversation.id,
         forgetSourceMemories: forgetMemories,
       }),

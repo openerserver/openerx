@@ -134,22 +134,25 @@ try {
     .locator(".message-assistant[data-message-status='completed']")
     .count();
   const desktopWindowTitle = `openerx E2E ${path.basename(profileDirectory)}`;
-  if (process.platform === "win32") {
-    // Capture a stable, test-owned window: the chat's animated progress indicator
-    // changes its accessibility revision while the native helper takes a screenshot.
-    await application.evaluate(async ({ app, BrowserWindow }, title) => {
-      app.setAccessibilitySupportEnabled(true);
+  // Use a stable, unique target on every platform. Duplicate app titles must
+  // never cause this test to capture a development window or a user's window.
+  const desktopFixtureIds = await application.evaluate(async ({ app, BrowserWindow }, title) => {
+    if (process.platform === "win32") app.setAccessibilitySupportEnabled(true);
+    const ids = [];
+    for (const windowTitle of [title, "openerx", "openerx"]) {
       const fixture = new BrowserWindow({
         width: 640,
         height: 480,
-        title,
+        title: windowTitle,
         webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
       });
       await fixture.loadURL(
-        `data:text/html,${encodeURIComponent(`<title>${title}</title><h1>Desktop capture fixture</h1><p>Stable test-owned window</p>`)}`,
+        `data:text/html,${encodeURIComponent(`<title>${windowTitle}</title><h1>Desktop capture fixture</h1><p>Stable test-owned window</p>`)}`,
       );
-    }, desktopWindowTitle);
-  }
+      ids.push(fixture.id);
+    }
+    return ids;
+  }, desktopWindowTitle);
   await page
     .getByLabel("发送消息")
     .fill(`捕获桌面测试窗口 [PI_TEST_DESKTOP] WINDOW_TITLE=${JSON.stringify(desktopWindowTitle)}`);
@@ -181,10 +184,17 @@ try {
     .last()
     .innerText();
   assert.match(desktopAssistantText, /桌面窗口捕获完成：已捕获目标应用窗口/u);
+  assert.ok(desktopAssistantText.includes(desktopWindowTitle));
+  await application.evaluate(({ BrowserWindow }, ids) => {
+    for (const id of ids) BrowserWindow.fromId(id)?.destroy();
+  }, desktopFixtureIds);
+  console.log("E2E_DESKTOP_TARGET_ISOLATION_OK unique-target duplicate-app-titles image-verified");
 
-  await page.getByRole("link", { name: "设置", exact: true }).click();
-  await page.getByRole("button", { name: "工具" }).click();
-  await page.getByRole("heading", { name: "工具" }).waitFor();
+  // Open the tested section without depending on the edition's account landing page.
+  await page.evaluate(() => {
+    window.location.hash = "/settings/account?section=tools";
+  });
+  await page.getByRole("heading", { name: "工具", exact: true }).waitFor();
   let localSearchRow = page.locator(".tool-library-row").filter({ hasText: "本地 Web Search" });
   await localSearchRow.getByRole("button", { name: "设置" }).click();
   let localSearchPanel = page.getByRole("dialog", { name: "本地 Web Search" });
@@ -195,8 +205,8 @@ try {
   await localSearchPanel.getByText("搜索设置已保存。", { exact: true }).waitFor();
   await page.reload();
   try {
-    await page.getByRole("button", { name: "工具" }).click();
-    await page.getByRole("heading", { name: "工具" }).waitFor();
+    await page.getByRole("button", { name: "工具", exact: true }).click();
+    await page.getByRole("heading", { name: "工具", exact: true }).waitFor();
   } catch (error) {
     console.error("E2E_TOOLS_SETTINGS_RELOAD_STATE\n", await page.locator("body").innerText());
     throw error;

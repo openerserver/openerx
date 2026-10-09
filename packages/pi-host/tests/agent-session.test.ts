@@ -3,7 +3,12 @@ import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import {
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  InMemoryCredentialStore,
+  InMemoryModelsStore,
+} from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -11,9 +16,16 @@ import {
   fauxThinking,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
+import { defineTool } from "@earendil-works/pi-coding-agent";
 import { piHostContractVersion } from "@openerx/contracts";
-import { afterEach, describe, expect, it } from "vitest";
-import { createProductPiSession, ModelRuntime } from "../src/agent-session";
+import { Type } from "@sinclair/typebox";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  activateProductSessionTools,
+  createProductPiSession,
+  ModelRuntime,
+  SessionManager,
+} from "../src/agent-session";
 import { startPiHostProcess } from "../src/host";
 
 const temporaryDirectories: string[] = [];
@@ -25,6 +37,107 @@ afterEach(() => {
 });
 
 describe("Pi AgentSession composition", () => {
+  it("resumes an authorized historical tool without exposing revoked or failed-only tools", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-tool-resume-"));
+    temporaryDirectories.push(root);
+    const cwd = path.join(root, "workspace"),
+      agentDir = path.join(root, "agent");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    const runtime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
+    const faux = fauxProvider({ tokensPerSecond: 10_000 });
+    runtime.registerNativeProvider(faux.provider);
+    const manager = SessionManager.inMemory(cwd);
+    const parameters = Type.Object({}, { additionalProperties: false });
+    manager.appendMessage({
+      role: "system",
+      content: "Previous tools",
+      timestamp: 1,
+      toolsAdded: ["openerx_calculate", "revoked_tool"].map((name) => ({
+        name,
+        description: name,
+        parameters,
+      })),
+    });
+    manager.appendMessage({ role: "user", content: "Calculate and inspect", timestamp: 2 });
+    for (const [name, stopReason] of [
+      ["openerx_calculate", "toolUse"],
+      ["revoked_tool", "toolUse"],
+      ["failed_only", "error"],
+    ] as const) {
+      manager.appendMessage({
+        ...fauxAssistantMessage(""),
+        stopReason,
+        content: [{ type: "toolCall", id: `previous_${name}`, name, arguments: {} }],
+        timestamp: 3,
+      });
+      if (stopReason === "toolUse")
+        manager.appendMessage({
+          role: "toolResult",
+          toolCallId: `previous_${name}`,
+          toolName: name,
+          content: [{ type: "text", text: "Previous result" }],
+          isError: false,
+          timestamp: 4,
+        });
+    }
+    const calculate = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "35" }],
+      details: {},
+    }));
+    const neverExecute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "unexpected" }],
+      details: {},
+    }));
+    const { session } = await createProductPiSession({
+      cwd,
+      agentDir,
+      history: [],
+      modelRuntime: runtime,
+      model: faux.getModel(),
+      sessionManager: manager,
+      customTools: [
+        defineTool({
+          name: "openerx_calculate",
+          label: "Calculate",
+          description: "Calculate",
+          parameters,
+          execute: calculate,
+        }),
+        ...["inspect", "failed_only"].map((name) =>
+          defineTool({ name, label: name, description: name, parameters, execute: neverExecute }),
+        ),
+      ],
+    });
+    activateProductSessionTools(session, ["inspect"]);
+    faux.setResponses([
+      (context) => {
+        const names = getCurrentTools(context.messages).map(({ name }) => name);
+        expect(names).toContain("openerx_calculate");
+        expect(names).not.toContain("revoked_tool");
+        expect(names).not.toContain("failed_only");
+        return fauxAssistantMessage(fauxToolCall("openerx_calculate", {}));
+      },
+      fauxAssistantMessage("恢复成功"),
+    ]);
+    try {
+      await session.prompt("Continue", { expandPromptTemplates: false });
+      await session.waitForIdle();
+      expect(calculate).toHaveBeenCalledTimes(1);
+      expect(neverExecute).not.toHaveBeenCalled();
+      expect(session.messages.at(-1)).toMatchObject({ stopReason: "stop" });
+      expect(session.getActiveToolNames().sort()).toEqual(["inspect", "openerx_calculate"]);
+    } finally {
+      session.dispose();
+    }
+  });
+
   it("runs memory extraction as a no-tool in-memory Pi task with strict candidates", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openerx-pi-memory-extract-"));
     temporaryDirectories.push(root);
@@ -48,7 +161,13 @@ describe("Pi AgentSession composition", () => {
       },
       start(): void {},
     });
-    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     modelRuntime.registerNativeProvider(faux.provider);
     const sourceMessageId = randomUUID();
@@ -151,7 +270,13 @@ describe("Pi AgentSession composition", () => {
       },
       start(): void {},
     });
-    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     modelRuntime.registerNativeProvider(faux.provider);
     const leftMemoryId = randomUUID();
@@ -241,7 +366,13 @@ describe("Pi AgentSession composition", () => {
       },
       start(): void {},
     });
-    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     modelRuntime.registerNativeProvider(faux.provider);
     faux.setResponses([fauxAssistantMessage("不应完成")]);
@@ -317,7 +448,13 @@ describe("Pi AgentSession composition", () => {
     }
     const parentPort = new EventEmitter();
     const piPort = new FakePort();
-    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 200, tokenSize: { min: 4, max: 4 } });
     modelRuntime.registerNativeProvider(faux.provider);
     let modelCalls = 0;
@@ -454,7 +591,13 @@ describe("Pi AgentSession composition", () => {
       },
       start(): void {},
     });
-    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     modelRuntime.registerNativeProvider(faux.provider);
     faux.setResponses([
@@ -493,7 +636,7 @@ describe("Pi AgentSession composition", () => {
           {
             personalFileId: randomUUID(),
             displayName: "fixture.png",
-            data: "aW1hZ2U=",
+            data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR4nO3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4unIZ5cAAAAASUVORK5CYII=",
             mimeType: "image/png",
           },
         ],
@@ -503,7 +646,11 @@ describe("Pi AgentSession composition", () => {
 
     expect(observedUserContent).toEqual([
       { type: "text", text: "图片里有什么？" },
-      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      {
+        type: "image",
+        data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR4nO3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4unIZ5cAAAAASUVORK5CYII=",
+        mimeType: "image/png",
+      },
     ]);
     expect(piPort.sent).toEqual(
       expect.arrayContaining([
@@ -543,7 +690,13 @@ describe("Pi AgentSession composition", () => {
     const agentDir = path.join(root, "agent");
     mkdirSync(cwd, { recursive: true });
     mkdirSync(agentDir, { recursive: true });
-    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     modelRuntime.registerNativeProvider(faux.provider);
     faux.setResponses([
@@ -569,6 +722,7 @@ describe("Pi AgentSession composition", () => {
       modelRuntime,
       model: faux.getModel(),
     });
+    expect(session.autoRetryEnabled).toBe(true);
     const deltas: string[] = [];
     const eventTypes: string[] = [];
     const unsubscribe = session.subscribe((event) => {
@@ -615,7 +769,13 @@ describe("Pi AgentSession composition", () => {
       },
       start(): void {},
     });
-    const modelRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     modelRuntime.registerNativeProvider(faux.provider);
     faux.setResponses([
@@ -750,4 +910,68 @@ describe("Pi AgentSession composition", () => {
       }),
     );
   });
+});
+
+describe("current runtime clock in model input", () => {
+  it.each([undefined, "You are UWA Enterprise. Preserve the enterprise scope."])(
+    "refreshes the clock when resuming history with prompt override %s",
+    async (systemPromptOverride) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openerx-runtime-clock-"));
+      temporaryDirectories.push(root);
+      const runtime = await ModelRuntime.create({
+        credentials: new InMemoryCredentialStore(),
+        modelsStore: new InMemoryModelsStore(),
+        modelsPath: null,
+        allowModelNetwork: false,
+        refreshOnCreate: false,
+      });
+      const faux = fauxProvider({ tokensPerSecond: 10_000 });
+      runtime.registerNativeProvider(faux.provider);
+      const manager = SessionManager.inMemory(root);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        for (const instant of ["2026-10-09T06:32:18Z", "2026-10-10T06:32:18Z"]) {
+          vi.setSystemTime(new Date(instant));
+          const expectedDate = new Intl.DateTimeFormat("en-CA", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          }).format(new Date());
+          faux.setResponses([
+            (context) => {
+              const prompt = getCurrentSystemPrompt(context.messages);
+              expect(prompt).toContain(`Current date: ${expectedDate}`);
+              expect(prompt).toContain(
+                `Time zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`,
+              );
+              expect(prompt).toContain(`UTC instant: ${new Date(instant).toISOString()}`);
+              expect(prompt.match(/Current runtime clock/g)).toHaveLength(1);
+              if (systemPromptOverride) expect(prompt).toContain(systemPromptOverride);
+              expect(JSON.stringify(context.messages)).toContain("2025年4月14日");
+              return fauxAssistantMessage(fauxText("clock received"));
+            },
+          ]);
+          const { session } = await createProductPiSession({
+            cwd: root,
+            agentDir: root,
+            modelRuntime: runtime,
+            model: faux.getModel(),
+            sessionManager: manager,
+            nativeToolsEnabled: false,
+            history: [{ role: "assistant", text: "今天是2025年4月14日。" }],
+            systemPromptOverride,
+          });
+          try {
+            await session.prompt("今天几号、星期几？", { expandPromptTemplates: false });
+            await session.waitForIdle();
+            expect(session.messages.at(-1)).toMatchObject({ stopReason: "stop" });
+          } finally {
+            session.dispose();
+          }
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

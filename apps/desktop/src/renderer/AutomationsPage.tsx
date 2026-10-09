@@ -1,5 +1,9 @@
 import type { AutomationDefinition, AutomationRun, AutomationSchedule } from "@openerx/contracts";
 import {
+  desktopWorkspaceBridge,
+  desktopWorkspaceCapabilities,
+} from "@openerx/desktop-ui/workspace-bridge";
+import {
   ArrowClockwise,
   CaretRight,
   ClockCountdown,
@@ -14,6 +18,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, useSearchParams } from "react-router-dom";
+import { conversationTargetHref } from "./conversation-target";
+import { ModalDialog } from "./ModalDialog";
 
 function displayTime(value: string | null): string {
   if (!value) return "没有后续计划";
@@ -93,6 +99,9 @@ export function AutomationsPage({
   defaultModelRef: string;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
+  const capabilities = desktopWorkspaceCapabilities();
+  const [editingTarget, setEditingTarget] = useState<AutomationDefinition["target"] | null>(null);
+  const [editingKind, setEditingKind] = useState<AutomationDefinition["kind"] | null>(null);
   const [searchParams] = useSearchParams();
   const [editorMode, setEditorMode] = useState<"create" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -119,16 +128,38 @@ export function AutomationsPage({
 
   const automations = useQuery({
     queryKey: ["automations"],
-    queryFn: () => window.openerx.listAutomations(),
+    queryFn: () => desktopWorkspaceBridge().listAutomations(),
     refetchInterval: 30_000,
   });
+  const models = useQuery({
+    queryKey: ["models", "catalog"],
+    queryFn: () => desktopWorkspaceBridge().listModels(),
+    enabled: editorMode !== null,
+    retry: false,
+  });
+  const availableModels = useMemo(
+    () => models.data?.filter((model) => model.status !== "unavailable") ?? [],
+    [models.data],
+  );
+  useEffect(() => {
+    if (
+      editorMode === "create" &&
+      availableModels.length &&
+      !availableModels.some((model) => model.modelRef === editorModelRef)
+    )
+      setEditorModelRef(
+        availableModels.find((model) => model.modelRef === defaultModelRef)?.modelRef ??
+          availableModels[0]?.modelRef ??
+          defaultModelRef,
+      );
+  }, [editorMode, availableModels, editorModelRef, defaultModelRef]);
   const loginStartup = useQuery({
     queryKey: ["desktop-login-startup"],
-    queryFn: () => window.openerx.getLoginStartupSettings(),
+    queryFn: () => desktopWorkspaceBridge().getLoginStartupSettings(),
   });
   const conversations = useQuery({
     queryKey: ["chat", "list", false],
-    queryFn: () => window.openerx.listConversations(),
+    queryFn: () => desktopWorkspaceBridge().listConversations(),
   });
   const selected = automations.data?.find(({ id }) => id === selectedId) ?? null;
   const filteredAutomations = useMemo(() => {
@@ -148,7 +179,8 @@ export function AutomationsPage({
   }, [automations.data, searchQuery, statusFilter]);
   const runs = useQuery({
     queryKey: ["automations", selectedId, "runs"],
-    queryFn: () => window.openerx.listAutomationRuns({ automationId: String(selectedId) }),
+    queryFn: () =>
+      desktopWorkspaceBridge().listAutomationRuns({ automationId: String(selectedId) }),
     enabled: selectedId !== null,
     refetchInterval: selectedId ? 10_000 : false,
   });
@@ -158,7 +190,7 @@ export function AutomationsPage({
     queryFn: () => {
       const schedule = scheduleDraft(frequency, startAt, scheduleTimeZone);
       if (!schedule) return Promise.resolve({ occurrences: [] });
-      return window.openerx.previewAutomationSchedule({ schedule, count: 5 });
+      return desktopWorkspaceBridge().previewAutomationSchedule({ schedule, count: 5 });
     },
     enabled: editorMode !== null && currentSchedule !== null,
     staleTime: 60_000,
@@ -168,11 +200,15 @@ export function AutomationsPage({
     setEditorMode(null);
     setEditingId(null);
     setEditingRevision(null);
+    setEditingTarget(null);
+    setEditingKind(null);
   };
   const openCreate = (): void => {
     setEditorMode("create");
     setEditingId(null);
     setEditingRevision(null);
+    setEditingTarget(null);
+    setEditingKind(null);
     setName("");
     setPrompt("");
     setKind("standalone");
@@ -188,6 +224,8 @@ export function AutomationsPage({
     setEditorMode("edit");
     setEditingId(item.id);
     setEditingRevision(item.revision);
+    setEditingTarget(item.target);
+    setEditingKind(item.kind);
     setName(item.name);
     setPrompt(item.prompt);
     setKind(item.kind);
@@ -209,7 +247,7 @@ export function AutomationsPage({
     mutationFn: () => {
       const schedule = scheduleDraft(frequency, startAt, scheduleTimeZone);
       if (!schedule) throw new Error("AUTOMATION_TIME_INVALID");
-      return window.openerx.createAutomation({
+      return desktopWorkspaceBridge().createAutomation({
         name,
         prompt,
         kind,
@@ -237,7 +275,7 @@ export function AutomationsPage({
       const schedule = scheduleDraft(frequency, startAt, scheduleTimeZone);
       if (!schedule) throw new Error("AUTOMATION_TIME_INVALID");
       if (!editingId || !editingRevision) throw new Error("AUTOMATION_NOT_FOUND");
-      return window.openerx.updateAutomation({
+      return desktopWorkspaceBridge().updateAutomation({
         automationId: editingId,
         revision: editingRevision,
         changes: {
@@ -245,11 +283,20 @@ export function AutomationsPage({
           prompt,
           kind,
           schedule,
-          target: {
-            conversationId: kind === "heartbeat" ? targetConversationId : null,
-            branchId: null,
-            workspaceGrantIds: [],
-          },
+          ...(editingKind === kind &&
+          (kind === "standalone" || editingTarget?.conversationId === targetConversationId)
+            ? {} // An unchanged target keeps its original branch and directory grants.
+            : {
+                target: {
+                  conversationId: kind === "heartbeat" ? targetConversationId : null,
+                  branchId:
+                    kind === "heartbeat"
+                      ? (conversations.data?.find((item) => item.id === targetConversationId)
+                          ?.activeBranchId ?? null)
+                      : null,
+                  workspaceGrantIds: [],
+                },
+              }),
           execution: { modelRef: editorModelRef, retryPolicy, catchUpPolicy },
         },
       });
@@ -263,12 +310,19 @@ export function AutomationsPage({
   const setStatus = useMutation({
     mutationFn: ({ item, active }: { item: AutomationDefinition; active: boolean }) =>
       active
-        ? window.openerx.resumeAutomation({ automationId: item.id, revision: item.revision })
-        : window.openerx.pauseAutomation({ automationId: item.id, revision: item.revision }),
+        ? desktopWorkspaceBridge().resumeAutomation({
+            automationId: item.id,
+            revision: item.revision,
+          })
+        : desktopWorkspaceBridge().pauseAutomation({
+            automationId: item.id,
+            revision: item.revision,
+          }),
     onSuccess: refresh,
   });
   const runNow = useMutation({
-    mutationFn: (automationId: string) => window.openerx.runAutomationNow({ automationId }),
+    mutationFn: (automationId: string) =>
+      desktopWorkspaceBridge().runAutomationNow({ automationId }),
     onSuccess: async () => {
       await refresh();
       await queryClient.invalidateQueries({ queryKey: ["automations", selectedId, "runs"] });
@@ -276,7 +330,7 @@ export function AutomationsPage({
   });
   const remove = useMutation({
     mutationFn: (item: AutomationDefinition) =>
-      window.openerx.deleteAutomation({ automationId: item.id, revision: item.revision }),
+      desktopWorkspaceBridge().deleteAutomation({ automationId: item.id, revision: item.revision }),
     onSuccess: async () => {
       setSelectedId(null);
       await refresh();
@@ -284,7 +338,7 @@ export function AutomationsPage({
   });
   const updateLoginStartup = useMutation({
     mutationFn: (openAtLogin: boolean) =>
-      window.openerx.updateLoginStartupSettings({ openAtLogin }),
+      desktopWorkspaceBridge().updateLoginStartupSettings({ openAtLogin }),
     onSuccess: (settings) => {
       queryClient.setQueryData(["desktop-login-startup"], settings);
     },
@@ -301,18 +355,19 @@ export function AutomationsPage({
 
   return (
     <main className="automations-page">
-      <div className="automations-topbar">
-        <div />
-        <button type="button" className="automation-create-button" onClick={openCreate}>
-          <Plus size={15} weight="bold" />
-          新建自动化
-        </button>
-      </div>
-
       <div className="automations-content">
         <header className="automations-header">
-          <h1>自动化</h1>
-          <p>按计划启动任务、持续跟进工作，或监测重要变化</p>
+          <div>
+            <p className="eyebrow">
+              {capabilities.mode === "enterprise" ? "企业计划任务" : "本机计划任务"}
+            </p>
+            <h1>自动化</h1>
+            <p>按计划启动任务、持续跟进工作，或监测重要变化</p>
+          </div>
+          <button type="button" className="automation-create-button" onClick={openCreate}>
+            <Plus size={15} weight="bold" />
+            新建自动化
+          </button>
         </header>
         <label className="automation-search">
           <MagnifyingGlass size={19} aria-hidden="true" />
@@ -403,12 +458,12 @@ export function AutomationsPage({
           </span>
           <div>
             <strong>后台运行</strong>
-            <span>登录 Windows 后静默启动，让计划任务保持调度。</span>
+            <span>计划任务需要此电脑在线、应用运行且账号已登录；退出或休眠期间不会执行。</span>
           </div>
           <label className="automation-switch">
             <input
               type="checkbox"
-              aria-label="登录 Windows 后自动运行"
+              aria-label="系统登录后自动运行"
               checked={loginStartup.data?.openAtLogin ?? false}
               disabled={
                 loginStartup.isPending ||
@@ -422,7 +477,7 @@ export function AutomationsPage({
               {loginStartup.isPending
                 ? "正在读取…"
                 : loginStartup.data?.supported === false
-                  ? "当前平台不可用"
+                  ? "此平台暂不支持登录启动，请手动保持应用运行"
                   : loginStartup.data?.openAtLogin
                     ? "已开启"
                     : "未开启"}
@@ -434,10 +489,11 @@ export function AutomationsPage({
       {editorMode || selected ? (
         <div className="automation-drawer-backdrop">
           {editorMode ? (
-            <aside
+            <ModalDialog
               className="automation-drawer automation-editor-drawer"
-              role="dialog"
-              aria-modal="true"
+              titleId="automation-editor-title"
+              onClose={closeEditor}
+              pending={create.isPending || update.isPending}
             >
               <form
                 className="automation-form"
@@ -449,13 +505,16 @@ export function AutomationsPage({
               >
                 <header className="automation-drawer-header">
                   <div>
-                    <h2>{editorMode === "edit" ? "编辑自动化" : "新建自动化"}</h2>
+                    <h2 id="automation-editor-title">
+                      {editorMode === "edit" ? "编辑自动化" : "新建自动化"}
+                    </h2>
                     <p>设置任务内容和运行节奏</p>
                   </div>
                   <button
                     type="button"
                     className="icon-button"
                     aria-label="关闭"
+                    disabled={create.isPending || update.isPending}
                     onClick={closeEditor}
                   >
                     <X size={18} />
@@ -467,6 +526,7 @@ export function AutomationsPage({
                     <label>
                       <span>名称</span>
                       <input
+                        data-dialog-initial-focus
                         value={name}
                         onChange={(event) => setName(event.target.value)}
                         required
@@ -548,23 +608,56 @@ export function AutomationsPage({
                     <h3>执行设置</h3>
                     <label>
                       <span>使用模型</span>
-                      <input
+                      <select
                         value={editorModelRef}
                         onChange={(event) => setEditorModelRef(event.target.value)}
                         required
-                      />
+                        disabled={models.isPending || !availableModels.length}
+                      >
+                        {!availableModels.some((model) => model.modelRef === editorModelRef) ? (
+                          <option value={editorModelRef} disabled>
+                            {models.isPending ? "正在读取模型…" : "请选择可用模型"}
+                          </option>
+                        ) : null}
+                        {availableModels.map((model) => (
+                          <option key={model.modelRef} value={model.modelRef}>
+                            {model.displayName}
+                          </option>
+                        ))}
+                      </select>
                     </label>
+                    {models.error ? (
+                      <div role="alert">
+                        <p>暂时无法读取模型目录。</p>
+                        <button type="button" onClick={() => void models.refetch()}>
+                          重新读取模型
+                        </button>
+                      </div>
+                    ) : null}
+                    {kind === "heartbeat" &&
+                    editingTarget?.conversationId === targetConversationId ? (
+                      <p>
+                        执行分支：
+                        {editingTarget.branchId
+                          ? `固定分支 · ${editingTarget.branchId.slice(0, 8)}`
+                          : "任务当前分支"}
+                        。仅修改名称或计划不会改变目标。
+                      </p>
+                    ) : null}
                     <div className="automation-form-grid">
                       <label>
                         <span>启动失败重试</span>
                         <select
+                          disabled={capabilities.automationRetryPolicies.length < 2}
                           value={retryPolicy}
                           onChange={(event) =>
                             setRetryPolicy(event.target.value as typeof retryPolicy)
                           }
                         >
                           <option value="none">不自动重试</option>
-                          <option value="transient_3">瞬时错误重试 3 次</option>
+                          {capabilities.automationRetryPolicies.includes("transient_3") ? (
+                            <option value="transient_3">瞬时错误重试 3 次</option>
+                          ) : null}
                         </select>
                       </label>
                       <label>
@@ -609,7 +702,11 @@ export function AutomationsPage({
                   </section>
                 </div>
                 <footer className="automation-form-actions">
-                  <button type="button" onClick={closeEditor}>
+                  <button
+                    type="button"
+                    disabled={create.isPending || update.isPending}
+                    onClick={closeEditor}
+                  >
                     取消
                   </button>
                   <button
@@ -619,7 +716,8 @@ export function AutomationsPage({
                       create.isPending ||
                       update.isPending ||
                       preview.isError ||
-                      currentSchedule === null
+                      currentSchedule === null ||
+                      !availableModels.some((model) => model.modelRef === editorModelRef)
                     }
                   >
                     {editorMode === "edit"
@@ -632,15 +730,19 @@ export function AutomationsPage({
                   </button>
                 </footer>
               </form>
-            </aside>
+            </ModalDialog>
           ) : selected ? (
-            <aside className="automation-drawer automation-detail" role="dialog" aria-modal="true">
+            <ModalDialog
+              className="automation-drawer automation-detail"
+              titleId="automation-detail-title"
+              onClose={() => setSelectedId(null)}
+            >
               <header className="automation-drawer-header">
                 <div>
                   <span className="automation-detail-kicker">
                     {selected.kind === "heartbeat" ? "持续跟进" : "独立任务"}
                   </span>
-                  <h2>{selected.name}</h2>
+                  <h2 id="automation-detail-title">{selected.name}</h2>
                   <p>{scheduleLabel(selected)}</p>
                 </div>
                 <button
@@ -652,7 +754,12 @@ export function AutomationsPage({
                   <X size={18} />
                 </button>
               </header>
-              <div className="automation-detail-body">
+              <section
+                className="automation-detail-body"
+                aria-label="自动化详情与运行历史"
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: This bounded scroll region needs keyboard PageDown and End access to the full run history.
+                tabIndex={0}
+              >
                 <div className="automation-detail-status-row">
                   <span className={`automation-status automation-status-${selected.status}`} />
                   <strong>{definitionStatus[selected.status]}</strong>
@@ -729,7 +836,14 @@ export function AutomationsPage({
                         </small>
                       </div>
                       {run.conversationId ? (
-                        <NavLink to={`/chat/${run.conversationId}`}>查看任务</NavLink>
+                        <NavLink
+                          to={conversationTargetHref({
+                            conversationId: run.conversationId,
+                            branchId: run.branchId,
+                          })}
+                        >
+                          查看任务
+                        </NavLink>
                       ) : null}
                     </article>
                   ))}
@@ -737,8 +851,8 @@ export function AutomationsPage({
                     <p className="muted-copy">尚无运行记录。</p>
                   ) : null}
                 </section>
-              </div>
-            </aside>
+              </section>
+            </ModalDialog>
           ) : null}
         </div>
       ) : null}

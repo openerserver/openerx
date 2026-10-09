@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { strFromU8, unzipSync } from "fflate";
 import { _electron as electron } from "playwright";
+import { checkModelImageInput } from "./model-capability-preflight.mjs";
 
 const desktopDirectory = path.resolve(import.meta.dirname, "..");
 const mainEntry = path.join(desktopDirectory, ".vite", "build", "main.js");
@@ -45,6 +46,7 @@ try {
     },
   });
   const page = await application.firstWindow();
+  await page.waitForURL((url) => ["http:", "https:", "file:", "openerx:"].includes(url.protocol));
   await page.waitForLoadState("domcontentloaded");
   await application.evaluate(({ ipcMain }) => {
     ipcMain.removeHandler("model:catalog:list");
@@ -74,6 +76,7 @@ try {
     window.localStorage.setItem("openerx.defaultModelRef", "platform/e2e-faux"),
   );
   await page.reload({ waitUntil: "domcontentloaded" });
+  await checkModelImageInput(page, "desktop-data-export");
   await page.getByLabel("发送消息").fill(privatePrompt);
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await page.locator(".message-assistant[data-message-status='completed']").waitFor();
@@ -84,8 +87,10 @@ try {
     crash();
   });
   await waitForAppServiceRestart();
-  await page.getByRole("link", { name: "设置", exact: true }).click();
-  await page.getByRole("button", { name: "诊断与数据", exact: true }).click();
+  // Open the tested section without depending on the edition's account landing page.
+  await page.evaluate(() => {
+    window.location.hash = "/settings/account?section=diagnostics";
+  });
   await page.getByRole("heading", { name: "诊断与数据" }).waitFor();
   await page.getByText("次服务重启", { exact: false }).waitFor();
 

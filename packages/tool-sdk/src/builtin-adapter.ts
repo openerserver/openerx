@@ -42,18 +42,31 @@ function calculate(expression: string): number {
   const tokens = tokenize(expression);
   const output: Token[] = [];
   const operators: Token[] = [];
-  const precedence: Record<string, number> = { "+": 1, "-": 1, "*": 2, "/": 2, "%": 2, "^": 3 };
-  let previous: Token | undefined;
+  // Exponentiation binds more tightly than a prefix sign. Prefix signs are
+  // pushed without popping, so a signed exponent also works (2^-3 = 0.125).
+  const precedence: Record<string, number> = {
+    "+": 1,
+    "-": 1,
+    "*": 2,
+    "/": 2,
+    "%": 2,
+    "u+": 3,
+    "u-": 3,
+    "^": 4,
+  };
+  let expectsOperand = true;
   for (const token of tokens) {
-    if (token.kind === "number") output.push(token);
-    else if (token.kind === "operator") {
-      if (
-        token.value === "-" &&
-        (!previous ||
-          previous.kind === "operator" ||
-          (previous.kind === "paren" && previous.value === "("))
-      ) {
-        output.push({ kind: "number", value: 0 });
+    if (token.kind === "number") {
+      if (!expectsOperand) throw new Error("COMPUTE_INVALID_EXPRESSION");
+      if (!Number.isFinite(token.value)) throw new Error("COMPUTE_NON_FINITE_RESULT");
+      output.push(token);
+      expectsOperand = false;
+    } else if (token.kind === "operator") {
+      if (expectsOperand) {
+        if (token.value !== "+" && token.value !== "-")
+          throw new Error("COMPUTE_INVALID_EXPRESSION");
+        operators.push({ kind: "operator", value: `u${token.value}` });
+        continue;
       }
       while (operators.length > 0) {
         const top = operators.at(-1);
@@ -66,14 +79,19 @@ function calculate(expression: string): number {
         output.push(operators.pop() as Token);
       }
       operators.push(token);
-    } else if (token.value === "(") operators.push(token);
-    else {
+      expectsOperand = true;
+    } else if (token.value === "(") {
+      if (!expectsOperand) throw new Error("COMPUTE_INVALID_EXPRESSION");
+      operators.push(token);
+    } else {
+      if (expectsOperand) throw new Error("COMPUTE_INVALID_EXPRESSION");
       while (operators.length > 0 && operators.at(-1)?.kind !== "paren")
         output.push(operators.pop() as Token);
       if (operators.pop()?.kind !== "paren") throw new Error("COMPUTE_INVALID_EXPRESSION");
+      expectsOperand = false;
     }
-    previous = token;
   }
+  if (expectsOperand) throw new Error("COMPUTE_INVALID_EXPRESSION");
   while (operators.length > 0) {
     const token = operators.pop() as Token;
     if (token.kind === "paren") throw new Error("COMPUTE_INVALID_EXPRESSION");
@@ -84,8 +102,13 @@ function calculate(expression: string): number {
     if (token.kind === "number") stack.push(token.value);
     else if (token.kind === "operator") {
       const right = stack.pop();
+      if (right === undefined) throw new Error("COMPUTE_INVALID_EXPRESSION");
+      if (token.value === "u+" || token.value === "u-") {
+        stack.push(token.value === "u-" ? -right : right);
+        continue;
+      }
       const left = stack.pop();
-      if (left === undefined || right === undefined) throw new Error("COMPUTE_INVALID_EXPRESSION");
+      if (left === undefined) throw new Error("COMPUTE_INVALID_EXPRESSION");
       const result =
         token.value === "+"
           ? left + right
@@ -104,6 +127,18 @@ function calculate(expression: string): number {
   }
   if (stack.length !== 1) throw new Error("COMPUTE_INVALID_EXPRESSION");
   return stack[0] as number;
+}
+
+function compareValues(left: unknown, right: unknown): number {
+  // Keep mixed columns ordered consistently: empty values, numbers, then text.
+  const rank = (value: unknown) => (value == null ? 0 : typeof value === "number" ? 1 : 2);
+  const leftRank = rank(left);
+  const rightRank = rank(right);
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  if (left == null || right == null) return 0;
+  if (typeof left === "number" && typeof right === "number")
+    return left === right ? 0 : left < right ? -1 : 1;
+  return String(left).localeCompare(String(right), "zh-CN", { numeric: true });
 }
 
 function structured(
@@ -125,11 +160,7 @@ function structured(
   }
   return [...operation.rows].sort((left, right) => {
     for (const field of operation.fields) {
-      const compared = String(left[field] ?? "").localeCompare(
-        String(right[field] ?? ""),
-        "zh-CN",
-        { numeric: true },
-      );
+      const compared = compareValues(left[field], right[field]);
       if (compared !== 0) return compared;
     }
     return 0;

@@ -52,7 +52,7 @@ describe("database migrations", () => {
       expect(
         database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get(),
       ).toEqual({
-        version: 35,
+        version: 37,
       });
       expect(
         database.prepare("SELECT name FROM sqlite_master WHERE name = 'projects'").get(),

@@ -77,6 +77,7 @@ export interface ToolProjection {
 export interface ToolCallDraft {
   runId: string;
   piCallRef: string;
+  parentPiToolCallId?: string;
   toolName: string;
   source: ToolCall["source"];
   risk: ToolRisk;
@@ -143,12 +144,15 @@ export type StoredLocalWebSearchSettings = LocalWebSearchSettingsSelection & {
 
 export class ToolRepository {
   readonly #database: DatabaseSync;
+  readonly #ownsDatabase: boolean;
   readonly #ownerProfileId: string;
   readonly #now: () => string;
   readonly #idFactory: () => string;
 
-  constructor(databasePath: string, options: ToolRepositoryOptions = {}) {
-    this.#database = new DatabaseSync(databasePath);
+  constructor(databasePath: string | DatabaseSync, options: ToolRepositoryOptions = {}) {
+    this.#ownsDatabase = typeof databasePath === "string";
+    this.#database =
+      typeof databasePath === "string" ? new DatabaseSync(databasePath) : databasePath;
     this.#ownerProfileId = options.ownerProfileId ?? "local-default";
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#idFactory = options.idFactory ?? randomUUID;
@@ -156,7 +160,7 @@ export class ToolRepository {
   }
 
   close(): void {
-    this.#database.close();
+    if (this.#ownsDatabase) this.#database.close();
   }
 
   createProjection(input: {
@@ -294,6 +298,7 @@ export class ToolRepository {
           type: "tool",
           toolCallId,
           toolName: draft.toolName,
+          ...(draft.parentPiToolCallId ? { parentPiToolCallId: draft.parentPiToolCallId } : {}),
           input: draft.input ?? null,
           inputSummary: draft.inputSummary,
           targetSummary: draft.targetSummary,
@@ -2366,6 +2371,9 @@ export class ToolRepository {
     errorCode: string | null,
     now: string,
   ): void {
+    const previous = this.runItemByRef(call.runId, `tool:${call.piCallRef}`);
+    const parentPiToolCallId =
+      previous?.content.type === "tool" ? previous.content.parentPiToolCallId : undefined;
     this.upsertRunItem({
       runId: call.runId,
       piItemRef: `tool:${call.piCallRef}`,
@@ -2377,6 +2385,7 @@ export class ToolRepository {
         type: "tool",
         toolCallId: call.id,
         toolName: call.toolName,
+        ...(parentPiToolCallId ? { parentPiToolCallId } : {}),
         input: call.input,
         inputSummary: call.inputSummary,
         targetSummary: call.targetSummary,

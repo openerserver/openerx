@@ -4,6 +4,7 @@ import {
   type McpServerConfig,
   type McpServerPreset,
 } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { X } from "@phosphor-icons/react";
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -58,7 +59,7 @@ export function McpServerEditor({
       const saved: McpServerConfig[] = [];
       for (const input of inputs) {
         if (imported.includes(input.config.id)) continue;
-        const result = await window.openerx.saveMcpServer(input);
+        const result = await desktopWorkspaceBridge().saveMcpServer(input);
         saved.push(result);
         if (mode === "json") {
           setImported((current) => [...current, result.id]);

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { _electron as electron } from "playwright";
+import { checkModelImageInput } from "./model-capability-preflight.mjs";
 
 const desktopDirectory = path.resolve(import.meta.dirname, "..");
 const mainEntry = path.join(desktopDirectory, ".vite", "build", "main.js");
@@ -60,6 +61,8 @@ async function launch() {
     window.localStorage.setItem("openerx.defaultModelRef", "platform/e2e-faux"),
   );
   await page.reload({ waitUntil: "domcontentloaded" });
+  const modelPreflight = await checkModelImageInput(page, "attachments");
+  assert.equal(modelPreflight.imageInput, false);
   return { application, page };
 }
 

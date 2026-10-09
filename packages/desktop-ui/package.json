@@ -5,10 +5,18 @@
   "type": "module",
   "license": "Apache-2.0",
   "exports": {
+    "./tool-permission": "./src/tool-permission.tsx",
     "./connections": "./src/connections.tsx",
-    "./version": "./src/version.tsx"
+    "./pi-runtime": "./src/pi-runtime.tsx",
+    "./version": "./src/version.tsx",
+    "./workspace": "./src/workspace.tsx",
+    "./workspace-bridge": "./src/workspace-bridge.ts"
   },
   "peerDependencies": {
-    "react": "^19.2.0"
+    "react": "^19.2.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "@openerx/contracts": "0.0.0"
   }
 }

@@ -1,4 +1,5 @@
 import type { WorkItemDetail } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { ArrowCounterClockwise, FileCode } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -16,7 +17,8 @@ export function WorkItemWorkspaceEdits({
 }): React.JSX.Element | null {
   const detail = useQuery({
     queryKey: ["tools", "work-item", workItemId, runId],
-    queryFn: () => window.openerx.getWorkItem({ workItemId, ...(runId ? { runId } : {}) }),
+    queryFn: () =>
+      desktopWorkspaceBridge().getWorkItem({ workItemId, ...(runId ? { runId } : {}) }),
   });
   return detail.data ? <WorkspaceEdits key={detail.data.run.id} detail={detail.data} /> : null;
 }
@@ -45,7 +47,7 @@ export function WorkspaceEdits({ detail }: { detail: WorkItemDetail }): React.JS
     ["completed", "failed", "interrupted", "cancelled"].includes(detail.workItem.status);
   const undo = useMutation({
     mutationFn: (editId: string | undefined) =>
-      window.openerx.undoWorkspaceEdits({
+      desktopWorkspaceBridge().undoWorkspaceEdits({
         workItemId: detail.workItem.id,
         runId: detail.run.id,
         ...(editId ? { editId } : {}),

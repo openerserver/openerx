@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, _electron as electron } from "playwright";
+import { verifySettingsLayout } from "./settings-layout-regression.mjs";
 
 const desktopDirectory = path.resolve(import.meta.dirname, "..");
 const fixture = path.join(desktopDirectory, ".vite/build/platform-alpha-test.mjs");
@@ -123,6 +124,7 @@ try {
   await page.locator(".sidebar-account").getByText("本机模式", { exact: true }).waitFor();
   await page.locator(".sidebar-account").click();
   await page.getByRole("heading", { name: "欢迎使用 openerx" }).waitFor();
+  await verifySettingsLayout(page, { evidenceDirectory: evidence });
   assert.equal(await page.getByLabel("邮箱", { exact: true }).count(), 0);
   await assertAccessible(page, "直接使用");
   await screenshot(page, "account-local");

@@ -16,6 +16,7 @@ import type { DiagnosticsBridge } from "./diagnostics";
 import type { FileBridge } from "./file";
 import type { ModelUsageBridge } from "./model";
 import type { ModelServiceBridge } from "./model-service";
+import type { PiRuntimeBridge } from "./pi-runtime";
 import type { ProjectBridge } from "./project";
 import type { ReleaseUpdateBridge } from "./release";
 import type { SkillBridge } from "./skill";
@@ -35,6 +36,8 @@ export const ipcChannels = Object.freeze({
   accountSignOutAll: "account:devices:sign-out-all",
   accountRevokeDevice: "account:device:revoke",
   modelList: "model:catalog:list",
+  hostedModelUsage: "model:hosted-usage",
+  modelCatalogChanged: "model:catalog:changed",
   modelServiceSettingsGet: "model:service:settings:get",
   modelServiceSettingsUpdate: "model:service:settings:update",
   modelServiceConnectionTest: "model:service:connection:test",
@@ -52,6 +55,10 @@ export const ipcChannels = Object.freeze({
   billingStatementExport: "billing:statement:export",
   diagnosticsPreview: "diagnostics:preview",
   diagnosticsExport: "diagnostics:export",
+  legacyPersonalDataSummary: "legacy-personal-data:summary",
+  legacyPersonalDataExport: "legacy-personal-data:export",
+  legacyChatList: "legacy-personal-data:conversations:list",
+  legacyChatGet: "legacy-personal-data:conversation:get",
   personalDataSummary: "personal-data:summary",
   personalDataExport: "personal-data:export",
   syncNow: "sync:run",
@@ -59,6 +66,8 @@ export const ipcChannels = Object.freeze({
   syncResolveConflict: "sync:conflict:resolve",
   localCacheClear: "cache:local:clear",
   memorySettingsGet: "memory:settings:get",
+  piRuntimeSettingsGet: "pi:runtime:settings:get",
+  piRuntimeSettingsUpdate: "pi:runtime:settings:update",
   memorySettingsUpdate: "memory:settings:update",
   memoryConversationSettingsGet: "memory:conversation-settings:get",
   memoryConversationSettingsUpdate: "memory:conversation-settings:update",
@@ -238,6 +247,7 @@ export interface DesktopBridge
     WorkspaceBridge,
     ProjectBridge,
     SkillBridge,
+    PiRuntimeBridge,
     RemoteDesktopBridge,
     ReleaseUpdateBridge {
   getEnvironment(): Promise<DesktopEnvironment>;

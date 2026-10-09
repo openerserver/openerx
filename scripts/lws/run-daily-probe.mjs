@@ -33,7 +33,7 @@ const probeStatus = runNode(
 if (probeStatus !== 0) {
   process.exitCode = probeStatus;
 } else {
-  const gateOutput = path.join(repositoryRoot, "artifacts", "lws-probes", "gate.json");
+  const gateOutput = path.join(repositoryRoot, "tests", "v2", "golden", "lws-006-gate-status.json");
   if (existsSync(gateOutput)) {
     const require = createRequire(import.meta.url);
     const formatStatus = runNode(require.resolve("@biomejs/biome/bin/biome"), [

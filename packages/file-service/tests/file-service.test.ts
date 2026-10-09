@@ -314,6 +314,11 @@ describe("M4 parsers and artifacts", () => {
     expect(second.versions).toHaveLength(2);
     expect(preview.parsedText).toContain("第二版");
     expect(preview.renderedSurfaces.map(({ label }) => label)).toEqual(["幻灯片 1", "幻灯片 2"]);
+    for (const surface of preview.renderedSurfaces) {
+      const svg = Buffer.from(surface.imageDataUrl.split(",")[1]!, "base64").toString("utf8");
+      expect(svg).toContain("openerx · 演示文稿");
+      expect(svg).not.toContain("OPENERX PRESENTATION");
+    }
     expect(
       preview.renderedSurfaces.every(({ modelImageDataUrl }) => modelImageDataUrl === undefined),
     ).toBe(true);

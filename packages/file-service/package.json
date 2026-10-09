@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./office-spreadsheet": "./src/office-spreadsheet.ts"
   },
   "types": "./src/index.ts",
   "scripts": {
@@ -16,7 +17,7 @@
     "@openerx/contracts": "0.0.0",
     "@openerx/storage": "0.0.0",
     "@resvg/resvg-js": "^2.6.2",
-    "fflate": "0.8.2",
+    "fflate": "0.8.3",
     "pdfjs-dist": "5.4.149",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yaml": "2.9.0"

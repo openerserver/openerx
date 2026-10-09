@@ -26,12 +26,13 @@ import {
   type UsageRecord,
 } from "@openerx/contracts";
 import type { MessagePortMain } from "electron";
-import { createProductPiSession, ModelRuntime } from "./agent-session";
+import { activateProductSessionTools, createProductPiSession, ModelRuntime } from "./agent-session";
 import {
   byokModelCompatibility,
   createByokStream,
   createRestrictedByokFetch,
 } from "./byok-provider";
+import { ModelAuthorizationClient } from "./model-authorization-client";
 
 export { createRestrictedByokFetch } from "./byok-provider";
 
@@ -47,6 +48,7 @@ import {
   validateMemoryExtractionOutput,
 } from "./memory-background";
 import { createProductMemoryTools, productMemoryToolNames } from "./memory-tools";
+import { getProductToolCallContext } from "./native-tools";
 import { createProductPlanTool, productPlanToolName } from "./plan-tool";
 import { createPlatformModelProvider, HttpPlatformModelTransport } from "./platform-provider";
 import { ProductSessionRegistry } from "./session-registry";
@@ -69,9 +71,12 @@ interface ActiveGeneration {
 }
 
 interface PendingFileToolRequest {
+  generationId: string;
   resolve(value: unknown): void;
   reject(error: Error): void;
   timeout: NodeJS.Timeout;
+  signal?: AbortSignal;
+  abort?: () => void;
 }
 
 interface PendingCapabilityToolRequest extends PendingFileToolRequest {
@@ -143,6 +148,7 @@ export function startPiHostProcess(
     mkdirSync(workspaceDirectory, { recursive: true });
     mkdirSync(agentDirectory, { recursive: true });
     const active = new Map<string, ActiveGeneration>();
+    const modelAuthorization = new ModelAuthorizationClient(port);
     const pendingFileTools = new Map<string, PendingFileToolRequest>();
     const pendingCapabilityTools = new Map<string, PendingCapabilityToolRequest>();
     const sessionRegistry = new ProductSessionRegistry(
@@ -153,13 +159,47 @@ export function startPiHostProcess(
 
     const fileToolTransport = {
       request: async (frame: PiFileToolRequestFrame): Promise<unknown> => {
+        const context = getProductToolCallContext();
+        const signal = context?.signal;
         return await new Promise((resolve, reject) => {
+          const state = active.get(frame.generationId);
+          if (!state || state.abortRequested || state.terminal || signal?.aborted) {
+            reject(new Error("TOOL_CANCELLED"));
+            return;
+          }
+          const cancel = () =>
+            port.postMessage({
+              kind: "pi.tool.cancel",
+              requestId: frame.requestId,
+              generationId: frame.generationId,
+            });
           const timeout = setTimeout(() => {
+            signal?.removeEventListener("abort", abort);
             pendingFileTools.delete(frame.requestId);
+            cancel();
             reject(new Error("FILE_TOOL_TIMEOUT"));
           }, 15_000);
-          pendingFileTools.set(frame.requestId, { resolve, reject, timeout });
-          port.postMessage(frame);
+          const abort = () => {
+            if (!pendingFileTools.has(frame.requestId)) return;
+            clearTimeout(timeout);
+            signal?.removeEventListener("abort", abort);
+            pendingFileTools.delete(frame.requestId);
+            cancel();
+            reject(new Error("TOOL_CANCELLED"));
+          };
+          pendingFileTools.set(frame.requestId, {
+            generationId: frame.generationId,
+            resolve,
+            reject,
+            timeout,
+            signal,
+            abort,
+          });
+          signal?.addEventListener("abort", abort, { once: true });
+          port.postMessage({
+            ...frame,
+            ...(context?.parentToolCallId ? { parentToolCallId: context.parentToolCallId } : {}),
+          });
         });
       },
     };
@@ -171,8 +211,14 @@ export function startPiHostProcess(
           onProgress?: PendingCapabilityToolRequest["onProgress"];
         } = {},
       ): Promise<unknown> => {
+        const context = getProductToolCallContext();
+        const signal =
+          options.signal && context?.signal && options.signal !== context.signal
+            ? AbortSignal.any([options.signal, context.signal])
+            : (options.signal ?? context?.signal);
         return await new Promise((resolve, reject) => {
-          if (options.signal?.aborted) {
+          const state = active.get(frame.generationId);
+          if (!state || state.abortRequested || state.terminal || signal?.aborted) {
             reject(new Error("TOOL_CANCELLED"));
             return;
           }
@@ -191,6 +237,7 @@ export function startPiHostProcess(
             const pending = pendingCapabilityTools.get(frame.requestId);
             if (!pending) return;
             clearTimeout(pending.timeout);
+            pending.signal?.removeEventListener("abort", pending.abort as EventListener);
             pendingCapabilityTools.delete(frame.requestId);
             port.postMessage({
               kind: "pi.tool.cancel",
@@ -200,15 +247,19 @@ export function startPiHostProcess(
             reject(new Error("TOOL_CANCELLED"));
           };
           pendingCapabilityTools.set(frame.requestId, {
+            generationId: frame.generationId,
             resolve,
             reject,
             timeout,
             lastProgressSequence: 0,
             ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-            ...(options.signal ? { signal: options.signal, abort } : {}),
+            ...(signal ? { signal, abort } : {}),
           });
-          options.signal?.addEventListener("abort", abort, { once: true });
-          port.postMessage(frame);
+          signal?.addEventListener("abort", abort, { once: true });
+          port.postMessage({
+            ...frame,
+            ...(context?.parentToolCallId ? { parentToolCallId: context.parentToolCallId } : {}),
+          });
         });
       },
     };
@@ -297,21 +348,53 @@ export function startPiHostProcess(
       try {
         let modelRuntime = options.modelRuntime;
         let model = options.model;
+        let backgroundThinking = frame.thinkingLevel ?? "medium";
         if (frame.platform) {
           const transport = new HttpPlatformModelTransport(
             frame.platform.platformBaseUrl,
             frame.platform.accessToken,
+            frame.platform.modelApiVersion === "v3"
+              ? {
+                  apiVersion: "v3",
+                  authorize: async (rejectedAccessToken) => {
+                    const authorization = await modelAuthorization.authorize(
+                      frame.platform!.accountId,
+                      rejectedAccessToken,
+                    );
+                    if (
+                      authorization.accountId !== frame.platform!.accountId ||
+                      authorization.platformBaseUrl !== frame.platform!.platformBaseUrl ||
+                      authorization.modelApiVersion !== "v3"
+                    )
+                      throw new Error("ACCOUNT_CHANGED");
+                    return authorization.accessToken;
+                  },
+                }
+              : {},
           );
           const catalog = await transport.catalog();
+          if (frame.platform.modelApiVersion === "v3") {
+            const selected =
+              frame.platform.selectedModelRef === "platform/auto"
+                ? catalog.find((entry) => entry.status === "available")
+                : catalog.find((entry) => entry.modelRef === frame.platform!.selectedModelRef);
+            const levels = selected?.thinkingLevels ?? ["off"];
+            if (!levels.includes(backgroundThinking)) backgroundThinking = levels[0] ?? "off";
+          }
           const platform = createPlatformModelProvider({
             catalog,
             transport,
-            thinkingLevel: frame.thinkingLevel ?? "medium",
+            thinkingLevel: backgroundThinking,
             request: {
               accountId: frame.platform.accountId,
               conversationId: frame.conversationId,
               messageId: frame.jobId,
-              selectedModelRef: frame.platform.selectedModelRef,
+              selectedModelRef:
+                frame.platform.modelApiVersion === "v3" &&
+                frame.platform.selectedModelRef === "platform/auto"
+                  ? (catalog.find((entry) => entry.status === "available")?.modelRef ??
+                    frame.platform.selectedModelRef)
+                  : frame.platform.selectedModelRef,
               approvedFallbackModelRef: frame.platform.approvedFallbackModelRef,
               requestDedupeKey: frame.platform.requestDedupeKey,
             },
@@ -378,7 +461,7 @@ export function startPiHostProcess(
           cwd: workspaceDirectory,
           agentDir: agentDirectory,
           history: [],
-          thinkingLevel: frame.thinkingLevel ?? "medium",
+          thinkingLevel: backgroundThinking,
           modelRuntime,
           model,
           customTools: [],
@@ -437,21 +520,53 @@ export function startPiHostProcess(
       try {
         let modelRuntime = options.modelRuntime;
         let model = options.model;
+        let backgroundThinking = frame.thinkingLevel ?? "medium";
         if (frame.platform) {
           const transport = new HttpPlatformModelTransport(
             frame.platform.platformBaseUrl,
             frame.platform.accessToken,
+            frame.platform.modelApiVersion === "v3"
+              ? {
+                  apiVersion: "v3",
+                  authorize: async (rejectedAccessToken) => {
+                    const authorization = await modelAuthorization.authorize(
+                      frame.platform!.accountId,
+                      rejectedAccessToken,
+                    );
+                    if (
+                      authorization.accountId !== frame.platform!.accountId ||
+                      authorization.platformBaseUrl !== frame.platform!.platformBaseUrl ||
+                      authorization.modelApiVersion !== "v3"
+                    )
+                      throw new Error("ACCOUNT_CHANGED");
+                    return authorization.accessToken;
+                  },
+                }
+              : {},
           );
           const catalog = await transport.catalog();
+          if (frame.platform.modelApiVersion === "v3") {
+            const selected =
+              frame.platform.selectedModelRef === "platform/auto"
+                ? catalog.find((entry) => entry.status === "available")
+                : catalog.find((entry) => entry.modelRef === frame.platform!.selectedModelRef);
+            const levels = selected?.thinkingLevels ?? ["off"];
+            if (!levels.includes(backgroundThinking)) backgroundThinking = levels[0] ?? "off";
+          }
           const platform = createPlatformModelProvider({
             catalog,
             transport,
-            thinkingLevel: frame.thinkingLevel ?? "medium",
+            thinkingLevel: backgroundThinking,
             request: {
               accountId: frame.platform.accountId,
               conversationId: frame.runId,
               messageId: frame.requestId,
-              selectedModelRef: frame.platform.selectedModelRef,
+              selectedModelRef:
+                frame.platform.modelApiVersion === "v3" &&
+                frame.platform.selectedModelRef === "platform/auto"
+                  ? (catalog.find((entry) => entry.status === "available")?.modelRef ??
+                    frame.platform.selectedModelRef)
+                  : frame.platform.selectedModelRef,
               approvedFallbackModelRef: frame.platform.approvedFallbackModelRef,
               requestDedupeKey: frame.platform.requestDedupeKey,
             },
@@ -518,7 +633,7 @@ export function startPiHostProcess(
           cwd: workspaceDirectory,
           agentDir: agentDirectory,
           history: [],
-          thinkingLevel: frame.thinkingLevel ?? "medium",
+          thinkingLevel: backgroundThinking,
           modelRuntime,
           model,
           customTools: [],
@@ -595,6 +710,8 @@ export function startPiHostProcess(
       let unsubscribe: (() => void) | undefined;
       const authoritativeUsageRecords: UsageRecord[] = [];
       try {
+        let modelSupportsTools = true;
+        let interactiveThinking = frame.thinkingLevel ?? defaultThinkingLevel;
         const promptMessage = frame.history.at(-1);
         if (promptMessage?.role !== "user") {
           throw new Error("Pi prompt is missing its final user message");
@@ -605,12 +722,40 @@ export function startPiHostProcess(
           const transport = new HttpPlatformModelTransport(
             frame.platform.platformBaseUrl,
             frame.platform.accessToken,
+            frame.platform.modelApiVersion === "v3"
+              ? {
+                  apiVersion: "v3",
+                  authorize: async (rejectedAccessToken) => {
+                    const authorization = await modelAuthorization.authorize(
+                      frame.platform!.accountId,
+                      rejectedAccessToken,
+                    );
+                    if (
+                      authorization.accountId !== frame.platform!.accountId ||
+                      authorization.platformBaseUrl !== frame.platform!.platformBaseUrl ||
+                      authorization.modelApiVersion !== "v3"
+                    )
+                      throw new Error("ACCOUNT_CHANGED");
+                    return authorization.accessToken;
+                  },
+                }
+              : {},
           );
           const catalog = await transport.catalog();
+          const selectedEntry =
+            frame.platform.modelApiVersion === "v3" &&
+            frame.platform.selectedModelRef === "platform/auto"
+              ? catalog.find((entry) => entry.status === "available")
+              : catalog.find((entry) => entry.modelRef === frame.platform!.selectedModelRef);
+          modelSupportsTools = selectedEntry?.capabilities.functionCalling ?? true;
+          if (frame.platform.modelApiVersion === "v3" && frame.thinkingLevel === undefined) {
+            const levels = selectedEntry?.thinkingLevels ?? ["off"];
+            if (!levels.includes(interactiveThinking)) interactiveThinking = levels[0] ?? "off";
+          }
           const platform = createPlatformModelProvider({
             catalog,
             transport,
-            thinkingLevel: frame.thinkingLevel ?? defaultThinkingLevel,
+            thinkingLevel: interactiveThinking,
             requiresImageInput:
               (frame.images?.length ?? 0) > 0 ||
               frame.history.some((message) => (message.images?.length ?? 0) > 0),
@@ -618,7 +763,12 @@ export function startPiHostProcess(
               accountId: frame.platform.accountId,
               conversationId: frame.conversationId,
               messageId: frame.assistantMessageId,
-              selectedModelRef: frame.platform.selectedModelRef,
+              selectedModelRef:
+                frame.platform.modelApiVersion === "v3" &&
+                frame.platform.selectedModelRef === "platform/auto"
+                  ? (catalog.find((entry) => entry.status === "available")?.modelRef ??
+                    frame.platform.selectedModelRef)
+                  : frame.platform.selectedModelRef,
               approvedFallbackModelRef: frame.platform.approvedFallbackModelRef,
               requestDedupeKey: frame.platform.requestDedupeKey,
             },
@@ -699,6 +849,7 @@ export function startPiHostProcess(
           conversationId: frame.conversationId,
           branchId: frame.branchId,
           assistantMessageId: frame.assistantMessageId,
+          imageInput: model.input.includes("image"),
           ...(frame.workspace?.execution
             ? { brokeredBashExecution: frame.workspace.execution }
             : {}),
@@ -733,6 +884,7 @@ export function startPiHostProcess(
           conversationId: frame.conversationId,
           branchId: frame.branchId,
           assistantMessageId: frame.assistantMessageId,
+          imageInput: model.input.includes("image"),
           transport: fileToolTransport,
         });
         const memoryTools = frame.memoryEnabled
@@ -760,6 +912,7 @@ export function startPiHostProcess(
           for (const name of productMemoryToolNames) available.add(name);
         }
         const searchableTools = allTools.filter(({ name }) => available.has(name));
+        const nativeToolsEnabled = modelSupportsTools && frame.nativeToolsEnabled === true;
         let productSession: AgentSession | undefined;
         const toolSearch = createProductToolSearch(searchableTools, {
           active: () => productSession?.getActiveToolNames() ?? ["openerx_tool_search"],
@@ -769,7 +922,7 @@ export function startPiHostProcess(
           cwd: workspaceDirectory,
           agentDir: agentDirectory,
           history: frame.history.slice(0, -1),
-          thinkingLevel: frame.thinkingLevel ?? defaultThinkingLevel,
+          thinkingLevel: interactiveThinking,
           modelRuntime,
           model,
           sessionManager,
@@ -778,19 +931,29 @@ export function startPiHostProcess(
           workspace: frame.workspace,
           memories: frame.memories,
           memoryEnabled: frame.memoryEnabled,
-          customTools: [toolSearch, ...searchableTools],
+          nativeToolsEnabled,
+          customTools: modelSupportsTools
+            ? [...(nativeToolsEnabled ? [] : [toolSearch]), ...searchableTools]
+            : [],
         });
         const session = result.session;
         productSession = session;
-        if (frame.initialToolNames) {
-          session.setActiveToolsByName(
+        if (modelSupportsTools && (frame.initialToolNames || nativeToolsEnabled)) {
+          activateProductSessionTools(
+            session,
             [
               ...new Set([
                 "openerx_tool_search",
-                ...frame.initialToolNames,
+                ...(nativeToolsEnabled ? ["codemode", "tool_search"] : []),
+                ...(frame.initialToolNames ?? searchableTools.map(({ name }) => name)),
                 ...(frame.memoryEnabled ? productMemoryToolNames : []),
               ]),
-            ].filter((name) => name === "openerx_tool_search" || available.has(name)),
+            ].filter(
+              (name) =>
+                name === "openerx_tool_search" ||
+                (nativeToolsEnabled && (name === "codemode" || name === "tool_search")) ||
+                available.has(name),
+            ),
           );
         }
         state.session = session;
@@ -1097,11 +1260,13 @@ export function startPiHostProcess(
     };
 
     port.on("message", (event) => {
+      if (modelAuthorization.handle(event.data)) return;
       const fileToolResponse = piFileToolResponseFrameSchema.safeParse(event.data);
       if (fileToolResponse.success) {
         const pending = pendingFileTools.get(fileToolResponse.data.requestId);
         if (!pending) return;
         clearTimeout(pending.timeout);
+        pending.signal?.removeEventListener("abort", pending.abort as EventListener);
         pendingFileTools.delete(fileToolResponse.data.requestId);
         if (fileToolResponse.data.ok) pending.resolve(fileToolResponse.data.data);
         else pending.reject(new Error(fileToolResponse.data.errorCode));
@@ -1160,8 +1325,10 @@ export function startPiHostProcess(
       }
     });
     port.once("close", () => {
+      modelAuthorization.close();
       for (const pending of pendingFileTools.values()) {
         clearTimeout(pending.timeout);
+        pending.signal?.removeEventListener("abort", pending.abort as EventListener);
         pending.reject(new Error("PI_HOST_DISCONNECTED"));
       }
       pendingFileTools.clear();

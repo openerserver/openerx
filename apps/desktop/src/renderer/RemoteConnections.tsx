@@ -1,11 +1,12 @@
 import type { RemoteConnectionRequest } from "@openerx/contracts";
 import { ConnectionRequestsPanel } from "@openerx/desktop-ui/connections";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 function useConnectionRequests() {
   const account = useQuery({
     queryKey: ["account", "state"],
-    queryFn: () => window.openerx.getAccountState(),
+    queryFn: () => desktopWorkspaceBridge().getAccountState(),
   });
   const signedIn = account.data?.status === "signed_in";
   const query = useQuery({
@@ -15,7 +16,7 @@ function useConnectionRequests() {
       account.data?.account?.accountId,
       account.data?.session?.device.deviceId,
     ],
-    queryFn: () => window.openerx.listRemoteConnectionRequests(),
+    queryFn: () => desktopWorkspaceBridge().listRemoteConnectionRequests(),
     enabled: signedIn,
     refetchInterval: 3_000,
     refetchIntervalInBackground: true,
@@ -34,7 +35,7 @@ function useConnectionRequests() {
 function useDecision() {
   const client = useQueryClient();
   return async (requestId: string, decision: "approve" | "reject") => {
-    await window.openerx.decideRemoteConnectionRequest({ requestId, decision });
+    await desktopWorkspaceBridge().decideRemoteConnectionRequest({ requestId, decision });
     await Promise.all([
       client.invalidateQueries({ queryKey: ["remote", "connection-requests"] }),
       client.invalidateQueries({ queryKey: ["remote", "state"] }),

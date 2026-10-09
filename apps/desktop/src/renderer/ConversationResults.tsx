@@ -1,4 +1,6 @@
 import type { Artifact, ContentPreview, PersonalFile, WorkItem } from "@openerx/contracts";
+import { WorkspaceInspector } from "@openerx/desktop-ui/workspace";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import {
   ArrowsInSimple,
   ArrowsOutSimple,
@@ -124,14 +126,14 @@ export function ConversationResults({
     queryFn: () => {
       if (!selected) throw new Error("No content selected");
       return selected.kind === "artifact"
-        ? window.openerx.previewArtifact({ artifactId: selected.id })
-        : window.openerx.previewFile({ personalFileId: selected.id });
+        ? desktopWorkspaceBridge().previewArtifact({ artifactId: selected.id })
+        : desktopWorkspaceBridge().previewFile({ personalFileId: selected.id });
     },
     enabled: Boolean(selected && selectedItem),
     retry: false,
   });
   const save = useMutation({
-    mutationFn: (artifactId: string) => window.openerx.saveArtifact({ artifactId }),
+    mutationFn: (artifactId: string) => desktopWorkspaceBridge().saveArtifact({ artifactId }),
   });
 
   function showOverview(next: Section = section): void {
@@ -202,7 +204,7 @@ export function ConversationResults({
   ] as const;
 
   return (
-    <aside
+    <WorkspaceInspector
       ref={panelRef}
       className={`conversation-rail results-panel ${selected ? "is-preview" : ""} ${wide ? "is-wide" : ""}`}
       aria-label={
@@ -595,6 +597,6 @@ export function ConversationResults({
           </>
         )}
       </div>
-    </aside>
+    </WorkspaceInspector>
   );
 }

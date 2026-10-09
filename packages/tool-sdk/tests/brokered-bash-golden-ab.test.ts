@@ -58,11 +58,9 @@ const tasks = [
   },
   {
     id: "pre_patch_validation",
+    // Both sandboxes allow /dev/null for discarded stdio used internally by Git.
     command: "git diff --check --no-index fixture.js fixture.js",
     marker: "",
-    legacyMarker:
-      /(?:could not open '\/dev\/null'|open \/dev\/null or dup failed: Operation not permitted)/,
-    legacyExitCode: 128,
     exitCode: 0,
   },
   {
@@ -149,13 +147,8 @@ describe("PBASH-007 deterministic Golden A/B", () => {
           signal: new AbortController().signal,
         });
 
-        expect(legacyExitCode, `${task.id}: legacy exit\n${legacyOutput}`).toBe(
-          "legacyExitCode" in task ? task.legacyExitCode : task.exitCode,
-        );
+        expect(legacyExitCode, `${task.id}: legacy exit\n${legacyOutput}`).toBe(task.exitCode);
         expect(result.exitCode, `${task.id}: brokered exit\n${result.output}`).toBe(task.exitCode);
-        if ("legacyMarker" in task) {
-          expect(legacyOutput, `${task.id}: explained legacy gap`).toMatch(task.legacyMarker);
-        }
         if (task.marker) {
           expect(legacyOutput, `${task.id}: legacy marker`).toContain(task.marker);
           expect(result.output, `${task.id}: brokered marker`).toContain(task.marker);

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -176,6 +176,50 @@ describe("ShellToolAdapter", () => {
           content: [{ type: "text", text: "failure-output" }],
           data: { exitCode: 3, state: "failed" },
         });
+      } finally {
+        await adapter.stopAll();
+      }
+    },
+    20_000,
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "supports discarded child stdio while writes outside the approved workspace stay denied",
+    async () => {
+      const workspace = mkdtempSync(path.join(tmpdir(), "openerx-shell-stdio-"));
+      const outside = mkdtempSync(path.join(tmpdir(), "openerx-shell-stdio-outside-"));
+      directories.push(workspace, outside);
+      const outsideFile = path.join(outside, "private.txt");
+      writeFileSync(outsideFile, "private-unchanged");
+      const adapter = new ShellToolAdapter([workspace]);
+      try {
+        const result = await adapter.execute(
+          {
+            operation: "shell_execute",
+            cwd: workspace,
+            command: process.execPath,
+            args: [
+              "-e",
+              `const fs=require('node:fs');const {spawnSync}=require('node:child_process');
+fs.writeFileSync('/dev/null','discarded-output');
+const child=spawnSync(process.execPath,['-e',"process.stdout.write('discarded-child-output')"],{stdio:'ignore'});
+if(child.error) throw child.error;
+if(child.status!==0) throw new Error('CHILD_FAILED');
+let denied=false;try{fs.writeFileSync(process.argv[1],'unwanted-overwrite')}catch(error){denied=['EPERM','EACCES'].includes(error.code)}
+if(!denied) throw new Error('OUTSIDE_WRITE_ALLOWED');
+process.stdout.write('discarded-stdio-ok');`,
+              outsideFile,
+            ],
+            timeoutMs: 10_000,
+            background: false,
+            allowNetwork: false,
+            idempotencyKey: "shell-discarded-stdio-0001",
+          },
+          context(),
+        );
+        expect(result.summary).toContain("discarded-stdio-ok");
+        expect(result.data).toMatchObject({ state: "completed", exitCode: 0 });
+        expect(readFileSync(outsideFile, "utf8")).toBe("private-unchanged");
       } finally {
         await adapter.stopAll();
       }

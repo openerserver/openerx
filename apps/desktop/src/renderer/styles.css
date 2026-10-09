@@ -3083,27 +3083,16 @@ h1 {
   }
 }
 
-/* Codex-inspired automation workspace. */
+/* Automation workspace shares the files and search page frame. */
 .automations-page {
   position: relative;
   width: 100%;
   min-height: 100vh;
   margin: 0;
-  padding: 0 0 88px;
+  padding: 42px 44px 64px;
   color: var(--workspace-text);
-  background: var(--workspace-surface);
-  border-top: 1px solid var(--workspace-border);
-  border-left: 1px solid var(--workspace-border);
-  border-top-left-radius: 18px;
+  background: var(--workspace-bg);
   overflow: hidden;
-}
-
-.automations-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 76px;
-  padding: 0 22px;
 }
 
 .automation-create-button {
@@ -3112,34 +3101,42 @@ h1 {
   min-height: 38px;
   gap: 7px;
   padding: 8px 14px;
-  color: var(--workspace-surface);
-  background: var(--workspace-text);
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
   border: 0;
-  border-radius: 12px;
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 650;
   box-shadow: 0 1px 1px rgb(0 0 0 / 8%);
 }
 
 .automation-create-button:hover {
-  opacity: 0.86;
+  background: var(--workspace-accent-hover);
 }
 
 .automations-content {
-  width: min(980px, calc(100% - 80px));
-  margin: 30px auto 0;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
 }
 
 .automations-header {
-  display: block;
-  margin: 0 10px 28px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 28px;
+}
+
+.automations-header > div {
+  min-width: 0;
 }
 
 .automations-header h1 {
   margin: 0 0 9px;
   color: var(--workspace-text);
   font-size: 34px;
-  font-weight: 560;
+  font-weight: 700;
   line-height: 1.16;
   letter-spacing: -0.038em;
 }
@@ -3147,8 +3144,18 @@ h1 {
 .automations-header p {
   margin: 0;
   color: var(--workspace-muted);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.5;
+}
+
+.automations-header .eyebrow {
+  margin: 0 0 6px;
+  color: var(--workspace-accent-strong);
+  font-size: 11px;
+}
+
+.automations-header .automation-create-button {
+  flex: 0 0 auto;
 }
 
 .automation-search {
@@ -3213,7 +3220,7 @@ h1 {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin: 36px 8px 17px;
+  margin: 20px 0 12px;
 }
 
 .automation-filters button {
@@ -3380,8 +3387,8 @@ h1 {
 
 .automation-empty {
   display: grid;
-  min-height: 280px;
-  padding: 52px 24px;
+  min-height: 240px;
+  padding: 36px 24px;
   place-content: center;
   justify-items: center;
   color: var(--workspace-muted);
@@ -3425,7 +3432,7 @@ h1 {
 
 .automation-runtime-settings {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr) minmax(120px, 34%);
   align-items: center;
   gap: 12px;
   margin: 28px 0 0;
@@ -3462,9 +3469,9 @@ h1 {
   font-size: 12px;
 }
 
-.automation-switch {
+.automation-runtime-settings .automation-switch {
   display: grid;
-  grid-template-columns: 34px auto;
+  grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   color: var(--workspace-muted);
@@ -3738,12 +3745,18 @@ h1 {
 }
 
 .automation-form-actions .automation-primary-action {
-  color: var(--workspace-surface);
-  background: var(--workspace-text);
-  border-color: var(--workspace-text);
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
+  border-color: var(--workspace-accent);
+}
+
+.automation-form-actions .automation-primary-action:hover {
+  background: var(--workspace-accent-hover);
 }
 
 .automation-detail {
+  display: flex;
+  flex-direction: column;
   padding: 0;
   background: var(--workspace-surface);
   border: 0;
@@ -3762,7 +3775,13 @@ h1 {
 }
 
 .automation-detail-body {
+  flex: 1;
   padding-top: 22px;
+  overscroll-behavior: contain;
+}
+
+.automation-detail > .automation-drawer-header {
+  flex: 0 0 auto;
 }
 
 .automation-detail-status-row {
@@ -3899,21 +3918,23 @@ h1 {
   color: var(--workspace-info);
 }
 
-@media (max-width: 980px) {
-  .automations-content {
-    width: min(820px, calc(100% - 48px));
-  }
-}
-
 @media (max-width: 760px) {
-  .automations-topbar {
-    min-height: 66px;
-    padding: 0 16px;
+  .automations-page {
+    padding: 32px 20px 56px;
   }
 
-  .automations-content {
-    width: calc(100% - 32px);
-    margin-top: 18px;
+  .automations-header {
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .automation-runtime-settings {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .automation-runtime-settings .automation-switch {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .automations-header h1 {
@@ -4034,6 +4055,7 @@ h1 {
 }
 
 .settings-nav-scroll {
+  flex: 1 1 auto;
   min-height: 0;
   padding-right: 2px;
   overflow-y: auto;
@@ -4055,7 +4077,7 @@ h1 {
   letter-spacing: 0.015em;
 }
 
-.settings-account-page .settings-nav-group > button {
+.settings-account-page :is(.settings-nav-group, .settings-nav-scroll) > button {
   display: flex;
   align-items: center;
   width: 100%;
@@ -4071,19 +4093,19 @@ h1 {
   font-weight: 500;
 }
 
-.settings-account-page .settings-nav-group > button:hover {
+.settings-account-page :is(.settings-nav-group, .settings-nav-scroll) > button:hover {
   color: var(--workspace-text);
   background: color-mix(in srgb, var(--workspace-text) 4%, transparent);
 }
 
-.settings-account-page .settings-nav-group > button.is-active {
+.settings-account-page :is(.settings-nav-group, .settings-nav-scroll) > button.is-active {
   color: var(--workspace-text);
   background: color-mix(in srgb, var(--workspace-text) 9%, transparent);
   box-shadow: none;
   font-weight: 600;
 }
 
-.settings-account-page .settings-nav-group > button.is-active svg {
+.settings-account-page :is(.settings-nav-group, .settings-nav-scroll) > button.is-active svg {
   color: currentColor;
 }
 
@@ -4100,7 +4122,7 @@ h1 {
   min-width: 0;
   min-height: 0;
   gap: 22px;
-  padding: 28px clamp(72px, 13vw, 300px) 72px;
+  padding: 28px clamp(18px, 3vw, 48px) 60px;
   overflow-y: auto;
   background: var(--workspace-surface);
   border-top: 1px solid var(--workspace-border);
@@ -4171,14 +4193,6 @@ h1 {
 }
 
 @media (max-width: 1100px) {
-  .settings-account-page .settings-workbench {
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
-
-  .settings-account-page .settings-section-content {
-    padding: 28px 30px 60px;
-  }
-
   .settings-account-page .settings-tool-center .tool-library-toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -4198,20 +4212,35 @@ h1 {
   }
 
   .settings-account-page .settings-section-nav {
-    max-height: 210px;
+    display: grid;
+    grid-template-areas: "back version" "search search" "sections sections";
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: minmax(38px, auto) 40px minmax(44px, auto);
+    gap: 6px 10px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--workspace-border);
   }
 
-  .settings-search-field {
-    margin-bottom: 10px;
+  .settings-account-page .settings-section-nav .settings-back-button {
+    grid-area: back;
+    margin: 0;
+  }
+
+  .settings-account-page .settings-search-field {
+    grid-area: search;
+    margin: 0;
   }
 
   .settings-nav-scroll {
+    grid-area: sections;
     display: flex;
+    align-items: center;
+    min-height: 44px;
     gap: 8px;
+    padding: 5px 6px;
     overflow-x: auto;
     overflow-y: hidden;
+    scroll-padding-inline: 6px;
   }
 
   .settings-nav-group {
@@ -4225,7 +4254,8 @@ h1 {
     display: none;
   }
 
-  .settings-account-page .settings-nav-group > button {
+  .settings-account-page :is(.settings-nav-group, .settings-nav-scroll) > button {
+    flex: 0 0 auto;
     width: auto;
     white-space: nowrap;
   }
@@ -7077,10 +7107,10 @@ button:disabled {
 }
 
 .composer-select-menu {
-  position: absolute;
+  box-sizing: border-box;
+  position: fixed;
   z-index: 80;
-  bottom: calc(100% + 8px);
-  left: -1px;
+  bottom: auto;
   display: grid;
   gap: 2px;
   width: max-content;
@@ -7089,6 +7119,9 @@ button:disabled {
   max-height: min(320px, 48vh);
   padding: 6px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  font-size: 12px;
   color: var(--workspace-text);
   background: color-mix(in srgb, var(--workspace-surface) 96%, var(--workspace-bg));
   border: 1px solid var(--workspace-border-strong);
@@ -7099,6 +7132,10 @@ button:disabled {
     inset 0 1px 0 rgb(255 255 255 / 7%);
   animation: composer-menu-enter 130ms ease-out;
   transform-origin: bottom left;
+}
+
+.composer-select-menu[data-placement="below"] {
+  transform-origin: top left;
 }
 
 .composer-select-option {
@@ -7155,8 +7192,9 @@ button:disabled {
 
 .composer-select-option-copy small {
   color: var(--workspace-muted);
-  font-size: 10px;
-  line-height: 1.4;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
   white-space: normal;
 }
 
@@ -7202,12 +7240,67 @@ button:disabled {
   margin: 0;
 }
 
+:where(.desktop-workspace) a {
+  color: var(--workspace-accent-strong);
+  text-underline-offset: 3px;
+}
+
+.composer-feedback a,
+.message-feedback a,
+.toolbar-feedback a,
+.library-feedback a {
+  color: var(--workspace-accent-strong);
+  text-underline-offset: 3px;
+}
+
 .composer-feedback,
 .message-feedback,
 .toolbar-feedback,
 .library-feedback {
   display: grid;
   gap: 5px;
+}
+
+.page-state-message {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface-raised);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.page-state-message.is-error {
+  color: var(--workspace-danger);
+  border-color: var(--workspace-danger-border);
+  background: var(--workspace-danger-surface);
+}
+
+.page-state-message > p {
+  margin: 0;
+  color: inherit;
+}
+
+.page-state-message > button {
+  padding: 7px 12px;
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: 7px;
+  color: var(--workspace-text);
+  background: var(--workspace-surface);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-card.settings-stack > p.inline-error {
+  padding: 12px 14px;
+  border: 1px solid var(--workspace-danger-border);
+  border-radius: 8px;
+  color: var(--workspace-danger);
+  background: var(--workspace-danger-surface);
 }
 
 .message-feedback,
@@ -7634,6 +7727,47 @@ summary:focus-visible {
   max-width: 1040px;
 }
 
+.new-chat-page > .new-chat-topbar {
+  padding-bottom: 16px;
+}
+
+.new-chat-page > .welcome {
+  padding-top: clamp(16px, 4vh, 48px);
+}
+
+.new-chat-page > .composer {
+  flex-shrink: 0;
+  margin-top: 28px;
+}
+
+.new-chat-suggestions {
+  width: 100%;
+  max-width: 820px;
+  margin: 20px auto 0;
+}
+
+.new-chat-suggestions > summary {
+  width: fit-content;
+  padding: 6px 2px;
+  color: var(--workspace-muted-strong);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.new-chat-suggestions .suggestion-grid {
+  margin-top: 10px;
+}
+
+@media (max-height: 680px) {
+  .new-chat-page > .welcome {
+    padding-top: 12px;
+  }
+
+  .new-chat-page > .composer {
+    margin-top: 20px;
+  }
+}
+
 .welcome {
   padding-top: 6vh;
 }
@@ -8007,8 +8141,7 @@ summary:focus-visible {
 }
 
 .settings-account-page {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: block;
   width: 100%;
   max-width: none;
   height: 100vh;
@@ -9216,6 +9349,28 @@ summary:focus-visible {
 .settings-account-page .settings-section-content {
   gap: 16px;
   scrollbar-gutter: stable;
+}
+
+.settings-section-heading {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 4px;
+}
+
+.settings-section-heading h1 {
+  margin: 0;
+  color: var(--workspace-text);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.025em;
+}
+
+.settings-section-heading p {
+  margin: 0;
+  color: var(--workspace-muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .settings-account-page .settings-section-content > * {
@@ -10562,6 +10717,7 @@ summary:focus-visible {
 
 .settings-version {
   display: grid;
+  flex: 0 0 auto;
   gap: 5px;
   padding: 14px 16px;
   border-top: 1px solid var(--workspace-border);
@@ -10571,7 +10727,8 @@ summary:focus-visible {
 .settings-version strong {
   font-size: 12px;
 }
-.settings-version button {
+.settings-section-nav .settings-version button {
+  min-height: 28px;
   padding: 0;
   width: fit-content;
   border: 0;
@@ -10580,6 +10737,40 @@ summary:focus-visible {
   font-size: 11px;
   cursor: pointer;
   text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .settings-account-page .settings-section-nav .settings-version {
+    grid-area: version;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+    gap: 0 8px;
+    padding: 0;
+    border: 0;
+  }
+
+  .settings-account-page .settings-version strong {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .settings-account-page .settings-version > span:not([role="status"]) {
+    display: none;
+  }
+
+  .settings-account-page .settings-version > span[role="status"] {
+    flex-basis: 100%;
+    text-align: right;
+  }
+
+  .settings-account-page .settings-section-nav .settings-version button {
+    flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
+  }
 }
 
 /* Keep native controls, selection and keyboard focus readable in both themes. */
@@ -10606,4 +10797,10 @@ summary:focus-visible,
 .theme-option:has(input:focus-visible) {
   outline: 2px solid var(--workspace-accent-strong);
   outline-offset: 3px;
+}
+
+.message-stack[data-search-match="true"] {
+  outline: 2px solid var(--workspace-accent-strong);
+  outline-offset: 6px;
+  border-radius: 8px;
 }

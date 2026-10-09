@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { PiSkillMount, PiToolRequestFrame, ToolOperation } from "@openerx/contracts";
+import {
+  type PiSkillMount,
+  type PiToolRequestFrame,
+  skillScriptOutputSchema,
+  type ToolOperation,
+} from "@openerx/contracts";
 import { Type } from "@sinclair/typebox";
 import type { PiCapabilityToolTransport } from "./capability-tools";
 import { productToolResult } from "./tool-result";
@@ -65,6 +70,8 @@ export function createProductSkillTools(input: {
   assistantMessageId: string;
   mounts: PiSkillMount[];
   transport: PiCapabilityToolTransport;
+  binaryResourcesAvailable?: boolean;
+  scriptOutputsAvailable?: boolean;
 }): ToolDefinition[] {
   const invoke = async (
     toolCallId: string,
@@ -93,8 +100,9 @@ export function createProductSkillTools(input: {
     defineTool({
       name: "read",
       label: "Read Skill resource",
-      description:
-        "Read a mounted Skill instruction, reference, or text asset using the absolute path shown in the Skill metadata.",
+      description: input.binaryResourcesAvailable
+        ? "Read a mounted Skill instruction, reference, or Office/PDF/image template using its absolute path. Binary resources return a task file reference and parsed text; this does not establish image recognition or visual review."
+        : "Read a mounted Skill instruction, reference, or text asset using the absolute path shown in the Skill metadata.",
       parameters: Type.Object(
         { path: Type.String({ minLength: 1, maxLength: 4_096 }) },
         { additionalProperties: false },
@@ -112,7 +120,10 @@ export function createProductSkillTools(input: {
       name: "openerx_skill_script",
       label: "Run Skill script",
       description:
-        "Execute a script declared by an enabled Skill through the openerx Capability Broker.",
+        "Execute a script declared by an enabled Skill through the openerx Capability Broker." +
+        (input.scriptOutputsAvailable
+          ? " Scripts can use package assets in their isolated copy. List generated files under outputs/ to save immutable artifacts; do not pass bytes/base64 through arguments or stdout. Existing Office content specs create new documents and do not preserve an external template's format."
+          : ""),
       parameters: Type.Object(
         {
           skill: Type.String({ minLength: 1, maxLength: 64 }),
@@ -120,10 +131,36 @@ export function createProductSkillTools(input: {
           args: Type.Array(Type.String({ maxLength: 8_000 }), { maxItems: 200 }),
           timeoutMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 1_800_000 })),
           allowNetwork: Type.Optional(Type.Boolean()),
+          ...(input.scriptOutputsAvailable
+            ? {
+                outputs: Type.Optional(
+                  Type.Array(
+                    Type.Object(
+                      {
+                        relativePath: Type.String({
+                          minLength: 1,
+                          maxLength: 500,
+                          description: "Relative generated file path beginning with outputs/.",
+                        }),
+                        displayName: Type.String({ minLength: 1, maxLength: 240 }),
+                        purpose: Type.Optional(
+                          Type.Union([Type.Literal("deliverable"), Type.Literal("intermediate")]),
+                        ),
+                        artifactId: Type.Optional(Type.String({ format: "uuid" })),
+                      },
+                      { additionalProperties: false },
+                    ),
+                    { minItems: 1, maxItems: 10 },
+                  ),
+                ),
+              }
+            : {}),
         },
         { additionalProperties: false },
       ),
       execute: async (toolCallId, params) => {
+        if (params.outputs && !input.scriptOutputsAvailable)
+          throw new Error("SKILL_OUTPUTS_NOT_AVAILABLE");
         const mount = input.mounts.find(({ name }) => name === params.skill);
         if (!mount) throw new Error("SKILL_NOT_MOUNTED");
         return await invoke(toolCallId, "openerx_skill_script", {
@@ -133,6 +170,9 @@ export function createProductSkillTools(input: {
           args: params.args,
           timeoutMs: params.timeoutMs ?? 120_000,
           allowNetwork: params.allowNetwork ?? false,
+          ...(params.outputs
+            ? { outputs: skillScriptOutputSchema.array().min(1).max(10).parse(params.outputs) }
+            : {}),
         });
       },
     }),

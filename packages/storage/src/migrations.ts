@@ -1568,6 +1568,107 @@ const migrations: readonly Migration[] = [
         ON workspace_undo_journal(owner_profile_id, run_id);
     `,
   },
+  {
+    version: 36,
+    checksum: "pi-native-tools-settings-v36-20261002",
+    sql: `
+      CREATE TABLE pi_runtime_settings (
+        owner_profile_id TEXT PRIMARY KEY,
+        native_tools_enabled INTEGER NOT NULL CHECK (native_tools_enabled IN (0, 1)),
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `,
+  },
+  {
+    version: 37,
+    checksum: "enterprise-skill-scope-v37-20261007",
+    sql: `
+      CREATE TABLE skill_installations_next (
+        id TEXT PRIMARY KEY,
+        owner_profile_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        publisher TEXT NOT NULL,
+        scope TEXT NOT NULL CHECK (scope IN ('builtin', 'personal', 'workspace', 'enterprise')),
+        workspace_id TEXT,
+        source_kind TEXT NOT NULL CHECK (source_kind IN (
+          'built_in', 'local_directory', 'archive', 'platform_catalog', 'enterprise_catalog'
+        )),
+        source_label TEXT NOT NULL,
+        trust TEXT NOT NULL CHECK (trust IN ('bundled', 'signed', 'unverified')),
+        desired_enabled INTEGER NOT NULL CHECK (desired_enabled IN (0, 1)),
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        auto_invoke INTEGER NOT NULL CHECK (auto_invoke IN (0, 1)),
+        package_state TEXT NOT NULL CHECK (package_state IN ('installed', 'missing', 'damaged')),
+        active_version_id TEXT,
+        selected_version TEXT NOT NULL,
+        selected_checksum_sha256 TEXT NOT NULL,
+        permission_digest TEXT NOT NULL,
+        approved_permission_digest TEXT,
+        declared_tools_json TEXT NOT NULL,
+        declared_mcp_servers_json TEXT NOT NULL,
+        permissions_json TEXT NOT NULL,
+        platforms_json TEXT NOT NULL,
+        installed_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_used_at TEXT,
+        deleted_at TEXT,
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        enterprise_source_json TEXT,
+        CHECK ((scope = 'enterprise' AND source_kind = 'enterprise_catalog' AND
+                enterprise_source_json IS NOT NULL AND trust = 'unverified') OR
+               (scope != 'enterprise' AND source_kind != 'enterprise_catalog' AND
+                enterprise_source_json IS NULL)),
+        CHECK ((scope = 'workspace' AND workspace_id IS NOT NULL) OR
+               (scope != 'workspace' AND workspace_id IS NULL))
+      ) STRICT;
+      CREATE TABLE skill_versions_next (
+        id TEXT PRIMARY KEY,
+        installation_id TEXT NOT NULL REFERENCES skill_installations_next(id) ON DELETE CASCADE,
+        version TEXT NOT NULL,
+        checksum_sha256 TEXT NOT NULL,
+        package_path TEXT NOT NULL,
+        scripts_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(installation_id, version)
+      ) STRICT;
+      CREATE TABLE skill_invocations_next (
+        id TEXT PRIMARY KEY,
+        installation_id TEXT NOT NULL REFERENCES skill_installations_next(id) ON DELETE CASCADE,
+        generation_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        trigger TEXT NOT NULL CHECK (trigger IN ('explicit', 'automatic')),
+        status TEXT NOT NULL CHECK (status IN (
+          'selected', 'loaded', 'completed', 'failed', 'cancelled'
+        )),
+        reason TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        error_code TEXT,
+        UNIQUE(generation_id, installation_id)
+      ) STRICT;
+      INSERT INTO skill_installations_next SELECT *, NULL FROM skill_installations;
+      INSERT INTO skill_versions_next SELECT * FROM skill_versions;
+      INSERT INTO skill_invocations_next SELECT * FROM skill_invocations;
+      DROP TABLE skill_invocations;
+      DROP TABLE skill_versions;
+      DROP TABLE skill_installations;
+      ALTER TABLE skill_installations_next RENAME TO skill_installations;
+      ALTER TABLE skill_versions_next RENAME TO skill_versions;
+      ALTER TABLE skill_invocations_next RENAME TO skill_invocations;
+      CREATE UNIQUE INDEX skill_installations_identity_idx
+        ON skill_installations(owner_profile_id, name, scope, COALESCE(workspace_id, ''))
+        WHERE deleted_at IS NULL;
+      CREATE INDEX skill_installations_owner_idx
+        ON skill_installations(owner_profile_id, deleted_at, scope, name);
+      CREATE INDEX skill_versions_installation_idx
+        ON skill_versions(installation_id, created_at DESC);
+      CREATE INDEX skill_invocations_generation_idx
+        ON skill_invocations(generation_id, started_at);
+    `,
+  },
 ];
 
 export function migrateDatabase(

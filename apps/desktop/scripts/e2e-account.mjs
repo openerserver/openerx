@@ -123,7 +123,7 @@ let running;
 try {
   running = await launch();
   let { application, page } = running;
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "设置", exact: true }).click();
   await page.getByRole("textbox", { name: "邮箱", exact: true }).fill("account-e2e@example.com");
   await page.getByRole("button", { name: "发送验证码" }).click();
   await page.getByLabel("六位验证码").fill("123456");
@@ -191,7 +191,7 @@ try {
   }).then((response) => response.json());
   assert.equal(settledCharges.length, 2, JSON.stringify(settledCharges));
   const conversationUrl = page.url();
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "费用与账单", exact: true }).click();
   await page.getByRole("link", { name: "查看费用与账单" }).click();
   try {
@@ -222,7 +222,7 @@ try {
 
   const otherDevice = await signInDevice("account-e2e@example.com", "E2E Windows");
 
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "刷新设备" }).click();
   const otherDeviceCard = page.getByLabel("设备会话").locator(".device-card", {
     hasText: "E2E Windows",
@@ -252,7 +252,7 @@ try {
     .getByLabel("对话消息")
     .getByText(/平台 platform\/tools 已回答：切换后的消息/)
     .waitFor();
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "设置", exact: true }).click();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "删除云端对话数据" }).click();

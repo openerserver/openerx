@@ -14,6 +14,29 @@ import { thinkingLevelSchema, toolSystemPermissionSchema } from "./model";
 import { modelUsageRecordSchema } from "./model-usage";
 import { workspaceEditSummarySchema, workspaceInstructionSourceSchema } from "./workspace";
 
+export const skillScriptOutputSchema = z
+  .object({
+    relativePath: z
+      .string()
+      .min(1)
+      .max(500)
+      .refine(
+        (value) =>
+          value.startsWith("outputs/") &&
+          !/[\\:\p{Cc}]/u.test(value) &&
+          value.split("/").every((part) => part !== "" && part !== "." && part !== ".."),
+      ),
+    displayName: z
+      .string()
+      .min(1)
+      .max(240)
+      .refine((value) => !/[/\\\p{Cc}]/u.test(value)),
+    purpose: z.enum(["deliverable", "intermediate"]).default("deliverable"),
+    artifactId: entityIdSchema.optional(),
+  })
+  .strict();
+export type SkillScriptOutput = z.infer<typeof skillScriptOutputSchema>;
+
 export const toolRiskSchema = z.enum(["L0", "L1", "L2", "L3", "L4", "L5"]);
 export const toolPermissionModeSchema = z.enum(["ask", "full_access"]);
 export const toolCapabilitySchema = z.enum([
@@ -151,6 +174,46 @@ export const toolCallStatusSchema = z.enum([
   "cancelled",
 ]);
 
+// Saved execution summaries can be displayed without inventing a live PI run,
+// typed tool inputs, per-tool timestamps, or package versions that were not recorded.
+export const recordedActivitySchema = z
+  .object({
+    runId: entityIdSchema,
+    modelRef: z.string().min(1).max(200),
+    status: z.enum(["running", "completed", "failed", "cancelled"]),
+    createdAt: timestampSchema,
+    completedAt: timestampSchema.nullable(),
+    errorCode: z.string().min(1).max(100).nullable(),
+    bindings: z
+      .array(
+        z
+          .object({
+            installationId: entityIdSchema,
+            name: z.string().min(1).max(200),
+            version: z.string().min(1).max(200),
+            source: z.enum(["builtin", "enterprise"]),
+            digest: z.string().regex(/^[a-f0-9]{64}$/),
+          })
+          .strict(),
+      )
+      .max(500),
+    tools: z
+      .array(
+        z
+          .object({
+            callId: z.string().min(1).max(300),
+            name: z.string().min(1).max(200),
+            status: z.enum(["started", "completed", "failed"]),
+            summary: z.string().max(4000),
+            errorCode: z.string().min(1).max(100).nullable(),
+            permission: z.enum(["pending", "once", "deny"]).optional(),
+          })
+          .strict(),
+      )
+      .max(64),
+  })
+  .strict();
+
 export const workItemSchema = z
   .object({
     id: entityIdSchema,
@@ -164,6 +227,7 @@ export const workItemSchema = z
     updatedAt: timestampSchema,
     completedAt: timestampSchema.nullable(),
     revision: z.number().int().positive(),
+    recordedActivity: recordedActivitySchema.optional(),
   })
   .strict();
 
@@ -659,6 +723,7 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
       args: z.array(z.string().max(8_000)).max(200),
       timeoutMs: z.number().int().min(100).max(1_800_000),
       allowNetwork: z.boolean().default(false),
+      outputs: z.array(skillScriptOutputSchema).min(1).max(10).optional(),
     })
     .strict(),
   z
@@ -825,6 +890,7 @@ export const runItemContentSchema = z.discriminatedUnion("type", [
       type: z.literal("tool"),
       toolCallId: entityIdSchema,
       toolName: z.string().min(1).max(200),
+      parentPiToolCallId: z.string().min(1).max(500).optional(),
       input: toolInputSchema.nullable(),
       inputSummary: z.string().max(2_000),
       targetSummary: z.string().max(2_000),
@@ -914,6 +980,7 @@ export const piToolRequestFrameSchema = z
     branchId: entityIdSchema,
     assistantMessageId: entityIdSchema,
     piToolCallId: z.string().min(1).max(500),
+    parentToolCallId: z.string().min(1).max(500).optional(),
     toolName: z.string().min(1).max(200),
     operation: toolOperationSchema,
   })

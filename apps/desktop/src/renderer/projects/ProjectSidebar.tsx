@@ -1,5 +1,9 @@
 import type { ConversationSummary } from "@openerx/contracts";
 import {
+  desktopWorkspaceBridge,
+  desktopWorkspaceCapabilities,
+} from "@openerx/desktop-ui/workspace-bridge";
+import {
   CaretRight,
   ChatCircle,
   FolderSimple,
@@ -10,8 +14,10 @@ import {
 } from "@phosphor-icons/react";
 import { type UseQueryResult, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { ConversationDeleteButton } from "../ConversationDeletion";
+import { ModalDialog } from "../ModalDialog";
 import { projectKeys, useProjectList } from "./use-projects";
 
 function operationId(): string {
@@ -59,7 +65,7 @@ export function ProjectSidebar({
   }
   const create = useMutation({
     mutationFn: () =>
-      window.openerx.createProject({
+      desktopWorkspaceBridge().createProject({
         operationId: operationId(),
         name,
         instructions,
@@ -199,68 +205,89 @@ export function ProjectSidebar({
       ) : null}
       {projects.error ? <p className="project-inline-error">项目列表暂时不可用。</p> : null}
 
-      {createOpen ? (
-        <div className="project-dialog-backdrop">
-          <section
-            className="project-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="new-project-title"
-          >
-            <header>
-              <div>
-                <p className="project-panel-eyebrow">个人工作区</p>
-                <h2 id="new-project-title">新建项目</h2>
-              </div>
-              <button type="button" aria-label="关闭新建项目" onClick={() => setCreateOpen(false)}>
-                <X size={17} />
-              </button>
-            </header>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (name.trim()) create.mutate();
-              }}
-            >
-              <label>
-                <span>项目名称</span>
-                <input
-                  maxLength={80}
-                  required
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="例如：年度市场报告"
-                />
-              </label>
-              <label>
-                <span>项目说明（可选）</span>
-                <textarea
-                  maxLength={20_000}
-                  rows={5}
-                  value={instructions}
-                  onChange={(event) => setInstructions(event.target.value)}
-                  placeholder="说明目标、偏好和长期上下文；不要填写密码或密钥。"
-                />
-              </label>
-              {create.error ? (
-                <p className="project-inline-error">{errorMessage(create.error)}</p>
-              ) : null}
-              <footer>
-                <button type="button" onClick={() => setCreateOpen(false)}>
-                  取消
-                </button>
-                <button
-                  className="project-primary-button"
-                  type="submit"
-                  disabled={create.isPending || !name.trim()}
+      {createOpen
+        ? createPortal(
+            <div className="project-dialog-backdrop">
+              <ModalDialog
+                className="project-dialog"
+                titleId="new-project-title"
+                onClose={() => setCreateOpen(false)}
+                pending={create.isPending}
+              >
+                <header>
+                  <div>
+                    <p className="project-panel-eyebrow">
+                      {desktopWorkspaceCapabilities().mode === "enterprise"
+                        ? "企业工作区"
+                        : "个人工作区"}
+                    </p>
+                    <h2 id="new-project-title">新建项目</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="project-dialog-close"
+                    aria-label="关闭新建项目"
+                    onClick={() => setCreateOpen(false)}
+                    disabled={create.isPending}
+                  >
+                    <X size={17} />
+                  </button>
+                </header>
+                <form
+                  className="project-create-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (name.trim()) create.mutate();
+                  }}
                 >
-                  {create.isPending ? "正在创建…" : "创建项目"}
-                </button>
-              </footer>
-            </form>
-          </section>
-        </div>
-      ) : null}
+                  <div className="project-create-body">
+                    <label>
+                      <span>项目名称</span>
+                      <input
+                        data-dialog-initial-focus
+                        maxLength={80}
+                        required
+                        value={name}
+                        onChange={(event) => setName(event.target.value)}
+                        placeholder="例如：年度市场报告"
+                      />
+                    </label>
+                    <label>
+                      <span>项目说明（可选）</span>
+                      <textarea
+                        maxLength={20_000}
+                        rows={5}
+                        value={instructions}
+                        onChange={(event) => setInstructions(event.target.value)}
+                        placeholder="说明目标、偏好和长期上下文；不要填写密码或密钥。"
+                      />
+                    </label>
+                    {create.error ? (
+                      <p className="project-inline-error">{errorMessage(create.error)}</p>
+                    ) : null}
+                  </div>
+                  <footer>
+                    <button
+                      type="button"
+                      onClick={() => setCreateOpen(false)}
+                      disabled={create.isPending}
+                    >
+                      取消
+                    </button>
+                    <button
+                      className="project-primary-button"
+                      type="submit"
+                      disabled={create.isPending || !name.trim()}
+                    >
+                      {create.isPending ? "正在创建…" : "创建项目"}
+                    </button>
+                  </footer>
+                </form>
+              </ModalDialog>
+            </div>,
+            document.body,
+          )
+        : null}
     </section>
   );
 }

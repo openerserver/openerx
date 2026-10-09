@@ -148,6 +148,8 @@ function sandboxedCommand(
     '(allow file-read-data (literal "/"))',
     `(allow file-read* ${readRules} (literal "${sandboxPath(executable)}"))`,
     `(allow file-write* (subpath "${sandboxPath(workspaceRoot)}"))`,
+    // Discarded stdio opens /dev/null for writing, including child processes.
+    '(allow file-write* (literal "/dev/null"))',
     allowNetwork ? "(allow network*)" : "(deny network*)",
   ].join(" ");
   return {

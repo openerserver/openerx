@@ -55,6 +55,8 @@ export function configuredByokProviders(
 export const modelServiceSettingsSchema = z
   .object({
     mode: modelServiceModeSchema,
+    hostedAccountId: z.string().uuid().nullable().optional(),
+    hostedAvailable: z.boolean().optional(),
     providerModels: providerModelsSchema.optional(),
     byok: byokModelConfigurationSchema.nullable(),
     credentialConfigured: z.boolean(),
@@ -150,7 +152,7 @@ export function byokThinkingLevels(configuration: ByokModelConfiguration): Think
 }
 
 // Verified 2026-09-21. Sources and compatibility notes:
-// docs/models.md
+// docs/v2/evidence/model-catalog-2026-09-21.md
 export const byokProviderPresets: readonly ByokProviderPreset[] = [
   {
     id: "deepseek",

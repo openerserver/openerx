@@ -1,6 +1,24 @@
 import { z } from "zod";
 
 const failures = {
+  MODEL_TASK_LIMIT_REACHED: [
+    "quota",
+    false,
+    "本次任务已达到调用或 Token 上限，请缩小任务范围后重试。",
+  ],
+  MODEL_ACCOUNT_AUTH_REQUIRED: [
+    "authentication",
+    false,
+    "账号登录已失效，请重新登录后使用服务器模型。",
+  ],
+  MODEL_RESULT_UNAVAILABLE: [
+    "response",
+    false,
+    "该请求已提交，但结果无法恢复。为避免重复调用，未自动重试；请主动重新生成。",
+  ],
+  MODEL_REQUEST_CONFLICT: ["request", false, "请求标识已用于不同的模型或内容，请重新发送。"],
+  MODEL_REQUEST_IN_PROGRESS: ["request", false, "该模型请求仍在处理，未重复提交。"],
+  MODEL_UPSTREAM_AUTH_FAILED: ["configuration", false, "服务器的模型凭据不可用，请联系管理员。"],
   MODEL_AUTHENTICATION_FAILED: [
     "authentication",
     false,
@@ -9,9 +27,9 @@ const failures = {
   MODEL_PERMISSION_DENIED: [
     "permission",
     false,
-    "当前 API Key 没有调用此模型的权限，请检查供应商授权。",
+    "当前账户或 API Key 没有调用此模型的权限，请检查模型授权。",
   ],
-  MODEL_QUOTA_EXCEEDED: ["quota", false, "模型账户额度不足，请检查供应商余额或用量上限。"],
+  MODEL_QUOTA_EXCEEDED: ["quota", false, "模型账户额度不足，请检查账户用量上限或供应商余额。"],
   MODEL_RATE_LIMITED: ["rate_limit", true, "模型请求受到限流，请稍后重试或降低并发。"],
   MODEL_REQUEST_TIMEOUT: ["timeout", true, "模型请求超时，请稍后重试。"],
   MODEL_NETWORK_ERROR: ["network", true, "连接模型服务失败，请检查网络和模型服务地址。"],
@@ -30,6 +48,11 @@ const failures = {
     "response",
     false,
     "模型返回的内容或工具调用格式无效，请检查模型兼容性。",
+  ],
+  MODEL_STRUCTURED_OUTPUT_INVALID: [
+    "response",
+    false,
+    "模型返回结果不符合要求的 JSON 结构，未作为有效结果使用。请检查模型的结构化输出能力。",
   ],
   MODEL_REQUEST_INVALID: ["request", false, "模型不接受当前请求参数，请检查模型配置与能力设置。"],
   MODEL_NOT_FOUND: ["configuration", false, "模型或接口不存在，请检查模型名称和服务地址。"],

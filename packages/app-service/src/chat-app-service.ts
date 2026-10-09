@@ -17,7 +17,11 @@ import type {
   RemoteCommandPayload,
 } from "@openerx/contracts";
 import { isByokModelRef } from "@openerx/contracts";
-import { type FileAppService, FileServiceError } from "@openerx/file-service";
+import {
+  executeAttachedFileTool,
+  type FileAppService,
+  FileServiceError,
+} from "@openerx/file-service";
 import type { SkillPackageService } from "@openerx/skills";
 import type {
   ChatRepository,
@@ -45,6 +49,16 @@ interface RemoteExecutionAuthority {
 }
 
 export class ChatAppService {
+  async invalidateModelAccount(accountId: string | null): Promise<void> {
+    for (const [generationId, auth] of this.#authorizationByGeneration) {
+      if (auth.modelApiVersion !== "v3" || auth.accountId === accountId) continue;
+      const assistantMessageId = this.#messageByGeneration.get(generationId);
+      const conversationId = this.#conversationByGeneration.get(generationId);
+      if (assistantMessageId && conversationId)
+        await this.handle({ command: "chat.stop", input: { assistantMessageId, conversationId } });
+    }
+  }
+
   readonly #repository: ChatRepository;
   readonly #piHost: PiHostClient;
   readonly #listeners = new Set<(event: ChatEvent) => void>();
@@ -52,6 +66,8 @@ export class ChatAppService {
   readonly #messageByGeneration = new Map<string, string>();
   readonly #conversationByGeneration = new Map<string, string>();
   readonly #branchByGeneration = new Map<string, string>();
+  readonly #nativeToolsGenerations = new Set<string>();
+  readonly #revokedNativeToolsGenerations = new Set<string>();
   readonly #authorizationByGeneration = new Map<string, AppServiceAuthorization>();
   readonly #syncAuthorizationByGeneration = new Map<string, AppServiceAuthorization>();
   readonly #remoteAuthorityByMessage = new Map<string, RemoteExecutionAuthority>();
@@ -156,6 +172,37 @@ export class ChatAppService {
       case "cache.clear": {
         this.#repository.clearLocalCache();
         return { clearedAt: new Date().toISOString() };
+      }
+      case "pi.runtime.settings.get":
+        return this.#repository.piRuntimeSettings();
+      case "pi.runtime.settings.update": {
+        const result = this.#repository.updatePiRuntimeSettings(request.input);
+        if (!result.nativeToolsEnabled) {
+          const generations = [...this.#nativeToolsGenerations];
+          // Revoke before awaiting abort so no subsequent broker request can start.
+          for (const generationId of generations)
+            this.#revokedNativeToolsGenerations.add(generationId);
+          let abortError: unknown;
+          for (const generationId of generations) {
+            const assistantMessageId = this.#messageByGeneration.get(generationId);
+            const conversationId = this.#conversationByGeneration.get(generationId);
+            if (!assistantMessageId || !conversationId) continue;
+            const stopping = this.#repository.requestStopMessage(
+              conversationId,
+              assistantMessageId,
+              "PI_NATIVE_TOOLS_DISABLED",
+            );
+            if (stopping.event) this.#emit(stopping.event);
+            this.#tools?.requestCancellation(generationId);
+            try {
+              await this.#piHost.abort(generationId);
+            } catch (error) {
+              abortError ??= error;
+            }
+          }
+          if (abortError) throw abortError;
+        }
+        return result;
       }
       case "memory.settings.get":
         return this.#requiredMemories().settings();
@@ -305,6 +352,8 @@ export class ChatAppService {
         return { conversationId: result.conversationId, deletedAt: result.deletedAt };
       }
       case "chat.selectModel": {
+        if ([...this.#conversationByGeneration.values()].includes(request.input.conversationId))
+          throw new Error("CONVERSATION_GENERATION_ACTIVE");
         const currentModelRef = this.#repository.getConversation(request.input.conversationId)
           .conversation.selectedModelRef;
         if (isByokModelRef(currentModelRef) !== isByokModelRef(request.input.modelRef)) {
@@ -1030,6 +1079,9 @@ export class ChatAppService {
         thinkingLevel: draft.thinkingLevel,
         selectedModelRef: draft.selectedModelRef,
         history,
+        ...(this.#repository.piRuntimeSettings().nativeToolsEnabled
+          ? { nativeToolsEnabled: true }
+          : {}),
         ...(memorySettings?.memoriesEnabled
           ? { memoryEnabled: true, memories: recalledMemories }
           : {}),
@@ -1067,6 +1119,9 @@ export class ChatAppService {
                 accountId: selectedAuthorization.accountId,
                 accessToken: selectedAuthorization.accessToken,
                 platformBaseUrl: selectedAuthorization.platformBaseUrl,
+                ...(selectedAuthorization.modelApiVersion
+                  ? { modelApiVersion: selectedAuthorization.modelApiVersion }
+                  : {}),
                 selectedModelRef: draft.selectedModelRef,
                 approvedFallbackModelRef: null,
                 requestDedupeKey: `model-call:${draft.receipt.assistantMessageId}:1`,
@@ -1075,6 +1130,7 @@ export class ChatAppService {
           : {}),
         ...(selectedByok ? { byok: selectedByok } : {}),
       };
+      if (frame.nativeToolsEnabled) this.#nativeToolsGenerations.add(generationId);
       await this.#piHost.prompt(frame);
     } catch (error) {
       if (this.#closed) return;
@@ -1117,6 +1173,11 @@ export class ChatAppService {
     });
     const authorization = this.#authorizationByGeneration.get(frame.generationId);
     if (frame.type !== "delta") {
+      const terminalErrorCode =
+        frame.errorCode ??
+        (this.#revokedNativeToolsGenerations.has(frame.generationId)
+          ? "PI_NATIVE_TOOLS_DISABLED"
+          : undefined);
       this.#tools?.completeGeneration(
         frame.generationId,
         frame.type === "completed"
@@ -1124,7 +1185,7 @@ export class ChatAppService {
           : frame.type === "stopped"
             ? "interrupted"
             : "failed",
-        frame.errorCode,
+        terminalErrorCode,
         frame.usageRecords ?? [],
       );
       this.#skills?.completeGeneration(
@@ -1134,7 +1195,7 @@ export class ChatAppService {
           : frame.type === "stopped"
             ? "cancelled"
             : "failed",
-        frame.errorCode,
+        terminalErrorCode,
       );
       if (this.#files && this.#tools) {
         captureWorkspaceArtifacts(
@@ -1151,6 +1212,8 @@ export class ChatAppService {
   }
 
   async #handleFileToolRequest(frame: PiFileToolRequestFrame): Promise<unknown> {
+    if (this.#revokedNativeToolsGenerations.has(frame.generationId))
+      throw new Error("PI_NATIVE_TOOLS_DISABLED");
     if (
       this.#conversationByGeneration.get(frame.generationId) !== frame.conversationId ||
       this.#branchByGeneration.get(frame.generationId) !== frame.branchId
@@ -1162,44 +1225,18 @@ export class ChatAppService {
     if (!assistantMessageId || assistantMessageId !== frame.assistantMessageId) {
       throw new Error("GENERATION_NOT_ACTIVE");
     }
+    if (this.#repository.message(assistantMessageId).cancellationRequestedAt !== null)
+      throw new Error("GENERATION_NOT_ACTIVE");
     const attached = files.attachedFilesForMessages(
       frame.conversationId,
       this.#repository.branchMessageIds(assistantMessageId),
     );
     const allowedIds = new Set(attached.map(({ id }) => id));
-    return await this.#requiredTools().handleFileRequest(frame, () => {
-      switch (frame.request.operation) {
-        case "list":
-          return attached;
-        case "search":
-          return files.search(frame.request.input.query, [...allowedIds]);
-        case "read":
-          if (!allowedIds.has(frame.request.input.personalFileId)) {
-            throw new Error("FILE_NOT_ATTACHED");
-          }
-          return files.readParsedFile(frame.request.input.personalFileId);
-        case "artifact.write": {
-          const input = frame.request.input;
-          const bytesBase64 = Buffer.from(input.content, "utf8").toString("base64");
-          return input.artifactId
-            ? files.addArtifactVersion({
-                artifactId: input.artifactId,
-                format: input.format,
-                mediaType: input.mediaType,
-                bytesBase64,
-              })
-            : files.createArtifact({
-                displayName: input.displayName,
-                format: input.format,
-                mediaType: input.mediaType,
-                bytesBase64,
-              });
-        }
-        case "artifact.office.write": {
-          const artifact = files.writeOfficeArtifact(frame.request.input);
-          return { artifact, preview: files.previewArtifact(artifact.id) };
-        }
-      }
+    return await this.#requiredTools().handleFileRequest(frame, async (signal) => {
+      return await executeAttachedFileTool(files, frame.request, {
+        allowedFileIds: allowedIds,
+        signal,
+      });
     });
   }
 
@@ -1207,6 +1244,8 @@ export class ChatAppService {
     frame: PiToolRequestFrame,
     onProgress: (delta: string, truncated: boolean) => void = () => undefined,
   ): Promise<unknown> {
+    if (this.#revokedNativeToolsGenerations.has(frame.generationId))
+      throw new Error("PI_NATIVE_TOOLS_DISABLED");
     if (
       this.#conversationByGeneration.get(frame.generationId) !== frame.conversationId ||
       this.#branchByGeneration.get(frame.generationId) !== frame.branchId ||
@@ -1214,6 +1253,8 @@ export class ChatAppService {
     ) {
       throw new Error("GENERATION_NOT_ACTIVE");
     }
+    if (this.#repository.message(frame.assistantMessageId).cancellationRequestedAt !== null)
+      throw new Error("GENERATION_NOT_ACTIVE");
     if (frame.operation.operation.startsWith("memory_")) {
       const startedAt = Date.now();
       const memories = this.#requiredMemories();
@@ -1334,6 +1375,8 @@ export class ChatAppService {
   }
 
   #forgetGeneration(generationId: string): void {
+    this.#nativeToolsGenerations.delete(generationId);
+    this.#revokedNativeToolsGenerations.delete(generationId);
     this.#releaseGeneration.get(generationId)?.();
     this.#releaseGeneration.delete(generationId);
     const messageId = this.#messageByGeneration.get(generationId);
@@ -1385,7 +1428,7 @@ export class ChatAppService {
   }
 
   async #syncIfAuthorized(authorization: AppServiceAuthorization | undefined): Promise<void> {
-    if (!authorization || !this.#sync) return;
+    if (!authorization || !this.#sync || authorization.modelApiVersion === "v3") return;
     try {
       await this.#sync.syncOnce(authorization);
     } catch {

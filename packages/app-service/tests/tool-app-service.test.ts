@@ -20,6 +20,7 @@ import {
 } from "@openerx/storage";
 import {
   type BrokeredBashLogArtifactWriter,
+  type CapabilityHost,
   type LocalSearchProvider,
   MacOSSandboxExecEngine,
   PLATFORM_SANDBOX_ENGINE_VERSION,
@@ -45,6 +46,7 @@ function fixture(
     localWebSearchV2?: boolean;
     localWebSearchPolicy?: LocalWebSearchPolicy;
     localWebSearchProviders?: LocalSearchProvider[];
+    hostExecute?: CapabilityHost["execute"];
   } = {},
 ) {
   const directory = mkdtempSync(path.join(tmpdir(), "openerx-tool-service-"));
@@ -70,15 +72,18 @@ function fixture(
         unavailableReasons: {},
       }),
     ),
-    execute: vi.fn(async () => ({
-      summary: "host operation completed",
-      content: [{ type: "text" as const, text: "host operation completed" }],
-      data: { sessionId: "00000000-0000-4000-8000-000000000777" },
-      sources: [],
-      artifacts: [],
-      sideEffectCommitted: true,
-      durationMs: 2,
-    })),
+    execute: vi.fn(
+      options.hostExecute ??
+        (async () => ({
+          summary: "host operation completed",
+          content: [{ type: "text" as const, text: "host operation completed" }],
+          data: { sessionId: "00000000-0000-4000-8000-000000000777" },
+          sources: [],
+          artifacts: [],
+          sideEffectCommitted: true,
+          durationMs: 2,
+        })),
+    ),
     resolve: vi.fn(async () => "secret"),
     clear: vi.fn(async () => undefined),
   };
@@ -255,6 +260,138 @@ afterEach(() => {
 });
 
 describe("ToolAppService", () => {
+  it("cancels one nested tool request without canceling its sibling and preserves parent audit", async () => {
+    const signals = new Map<string, AbortSignal>();
+    const releases = new Map<string, () => void>();
+    const { chat, service, base, tools, events } = fixture({
+      hostExecute: async (operation, signal) => {
+        signals.set(operation.idempotencyKey, signal);
+        await new Promise<void>((resolve, reject) => {
+          releases.set(operation.idempotencyKey, resolve);
+          signal.addEventListener("abort", () => reject(new Error("TOOL_CANCELLED")), {
+            once: true,
+          });
+        });
+        return {
+          summary: "done",
+          content: [{ type: "text", text: "done" }],
+          data: {},
+          sources: [],
+          artifacts: [],
+          sideEffectCommitted: false,
+          durationMs: 1,
+        };
+      },
+    });
+    service.startGeneration({
+      ...base,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    service.setPermissionMode({ conversationId: base.conversationId, mode: "full_access" });
+    const first = service.handleRequest({
+      ...base,
+      parentToolCallId: "parent-codemode",
+      operation: {
+        operation: "browser",
+        action: "navigate",
+        url: "https://example.com",
+        idempotencyKey: "nested-first",
+      },
+    });
+    const firstRejected = expect(first).rejects.toThrow("TOOL_CANCELLED");
+    const secondId = crypto.randomUUID();
+    const second = service.handleRequest({
+      ...base,
+      requestId: secondId,
+      piToolCallId: "sibling-tool",
+      parentToolCallId: "parent-codemode",
+      operation: {
+        operation: "browser",
+        action: "navigate",
+        url: "https://example.com",
+        idempotencyKey: "nested-second",
+      },
+    });
+    await vi.waitFor(() => expect(signals.size).toBe(2));
+    service.cancelToolRequest(base.requestId, base.generationId);
+    await firstRejected;
+    expect(signals.get("nested-second")?.aborted).toBe(false);
+    expect(events.some(({ type }) => type === "run.cancelling")).toBe(false);
+    releases.get("nested-second")?.();
+    await second;
+    const runId = tools.listWorkItems()[0]?.activeRunId;
+    if (!runId) throw new Error("native generation run missing");
+    expect(tools.runItemByRef(runId, `tool:${base.piToolCallId}`)?.content).toMatchObject({
+      type: "tool",
+      parentPiToolCallId: "parent-codemode",
+    });
+    expect(tools.runItemByRef(runId, "tool:sibling-tool")?.content).toMatchObject({
+      type: "tool",
+      parentPiToolCallId: "parent-codemode",
+    });
+    service.completeGeneration(base.generationId, "completed");
+    await expect(
+      service.handleRequest({
+        ...base,
+        requestId: crypto.randomUUID(),
+        piToolCallId: "late",
+        operation: { operation: "compute", expression: "1+1", idempotencyKey: "late-tool-call" },
+      }),
+    ).rejects.toThrow("GENERATION_NOT_ACTIVE");
+    expect(tools.listWorkItems()).toHaveLength(1);
+    await service.close();
+    chat.close();
+  });
+
+  it("routes file request cancellation independently and aborts all requests for a generation stop", async () => {
+    const { chat, service, base, tools } = fixture();
+    service.startGeneration({
+      ...base,
+      selectedModelRef: "platform/auto",
+      thinkingLevel: "medium",
+    });
+    const signals: AbortSignal[] = [];
+    const read = (signal: AbortSignal) =>
+      new Promise<void>((_resolve, reject) => {
+        signals.push(signal);
+        signal.addEventListener("abort", () => reject(new Error("TOOL_CANCELLED")), { once: true });
+      });
+    const fileFrame = {
+      ...base,
+      kind: "pi.file-tool.request" as const,
+      parentToolCallId: "parent-file-batch",
+      request: { operation: "list" as const, input: {} },
+    };
+    const first = service.handleFileRequest(fileFrame, read);
+    const firstRejected = expect(first).rejects.toThrow("TOOL_CANCELLED");
+    const second = service.handleFileRequest(
+      { ...fileFrame, requestId: crypto.randomUUID(), piToolCallId: "file-sibling" },
+      read,
+    );
+    const secondRejected = expect(second).rejects.toThrow("TOOL_CANCELLED");
+    service.cancelToolRequest(base.requestId, base.generationId);
+    await firstRejected;
+    expect(signals[1]?.aborted).toBe(false);
+    service.requestCancellation(base.generationId);
+    await secondRejected;
+    const runId = tools.listWorkItems()[0]?.activeRunId;
+    if (!runId) throw new Error("native file generation run missing");
+    expect(tools.runItemByRef(runId, `tool:${base.piToolCallId}`)?.content).toMatchObject({
+      type: "tool",
+      parentPiToolCallId: "parent-file-batch",
+    });
+    await expect(
+      service.handleFileRequest(
+        { ...fileFrame, requestId: crypto.randomUUID(), piToolCallId: "late-file" },
+        read,
+      ),
+    ).rejects.toThrow("GENERATION_NOT_ACTIVE");
+    expect(signals).toHaveLength(2);
+    await service.close();
+    chat.close();
+  });
+
   it.each(["completed", "failed", "interrupted"] as const)(
     "identifies the exact generation to release on %s",
     async (status) => {

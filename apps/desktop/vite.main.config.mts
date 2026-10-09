@@ -15,6 +15,9 @@ export default defineConfig(({ command }) => {
     define: buildInfoDefine,
     build: {
       rollupOptions: {
+        // Enterprise task files reuse Office previews in the main process.
+        // Load the platform-native renderer at runtime, as the file worker does.
+        external: ["@resvg/resvg-js"],
         output: {
           entryFileNames: "main.js",
         },

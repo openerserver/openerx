@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
+  type EnterpriseSkillScope,
+  type EnterpriseSkillSource,
+  enterpriseSkillScopeSchema,
+  enterpriseSkillSourceSchema,
   type SkillInstallation,
   type SkillInstallationSync,
   type SkillInvocation,
@@ -18,6 +22,8 @@ export interface SkillRepositoryOptions {
   deviceId?: string | null;
   now?: () => string;
   idFactory?: () => string;
+  /** A separate managed database; never emits personal synchronization. */
+  enterpriseScope?: EnterpriseSkillScope;
 }
 
 export interface InstallSkillVersionInput {
@@ -37,6 +43,7 @@ export interface InstallSkillVersionInput {
   manifest: SkillPackageManifest;
   permissionDigest: string;
   builtIn?: boolean;
+  enterpriseSource?: EnterpriseSkillSource;
 }
 
 export interface ActiveSkillPackage {
@@ -51,14 +58,30 @@ export class SkillRepository {
   readonly #deviceId: string | null;
   readonly #now: () => string;
   readonly #idFactory: () => string;
+  readonly #enterpriseScope: EnterpriseSkillScope | null;
 
   constructor(databasePath: string, options: SkillRepositoryOptions = {}) {
+    this.#enterpriseScope = options.enterpriseScope
+      ? enterpriseSkillScopeSchema.parse(options.enterpriseScope)
+      : null;
+    this.#ownerProfileId =
+      options.ownerProfileId ?? this.#enterpriseScope?.accountId ?? "local-default";
+    if (this.#enterpriseScope && this.#ownerProfileId !== this.#enterpriseScope.accountId)
+      throw new Error("SKILL_ENTERPRISE_SCOPE_MISMATCH");
     this.#database = new DatabaseSync(databasePath);
-    this.#ownerProfileId = options.ownerProfileId ?? "local-default";
     this.#deviceId = options.deviceId ?? null;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#idFactory = options.idFactory ?? randomUUID;
     migrateDatabase(this.#database);
+    if (
+      this.#enterpriseScope &&
+      this.#database
+        .prepare("SELECT id FROM skill_installations WHERE scope != 'enterprise' LIMIT 1")
+        .get()
+    ) {
+      this.#database.close();
+      throw new Error("SKILL_ENTERPRISE_DATABASE_REQUIRED");
+    }
   }
 
   close(): void {
@@ -66,6 +89,26 @@ export class SkillRepository {
   }
 
   installVersion(input: InstallSkillVersionInput): SkillInstallation {
+    if (input.scope === "enterprise") {
+      const source = enterpriseSkillSourceSchema.parse(input.enterpriseSource);
+      if (
+        !this.#enterpriseScope ||
+        input.workspaceId !== null ||
+        input.sourceKind !== "enterprise_catalog" ||
+        input.trust !== "unverified" ||
+        input.version !== source.version ||
+        Object.entries(this.#enterpriseScope).some(
+          ([key, value]) => source[key as keyof EnterpriseSkillScope] !== value,
+        )
+      )
+        throw new Error("SKILL_ENTERPRISE_SCOPE_MISMATCH");
+    } else if (
+      this.#enterpriseScope ||
+      input.enterpriseSource ||
+      input.sourceKind === "enterprise_catalog"
+    ) {
+      throw new Error("SKILL_ENTERPRISE_SCOPE_MISMATCH");
+    }
     return this.#transaction(() => {
       const now = this.#now();
       const existing = this.#row(input.installationId);
@@ -84,6 +127,11 @@ export class SkillRepository {
       if (existing && String(existing.name) !== input.name) {
         throw new Error("SKILL_NAME_IMMUTABLE");
       }
+      if (
+        existing &&
+        (existing.scope !== input.scope || existing.workspace_id !== input.workspaceId)
+      )
+        throw new Error("SKILL_SCOPE_IMMUTABLE");
       const sameVersion = this.#database
         .prepare(
           "SELECT id, checksum_sha256 FROM skill_versions WHERE installation_id = ? AND version = ?",
@@ -97,6 +145,7 @@ export class SkillRepository {
       const versionId = sameVersion?.id ?? this.#idFactory();
       if (!existing) {
         const preapproved = input.builtIn || input.manifest.permissions.length === 0;
+        const automatic = input.builtIn || input.scope === "enterprise";
         this.#database
           .prepare(
             `INSERT INTO skill_installations
@@ -106,9 +155,9 @@ export class SkillRepository {
               selected_checksum_sha256, permission_digest,
               approved_permission_digest, declared_tools_json, declared_mcp_servers_json,
               permissions_json, platforms_json, installed_at, updated_at, last_used_at,
-              deleted_at, revision)
+              deleted_at, revision, enterprise_source_json)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'installed', ?, ?, ?, ?, ?, ?, ?, ?,
-                     ?, ?, ?, NULL, NULL, 1)`,
+                     ?, ?, ?, NULL, NULL, 1, ?)`,
           )
           .run(
             input.installationId,
@@ -122,9 +171,9 @@ export class SkillRepository {
             input.sourceKind,
             input.sourceLabel,
             input.trust,
-            input.builtIn ? 1 : 0,
-            input.builtIn ? 1 : 0,
-            input.builtIn ? 1 : 0,
+            automatic ? 1 : 0,
+            automatic && preapproved ? 1 : 0,
+            automatic ? 1 : 0,
             versionId,
             input.version,
             input.checksumSha256,
@@ -136,6 +185,7 @@ export class SkillRepository {
             JSON.stringify(input.manifest.platforms),
             now,
             now,
+            input.enterpriseSource ? JSON.stringify(input.enterpriseSource) : null,
           );
       } else {
         const permissionChanged = String(existing.permission_digest) !== input.permissionDigest;
@@ -202,10 +252,20 @@ export class SkillRepository {
               publisher: input.publisher,
               permissionDigest: input.permissionDigest,
               manifest: input.manifest,
+              enterpriseSource: input.enterpriseSource,
             }),
             now,
           );
       }
+      this.#database
+        .prepare(
+          "UPDATE skill_installations SET enterprise_source_json = ? WHERE id = ? AND owner_profile_id = ?",
+        )
+        .run(
+          input.enterpriseSource ? JSON.stringify(input.enterpriseSource) : null,
+          input.installationId,
+          this.#ownerProfileId,
+        );
       const installed = this.get(input.installationId);
       if (!input.builtIn) this.#queueSyncUpsert(installed, now);
       return installed;
@@ -232,12 +292,30 @@ export class SkillRepository {
             "SELECT id FROM skill_installations WHERE owner_profile_id = ? AND deleted_at IS NULL ORDER BY scope, name",
           )
           .all(this.#ownerProfileId) as SqlRow[]);
-    return rows.map((row) => this.get(String(row.id)));
+    return rows
+      .filter((row) => {
+        const item = this.#row(String(row.id));
+        return this.#enterpriseScope ? item?.scope === "enterprise" : item?.scope !== "enterprise";
+      })
+      .map((row) => this.get(String(row.id)));
   }
 
   get(installationId: string): SkillInstallation {
     const row = this.#row(installationId);
     if (!row || row.deleted_at !== null) throw new Error("SKILL_NOT_FOUND");
+    if ((row.scope === "enterprise") !== Boolean(this.#enterpriseScope))
+      throw new Error("SKILL_ENTERPRISE_SCOPE_MISMATCH");
+    if (this.#enterpriseScope) {
+      const source = enterpriseSkillSourceSchema.parse(
+        JSON.parse(String(row.enterprise_source_json)),
+      );
+      if (
+        Object.entries(this.#enterpriseScope).some(
+          ([key, value]) => source[key as keyof EnterpriseSkillScope] !== value,
+        )
+      )
+        throw new Error("SKILL_ENTERPRISE_SCOPE_MISMATCH");
+    }
     const activeVersion = this.#activeVersionRow(row);
     const version = activeVersion ?? {
       id: "missing",
@@ -264,6 +342,9 @@ export class SkillRepository {
       workspaceId: row.workspace_id,
       sourceKind: row.source_kind,
       sourceLabel: row.source_label,
+      ...(row.enterprise_source_json
+        ? { enterpriseSource: JSON.parse(String(row.enterprise_source_json)) }
+        : {}),
       checksumSha256: version.checksum_sha256,
       trust: row.trust,
       enabled: Number(row.enabled) === 1,
@@ -341,6 +422,7 @@ export class SkillRepository {
     installationId: string,
     packageState: SkillInstallation["packageState"],
   ): SkillInstallation {
+    this.get(installationId);
     const row = this.#row(installationId);
     if (!row || row.deleted_at !== null) throw new Error("SKILL_NOT_FOUND");
     this.#database
@@ -367,6 +449,7 @@ export class SkillRepository {
         publisher: string;
         permissionDigest: string;
         manifest: SkillPackageManifest;
+        enterpriseSource?: EnterpriseSkillSource;
       };
       const approved =
         row.approved_permission_digest === metadata.permissionDigest
@@ -375,6 +458,12 @@ export class SkillRepository {
       const enabled =
         Number(row.desired_enabled) === 1 &&
         (metadata.manifest.permissions.length === 0 || approved === metadata.permissionDigest);
+      this.#database
+        .prepare("UPDATE skill_installations SET enterprise_source_json = ? WHERE id = ?")
+        .run(
+          metadata.enterpriseSource ? JSON.stringify(metadata.enterpriseSource) : null,
+          installationId,
+        );
       this.#database
         .prepare(
           `UPDATE skill_installations SET active_version_id = ?, selected_version = ?,
@@ -415,6 +504,7 @@ export class SkillRepository {
     return this.#transaction(() => {
       const row = this.#row(installationId);
       if (!row || row.deleted_at !== null) return { installationId, removed: false };
+      this.get(installationId);
       if (row.scope === "builtin") throw new Error("BUILTIN_SKILL_CANNOT_BE_UNINSTALLED");
       const now = this.#now();
       this.#database
@@ -442,12 +532,80 @@ export class SkillRepository {
     };
   }
 
+  /** Resolve the immutable version bound by a running task, without changing the catalog selection. */
+  packageVersion(installationId: string, version: string): ActiveSkillPackage {
+    const current = this.get(installationId);
+    if (current.version === version) return this.activePackage(installationId);
+    const row = this.#database
+      .prepare(
+        "SELECT version, checksum_sha256, package_path, scripts_json, metadata_json FROM skill_versions WHERE installation_id = ? AND version = ?",
+      )
+      .get(installationId, version) as SqlRow | undefined;
+    if (!row) throw new Error("SKILL_VERSION_NOT_FOUND");
+    const metadata = JSON.parse(String(row.metadata_json)) as {
+      displayName: string;
+      description: string;
+      publisher: string;
+      permissionDigest: string;
+      manifest: SkillPackageManifest;
+      enterpriseSource?: EnterpriseSkillSource;
+    };
+    const installation = skillInstallationSchema.parse({
+      ...current,
+      version: String(row.version),
+      checksumSha256: String(row.checksum_sha256),
+      displayName: metadata.displayName,
+      description: metadata.description,
+      publisher: metadata.publisher,
+      permissionDigest: metadata.permissionDigest,
+      declaredTools: metadata.manifest.tools,
+      declaredMcpServers: metadata.manifest.mcp_servers,
+      permissions: metadata.manifest.permissions,
+      platforms: metadata.manifest.platforms,
+      enterpriseSource: metadata.enterpriseSource,
+    });
+    return {
+      installation,
+      packagePath: String(row.package_path),
+      scripts: JSON.parse(String(row.scripts_json)) as string[],
+    };
+  }
+
+  removeManagedInstallation(installationId: string): void {
+    if (!this.#enterpriseScope) throw new Error("SKILL_ENTERPRISE_DATABASE_REQUIRED");
+    this.get(installationId);
+    this.#database
+      .prepare(
+        "DELETE FROM skill_installations WHERE id = ? AND owner_profile_id = ? AND scope = 'enterprise'",
+      )
+      .run(installationId, this.#ownerProfileId);
+  }
+
+  pruneManagedVersions(installationId: string, retainedVersions: string[] = []): string[] {
+    if (!this.#enterpriseScope) throw new Error("SKILL_ENTERPRISE_DATABASE_REQUIRED");
+    const installed = this.get(installationId);
+    return this.#transaction(() => {
+      const rows = this.#database
+        .prepare("SELECT id, version, package_path FROM skill_versions WHERE installation_id = ?")
+        .all(installationId) as Array<{ id: string; version: string; package_path: string }>;
+      const paths: string[] = [];
+      for (const row of rows)
+        if (row.version !== installed.version && !retainedVersions.includes(row.version)) {
+          this.#database
+            .prepare("DELETE FROM skill_versions WHERE id = ? AND installation_id = ?")
+            .run(row.id, installationId);
+          paths.push(row.package_path);
+        }
+      return paths;
+    });
+  }
+
   enabledPackages(workspaceId: string, preferredInstallationId?: string): ActiveSkillPackage[] {
     const candidates = this.list()
       .filter((skill) => skill.enabled && skill.packageState === "installed")
       .filter((skill) => skill.scope !== "workspace" || skill.workspaceId === workspaceId)
       .map((skill) => this.activePackage(skill.id));
-    const priority = { builtin: 0, personal: 1, workspace: 2 } as const;
+    const priority = { builtin: 0, personal: 1, workspace: 2, enterprise: 3 } as const;
     const selected = new Map<string, ActiveSkillPackage>();
     for (const candidate of candidates.sort(
       (left, right) => priority[right.installation.scope] - priority[left.installation.scope],
@@ -566,6 +724,7 @@ export class SkillRepository {
     return this.#transaction(() => {
       const row = this.#row(installationId);
       if (!row || row.deleted_at !== null) throw new Error("SKILL_NOT_FOUND");
+      this.get(installationId);
       const now = this.#now();
       operation(row, now);
       const skill = this.get(installationId);
@@ -596,6 +755,7 @@ export class SkillRepository {
   }
 
   #syncEnabled(): boolean {
+    if (this.#enterpriseScope) return false;
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     return uuid.test(this.#ownerProfileId) && this.#deviceId !== null && uuid.test(this.#deviceId);
   }

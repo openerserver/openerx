@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright";
+import { checkModelImageInput } from "./model-capability-preflight.mjs";
 
 const desktopDirectory = path.resolve(import.meta.dirname, "..");
 const mainEntry = path.join(desktopDirectory, ".vite", "build", "main.js");
@@ -115,9 +116,13 @@ try {
   );
   await page.reload({ waitUntil: "domcontentloaded" });
   await waitForAppService(page);
+  const modelPreflight = await checkModelImageInput(page, "skills");
+  assert.equal(modelPreflight.imageInput, false);
 
-  await page.getByRole("link", { name: "设置", exact: true }).click();
-  await page.getByRole("button", { name: "skill", exact: true }).click();
+  // Open the tested section without depending on the edition's account landing page.
+  await page.evaluate(() => {
+    window.location.hash = "/settings/account?section=assistants";
+  });
   await page.getByRole("heading", { name: "Skill", exact: true }).waitFor();
   await page.getByRole("button", { name: "安装 Skill" }).click();
   const card = page.locator(".skill-card").filter({ hasText: "E2E report" });

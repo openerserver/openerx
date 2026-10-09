@@ -3,7 +3,8 @@ import { genericToolResult, productToolResult } from "../src/tool-result";
 
 describe("typed Pi tool results", () => {
   it("passes visual content as an image block instead of Base64 JSON text", () => {
-    const base64 = "aW1hZ2U=";
+    const base64 =
+      "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR4nO3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4unIZ5cAAAAASUVORK5CYII=";
     const result = productToolResult({
       summary: "已捕获截图",
       content: [

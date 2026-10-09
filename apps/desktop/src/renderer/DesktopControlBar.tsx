@@ -1,4 +1,5 @@
 import type { DesktopControlCommand, DesktopControlSession } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { useEffect, useState } from "react";
 import "./desktop-control.css";
 
@@ -7,7 +8,7 @@ export function DesktopControlBar() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   useEffect(() => {
-    const list = window.openerx?.listDesktopControlSessions;
+    const list = desktopWorkspaceBridge()?.listDesktopControlSessions;
     if (!list) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -30,7 +31,7 @@ export function DesktopControlBar() {
     setPending(true);
     setError(null);
     try {
-      const result = await window.openerx.controlDesktopSession?.(command);
+      const result = await desktopWorkspaceBridge().controlDesktopSession?.(command);
       if (result)
         setSessions((previous) =>
           previous

@@ -7,6 +7,7 @@ import {
   timestampSchema,
 } from "./chat";
 import { errorEnvelopeSchema } from "./errors";
+import { modelAuthorizationSchema } from "./hosted-model";
 import { automaticMemoryCreatedEventSchema } from "./memory";
 import { hostToolAvailabilitySchema } from "./model";
 import { projectCommandEnvelopeSchema } from "./project";
@@ -41,14 +42,7 @@ export const appServiceReadyFrameSchema = z
   })
   .strict();
 
-export const appServiceAuthorizationSchema = z
-  .object({
-    accountId: entityIdSchema,
-    accessToken: z.string().min(32),
-    accessTokenExpiresAt: timestampSchema,
-    platformBaseUrl: z.url(),
-  })
-  .strict();
+export const appServiceAuthorizationSchema = modelAuthorizationSchema;
 
 export const appServiceByokConfigurationSchema = z
   .object({

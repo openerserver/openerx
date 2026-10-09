@@ -1,4 +1,7 @@
 import {
+  type ModelAuthorizationRequest,
+  type ModelAuthorizationResponse,
+  modelAuthorizationRequestSchema,
   type PiActivityEvent,
   type PiFileToolRequestFrame,
   type PiHostEventFrame,
@@ -45,6 +48,13 @@ export interface PiHostClient {
 }
 
 export class MessagePortPiHostClient implements PiHostClient {
+  #modelAuthorizationForwarder: ((request: ModelAuthorizationRequest) => void) | undefined;
+  forwardModelAuthorization(handler: (request: ModelAuthorizationRequest) => void): void {
+    this.#modelAuthorizationForwarder = handler;
+  }
+  respondModelAuthorization(response: ModelAuthorizationResponse): void {
+    this.#port.postMessage(response);
+  }
   readonly #usageListeners = new Set<(frame: PiModelUsageFrame) => void>();
   readonly #port: MessagePortMain;
   readonly #listeners = new Set<(frame: PiHostEventFrame) => void>();
@@ -214,6 +224,11 @@ export class MessagePortPiHostClient implements PiHostClient {
   }
 
   #handleMessage(data: unknown): void {
+    const modelRequest = modelAuthorizationRequestSchema.safeParse(data);
+    if (modelRequest.success) {
+      this.#modelAuthorizationForwarder?.(modelRequest.data);
+      return;
+    }
     const usage = piModelUsageFrameSchema.safeParse(data);
     if (usage.success) {
       for (const listener of this.#usageListeners) listener(usage.data);

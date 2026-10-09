@@ -118,6 +118,7 @@ export const piPromptFrameSchema = z
     mcpTools: z.array(mcpToolDescriptorSchema).max(2_000).optional(),
     initialToolNames: z.array(z.string().min(1).max(200)).max(1_000).optional(),
     availableToolNames: z.array(z.string().min(1).max(200)).max(2_000).optional(),
+    nativeToolsEnabled: z.boolean().optional(),
     memoryEnabled: z.boolean().optional(),
     memories: z.array(recalledMemorySchema).max(8).optional(),
     platform: z
@@ -125,6 +126,7 @@ export const piPromptFrameSchema = z
         accountId: entityIdSchema,
         accessToken: z.string().min(32),
         platformBaseUrl: z.url(),
+        modelApiVersion: z.literal("v3").optional(),
         selectedModelRef: z.string().min(1),
         approvedFallbackModelRef: z.string().min(1).nullable(),
         requestDedupeKey: z.string().min(8).max(240),
@@ -203,6 +205,7 @@ const piBackgroundPlatformSchema = z
     accountId: entityIdSchema,
     accessToken: z.string().min(32),
     platformBaseUrl: z.url(),
+    modelApiVersion: z.literal("v3").optional(),
     selectedModelRef: z.string().min(1),
     approvedFallbackModelRef: z.string().min(1).nullable(),
     requestDedupeKey: z.string().min(8).max(240),
@@ -381,6 +384,7 @@ export const piFileToolRequestFrameSchema = z
     branchId: entityIdSchema,
     assistantMessageId: entityIdSchema,
     piToolCallId: z.string().min(1).max(500),
+    parentToolCallId: z.string().min(1).max(500).optional(),
     toolName: z.string().min(1).max(200),
     request: piFileToolOperationSchema,
   })

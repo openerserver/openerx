@@ -66,7 +66,7 @@ export function resolveElectronExecutable(directory) {
   return executable;
 }
 
-function main() {
+async function main() {
   const action = process.argv[2];
   if (!["start", "package", "make"].includes(action)) throw new Error("FORGE_ACTION_NOT_SUPPORTED");
   installForgePackagerAdapter();
@@ -75,7 +75,14 @@ function main() {
   const cliRoot = path.dirname(require.resolve("@electron-forge/cli/package.json"));
   const entry = path.join(cliRoot, "dist", `electron-forge-${action}.js`);
   process.argv = [process.execPath, entry, ...process.argv.slice(3)];
-  require(entry);
+  const command = require(entry);
+  // Unlike start/package, Forge's make CLI runs only as require.main.
+  // Invoke its exported parser and API explicitly when loaded by this adapter.
+  if (action === "make") {
+    const options = await command.getMakeOptions();
+    require("@electron/get").initializeProxy();
+    await require("@electron-forge/core").api.make(options);
+  }
 }
 
-if (import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href) main();
+if (import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href) await main();

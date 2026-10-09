@@ -16,6 +16,8 @@ import {
 import {
   automaticModelRef,
   classifyModelError,
+  hostedModelCatalogSchema,
+  hostedModelUsageSchema,
   type ModelCatalogEntry,
   type ModelGatewayRequestDto,
   type ModelGatewayResponse,
@@ -27,6 +29,12 @@ import {
   thinkingLevelValues,
   type UsageRecord,
 } from "@openerx/contracts";
+import {
+  decodePlatformState,
+  encodePlatformState,
+  projectPlatformContext,
+} from "./platform-context";
+import { browserToolContent, officeVisualReviewUnavailable } from "./tool-result";
 
 export interface PlatformModelTransport {
   execute(request: ModelGatewayRequestDto, signal?: AbortSignal): Promise<ModelGatewayResponse>;
@@ -56,7 +64,7 @@ async function* readModelStream(
       const result = await reader.read();
       readerDone = result.done;
       buffer += decoder.decode(result.value, { stream: !readerDone });
-      if (buffer.length > 1_000_000) throw new Error("MODEL_STREAM_EVENT_TOO_LARGE");
+      if (buffer.length > 32 * 1024 * 1024) throw new Error("MODEL_STREAM_EVENT_TOO_LARGE");
       let boundary = buffer.search(/\r?\n\r?\n/u);
       while (boundary >= 0) {
         const separator = buffer.slice(boundary).startsWith("\r\n\r\n") ? 4 : 2;
@@ -79,61 +87,103 @@ async function* readModelStream(
   }
 }
 
+export interface PlatformTransportOptions {
+  apiVersion?: "v3";
+  authorize?: (rejectedAccessToken?: string) => Promise<string>;
+}
+
 export class HttpPlatformModelTransport implements PlatformModelTransport {
   readonly #baseUrl: string;
-  readonly #accessToken: string;
-
-  constructor(baseUrl: string, accessToken: string) {
+  #accessToken: string;
+  readonly #options: PlatformTransportOptions;
+  constructor(baseUrl: string, accessToken: string, options: PlatformTransportOptions = {}) {
     this.#baseUrl = baseUrl.replace(/\/$/, "");
     this.#accessToken = accessToken;
+    this.#options = options;
   }
-
+  #path(path: string): string {
+    return `/api/${this.#options.apiVersion ?? "v2"}/${path}`;
+  }
   async catalog(): Promise<ModelCatalogEntry[]> {
-    const body = await this.#json("/api/v2/models", { method: "GET" });
-    return modelCatalogEntrySchema.array().parse(body);
+    const body = await this.#json(this.#path("models"), { method: "GET" });
+    if (this.#options.apiVersion !== "v3") return modelCatalogEntrySchema.array().parse(body);
+    const catalog = hostedModelCatalogSchema.parse(body);
+    return catalog.models
+      .map((model) => ({
+        ...model,
+        recommended: model.modelRef === catalog.defaultModelRef,
+        catalogVersion: catalog.catalogVersion,
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.modelRef === catalog.defaultModelRef) -
+          Number(a.modelRef === catalog.defaultModelRef),
+      );
   }
-
+  async usage(query: { conversationId?: string; messageId?: string } = {}) {
+    const search = new URLSearchParams(query).toString();
+    return hostedModelUsageSchema.parse(
+      await this.#json(this.#path(`model/usage${search ? `?${search}` : ""}`), { method: "GET" }),
+    );
+  }
   async execute(
     request: ModelGatewayRequestDto,
     signal?: AbortSignal,
   ): Promise<ModelGatewayResponse> {
     return modelGatewayResponseSchema.parse(
-      await this.#json("/api/v2/model/execute", {
+      await this.#json(this.#path("model/execute"), {
         method: "POST",
         body: JSON.stringify(request),
-        signal,
+        ...(signal ? { signal } : {}),
       }),
     );
   }
-
   async *stream(
     request: ModelGatewayRequestDto,
     signal?: AbortSignal,
   ): AsyncGenerator<ModelGatewayStreamEvent> {
-    const response = await fetch(`${this.#baseUrl}/api/v2/model/stream`, {
+    const response = await this.#fetch(this.#path("model/stream"), {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${this.#accessToken}`,
-        "content-type": "application/json",
-      },
       body: JSON.stringify(request),
-      signal,
+      ...(signal ? { signal } : {}),
     });
-    if (!response.ok) {
-      throw await this.#responseError(response);
-    }
+    if (!response.ok) throw await this.#responseError(response);
     if (!response.body) throw new Error("MODEL_STREAM_BODY_MISSING");
     yield* readModelStream(response.body);
   }
-
+  async #fetch(pathname: string, init: RequestInit): Promise<Response> {
+    if (this.#options.authorize) {
+      try {
+        this.#accessToken = await this.#options.authorize();
+      } catch {
+        throw new Error("MODEL_ACCOUNT_AUTH_REQUIRED");
+      }
+    }
+    const send = () =>
+      fetch(`${this.#baseUrl}${pathname}`, {
+        ...init,
+        redirect: "error",
+        signal: init.signal ?? AbortSignal.timeout(30_000),
+        headers: {
+          authorization: `Bearer ${this.#accessToken}`,
+          "content-type": "application/json",
+        },
+      });
+    let response = await send();
+    // v3 guarantees a 401 is returned before reserving quota or contacting upstream.
+    if (response.status === 401 && this.#options.apiVersion === "v3" && this.#options.authorize) {
+      await response.body?.cancel();
+      try {
+        this.#accessToken = await this.#options.authorize(this.#accessToken);
+      } catch {
+        throw new Error("MODEL_ACCOUNT_AUTH_REQUIRED");
+      }
+      response = await send();
+    }
+    return response;
+  }
   async #json(pathname: string, init: RequestInit): Promise<unknown> {
-    const response = await fetch(`${this.#baseUrl}${pathname}`, {
-      ...init,
-      headers: {
-        authorization: `Bearer ${this.#accessToken}`,
-        "content-type": "application/json",
-      },
-    });
+    const response = await this.#fetch(pathname, init);
     if (!response.ok) throw await this.#responseError(response);
     try {
       return await response.json();
@@ -141,7 +191,6 @@ export class HttpPlatformModelTransport implements PlatformModelTransport {
       throw new Error("MODEL_RESPONSE_INVALID");
     }
   }
-
   async #responseError(response: Response): Promise<Error> {
     const payload: unknown = await response.json().catch(() => ({}));
     const body = (payload && typeof payload === "object" ? payload : {}) as {
@@ -149,15 +198,15 @@ export class HttpPlatformModelTransport implements PlatformModelTransport {
     };
     const code =
       typeof body.error?.code === "string" ? body.error.code : `PLATFORM_HTTP_${response.status}`;
-    const failure = classifyModelError(
-      `${code}:${typeof body.error?.message === "string" ? body.error.message : ""}`,
-      { httpStatus: response.status },
-    );
-    // Keep a safe cause and HTTP status through Pi's string error boundary.
-    // Pi recognizes insufficient_quota as a limit that should not be retried.
-    const message = /^(?:ACCESS_|ACCOUNT_|DEVICE_)/u.test(code)
-      ? code
-      : `${failure.code}:HTTP ${response.status}${failure.category === "quota" ? ":insufficient_quota" : ""}`;
+    if (this.#options.apiVersion === "v3" && response.status === 401)
+      return new Error("MODEL_ACCOUNT_AUTH_REQUIRED");
+    const failure = classifyModelError(code, { httpStatus: response.status });
+    const message =
+      /^(?:AUTH_|ACCESS_|ACCOUNT_|DEVICE_|MODEL_REQUEST_CONFLICT|MODEL_REQUEST_IN_PROGRESS|MODEL_RESULT_UNAVAILABLE)/u.test(
+        code,
+      )
+        ? code
+        : `${failure.code}:HTTP ${response.status}${failure.category === "quota" ? ":insufficient_quota" : ""}`;
     return Object.assign(new Error(message), { status: response.status });
   }
 }
@@ -176,6 +225,8 @@ export interface CreatePlatformProviderOptions {
   transport: PlatformModelTransport;
   request: PlatformModelRequestContext;
   thinkingLevel?: ThinkingLevel;
+  responseFormat?: ModelGatewayRequestDto["responseFormat"];
+  toolChoice?: ModelGatewayRequestDto["toolChoice"];
   requiresImageInput?: boolean;
   onUsage?: (record: UsageRecord) => void;
   streamChunkSize?: number;
@@ -233,7 +284,7 @@ function piUsage(record: UsageRecord): AssistantMessage["usage"] {
   };
 }
 
-function roundDedupeKey(baseKey: string, context: Context): string {
+function roundDedupeKey(baseKey: string, context: unknown): string {
   const digest = createHash("sha256").update(JSON.stringify(context), "utf8").digest("hex");
   return `${baseKey.slice(0, 160)}:ctx:${digest}`;
 }
@@ -255,6 +306,25 @@ function redactContext(
   if (!redactions || redactions.length === 0) return context;
   const redact = (value: unknown): unknown => {
     if (typeof value === "string") {
+      const state = decodePlatformState(value);
+      if (state)
+        return encodePlatformState({
+          ...state,
+          items: state.items.map((item) =>
+            Object.fromEntries(
+              Object.entries(item).map(([key, nested]) => [
+                key,
+                key === "encrypted_content"
+                  ? nested
+                  : item.type === "function_call" &&
+                      key === "arguments" &&
+                      typeof nested === "string"
+                    ? JSON.stringify(redact(JSON.parse(nested)))
+                    : redact(nested),
+              ]),
+            ),
+          ),
+        });
       return redactions.reduce(
         (current, item) =>
           item.value.length > 0 ? current.replaceAll(item.value, item.replacement) : current,
@@ -278,13 +348,47 @@ function streamPlatform(
   options: SimpleStreamOptions | undefined,
   configuration: CreatePlatformProviderOptions,
 ): AssistantMessageEventStream {
+  const entry = configuration.catalog.find((item) => item.modelRef === model.id);
   // The gateway carries prompt/tools outside the transcript. Replay Pi's system
   // deltas before projecting so resumed sessions and tool changes keep their state.
   const modelContext = redactContext(
     {
       systemPrompt: getCurrentSystemPrompt(context.messages),
       tools: getCurrentTools(context.messages),
-      messages: context.messages.filter((message) => message.role !== "system"),
+      messages: context.messages
+        .filter((message) => message.role !== "system")
+        .map((message) => {
+          // Older sessions can contain optional Office previews or browser screenshots.
+          // User images and tools that require visual input retain capability checks.
+          const browserSnapshot =
+            message.role === "toolResult" &&
+            (message.toolName === "openerx_browser" ||
+              (message.toolName === "openerx_web_search" &&
+                message.details !== null &&
+                typeof message.details === "object" &&
+                "webSearchFallback" in message.details));
+          if (entry?.capabilities.imageInput !== true && browserSnapshot) {
+            return {
+              ...message,
+              content: browserToolContent(message.content, false),
+            };
+          }
+          if (
+            entry?.capabilities.imageInput !== true &&
+            message.role === "toolResult" &&
+            message.toolName === "openerx_office_artifact" &&
+            message.content.some((part) => part.type === "image")
+          ) {
+            return {
+              ...message,
+              content: [
+                ...message.content.filter((part) => part.type !== "image"),
+                { type: "text" as const, text: officeVisualReviewUnavailable },
+              ],
+            };
+          }
+          return message;
+        }),
     },
     configuration.contextRedactions,
   );
@@ -317,15 +421,34 @@ function streamPlatform(
         stream.push({ type: "text_start", contentIndex: textContentIndex, partial: output });
         return textContentIndex;
       };
+      const wireContext = projectPlatformContext(
+        modelContext,
+        entry?.capabilities.structuredOutput,
+      );
+      const thinkingLevel = options?.reasoning ?? "off";
+      const toolChoice = modelContext.tools?.length
+        ? (options?.toolChoice ?? configuration.toolChoice)
+        : undefined;
+      const responseFormat = configuration.responseFormat;
       const request: ModelGatewayRequestDto = {
         ...configuration.request,
-        thinkingLevel: options?.reasoning ?? "off",
-        requestDedupeKey: roundDedupeKey(configuration.request.requestDedupeKey, modelContext),
+        thinkingLevel,
+        reasoningReplay: true,
+        responsesReplay: true,
+        ...(responseFormat ? { responseFormat } : {}),
+        ...(toolChoice ? { toolChoice } : {}),
+        requestDedupeKey: roundDedupeKey(configuration.request.requestDedupeKey, {
+          context: wireContext,
+          thinkingLevel,
+          toolChoice,
+          responseFormat,
+        }),
         requirements: {
           ...(contextHasImages(modelContext) ? { imageInput: true } : {}),
           ...(modelContext.tools && modelContext.tools.length > 0 ? { functionCalling: true } : {}),
+          ...(responseFormat && responseFormat.type !== "text" ? { structuredOutput: true } : {}),
         },
-        context: modelContext,
+        context: wireContext,
       };
       const pushDelta = (delta: string): void => {
         if (options?.signal?.aborted) throw new Error("MODEL_REQUEST_ABORTED");
@@ -379,6 +502,38 @@ function streamPlatform(
         });
       }
       const toolCalls = response.toolCalls ?? [];
+      if (response.providerState) {
+        output.content.push({
+          type: "thinking",
+          thinking: "",
+          redacted: true,
+          thinkingSignature: encodePlatformState(response.providerState),
+        });
+      }
+      if (response.reasoning) {
+        const contentIndex = output.content.length;
+        output.content.push({
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: response.reasoning.signature,
+        });
+        stream.push({ type: "thinking_start", contentIndex, partial: output });
+        const block = output.content[contentIndex];
+        if (block?.type === "thinking") block.thinking = response.reasoning.text;
+        stream.push({
+          type: "thinking_delta",
+          contentIndex,
+          delta: response.reasoning.text,
+          partial: output,
+        });
+        stream.push({
+          type: "thinking_end",
+          contentIndex,
+          content: response.reasoning.text,
+          partial: output,
+        });
+      }
+      if (response.finishReason === "aborted") throw new Error("MODEL_REQUEST_ABORTED");
       if (response.finishReason === "tool_calls" && toolCalls.length === 0) {
         throw new Error("MODEL_TOOL_CALLS_MISSING");
       }
@@ -427,7 +582,11 @@ function streamPlatform(
       }
       stream.end();
     } catch (error) {
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      output.stopReason =
+        options?.signal?.aborted ||
+        (error instanceof Error && error.message === "MODEL_REQUEST_ABORTED")
+          ? "aborted"
+          : "error";
       output.errorMessage = error instanceof Error ? error.message : String(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
@@ -450,6 +609,9 @@ export function createPlatformModelProvider(
       ? available.find(
           (entry) =>
             (options.requiresImageInput !== true || entry.capabilities.imageInput === true) &&
+            (!options.responseFormat ||
+              options.responseFormat.type === "text" ||
+              entry.capabilities.structuredOutput) &&
             (requestedThinkingLevel === undefined ||
               supportsThinkingLevel(entry, requestedThinkingLevel)),
         )
@@ -463,6 +625,13 @@ export function createPlatformModelProvider(
       .map(({ modelRef }) => modelRef)
       .join(",");
     throw new Error(`MODEL_CAPABILITY_UNSUPPORTED:imageInput:${suggestions}`);
+  }
+  if (
+    options.responseFormat &&
+    options.responseFormat.type !== "text" &&
+    !selectedEntry.capabilities.structuredOutput
+  ) {
+    throw new Error("MODEL_CAPABILITY_UNSUPPORTED:structuredOutput");
   }
   if (
     requestedThinkingLevel !== undefined &&

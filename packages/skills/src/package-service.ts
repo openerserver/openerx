@@ -3,6 +3,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -10,9 +11,19 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import type { PiSkillMount, SkillInstallation, SkillPackageManifest } from "@openerx/contracts";
-import { skillNameSchema, skillPackageManifestSchema } from "@openerx/contracts";
+import type {
+  EnterpriseSkillSource,
+  PiSkillMount,
+  SkillInstallation,
+  SkillPackageManifest,
+} from "@openerx/contracts";
+import {
+  enterpriseSkillSourceSchema,
+  skillNameSchema,
+  skillPackageManifestSchema,
+} from "@openerx/contracts";
 import type { SkillRepository } from "@openerx/storage";
 import { unzipSync } from "fflate";
 import { parse as parseYaml } from "yaml";
@@ -150,7 +161,19 @@ function copyDirectory(source: string, destination: string): void {
 function extractArchive(source: string, destination: string): void {
   const archive = readFileSync(source);
   if (archive.byteLength > maxPackageBytes) throw new Error("SKILL_ARCHIVE_TOO_LARGE");
-  const entries = unzipSync(archive);
+  // Check advertised expansion before fflate allocates decompressed buffers.
+  let advertisedBytes = 0,
+    advertisedFiles = 0;
+  const entries = unzipSync(archive, {
+    filter: (file) => {
+      advertisedBytes += file.originalSize;
+      if (++advertisedFiles > maxFiles) throw new Error("SKILL_TOO_MANY_FILES");
+      if (!Number.isSafeInteger(advertisedBytes) || advertisedBytes > maxPackageBytes)
+        throw new Error("SKILL_PACKAGE_TOO_LARGE");
+      normalizeRelative(file.name.endsWith("/") ? file.name.slice(0, -1) : file.name);
+      return true;
+    },
+  });
   const names = Object.keys(entries);
   if (names.length > maxFiles) throw new Error("SKILL_TOO_MANY_FILES");
   let total = 0;
@@ -240,6 +263,80 @@ export class SkillPackageService {
     return this.#stageAndInstall({ ...input, installationId: randomUUID() });
   }
 
+  // Main-process integration only. This is not part of the user import IPC.
+  installEnterpriseArchive(input: {
+    installationId: string;
+    sourcePath: string;
+    source: EnterpriseSkillSource;
+    expectedName: string;
+  }): SkillInstallation {
+    if (
+      builtInSkills.some(
+        (skill) => parseSkillFrontmatter(skill.files["SKILL.md"]).name === input.expectedName,
+      )
+    )
+      throw new Error("SKILL_SCOPE_NAME_CONFLICT");
+    const source = enterpriseSkillSourceSchema.parse(input.source);
+    if (input.installationId !== source.skillId) throw new Error("SKILL_ENTERPRISE_SCOPE_MISMATCH");
+    const archive = readFileSync(input.sourcePath);
+    if (
+      archive.byteLength !== source.sizeBytes ||
+      createHash("sha256").update(archive).digest("hex") !== source.archiveSha256
+    )
+      throw new Error("SKILL_ARCHIVE_INTEGRITY_FAILED");
+    return this.#stageAndInstall({
+      installationId: input.installationId,
+      sourcePath: input.sourcePath,
+      sourceKind: "archive",
+      scope: "enterprise",
+      workspaceId: null,
+      expectedName: input.expectedName,
+      enterpriseSource: source,
+    });
+  }
+
+  verifyPackage(installationId: string): void {
+    const active = this.#repository.activePackage(installationId);
+    this.#assertIntegrity(installationId, active.packagePath);
+  }
+
+  versionMount(installationId: string, version: string, autoInvoke = true): PiSkillMount {
+    const pinned = this.#repository.packageVersion(installationId, version);
+    this.#assertIntegrity(installationId, pinned.packagePath, pinned.installation.checksumSha256);
+    return {
+      installationId,
+      name: pinned.installation.name,
+      baseDir: pinned.packagePath,
+      autoInvoke,
+    };
+  }
+
+  removeEnterprisePackage(installationId: string): void {
+    this.#repository.removeManagedInstallation(installationId);
+    rmSync(path.join(this.#root, installationId), { recursive: true, force: true });
+  }
+
+  pruneUnusedVersions(installationId: string, retainedVersions: string[] = []): void {
+    const root = path.join(this.#root, installationId, "versions");
+    for (const directory of this.#repository.pruneManagedVersions(
+      installationId,
+      retainedVersions,
+    )) {
+      const relative = path.relative(root, directory);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
+        throw new Error("SKILL_PATH_ESCAPE");
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  cleanStaging(): void {
+    for (const name of readdirSync(this.#root))
+      if (/^\.staging-[0-9a-f-]{36}$/.test(name))
+        rmSync(path.join(this.#root, name), { recursive: true, force: true });
+    rmSync(path.join(this.#root, ".trash"), { recursive: true, force: true });
+    mkdirSync(path.join(this.#root, ".trash"), { mode: 0o700 });
+  }
+
   update(input: {
     installationId: string;
     sourcePath: string;
@@ -247,6 +344,7 @@ export class SkillPackageService {
   }): SkillInstallation {
     const current = this.#repository.get(input.installationId);
     if (current.scope === "builtin") throw new Error("BUILTIN_SKILL_UPDATE_MANAGED_BY_RELEASE");
+    if (current.scope === "enterprise") throw new Error("ENTERPRISE_SKILL_MANAGED_BY_CATALOG");
     return this.#stageAndInstall({
       ...input,
       scope: current.scope,
@@ -285,6 +383,8 @@ export class SkillPackageService {
   }
 
   rollback(installationId: string, version: string): SkillInstallation {
+    if (this.#repository.get(installationId).scope === "enterprise")
+      throw new Error("ENTERPRISE_SKILL_MANAGED_BY_CATALOG");
     return this.#repository.rollback(installationId, version);
   }
 
@@ -323,25 +423,39 @@ export class SkillPackageService {
   readResource(
     installationId: string,
     relativePath: string,
+    version?: string,
   ): {
     name: string;
     relativePath: string;
     content: string;
   } {
-    const active = this.#repository.activePackage(installationId);
+    const { bytes, ...resource } = this.readResourceBytes(installationId, relativePath, version);
+    if (bytes.byteLength > maxResourceBytes) throw new Error("SKILL_RESOURCE_TOO_LARGE");
+    return { ...resource, content: bytes.toString("utf8") };
+  }
+
+  /** Verified pinned bytes for host-side file parsers; never send these bytes to the model. */
+  readResourceBytes(
+    installationId: string,
+    relativePath: string,
+    version?: string,
+  ): { name: string; relativePath: string; bytes: Buffer } {
+    const active = version
+      ? this.#repository.packageVersion(installationId, version)
+      : this.#repository.activePackage(installationId);
     const normalized = normalizeRelative(relativePath);
-    this.#assertIntegrity(installationId, active.packagePath);
+    this.#assertIntegrity(installationId, active.packagePath, active.installation.checksumSha256);
     const target = path.join(active.packagePath, ...normalized.split("/"));
     const relative = path.relative(active.packagePath, target);
     if (relative.startsWith("..") || path.isAbsolute(relative))
       throw new Error("SKILL_PATH_ESCAPE");
     const info = lstatSync(target);
     if (!info.isFile() || info.isSymbolicLink()) throw new Error("SKILL_RESOURCE_NOT_FOUND");
-    if (info.size > maxResourceBytes) throw new Error("SKILL_RESOURCE_TOO_LARGE");
+    if (info.size > maxPackageBytes) throw new Error("SKILL_RESOURCE_TOO_LARGE");
     return {
       name: active.installation.name,
       relativePath: normalized,
-      content: readFileSync(target, "utf8"),
+      bytes: readFileSync(target),
     };
   }
 
@@ -349,8 +463,11 @@ export class SkillPackageService {
     installationId: string,
     relativePath: string,
     allowNetwork: boolean,
+    version?: string,
   ): { absolutePath: string; packagePath: string; name: string } {
-    const active = this.#repository.activePackage(installationId);
+    const active = version
+      ? this.#repository.packageVersion(installationId, version)
+      : this.#repository.activePackage(installationId);
     const normalized = normalizeRelative(relativePath);
     if (!active.scripts.includes(normalized)) throw new Error("SKILL_SCRIPT_NOT_DECLARED");
     if (!active.installation.platforms.includes(this.#platform))
@@ -365,10 +482,39 @@ export class SkillPackageService {
       (permission) => permission.capability === "network",
     );
     if (allowNetwork && !declaredNetwork) throw new Error("SKILL_NETWORK_NOT_DECLARED");
-    this.#assertIntegrity(installationId, active.packagePath);
+    this.#assertIntegrity(installationId, active.packagePath, active.installation.checksumSha256);
     const absolutePath = path.join(active.packagePath, ...normalized.split("/"));
     if (!lstatSync(absolutePath).isFile()) throw new Error("SKILL_SCRIPT_NOT_FOUND");
     return { absolutePath, packagePath: active.packagePath, name: active.installation.name };
+  }
+
+  /** Execute a verified version in a disposable copy, never in managed package storage. */
+  scriptExecutionCopy(
+    installationId: string,
+    relativePath: string,
+    allowNetwork: boolean,
+    version?: string,
+  ): ReturnType<SkillPackageService["scriptDescriptor"]> & { dispose(): void } {
+    const script = this.scriptDescriptor(installationId, relativePath, allowNetwork, version);
+    const active = version
+      ? this.#repository.packageVersion(installationId, version)
+      : this.#repository.activePackage(installationId);
+    const directory = mkdtempSync(path.join(tmpdir(), "openerx-skill-script-"));
+    const dispose = () => rmSync(directory, { recursive: true, force: true });
+    try {
+      copyDirectory(script.packagePath, directory);
+      if (treeChecksum(directory) !== active.installation.checksumSha256)
+        throw new Error("SKILL_PACKAGE_DAMAGED");
+      return {
+        name: script.name,
+        packagePath: directory,
+        absolutePath: path.join(directory, path.relative(script.packagePath, script.absolutePath)),
+        dispose,
+      };
+    } catch (error) {
+      dispose();
+      throw error;
+    }
   }
 
   beginInvocation(input: {
@@ -398,9 +544,10 @@ export class SkillPackageService {
     installationId: string;
     sourcePath: string;
     sourceKind: "local_directory" | "archive";
-    scope: "personal" | "workspace";
+    scope: "personal" | "workspace" | "enterprise";
     workspaceId: string | null;
     expectedName?: string;
+    enterpriseSource?: EnterpriseSkillSource;
   }): SkillInstallation {
     const staging = path.join(this.#root, `.staging-${randomUUID()}`);
     mkdirSync(staging, { recursive: true, mode: 0o700 });
@@ -412,15 +559,28 @@ export class SkillPackageService {
       if (input.expectedName && parsed.name !== input.expectedName) {
         throw new Error("SKILL_NAME_IMMUTABLE");
       }
+      if (
+        input.enterpriseSource &&
+        (parsed.manifest.version !== input.enterpriseSource.version ||
+          !parsed.manifest.platforms.includes(this.#platform))
+      )
+        throw new Error(
+          parsed.manifest.version !== input.enterpriseSource.version
+            ? "SKILL_VERSION_MISMATCH"
+            : "SKILL_PLATFORM_UNSUPPORTED",
+        );
       return this.#installParsed({
         parsed,
         installationId: input.installationId,
         scope: input.scope,
         workspaceId: input.workspaceId,
-        sourceKind: input.sourceKind,
-        sourceLabel: path.basename(input.sourcePath),
+        sourceKind: input.enterpriseSource ? "enterprise_catalog" : input.sourceKind,
+        sourceLabel: input.enterpriseSource
+          ? input.enterpriseSource.authorityOrigin
+          : path.basename(input.sourcePath),
         trust: "unverified",
         builtIn: false,
+        enterpriseSource: input.enterpriseSource,
       });
     } finally {
       rmSync(staging, { recursive: true, force: true });
@@ -449,6 +609,7 @@ export class SkillPackageService {
     sourceLabel: string;
     trust: SkillInstallation["trust"];
     builtIn: boolean;
+    enterpriseSource?: EnterpriseSkillSource;
   }): SkillInstallation {
     const versionDirectory = path.join(
       this.#root,
@@ -456,6 +617,12 @@ export class SkillPackageService {
       "versions",
       `${input.parsed.manifest.version}-${input.parsed.checksum.slice(0, 12)}`,
     );
+    if (
+      input.enterpriseSource &&
+      existsSync(versionDirectory) &&
+      treeChecksum(versionDirectory) !== input.parsed.checksum
+    )
+      rmSync(versionDirectory, { recursive: true, force: true });
     const packageCreated = !existsSync(versionDirectory);
     if (packageCreated) copyDirectory(input.parsed.root, versionDirectory);
     try {
@@ -476,6 +643,7 @@ export class SkillPackageService {
         manifest: input.parsed.manifest,
         permissionDigest: input.parsed.permissionDigest,
         builtIn: input.builtIn,
+        enterpriseSource: input.enterpriseSource,
       });
     } catch (error) {
       if (packageCreated) rmSync(versionDirectory, { recursive: true, force: true });
@@ -522,13 +690,35 @@ export class SkillPackageService {
     };
   }
 
-  #assertIntegrity(installationId: string, packagePath: string): void {
+  #assertIntegrity(installationId: string, packagePath: string, expectedChecksum?: string): void {
     const skill = this.#repository.get(installationId);
-    if (!existsSync(packagePath) || treeChecksum(packagePath) !== skill.checksumSha256) {
-      this.#repository.markPackageState(
-        installationId,
-        existsSync(packagePath) ? "damaged" : "missing",
-      );
+    const versionRoot = path.join(this.#root, installationId, "versions");
+    const relative = path.relative(versionRoot, path.resolve(packagePath));
+    if (
+      !relative ||
+      relative.startsWith("..") ||
+      path.isAbsolute(relative) ||
+      relative.split(path.sep).length !== 1
+    )
+      throw new Error("SKILL_PATH_ESCAPE");
+    for (const directory of [
+      this.#root,
+      path.join(this.#root, installationId),
+      versionRoot,
+      packagePath,
+    ])
+      if (existsSync(directory) && lstatSync(directory).isSymbolicLink())
+        throw new Error("SKILL_PATH_ESCAPE");
+    if (
+      !existsSync(packagePath) ||
+      treeChecksum(packagePath) !== (expectedChecksum ?? skill.checksumSha256)
+    ) {
+      // Damage to an archived run version must not quarantine the new catalog version.
+      if (!expectedChecksum || expectedChecksum === skill.checksumSha256)
+        this.#repository.markPackageState(
+          installationId,
+          existsSync(packagePath) ? "damaged" : "missing",
+        );
       throw new Error(existsSync(packagePath) ? "SKILL_PACKAGE_DAMAGED" : "SKILL_PACKAGE_MISSING");
     }
   }

@@ -1,4 +1,8 @@
 import type { WorkspaceGrant } from "@openerx/contracts";
+import {
+  desktopWorkspaceBridge,
+  desktopWorkspaceCapabilities,
+} from "@openerx/desktop-ui/workspace-bridge";
 import { CaretDown, FolderOpen, FolderSimple, Plus, X } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -9,7 +13,7 @@ import "./workspace-context.css";
 function useWorkspaces(conversationId: string) {
   return useQuery({
     queryKey: ["workspaces", conversationId],
-    queryFn: () => withUiTimeout(window.openerx.listWorkspaces({ conversationId })),
+    queryFn: () => withUiTimeout(desktopWorkspaceBridge().listWorkspaces({ conversationId })),
     enabled: Boolean(conversationId),
     retry: false,
   });
@@ -152,6 +156,7 @@ export function WorkspaceSection({
   onClose: () => void;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
+  const capabilities = desktopWorkspaceCapabilities();
   const workspaces = useWorkspaces(conversationId);
   const primary =
     workspaces.data?.find((workspace) => workspace.bindingRole === "primary") ??
@@ -169,13 +174,13 @@ export function WorkspaceSection({
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["workspaces", conversationId] });
   const choose = useMutation({
     mutationFn: () =>
-      window.openerx.chooseWorkspace({
+      desktopWorkspaceBridge().chooseWorkspace({
         conversationId,
-        role: pickerRole ?? "additional",
+        role: pickerRole ?? "primary",
         access,
         allowNetwork: access === "read_write" && allowNetwork,
         expiresAt:
-          expiry === "never"
+          !capabilities.customWorkspaceExpiry || expiry === "never"
             ? null
             : new Date(Date.now() + Number(expiry) * 60 * 60_000).toISOString(),
       }),
@@ -190,7 +195,10 @@ export function WorkspaceSection({
   });
   const select = useMutation({
     mutationFn: (workspace: WorkspaceGrant) =>
-      window.openerx.setPrimaryWorkspace({ conversationId, workspaceGrantId: workspace.id }),
+      desktopWorkspaceBridge().setPrimaryWorkspace({
+        conversationId,
+        workspaceGrantId: workspace.id,
+      }),
     onSuccess: async (workspace) => {
       await refresh();
       setNotice(`工作目录已设为 ${workspaceName(workspace)}，下一轮开始使用。`);
@@ -198,7 +206,7 @@ export function WorkspaceSection({
   });
   const remove = useMutation({
     mutationFn: (workspace: WorkspaceGrant) =>
-      window.openerx.revokeWorkspace({ workspaceGrantId: workspace.id }),
+      desktopWorkspaceBridge().revokeWorkspace({ workspaceGrantId: workspace.id }),
     onSuccess: async () => {
       await refresh();
       setNotice("已移除本对话的目录授权，磁盘文件保留。");
@@ -233,21 +241,29 @@ export function WorkspaceSection({
         <p className="workspace-help">
           {workspaces.isPending
             ? "正在读取工作目录…"
-            : "开始任务后会自动准备专属目录，也可以选择已有文件夹。"}
+            : capabilities.mode === "enterprise"
+              ? "选择此任务的主目录并单独授权，目录不会从项目继承。"
+              : "开始任务后会自动准备专属目录，也可以选择已有文件夹。"}
         </p>
       )}
       {primary ? (
         <p className="workspace-help">
           {primary.access === "read_only"
             ? "当前目录只读，需要写入时请选择可读写的目录。"
-            : "命令默认在此执行，新文件也保存在这里。"}
+            : capabilities.mode === "enterprise"
+              ? "文件读写与本地命令分别授权；目录可读写不代表允许执行命令。"
+              : "命令默认在此执行，新文件也保存在这里。"}
         </p>
       ) : null}
       <div className="workspace-section-heading workspace-additional-heading">
         <h3>
           附加目录 <span>{additional.length}</span>
         </h3>
-        <button type="button" disabled={busy} onClick={() => openPicker("additional")}>
+        <button
+          type="button"
+          disabled={busy || !capabilities.additionalDirectories}
+          onClick={() => openPicker("additional")}
+        >
           <Plus size={14} aria-hidden="true" />
           添加
         </button>
@@ -265,7 +281,11 @@ export function WorkspaceSection({
         />
       ))}
       {additional.length === 0 ? (
-        <p className="workspace-help">需要使用其他文件夹时再添加。</p>
+        <p className="workspace-help">
+          {capabilities.additionalDirectories
+            ? "需要使用其他文件夹时再添加。"
+            : "企业任务目前只支持一个主目录；可更换主目录，不能添加附加目录。"}
+        </p>
       ) : null}
       {pickerRole ? (
         <section
@@ -308,15 +328,21 @@ export function WorkspaceSection({
             <summary>
               更多权限设置 <CaretDown size={12} aria-hidden="true" />
             </summary>
-            <label className="workspace-access-field">
-              <span>有效期</span>
-              <select value={expiry} onChange={(event) => setExpiry(event.target.value)}>
-                <option value="never">长期有效</option>
-                <option value="1">1 小时</option>
-                <option value="24">24 小时</option>
-                <option value="168">7 天</option>
-              </select>
-            </label>
+            {capabilities.customWorkspaceExpiry ? (
+              <label className="workspace-access-field">
+                <span>有效期</span>
+                <select value={expiry} onChange={(event) => setExpiry(event.target.value)}>
+                  <option value="never">长期有效</option>
+                  <option value="1">1 小时</option>
+                  <option value="24">24 小时</option>
+                  <option value="168">7 天</option>
+                </select>
+              </label>
+            ) : (
+              <p className="workspace-help">
+                目录授权随企业身份验证有效期，到期后需重新验证。没有单独的长期授权。
+              </p>
+            )}
             <label className="workspace-network-field">
               <input
                 type="checkbox"

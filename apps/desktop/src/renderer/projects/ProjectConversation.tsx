@@ -1,8 +1,10 @@
 import type { Conversation, ConversationSnapshot, ProjectDirectoryState } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { ArrowRight, FolderSimple, X } from "@phosphor-icons/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
+import { ModalDialog } from "../ModalDialog";
 import { projectKeys, useProject, useProjectList } from "./use-projects";
 
 function operationId(): string {
@@ -88,7 +90,7 @@ export function ConversationProjectMoveDialog({
   const unchanged = targetProjectId === (conversation.projectId ?? "");
   const move = useMutation({
     mutationFn: () =>
-      window.openerx.moveConversationToProject({
+      desktopWorkspaceBridge().moveConversationToProject({
         operationId: operationId(),
         conversationId: conversation.id,
         projectId: targetProjectId || null,
@@ -112,21 +114,23 @@ export function ConversationProjectMoveDialog({
 
   return (
     <div className="project-dialog-backdrop">
-      <section
+      <ModalDialog
         className="project-dialog project-move-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="project-move-title"
-        onKeyDown={(event) => {
-          if (event.key === "Escape") onClose();
-        }}
+        titleId="project-move-title"
+        onClose={onClose}
+        pending={move.isPending}
       >
         <header>
           <div>
             <p className="project-panel-eyebrow">对话归属</p>
             <h2 id="project-move-title">更改所属项目</h2>
           </div>
-          <button type="button" aria-label="关闭更改项目" onClick={onClose}>
+          <button
+            type="button"
+            aria-label="关闭更改项目"
+            disabled={move.isPending}
+            onClick={onClose}
+          >
             <X size={17} />
           </button>
         </header>
@@ -135,6 +139,7 @@ export function ConversationProjectMoveDialog({
             <span>目标项目</span>
             <select
               aria-label="目标项目"
+              data-dialog-initial-focus
               value={targetProjectId}
               onChange={(event) => setTargetProjectId(event.target.value)}
             >
@@ -181,7 +186,7 @@ export function ConversationProjectMoveDialog({
           {move.error ? <p className="project-inline-error">{moveError(move.error)}</p> : null}
         </div>
         <footer className="project-move-actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={move.isPending} onClick={onClose}>
             取消
           </button>
           <button
@@ -193,7 +198,7 @@ export function ConversationProjectMoveDialog({
             {move.isPending ? "正在更改…" : "确认更改"}
           </button>
         </footer>
-      </section>
+      </ModalDialog>
     </div>
   );
 }

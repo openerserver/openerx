@@ -58,6 +58,9 @@ export class PiMemoryClusterer implements MemoryClusterer {
               accountId: authorization.accountId,
               accessToken: authorization.accessToken,
               platformBaseUrl: authorization.platformBaseUrl,
+              ...(authorization.modelApiVersion
+                ? { modelApiVersion: authorization.modelApiVersion }
+                : {}),
               selectedModelRef: "platform/auto",
               approvedFallbackModelRef: null,
               requestDedupeKey: `memory-cluster:${request.run.id}:${request.batchKey}`,

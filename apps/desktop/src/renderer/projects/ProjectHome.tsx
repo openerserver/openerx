@@ -1,4 +1,8 @@
 import type { ConversationSummary } from "@openerx/contracts";
+import {
+  desktopWorkspaceBridge,
+  desktopWorkspaceCapabilities,
+} from "@openerx/desktop-ui/workspace-bridge";
 import { ChatCircle, FolderSimple, GearSix, Plus, WarningCircle } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -14,12 +18,13 @@ function updatedLabel(timestamp: string): string {
 }
 
 export function ProjectHome(): React.JSX.Element {
+  const capabilities = desktopWorkspaceCapabilities();
   const projectId = useParams<{ projectId: string }>().projectId ?? "";
   const [settingsOpen, setSettingsOpen] = useState(false);
   const detail = useProject(projectId);
   const conversations = useQuery({
     queryKey: ["chat", "list", "project", projectId],
-    queryFn: () => window.openerx.listConversations({ includeArchived: true }),
+    queryFn: () => desktopWorkspaceBridge().listConversations({ includeArchived: true }),
     select: (items) => items.filter((conversation) => conversation.projectId === projectId),
     enabled: projectId.length > 0,
   });
@@ -52,7 +57,13 @@ export function ProjectHome(): React.JSX.Element {
     <main className="project-page">
       <header className="project-page-header">
         <div>
-          <p className="project-eyebrow">{project.archivedAt ? "已归档项目" : "个人项目"}</p>
+          <p className="project-eyebrow">
+            {project.archivedAt
+              ? "已归档项目"
+              : capabilities.mode === "enterprise"
+                ? "企业项目"
+                : "个人项目"}
+          </p>
           <h1>{project.name}</h1>
           <p>{project.instructions || "还没有项目说明。可以在设置中补充长期目标和偏好。"}</p>
         </div>
@@ -105,7 +116,9 @@ export function ProjectHome(): React.JSX.Element {
           <div>
             <h2 id="project-conversations-title">项目对话</h2>
             <p className="project-section-description">
-              项目说明和当前设备可用目录会在每一轮生成前重新解析。
+              {capabilities.projectDirectories
+                ? "项目说明和当前设备可用目录会在每一轮生成前重新解析。"
+                : "每轮生成都会继承项目说明；本机目录需在各对话中单独授权。"}
             </p>
           </div>
         </div>
@@ -130,7 +143,9 @@ export function ProjectHome(): React.JSX.Element {
               <ChatCircle size={24} />
               <h3>还没有项目对话</h3>
               <p className="project-empty-description">
-                从这个项目开始的新对话会自动继承项目说明和已连接目录。
+                {capabilities.projectDirectories
+                  ? "新对话会自动继承项目说明和已连接目录。"
+                  : "新对话会继承项目说明；本机目录需另行授权。"}
               </p>
               {!project.archivedAt ? (
                 <NavLink to={`/projects/${project.id}/new`}>开始第一个对话</NavLink>
@@ -144,11 +159,16 @@ export function ProjectHome(): React.JSX.Element {
         <div className="project-section-heading">
           <div>
             <h2 id="project-directory-summary-title">目录</h2>
-            <p className="project-section-description">真实路径和授权只保存在当前设备。</p>
+            <p className="project-section-description">
+              {capabilities.projectDirectories
+                ? "真实路径和授权只保存在当前设备。"
+                : "企业项目暂不支持绑定或继承目录。请在对话中授权一个主目录。"}
+            </p>
           </div>
           <button
             type="button"
             className="project-text-button"
+            disabled={!capabilities.projectDirectories}
             onClick={() => setSettingsOpen(true)}
           >
             管理目录

@@ -247,7 +247,7 @@ export class ModelServiceSettingsStore {
 
   async execution(modelRef?: string): Promise<AppServiceByokConfiguration | undefined> {
     const state = await this.state();
-    if (state.mode !== "byok") return undefined;
+    if (state.mode !== "byok" && !modelRef) return undefined;
     // The custom entry must use its exact configured model, including when a
     // preset provider key is also available. Explicit unknown models cannot fall back.
     if (modelRef === "platform/byok" || (!modelRef && state.credentialConfigured && state.byok)) {

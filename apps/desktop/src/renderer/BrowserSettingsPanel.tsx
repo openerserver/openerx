@@ -1,4 +1,5 @@
 import type { BrowserMode, BrowserPermissionUpdate } from "@openerx/contracts";
+import { desktopWorkspaceBridge } from "@openerx/desktop-ui/workspace-bridge";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import "./browser-settings.css";
@@ -15,24 +16,27 @@ export function BrowserSettingsPanel() {
   const [siteHost, setSiteHost] = useState("");
   const state = useQuery({
     queryKey: ["browser-connection"],
-    queryFn: () => window.openerx.getBrowserConnectionState(),
+    queryFn: () => desktopWorkspaceBridge().getBrowserConnectionState(),
     refetchInterval: 3000,
   });
   const sessions = useQuery({
     queryKey: ["browser-sessions"],
-    queryFn: () => window.openerx.listBrowserComputerUseSessions(),
+    queryFn: () => desktopWorkspaceBridge().listBrowserComputerUseSessions(),
     refetchInterval: 3000,
   });
   const save = useMutation({
-    mutationFn: (mode: BrowserMode) => window.openerx.updateBrowserMode(mode),
+    mutationFn: (mode: BrowserMode) => desktopWorkspaceBridge().updateBrowserMode(mode),
     onSuccess: async (value) => {
       client.setQueryData(["browser-connection"], value);
       await client.invalidateQueries({ queryKey: ["tools", "runtime-readiness"] });
     },
   });
-  const setup = useMutation({ mutationFn: () => window.openerx.prepareBrowserExtension() });
+  const setup = useMutation({
+    mutationFn: () => desktopWorkspaceBridge().prepareBrowserExtension(),
+  });
   const permissions = useMutation({
-    mutationFn: (input: BrowserPermissionUpdate) => window.openerx.updateBrowserPermission(input),
+    mutationFn: (input: BrowserPermissionUpdate) =>
+      desktopWorkspaceBridge().updateBrowserPermission(input),
     onSuccess: (value, input) => {
       client.setQueryData(["browser-connection"], value);
       setSiteHost("");
@@ -42,8 +46,8 @@ export function BrowserSettingsPanel() {
   const control = useMutation({
     mutationFn: ({ sessionId, resume }: { sessionId: string; resume: boolean }) =>
       resume
-        ? window.openerx.resumeBrowserComputerUseSession({ sessionId })
-        : window.openerx.pauseBrowserComputerUseSession({ sessionId }),
+        ? desktopWorkspaceBridge().resumeBrowserComputerUseSession({ sessionId })
+        : desktopWorkspaceBridge().pauseBrowserComputerUseSession({ sessionId }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["browser-sessions"] }),
   });
   const error = state.error || save.error || setup.error || control.error || permissions.error;

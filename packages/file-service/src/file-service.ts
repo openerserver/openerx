@@ -353,10 +353,16 @@ export class FileAppService {
 
   previewArtifact(
     id: string,
-    options: { includeModelImages?: boolean; includeHtmlResources?: boolean } = {},
+    options: {
+      includeModelImages?: boolean;
+      includeHtmlResources?: boolean;
+      version?: number;
+    } = {},
   ): ContentPreview {
     const artifact = this.#repository.artifact(id);
-    const version = artifact.versions.find(({ version }) => version === artifact.currentVersion);
+    const version = artifact.versions.find(
+      ({ version }) => version === (options.version ?? artifact.currentVersion),
+    );
     if (!version) throw new Error("ARTIFACT_VERSION_NOT_FOUND");
     const source = isTextPreviewFormat(artifact.format)
       ? this.#store.read(version.objectRef).toString("utf8")
@@ -419,13 +425,16 @@ export class FileAppService {
   exportArtifact(
     artifactId: string,
     destinationPath: string,
+    versionNumber?: number,
   ): {
     artifactId: string;
     fileName: string;
     version: number;
   } {
     const artifact = this.#repository.artifact(artifactId);
-    const version = artifact.versions.find(({ version }) => version === artifact.currentVersion);
+    const version = artifact.versions.find(
+      ({ version }) => version === (versionNumber ?? artifact.currentVersion),
+    );
     if (!version) throw new Error("ARTIFACT_VERSION_NOT_FOUND");
     const exported = this.#broker.exportSelectedPath(
       destinationPath,

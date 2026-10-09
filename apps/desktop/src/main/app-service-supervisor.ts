@@ -27,12 +27,15 @@ import {
   type DesktopControlSession,
   type DesktopExecutionContext,
   type HostToolAvailability,
+  type ModelAuthorization,
+  type ModelAuthorizationRequest,
   mainAutomationContextRequestFrameSchema,
   mainCapabilityAvailabilityRequestFrameSchema,
   mainCapabilityCancelFrameSchema,
   mainCapabilityRequestFrameSchema,
   mainCredentialRequestFrameSchema,
   mainOAuthRequestFrameSchema,
+  modelAuthorizationRequestSchema,
   type NormalizedToolResult,
   parseAutomationCommandResult,
   parseChatCommandResult,
@@ -87,6 +90,39 @@ export interface MainCapabilityHost {
 }
 
 export class AppServiceSupervisor {
+  #workspaceAccessAllowed = true;
+  #workspaceRevision = 0;
+  #workspaceAccessResolver: (() => Promise<void>) | null = null;
+
+  setWorkspaceAccessResolver(resolve: () => Promise<void>): void {
+    this.#workspaceAccessResolver = resolve;
+  }
+
+  /** Called only by Main's trusted account authority, never by renderer IPC. */
+  setWorkspaceAccessAllowed(allowed: boolean): void {
+    if (this.#workspaceAccessAllowed === allowed) return;
+    this.#workspaceAccessAllowed = allowed;
+    this.#workspaceRevision += 1;
+    if (!allowed) this.stop();
+  }
+
+  #assertWorkspaceAccess(revision = this.#workspaceRevision): void {
+    if (!this.#workspaceAccessAllowed) throw new Error("ENTERPRISE_WORKSPACE_REQUIRED");
+    if (revision !== this.#workspaceRevision) throw new Error("WORKSPACE_IDENTITY_CHANGED");
+  }
+
+  notifyModelAccountChanged(accountId: string | null): void {
+    this.#mainPort?.postMessage({ kind: "model.account.changed", accountId });
+  }
+  #modelAuthorizationProvider:
+    | ((request: ModelAuthorizationRequest) => Promise<ModelAuthorization>)
+    | undefined;
+  setModelAuthorizationProvider(
+    provider: (request: ModelAuthorizationRequest) => Promise<ModelAuthorization>,
+  ): void {
+    this.#modelAuthorizationProvider = provider;
+  }
+
   #profileDirectory: string;
   readonly #defaultWorkspaceDirectory: string;
   #ownerProfileId: string;
@@ -132,7 +168,13 @@ export class AppServiceSupervisor {
   }
 
   async start(): Promise<void> {
-    if (!this.#ready) this.#spawn();
+    if (this.#workspaceAccessResolver) await this.#workspaceAccessResolver();
+    this.#assertWorkspaceAccess();
+    const revision = this.#workspaceRevision;
+    if (!this.#ready) {
+      this.#stopping = false;
+      this.#spawn();
+    }
     const ready = this.#ready;
     if (!ready) throw new Error("App Service readiness was not initialized");
     return await new Promise<void>((resolve, reject) => {
@@ -143,7 +185,12 @@ export class AppServiceSupervisor {
       void ready.then(
         () => {
           clearTimeout(timeout);
-          resolve();
+          try {
+            this.#assertWorkspaceAccess(revision);
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
         },
         (error: unknown) => {
           clearTimeout(timeout);
@@ -153,18 +200,23 @@ export class AppServiceSupervisor {
     });
   }
 
-  async switchProfile(profileDirectory: string, ownerProfileId: string): Promise<void> {
+  async switchProfile(
+    profileDirectory: string,
+    ownerProfileId: string,
+    start = true,
+  ): Promise<void> {
     if (this.#profileDirectory === profileDirectory && this.#ownerProfileId === ownerProfileId) {
       return;
     }
     this.stop();
+    this.#workspaceRevision += 1;
     this.#remoteConfiguration = null;
     this.#profileDirectory = profileDirectory;
     this.#ownerProfileId = ownerProfileId;
     this.#stopping = false;
     this.#ready = null;
     this.#restartCount = 0;
-    await this.start();
+    if (start) await this.start();
   }
 
   stop(): void {
@@ -182,6 +234,10 @@ export class AppServiceSupervisor {
     this.#piHostProcess = null;
     this.#remoteHostProcess = null;
     this.#rejectAll(new Error("App Service stopped"));
+    this.#rejectReady?.(new Error("App Service stopped"));
+    this.#ready = null;
+    this.#resolveReady = null;
+    this.#rejectReady = null;
   }
 
   onEvent(listener: (event: ChatEvent) => void): () => void {
@@ -232,13 +288,15 @@ export class AppServiceSupervisor {
     timeoutMs = 15_000,
     byok?: AppServiceByokConfiguration,
   ): Promise<unknown> {
+    const revision = this.#workspaceRevision;
     if (request.command === "chat.stop") this.stopDesktopControl(request.input.conversationId);
     if (request.command === "tool.scope.revoke") this.stopDesktopControl();
     await this.start();
+    this.#assertWorkspaceAccess(revision);
     const port = this.#mainPort;
     if (!port) throw new Error("App Service is unavailable");
     const requestId = randomUUID();
-    return await new Promise<unknown>((resolve, reject) => {
+    const result = await new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.#pending.delete(requestId);
         reject(new Error(`App Service request timed out: ${request.command}`));
@@ -252,6 +310,8 @@ export class AppServiceSupervisor {
         ...(byok ? { byok } : {}),
       });
     });
+    this.#assertWorkspaceAccess(revision);
+    return result;
   }
 
   async saveCapabilityCredential(credentialRef: string, value: string): Promise<void> {
@@ -431,7 +491,11 @@ export class AppServiceSupervisor {
       },
       [remoteHostChannel.port1],
     );
-    this.#mainPort.on("message", (event) => this.#handleMessage(event.data, appNonce));
+    const messagePort = this.#mainPort;
+    messagePort.on("message", (event) => {
+      if (this.#mainPort === messagePort && this.#workspaceAccessAllowed)
+        this.#handleMessage(event.data, appNonce);
+    });
     this.#mainPort.start();
     const appProcess = this.#appProcess;
     const piHostProcess = this.#piHostProcess;
@@ -450,6 +514,40 @@ export class AppServiceSupervisor {
   }
 
   #handleMessage(data: unknown, expectedNonce: string): void {
+    // A delayed credential/tool reply may never be delivered to a replacement profile.
+    const responsePort = this.#mainPort;
+    const respond = (response: unknown): void => {
+      if (responsePort && this.#mainPort === responsePort && this.#workspaceAccessAllowed)
+        responsePort.postMessage(response);
+    };
+    const modelAuthorization = modelAuthorizationRequestSchema.safeParse(data);
+    if (modelAuthorization.success) {
+      const request = modelAuthorization.data;
+      const provider = this.#modelAuthorizationProvider;
+      void Promise.resolve()
+        .then(() => {
+          if (!provider) throw new Error("AUTHENTICATION_REQUIRED");
+          return provider(request);
+        })
+        .then(
+          (authorization) =>
+            respond({
+              kind: "model.authorization.response",
+              requestId: request.requestId,
+              ok: true,
+              authorization,
+            }),
+          () =>
+            respond({
+              kind: "model.authorization.response",
+              requestId: request.requestId,
+              ok: false,
+              errorCode: "AUTHENTICATION_REQUIRED",
+            }),
+        );
+      return;
+    }
+
     let ready: ReturnType<typeof parseInitialAppServiceReady>;
     try {
       ready = parseInitialAppServiceReady(data, expectedNonce, this.#handshakeComplete);
@@ -505,7 +603,7 @@ export class AppServiceSupervisor {
     if (automationContextRequest.success) {
       const provider = this.#automationExecutionContextProvider;
       if (!provider) {
-        this.#mainPort?.postMessage({
+        respond({
           kind: "main.automation-context.response",
           requestId: automationContextRequest.data.requestId,
           ok: false,
@@ -515,14 +613,14 @@ export class AppServiceSupervisor {
       }
       void provider(automationContextRequest.data.modelRef).then(
         (context) =>
-          this.#mainPort?.postMessage({
+          respond({
             kind: "main.automation-context.response",
             requestId: automationContextRequest.data.requestId,
             ok: true,
             data: context,
           }),
         (error: unknown) =>
-          this.#mainPort?.postMessage({
+          respond({
             kind: "main.automation-context.response",
             requestId: automationContextRequest.data.requestId,
             ok: false,
@@ -538,7 +636,7 @@ export class AppServiceSupervisor {
     if (capabilityRequest.success) {
       const host = this.#capabilityHost;
       if (!host) {
-        this.#mainPort?.postMessage({
+        respond({
           kind: "main.capability.response",
           requestId: capabilityRequest.data.requestId,
           ok: false,
@@ -556,14 +654,14 @@ export class AppServiceSupervisor {
         )
         .then(
           (result) =>
-            this.#mainPort?.postMessage({
+            respond({
               kind: "main.capability.response",
               requestId: capabilityRequest.data.requestId,
               ok: true,
               data: result,
             }),
           (error: unknown) =>
-            this.#mainPort?.postMessage({
+            respond({
               kind: "main.capability.response",
               requestId: capabilityRequest.data.requestId,
               ok: false,
@@ -585,7 +683,7 @@ export class AppServiceSupervisor {
     if (capabilityAvailability.success) {
       const host = this.#capabilityHost;
       if (!host) {
-        this.#mainPort?.postMessage({
+        respond({
           kind: "main.capability.availability.response",
           requestId: capabilityAvailability.data.requestId,
           ok: false,
@@ -595,14 +693,14 @@ export class AppServiceSupervisor {
       }
       void host.availability().then(
         (data) =>
-          this.#mainPort?.postMessage({
+          respond({
             kind: "main.capability.availability.response",
             requestId: capabilityAvailability.data.requestId,
             ok: true,
             data,
           }),
         (error: unknown) =>
-          this.#mainPort?.postMessage({
+          respond({
             kind: "main.capability.availability.response",
             requestId: capabilityAvailability.data.requestId,
             ok: false,
@@ -618,7 +716,7 @@ export class AppServiceSupervisor {
     if (credentialRequest.success) {
       const host = this.#capabilityHost;
       if (!host) {
-        this.#mainPort?.postMessage({
+        respond({
           kind: "main.credential.response",
           requestId: credentialRequest.data.requestId,
           ok: false,
@@ -636,14 +734,14 @@ export class AppServiceSupervisor {
             : host.clearCredential(credentialRequest.data.credentialRef).then(() => undefined);
       void operation.then(
         (value) =>
-          this.#mainPort?.postMessage({
+          respond({
             kind: "main.credential.response",
             requestId: credentialRequest.data.requestId,
             ok: true,
             ...(value ? { value } : {}),
           }),
         (error: unknown) =>
-          this.#mainPort?.postMessage({
+          respond({
             kind: "main.credential.response",
             requestId: credentialRequest.data.requestId,
             ok: false,
@@ -659,7 +757,7 @@ export class AppServiceSupervisor {
     if (oauthRequest.success) {
       const host = this.#capabilityHost;
       if (!host) {
-        this.#mainPort?.postMessage({
+        respond({
           kind: "main.oauth.response",
           requestId: oauthRequest.data.requestId,
           ok: false,
@@ -680,7 +778,7 @@ export class AppServiceSupervisor {
             : host.cancelOAuthCallback(oauthRequest.data.sessionId).then(() => ({}));
       void operation.then(
         (result) =>
-          this.#mainPort?.postMessage({
+          respond({
             kind: "main.oauth.response",
             requestId: oauthRequest.data.requestId,
             ok: true,
@@ -688,7 +786,7 @@ export class AppServiceSupervisor {
             ...result,
           }),
         (error: unknown) =>
-          this.#mainPort?.postMessage({
+          respond({
             kind: "main.oauth.response",
             requestId: oauthRequest.data.requestId,
             ok: false,
@@ -784,9 +882,16 @@ export class AppServiceSupervisor {
       return;
     }
     this.#emitStatus("restarting", `${processName} exited (${exitCode})`);
+    const restartRevision = this.#workspaceRevision;
     setTimeout(
       () => {
-        if (!this.#stopping) this.#spawn();
+        if (
+          !this.#stopping &&
+          this.#workspaceAccessAllowed &&
+          restartRevision === this.#workspaceRevision &&
+          !this.#ready
+        )
+          this.#spawn();
       },
       [100, 500, 1_500][this.#restartCount - 1] ?? 1_500,
     );
