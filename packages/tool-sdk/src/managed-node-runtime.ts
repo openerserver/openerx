@@ -82,8 +82,11 @@ function regularFile(root: string, relative: string): string {
   return current;
 }
 function manifestFor(runtime: ManagedNodeRuntime): RuntimeManifest {
-  if (digest(runtime.manifestPath) !== runtime.manifestSha256) fail();
-  return JSON.parse(readFileSync(runtime.manifestPath, "utf8")) as RuntimeManifest;
+  // Electron fabricates inode/timestamp metadata for packed ASAR files. Seal and
+  // parse the same bytes instead; virtual metadata cannot establish integrity.
+  const bytes = readFileSync(runtime.manifestPath);
+  if (createHash("sha256").update(bytes).digest("hex") !== runtime.manifestSha256) fail();
+  return JSON.parse(bytes.toString("utf8")) as RuntimeManifest;
 }
 function expectedPaths(platform: string) {
   return platform === "win32"
@@ -126,7 +129,8 @@ export function verifyManagedNodeRuntime(
     )
       fail();
     const root = realpathSync(rootDirectory);
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as RuntimeManifest;
+    const manifestBytes = readFileSync(manifestPath);
+    const manifest = JSON.parse(manifestBytes.toString("utf8")) as RuntimeManifest;
     const artifact =
       lock.artifacts[
         `${manifest.platform}-${manifest.architecture}` as keyof typeof lock.artifacts
@@ -193,7 +197,7 @@ export function verifyManagedNodeRuntime(
         npxCli: path.join(root, paths.npx),
         binDirectory: path.join(root, paths.bin),
         manifestPath,
-        manifestSha256: digest(manifestPath),
+        manifestSha256: createHash("sha256").update(manifestBytes).digest("hex"),
       }),
     );
   } catch {

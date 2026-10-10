@@ -1,8 +1,12 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { builtinModules, createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createPackageWithOptions, extractFile, statFile } from "@electron/asar";
+import { build } from "vite";
 import { afterEach, expect, test } from "vitest";
 import { runtimeLock, verifyPreparedNodeRuntime } from "../scripts/managed-node-runtime.mjs";
 
@@ -81,6 +85,139 @@ test("ASAR keeps trusted manifests packed while complete runtimes include hidden
     existsSync(path.join(`${archive}.unpacked`, "runtime/codex/files/vendor/bin/codex.exe")),
   ).toBe(true);
 });
+
+test.runIf(process.platform === "win32")(
+  "Electron verifies a packed manifest with virtual stats and still rejects manifest and unpacked-file substitution",
+  async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "runtime-electron-asar-"));
+    directories.push(root);
+    const source = path.join(root, "app");
+    const archive = path.join(root, "app.asar");
+    const data: Record<string, string> = {
+      "node.exe": "fixture executable",
+      "node_modules/npm/bin/npm-cli.js": "fixture npm",
+      "node_modules/npm/bin/npx-cli.js": "fixture npx",
+      "node_modules/npm/package.json": JSON.stringify({ version: runtimeLock.npmVersion }),
+      LICENSE: "fixture license",
+      "NOTICE.txt": "fixture notice",
+      "third-party-notices.json": "[]",
+      npmrc: "# fixture config",
+      "npmrc-global": "# fixture global config",
+    };
+    const files = Object.entries(data).map(([relative, content]) => {
+      const file = path.join(source, "runtime/node/files", relative);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, content);
+      return {
+        path: relative,
+        size: Buffer.byteLength(content),
+        sha256: createHash("sha256").update(content).digest("hex"),
+      };
+    });
+    const artifact = runtimeLock.artifacts["win32-x64"];
+    const manifest = {
+      schemaVersion: 1,
+      nodeVersion: runtimeLock.nodeVersion,
+      npmVersion: runtimeLock.npmVersion,
+      platform: "win32",
+      architecture: "x64",
+      archive: artifact.file,
+      archiveSha256: artifact.sha256,
+      files,
+    };
+    writeFileSync(path.join(source, "runtime/node/manifest.json"), JSON.stringify(manifest));
+    await createPackageWithOptions(source, archive, { unpackDir: "runtime/node/files" });
+    expect(statFile(archive, path.join("runtime/node/manifest.json"))).not.toHaveProperty(
+      "unpacked",
+      true,
+    );
+    const changedSource = path.join(root, "changed");
+    const changedArchive = path.join(root, "changed.asar");
+    mkdirSync(path.join(changedSource, "runtime/node"), { recursive: true });
+    writeFileSync(
+      path.join(changedSource, "runtime/node/manifest.json"),
+      JSON.stringify({ ...manifest, nodeVersion: "unapproved" }),
+    );
+    await createPackageWithOptions(changedSource, changedArchive, {});
+
+    const bundle = path.join(root, "bundle");
+    const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    await build({
+      configFile: false,
+      root: repository,
+      logLevel: "error",
+      build: {
+        outDir: bundle,
+        minify: false,
+        sourcemap: false,
+        lib: {
+          entry: path.join(repository, "packages/tool-sdk/src/managed-node-runtime.ts"),
+          formats: ["cjs"],
+          fileName: () => "managed-runtime.cjs",
+        },
+        rollupOptions: {
+          external: builtinModules.flatMap((name) => [name, `node:${name}`]),
+        },
+      },
+    });
+    const script = path.join(root, "verify.cjs");
+    writeFileSync(
+      script,
+      [
+        'const { app } = require("electron");',
+        'const assert = require("node:assert/strict");',
+        'const fs = require("node:fs");',
+        'const path = require("node:path");',
+        "const input = JSON.parse(process.argv[2]);",
+        "const { verifyManagedNodeRuntime, assertManagedNodeRuntime } = require(input.bundle);",
+        'app.setPath("userData", input.profile);',
+        "app.disableHardwareAcceleration();",
+        "app.whenReady().then(() => { try {",
+        "  const before = fs.statSync(input.manifest);",
+        '  const runtime = verifyManagedNodeRuntime(input.files, input.manifest, { platform: "win32", architecture: "x64" });',
+        "  assertManagedNodeRuntime(runtime);",
+        "  const after = fs.statSync(input.manifest);",
+        "  assert.throws(() => assertManagedNodeRuntime({ ...runtime, manifestPath: input.changedManifest }), /MANAGED_NODE_RUNTIME_INTEGRITY_FAILED/);",
+        "  const original = fs.readFileSync(runtime.nodeExecutable);",
+        "  fs.writeFileSync(runtime.nodeExecutable, Buffer.alloc(original.length, 120));",
+        "  assert.throws(() => assertManagedNodeRuntime(runtime), /MANAGED_NODE_RUNTIME_INTEGRITY_FAILED/);",
+        '  assert.throws(() => verifyManagedNodeRuntime(input.files, input.manifest, { platform: "win32", architecture: "x64" }), /MANAGED_NODE_RUNTIME_INTEGRITY_FAILED/);',
+        "  fs.writeFileSync(runtime.nodeExecutable, original);",
+        "  assertManagedNodeRuntime(runtime);",
+        "  console.log(JSON.stringify({ nodeVersion: runtime.nodeVersion, npmVersion: runtime.npmVersion, virtualInodeChanged: before.ino !== after.ino, tamperRejected: true }));",
+        "  app.exit(0);",
+        "} catch (error) { console.error(error.stack); app.exit(1); } });",
+      ].join("\n"),
+    );
+    const require = createRequire(import.meta.url);
+    mkdirSync(path.join(root, "profile"));
+    const environment = { ...process.env };
+    delete environment.ELECTRON_RUN_AS_NODE;
+    delete environment.NODE_OPTIONS;
+    delete environment.NODE_PATH;
+    const output = execFileSync(
+      require("electron") as string,
+      [
+        script,
+        JSON.stringify({
+          bundle: path.join(bundle, "managed-runtime.cjs"),
+          manifest: path.join(archive, "runtime/node/manifest.json"),
+          changedManifest: path.join(changedArchive, "runtime/node/manifest.json"),
+          files: path.join(`${archive}.unpacked`, "runtime/node/files"),
+          profile: path.join(root, "profile"),
+        }),
+      ],
+      { env: environment, encoding: "utf8", timeout: 20_000, windowsHide: true, maxBuffer: 65_536 },
+    );
+    expect(JSON.parse(output.trim())).toMatchObject({
+      nodeVersion: runtimeLock.nodeVersion,
+      npmVersion: runtimeLock.npmVersion,
+      tamperRejected: true,
+    });
+  },
+  30_000,
+);
+
 afterEach(() => {
   for (const root of directories.splice(0)) rmSync(root, { recursive: true, force: true });
 });
