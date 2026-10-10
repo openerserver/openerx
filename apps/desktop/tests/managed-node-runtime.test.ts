@@ -115,6 +115,7 @@ test.runIf(process.platform === "win32")(
       };
     });
     const artifact = runtimeLock.artifacts["win32-x64"];
+    if (!artifact) throw new Error("Missing locked Windows runtime fixture");
     const manifest = {
       schemaVersion: 1,
       nodeVersion: runtimeLock.nodeVersion,
