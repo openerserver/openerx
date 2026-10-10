@@ -7,7 +7,7 @@ import { afterEach, expect, test } from "vitest";
 import { runtimeLock, verifyPreparedNodeRuntime } from "../scripts/managed-node-runtime.mjs";
 
 const directories: string[] = [];
-test("ASAR keeps the trusted manifest packed while Node and npm entrypoints are real external files", async () => {
+test("ASAR keeps trusted manifests packed while complete runtimes include hidden npm metadata", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "runtime-asar-"));
   directories.push(root);
   const source = path.join(root, "app"),
@@ -16,14 +16,30 @@ test("ASAR keeps the trusted manifest packed while Node and npm entrypoints are 
     ["runtime/node/manifest.json", "trusted manifest"],
     ["runtime/node/files/node.exe", "binary"],
     ["runtime/node/files/node_modules/npm/bin/npm-cli.js", "cli"],
+    ["runtime/node/files/node_modules/npm/.npmrc", ""],
+    [
+      "runtime/node/files/node_modules/npm/node_modules/node-gyp/.release-please-manifest.json",
+      "{}",
+    ],
+    [
+      "runtime/node/files/node_modules/npm/node_modules/node-gyp/gyp/.release-please-manifest.json",
+      "{}",
+    ],
+    [
+      "runtime/node/files/node_modules/npm/node_modules/qrcode-terminal/.travis.yml",
+      "language: node_js",
+    ],
+    ["runtime/node/files/.metadata/license.json", "hidden directory metadata"],
     ["runtime/codex/manifest.json", "trusted Codex manifest"],
     ["runtime/codex/files/vendor/bin/codex.exe", "official Codex fixture"],
+    ["runtime/codex/files/.metadata/license.json", "trusted Codex license metadata"],
   ]) {
     const file = path.join(source, relative!);
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, content!);
   }
   await createPackageWithOptions(source, archive, {
+    unpackDir: "runtime/{node,codex}/files",
     unpack:
       "**/{runtime/node/files/**,runtime/codex/files/**,*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1,openerx-desktop-helper.exe}",
   });
@@ -40,6 +56,20 @@ test("ASAR keeps the trusted manifest packed while Node and npm entrypoints are 
       path.join(`${archive}.unpacked`, "runtime/node/files/node_modules/npm/bin/npm-cli.js"),
     ),
   ).toBe(true);
+  for (const relative of [
+    "runtime/node/files/node_modules/npm/.npmrc",
+    "runtime/node/files/node_modules/npm/node_modules/node-gyp/.release-please-manifest.json",
+    "runtime/node/files/node_modules/npm/node_modules/node-gyp/gyp/.release-please-manifest.json",
+    "runtime/node/files/node_modules/npm/node_modules/qrcode-terminal/.travis.yml",
+    "runtime/node/files/.metadata/license.json",
+    "runtime/codex/files/.metadata/license.json",
+  ]) {
+    const entry = path.join(...relative.split("/"));
+    expect(statFile(archive, entry)).toHaveProperty("unpacked", true);
+    expect(readFileSync(path.join(`${archive}.unpacked`, entry))).toEqual(
+      readFileSync(path.join(source, entry)),
+    );
+  }
   expect(extractFile(archive, path.join("runtime", "codex", "manifest.json")).toString()).toBe(
     "trusted Codex manifest",
   );

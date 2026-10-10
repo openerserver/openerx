@@ -13,6 +13,7 @@ import { releaseUpdateConfigurationSchema } from "@openerx/contracts";
 import { copyCodexRuntime } from "../../scripts/prepare-codex-runtime.mjs";
 import { resolveMacSigningIdentity } from "./scripts/mac-signing.mjs";
 import { copyNodeRuntime } from "./scripts/managed-node-runtime.mjs";
+import { packagerTemporaryDirectory } from "./scripts/packager-temporary-directory.mjs";
 import { signWindowsFile, verifyWindowsFile } from "./scripts/windows-signing.mjs";
 import { buildInfo } from "./vite.build-info";
 
@@ -145,9 +146,11 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
 
 const config: ForgeConfig = {
   packagerConfig: {
+    tmpdir: packagerTemporaryDirectory(desktopDirectory),
     appVersion: buildInfo.version,
     buildVersion: buildInfo.nativeBuildNumber,
     asar: {
+      unpackDir: "runtime/{node,codex}/files",
       unpack:
         "**/{runtime/node/files/**,runtime/codex/files/**,*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1,openerx-desktop-helper.exe}",
     },

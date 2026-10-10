@@ -106,6 +106,7 @@ run(
     "tests/windows-sandbox-setup.test.ts",
     "tests/windows-sandbox-setup-ui.test.tsx",
     "tests/managed-node-runtime.test.ts",
+    "tests/packager-temporary-directory.test.ts",
     "tests/credential-vault.test.ts",
     "tests/account-session-manager.test.ts",
     "tests/desktop-data-persistence.test.ts",
