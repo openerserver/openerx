@@ -6,6 +6,7 @@ import { DESKTOP_CONTROL_VERSION } from "@openerx/contracts";
 import { z } from "zod";
 import {
   assertTargetIdentity,
+  type DesktopFocusOptions,
   type DesktopNativeDriver,
   type DesktopObservedAction,
   type NativeElement,
@@ -82,7 +83,7 @@ export class WindowsDesktopDriver implements DesktopNativeDriver {
     params: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<unknown> {
-    if (method === "focus" || method === "act")
+    if (method === "focus" || method === "act" || method === "wait_foreground")
       return this.#interaction.request(method, params, signal);
     const child = await this.#spawn("--request", signal);
     return await new Promise((resolve, reject) => {
@@ -166,10 +167,23 @@ export class WindowsDesktopDriver implements DesktopNativeDriver {
       .strict()
       .parse(await this.#request("open", { applicationId }, signal));
   }
-  async focus(target: NativeTarget, signal: AbortSignal): Promise<void> {
+  async focus(
+    target: NativeTarget,
+    signal: AbortSignal,
+    options?: DesktopFocusOptions,
+  ): Promise<void> {
     z.object({ focused: z.literal(true) })
       .strict()
-      .parse(await this.#request("focus", { target }, signal));
+      .parse(await this.#request("focus", { target, ...options }, signal));
+  }
+  async waitForForeground(
+    target: NativeTarget,
+    signal: AbortSignal,
+  ): Promise<{ lastInputTime: number }> {
+    return z
+      .object({ lastInputTime: z.number().int().min(0).max(0xffff_ffff) })
+      .strict()
+      .parse(await this.#request("wait_foreground", { target }, signal));
   }
   async observe(target: NativeTarget, signal: AbortSignal): Promise<NativeObservation> {
     const observation = nativeObservationSchema.parse(

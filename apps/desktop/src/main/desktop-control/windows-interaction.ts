@@ -29,7 +29,11 @@ export class WindowsInteraction {
     worker.child.kill();
   }
 
-  async request(method: "focus" | "act", params: Record<string, unknown>, signal: AbortSignal) {
+  async request(
+    method: "focus" | "act" | "wait_foreground",
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+  ) {
     signal.throwIfAborted();
     if (this.#busy) throw new Error("DESKTOP_INTERACTION_BUSY");
     this.#busy = true;

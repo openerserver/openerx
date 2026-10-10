@@ -38,7 +38,7 @@ interface Session {
   controller: AbortController;
   observation: Observation | null;
   busy: boolean;
-  waitingForResume?: { resolve(): void; reject(error: Error): void };
+  waitingForResume?: { beginResume(): void; resolve(): void; reject(error: Error): void };
 }
 
 function response(
@@ -315,7 +315,14 @@ export class DesktopControlHost {
       session.descriptor.state = "ready";
       return observed;
     } catch (error) {
-      this.#pause(session, signal.aborted ? "TOOL_CANCELLED" : "DESKTOP_ATTACH_FAILED", true);
+      if (session.descriptor.state !== "stopped") {
+        const reason = signal.aborted
+          ? "TOOL_CANCELLED"
+          : error instanceof Error && /^DESKTOP_[A-Z_]+$/u.test(error.message)
+            ? error.message
+            : "DESKTOP_ATTACH_FAILED";
+        this.#pause(session, reason, true);
+      }
       throw error;
     } finally {
       signal.removeEventListener("abort", abort);
@@ -324,7 +331,10 @@ export class DesktopControlHost {
   }
   async #waitForResume(session: Session, signal: AbortSignal): Promise<void> {
     return await new Promise<void>((resolve, reject) => {
+      let settled = false;
       const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         signal.removeEventListener("abort", abort);
         delete session.waitingForResume;
@@ -336,18 +346,27 @@ export class DesktopControlHost {
         () => finish(new Error("DESKTOP_FOREGROUND_RESUME_TIMEOUT")),
         this.resumeTimeoutMs,
       );
-      session.waitingForResume = { resolve: () => finish(), reject: finish };
+      session.waitingForResume = {
+        beginResume: () => clearTimeout(timer),
+        resolve: () => finish(),
+        reject: finish,
+      };
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
     });
   }
   async #monitor(session: Session): Promise<void> {
+    const controller = session.controller;
     const monitor = await this.driver.monitor(
-      () => this.#pause(session, "DESKTOP_USER_INPUT"),
-      () => this.#pause(session, "DESKTOP_MONITOR_LOST"),
-      session.controller.signal,
+      () => {
+        if (session.controller === controller) this.#pause(session, "DESKTOP_USER_INPUT");
+      },
+      () => {
+        if (session.controller === controller) this.#pause(session, "DESKTOP_MONITOR_LOST");
+      },
+      controller.signal,
     );
-    if (session.controller.signal.aborted) {
+    if (controller.signal.aborted || session.controller !== controller) {
       monitor.close();
       throw new Error("DESKTOP_USER_RESUME_REQUIRED");
     }
@@ -416,6 +435,35 @@ export class DesktopControlHost {
     session.lease?.release();
     session.lease = null;
   }
+  async #resumeFocus(session: Session, signal: AbortSignal): Promise<void> {
+    await this.#monitor(session);
+    signal.throwIfAborted();
+    try {
+      await this.driver.focus(session.target, signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      if (
+        !(error instanceof Error) ||
+        error.message !== "DESKTOP_TARGET_NOT_FRONTMOST" ||
+        !this.driver.waitForForeground
+      )
+        throw error;
+      // Selecting the target is expected human input during this explicit UI
+      // recovery. Keep the lease, but never send input or attempt activation here.
+      session.monitor?.close();
+      session.monitor = null;
+      this.driver.cancelInteractions?.();
+      session.descriptor.reason = "DESKTOP_AWAITING_TARGET_FOREGROUND";
+      const receipt = await this.driver.waitForForeground(session.target, signal);
+      signal.throwIfAborted();
+      await this.#monitor(session);
+      signal.throwIfAborted();
+      // The receipt closes the gap before the takeover monitor became ready.
+      // This verification must not bring a different foreground window back.
+      await this.driver.focus(session.target, signal, { activate: false, ...receipt });
+    }
+    signal.throwIfAborted();
+  }
   async control(command: DesktopControlCommand): Promise<DesktopControlSession> {
     const session = this.#required(command.sessionId);
     if (command.action !== "resume") {
@@ -431,21 +479,45 @@ export class DesktopControlHost {
     session.lease = this.lease.acquire(session.descriptor.sessionId);
     session.controller = new AbortController();
     session.busy = true;
+    // Clicking resume claims the user-wait deadline. Native recovery has its own
+    // bound, so a timely click cannot expire while monitoring/focus is awaited.
+    session.waitingForResume?.beginResume();
+    const controller = session.controller;
+    let abort = () => {};
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      abort = () =>
+        reject(
+          controller.signal.reason instanceof Error
+            ? controller.signal.reason
+            : new Error("TOOL_CANCELLED"),
+        );
+      controller.signal.addEventListener("abort", abort, { once: true });
+    });
+    const timer = setTimeout(
+      () => controller.abort(new Error("DESKTOP_NATIVE_TIMEOUT")),
+      this.resumeTimeoutMs,
+    );
     try {
-      await this.#monitor(session);
-      session.controller.signal.throwIfAborted();
-      await this.driver.focus(session.target, session.controller.signal);
-      session.controller.signal.throwIfAborted();
+      await Promise.race([this.#resumeFocus(session, controller.signal), interrupted]);
+      controller.signal.throwIfAborted();
       session.descriptor.state = "ready";
       session.descriptor.reason = null;
       session.waitingForResume?.resolve();
       return structuredClone(session.descriptor);
     } catch (error) {
       // A stop command can change this state while native focus is awaited.
+      const reason =
+        error instanceof Error && /^DESKTOP_[A-Z_]+$/u.test(error.message)
+          ? error.message
+          : ((controller.signal.aborted ? session.descriptor.reason : null) ??
+            "DESKTOP_RESUME_FAILED");
       if (this.#required(command.sessionId).descriptor.state !== "stopped")
-        this.#pause(session, "DESKTOP_RESUME_FAILED");
+        this.#pause(session, reason);
+      session.waitingForResume?.reject(new Error(reason));
       throw error;
     } finally {
+      clearTimeout(timer);
+      controller.signal.removeEventListener("abort", abort);
       session.busy = false;
     }
   }

@@ -29,17 +29,41 @@ internal static class Automation
             "list" => ListWindows(),
             "open" => Open(input.GetProperty("applicationId").GetString()!),
             "observe" => Observe(ReadTarget(input), true),
-            "focus" => Focus(ReadTarget(input)),
+            "focus" => Focus(ReadTarget(input), input),
+            "wait_foreground" => WaitForForeground(ReadTarget(input)),
             "act" => Act(input),
             _ => throw new InvalidOperationException("DESKTOP_METHOD_UNSUPPORTED")
         };
     }
 
     private static Target ReadTarget(JsonElement input) => input.GetProperty("target").Deserialize<Target>(Program.Json) ?? throw new InvalidOperationException("DESKTOP_TARGET_INVALID");
-    private static object Focus(Target target)
+    private static object WaitForForeground(Target target)
+    {
+        // Explicit UI recovery only: let the user select the authorized window.
+        // No activation, restoration, capture or input is dispatched while waiting.
+        var watch = Stopwatch.StartNew();
+        while (watch.ElapsedMilliseconds < 10_000)
+        {
+            Validate(target, false, true);
+            var input = Native.LastInputTime();
+            if (Native.GetAncestor(Native.GetForegroundWindow(), 2) == Hwnd(target) &&
+                unchecked((uint)Environment.TickCount - input) >= 500)
+            {
+                try
+                {
+                    AssertInputReleased();
+                    if (Native.LastInputTime() == input) return new { lastInputTime = input };
+                }
+                catch (InvalidOperationException error) when (error.Message == "DESKTOP_USER_INPUT_ACTIVE") { }
+            }
+            Thread.Sleep(50);
+        }
+        throw new InvalidOperationException("DESKTOP_FOREGROUND_SELECTION_TIMEOUT");
+    }
+    private static object Focus(Target target, JsonElement input)
     {
         Validate(target, false, true);
-        var lastInput = Native.LastInputTime();
+        var lastInput = input.TryGetProperty("lastInputTime", out var receipt) ? receipt.GetUInt32() : Native.LastInputTime();
         void Check()
         {
             Validate(target, false, true);
@@ -60,6 +84,13 @@ internal static class Automation
         }
         bool IsForeground() => Native.GetAncestor(Native.GetForegroundWindow(), 2) == Hwnd(target);
         Check();
+        if (input.TryGetProperty("activate", out var activate) && !activate.GetBoolean())
+        {
+            if (!IsForeground()) throw new InvalidOperationException("DESKTOP_TARGET_NOT_FRONTMOST");
+            Validate(target, false);
+            Check();
+            return new { focused = true };
+        }
         if (Native.IsIconic(Hwnd(target)))
         {
             // Restore only minimized windows. Preserve normal/maximized layout.

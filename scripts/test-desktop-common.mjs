@@ -68,6 +68,7 @@ run(
     "tests/desktop-capture-fixture.test.ts",
     "tests/windows-desktop-availability.test.ts",
     "tests/desktop-control.test.ts",
+    "tests/desktop-foreground-recovery.test.ts",
     "tests/windows-interaction.test.ts",
     "tests/windows-desktop-artifact.test.ts",
     "tests/desktop-native-permissions.test.ts",

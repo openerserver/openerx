@@ -54,11 +54,16 @@ export type NativeTarget = z.infer<typeof nativeTargetSchema>;
 export type NativeObservation = z.infer<typeof nativeObservationSchema>;
 export type NativeElement = z.infer<typeof nativeElementSchema>;
 export type DesktopObservedAction = Extract<DesktopControlOperation, { observationId: string }>;
+export interface DesktopFocusOptions {
+  activate: false;
+  lastInputTime: number;
+}
 export interface DesktopNativeDriver {
   probe(signal: AbortSignal): Promise<void>;
   list(signal: AbortSignal): Promise<NativeTarget[]>;
   open(applicationId: string, signal: AbortSignal): Promise<void>;
-  focus(target: NativeTarget, signal: AbortSignal): Promise<void>;
+  focus(target: NativeTarget, signal: AbortSignal, options?: DesktopFocusOptions): Promise<void>;
+  waitForForeground?(target: NativeTarget, signal: AbortSignal): Promise<{ lastInputTime: number }>;
   observe(target: NativeTarget, signal: AbortSignal): Promise<NativeObservation>;
   act(
     target: NativeTarget,

@@ -14,6 +14,7 @@ export default defineConfig({
         run: path.join(desktop, "scripts/e2e-windows-desktop-control.mts"),
         apps: path.join(desktop, "scripts/e2e-windows-desktop-apps.mts"),
         foreground: path.join(desktop, "scripts/e2e-windows-foreground.mts"),
+        recovery: path.join(desktop, "scripts/e2e-windows-foreground-recovery.mts"),
       },
       output: { entryFileNames: "[name].mjs" },
     },

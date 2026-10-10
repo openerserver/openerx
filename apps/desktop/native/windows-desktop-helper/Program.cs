@@ -62,7 +62,7 @@ internal static class Program
             id = request.GetProperty("id").GetString();
             if (!Guid.TryParse(id, out _) || request.GetProperty("jsonrpc").GetString() != "2.0") throw new InvalidOperationException("DESKTOP_PROTOCOL_INVALID");
             var method = request.GetProperty("method").GetString()!;
-            if (session && method is not ("focus" or "act")) throw new InvalidOperationException("DESKTOP_METHOD_UNSUPPORTED");
+            if (session && method is not ("focus" or "act" or "wait_foreground")) throw new InvalidOperationException("DESKTOP_METHOD_UNSUPPORTED");
             var result = Automation.Execute(method, request.GetProperty("params"));
             Write(new { jsonrpc = "2.0", id, result });
             return 0;
