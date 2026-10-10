@@ -1,7 +1,32 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  type BigIntStats,
+  mkdirSync,
+  mkdtempSync,
+  type PathLike,
+  readFileSync,
+  rmSync,
+  type Stats,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+
+const fixedMetadata = vi.hoisted(() => new Map<string, { regular: Stats; bigint: BigIntStats }>());
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    statSync: (file: PathLike, options?: unknown) => {
+      const fixed = fixedMetadata.get(String(file));
+      if (fixed)
+        return (options as { bigint?: boolean } | undefined)?.bigint ? fixed.bigint : fixed.regular;
+      return Reflect.apply(actual.statSync, actual, [file, options]);
+    },
+  };
+});
 
 vi.mock("../src/managed-codex-runtime-lock.json", async () => {
   const { createHash } = await import("node:crypto");
@@ -35,6 +60,7 @@ import lock from "../src/managed-codex-runtime-lock.json";
 
 const roots: string[] = [];
 afterEach(() => {
+  fixedMetadata.clear();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture() {
@@ -85,12 +111,29 @@ test.each([
   f.save();
   expect(f.state()).toEqual({ error: "MANAGED_CODEX_RUNTIME_INTEGRITY_FAILED" });
 });
-test("rejects same-size replacement after a successful cached verification", () => {
+test("rejects same-size replacement after a successful verification", () => {
   const f = fixture();
   f.verify();
   writeFileSync(path.join(f.root, "helpers/runner.exe"), "x".repeat("helpers/runner.exe".length));
   expect(f.state()).toEqual({ error: "MANAGED_CODEX_RUNTIME_INTEGRITY_FAILED" });
 });
+
+test.each(["LICENSE", "bin/codex.exe", "helpers/runner.exe"])(
+  "rejects same-size %s replacement even when numeric and nanosecond metadata remain unchanged",
+  (relative) => {
+    const f = fixture();
+    const file = path.join(f.root, relative);
+    const metadata = { regular: statSync(file), bigint: statSync(file, { bigint: true }) };
+    fixedMetadata.set(file, metadata);
+    f.verify();
+    const replacement = "x".repeat(metadata.regular.size);
+    writeFileSync(file, replacement);
+    expect(readFileSync(file, "utf8")).toBe(replacement);
+    expect(statSync(file)).toBe(metadata.regular);
+    expect(statSync(file, { bigint: true })).toBe(metadata.bigint);
+    expect(f.state()).toEqual({ error: "MANAGED_CODEX_RUNTIME_INTEGRITY_FAILED" });
+  },
+);
 test("rejects a tampered development manifest even when it describes the new file hash", () => {
   const f = fixture();
   f.manifest.files[0]!.sha256 = "a".repeat(64);

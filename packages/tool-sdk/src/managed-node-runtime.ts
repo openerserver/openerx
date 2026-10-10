@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 import {
   type ManagedNodeRuntime,
@@ -30,17 +40,26 @@ interface RuntimeManifest {
   archiveSha256: string;
   files: RuntimeEntry[];
 }
-const hashes = new Map<string, { stamp: string; digest: string }>();
 function digest(file: string): string {
   const stat = statSync(file);
   const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-  const cached = hashes.get(file);
-  if (cached?.stamp === stamp) return cached.digest;
-  const value = createHash("sha256").update(readFileSync(file)).digest("hex");
-  // Bounded across profile switches; no business data is stored.
-  if (hashes.size > 20_000) hashes.clear();
-  hashes.set(file, { stamp, digest: value });
-  return value;
+  // A same-size replacement can preserve all available filesystem timestamps.
+  // Hash actual bytes on every verification; stream large executables to bound memory.
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(Math.min(1024 * 1024, stat.size || 1));
+  const fd = openSync(file, "r");
+  try {
+    for (;;) {
+      const count = readSync(fd, buffer);
+      if (!count) break;
+      hash.update(buffer.subarray(0, count));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  const after = statSync(file);
+  if (`${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}` !== stamp) fail();
+  return hash.digest("hex");
 }
 function fail(): never {
   throw new Error("MANAGED_NODE_RUNTIME_INTEGRITY_FAILED");

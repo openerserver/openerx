@@ -44,15 +44,14 @@ interface Manifest {
   executable: string;
   files: Entry[];
 }
-const hashes = new Map<string, { stamp: string; digest: string }>();
 function fail(): never {
   throw new Error("MANAGED_CODEX_RUNTIME_INTEGRITY_FAILED");
 }
 function digest(file: string): string {
   const info = statSync(file);
   const stamp = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
-  const cached = hashes.get(file);
-  if (cached?.stamp === stamp) return cached.digest;
+  // File timestamps can remain identical across same-size writes on Windows.
+  // Metadata is only a concurrent-change fence, never proof of unchanged bytes.
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   const fd = openSync(file, "r");
@@ -68,8 +67,6 @@ function digest(file: string): string {
   const after = statSync(file);
   if (`${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}` !== stamp) fail();
   const value = hash.digest("hex");
-  if (hashes.size > 512) hashes.clear();
-  hashes.set(file, { stamp, digest: value });
   return value;
 }
 function inventory(root: string, relative = ""): string[] {

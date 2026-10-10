@@ -1,17 +1,36 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  type BigIntStats,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  type PathLike,
   readFileSync,
   rmSync,
+  type Stats,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+
+const fixedMetadata = vi.hoisted(() => new Map<string, { regular: Stats; bigint: BigIntStats }>());
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    statSync: (file: PathLike, options?: unknown) => {
+      const fixed = fixedMetadata.get(String(file));
+      if (fixed)
+        return (options as { bigint?: boolean } | undefined)?.bigint ? fixed.bigint : fixed.regular;
+      return Reflect.apply(actual.statSync, actual, [file, options]);
+    },
+  };
+});
+
 import {
   assertManagedNodeRuntime,
   managedNodeRuntimeCacheKey,
@@ -80,6 +99,7 @@ test.runIf(process.platform === "win32")(
   60_000,
 );
 afterEach(() => {
+  fixedMetadata.clear();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture() {
@@ -196,6 +216,48 @@ test("a manifest changed after bootstrap cannot authorize changed entrypoints", 
   f.save();
   expect(() => assertManagedNodeRuntime(runtime)).toThrow("MANAGED_NODE_RUNTIME_INTEGRITY_FAILED");
   expect(readFileSync(runtime.nodeExecutable, "utf8")).toBe("fixture executable");
+});
+
+test.each([
+  "node.exe",
+  "node_modules/npm/bin/npm-cli.js",
+  "node_modules/npm/bin/npx-cli.js",
+  "npmrc",
+  "npmrc-global",
+  "node_modules/npm/LICENSE",
+])("rehashes %s even when same-size replacement preserves all metadata", (relative) => {
+  const f = fixture();
+  const file = path.join(f.root, relative);
+  const metadata = { regular: statSync(file), bigint: statSync(file, { bigint: true }) };
+  fixedMetadata.set(file, metadata);
+  const runtime = f.verify();
+  const replacement = "x".repeat(metadata.regular.size);
+  writeFileSync(file, replacement);
+  expect(readFileSync(file, "utf8")).toBe(replacement);
+  expect(statSync(file)).toBe(metadata.regular);
+  expect(statSync(file, { bigint: true })).toBe(metadata.bigint);
+  expect(f.verify).toThrow("MANAGED_NODE_RUNTIME_INTEGRITY_FAILED");
+  if (relative !== "node_modules/npm/LICENSE")
+    expect(() => assertManagedNodeRuntime(runtime)).toThrow(
+      "MANAGED_NODE_RUNTIME_INTEGRITY_FAILED",
+    );
+});
+
+test("rehashes the sealed manifest even when its same-size substitution preserves all metadata", () => {
+  const f = fixture();
+  const metadata = {
+    regular: statSync(f.manifest),
+    bigint: statSync(f.manifest, { bigint: true }),
+  };
+  fixedMetadata.set(f.manifest, metadata);
+  const runtime = f.verify();
+  const original = readFileSync(f.manifest, "utf8");
+  f.value.files[0]!.sha256 = "a".repeat(64);
+  f.save();
+  expect(readFileSync(f.manifest, "utf8")).not.toBe(original);
+  expect(statSync(f.manifest)).toBe(metadata.regular);
+  expect(statSync(f.manifest, { bigint: true })).toBe(metadata.bigint);
+  expect(() => assertManagedNodeRuntime(runtime)).toThrow("MANAGED_NODE_RUNTIME_INTEGRITY_FAILED");
 });
 
 test("startup rejects unlisted module files and junctions instead of following npm resolution outside the inventory", () => {
