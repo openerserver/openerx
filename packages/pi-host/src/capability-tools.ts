@@ -8,6 +8,7 @@ import {
   browserComputerUseV2Enabled,
   DESKTOP_CONTROL_FEATURE_FLAG,
   type PiToolRequestFrame,
+  shellEncodingSchema,
   type ToolOperation,
   windowsDesktopControlEnabled,
 } from "@openerx/contracts";
@@ -81,7 +82,7 @@ export function shellCommandDescription(platform: NodeJS.Platform = process.plat
   const contract =
     "Run one executable with literal argv inside an explicitly authorized read-write workspace. Paths are relative to the grant root. Shell syntax, built-ins, pipes, redirects and environment expansion require an explicit shell executable.";
   if (platform === "win32")
-    return `${contract} Host OS: Windows. Use powershell.exe with -NoLogo -NoProfile -NonInteractive -Command for PowerShell, or cmd.exe /d /c for cmd built-ins and .cmd/.bat programs such as npm. Do not use /bin/sh or bash unless separately installed. Programs must be installed in the app PATH. Output and stdin use UTF-8; legacy cmd codepage output is not decoded automatically. Prefer PowerShell for Unicode output. For Unicode output in Windows PowerShell 5, set [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false) inside the command. Use background=true for commands that need subsequent stdin input.`;
+    return `${contract} Host OS: Windows. For an explicitly managed UTF-8 PowerShell entry, use command=openerx-powershell and args containing exactly one script string; this entry sets console and pipeline UTF-8 without changing ordinary commands. Use powershell.exe with -NoLogo -NoProfile -NonInteractive -Command for PowerShell, or cmd.exe /d /c for cmd built-ins and .cmd/.bat programs such as npm. Do not use /bin/sh or bash unless separately installed. Programs must be installed in the app PATH. stdin/stdout/stderr default to UTF-8; declare encoding separately for a known cp936 or utf16le producer/consumer. No codec is guessed, and chcp does not guarantee a pipe's encoding. Prefer PowerShell for Unicode output. In Windows PowerShell 5, explicitly set [Console]::InputEncoding and [Console]::OutputEncoding to [System.Text.UTF8Encoding]::new($false); also set $OutputEncoding when passing text to native programs. Use background=true for commands that need subsequent stdin input.`;
   if (platform === "darwin")
     return `${contract} Host OS: macOS. Use /bin/sh -c or an explicitly installed shell when shell syntax is needed. Use background=true for commands that need subsequent stdin input.`;
   return `${contract} Host OS: ${platform}. This tool is unavailable without a supported OS sandbox; never substitute an unsandboxed command.`;
@@ -542,6 +543,34 @@ export function createProductCapabilityTools(input: {
           timeoutMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 1_800_000 })),
           background: Type.Optional(Type.Boolean()),
           allowNetwork: Type.Optional(Type.Boolean()),
+          encoding: Type.Optional(
+            Type.Object(
+              {
+                stdin: Type.Optional(
+                  Type.Union([
+                    Type.Literal("utf8"),
+                    Type.Literal("cp936"),
+                    Type.Literal("utf16le"),
+                  ]),
+                ),
+                stdout: Type.Optional(
+                  Type.Union([
+                    Type.Literal("utf8"),
+                    Type.Literal("cp936"),
+                    Type.Literal("utf16le"),
+                  ]),
+                ),
+                stderr: Type.Optional(
+                  Type.Union([
+                    Type.Literal("utf8"),
+                    Type.Literal("cp936"),
+                    Type.Literal("utf16le"),
+                  ]),
+                ),
+              },
+              { additionalProperties: false },
+            ),
+          ),
         },
         { additionalProperties: false },
       ),
@@ -555,13 +584,16 @@ export function createProductCapabilityTools(input: {
           timeoutMs: params.timeoutMs ?? 120_000,
           background: params.background ?? false,
           allowNetwork: params.allowNetwork ?? false,
+          ...(params.encoding === undefined
+            ? {}
+            : { encoding: shellEncodingSchema.parse(params.encoding) }),
         }),
     }),
     defineTool({
       name: "openerx_shell_process",
       label: "Control long process",
       description:
-        "Read streamed output, send UTF-8 stdin, or stop one process created by openerx_shell. Commands use pipes, not a full interactive terminal; use non-interactive programs or background=true before sending input.",
+        "Read streamed output, send stdin using the encoding declared when the process started (UTF-8 by default), or stop one process created by openerx_shell. Input that cannot be represented is rejected before writing. Commands use pipes, not a full interactive terminal; use non-interactive programs or background=true before sending input.",
       parameters: Type.Object(
         {
           action: Type.Union([Type.Literal("status"), Type.Literal("input"), Type.Literal("stop")]),

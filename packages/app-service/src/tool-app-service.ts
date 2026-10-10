@@ -84,6 +84,7 @@ import {
   HostCapabilityAdapter,
   HttpPlatformImageGenerationTransport,
   HttpPlatformWebSearchTransport,
+  inspectCodexWindowsSandbox,
   type LocalSearchProvider,
   LocalWebSearchCoordinator,
   LocalWebSearchError,
@@ -237,6 +238,8 @@ function fileOperationSummary(frame: PiFileToolRequestFrame): {
 }
 
 export interface ToolAppServiceOptions {
+  nodeRuntime?: import("@openerx/contracts").ManagedNodeRuntime;
+  nodeRuntimeError?: import("@openerx/contracts").ManagedNodeRuntimeError;
   repository: ToolRepository;
   workspaceDirectory: string;
   defaultWorkspaceDirectory?: string;
@@ -248,6 +251,7 @@ export interface ToolAppServiceOptions {
   emit(event: ChatEvent): void;
   additionalAdapters?: ToolAdapter[];
   shellAvailability?: () => HostToolAvailability;
+  windowsSandboxInspector?: typeof inspectCodexWindowsSandbox;
   brokeredBashV1?: boolean;
   brokeredBashRunnerMode?: BrokeredBashRunnerMode;
   platformSandboxEngine?: PlatformSandboxEngine;
@@ -364,6 +368,8 @@ export class ToolAppService {
   readonly #workspace: WorkspaceToolAdapter;
   readonly #host: CapabilityAvailabilityHost;
   readonly #shellAvailability: () => HostToolAvailability;
+  readonly #nodeRuntimeState: import("@openerx/contracts").ManagedNodeRuntimeState;
+  readonly #windowsSandboxInspector?: typeof inspectCodexWindowsSandbox;
   readonly #brokeredBashV1: boolean;
   readonly #localWebSearchV2: boolean;
   #localWebSearchConfiguration: FrozenLocalWebSearchConfiguration;
@@ -392,6 +398,15 @@ export class ToolAppService {
     this.#selectedModelRef = options.selectedModelRef;
     this.#host = options.host;
     this.#shellAvailability = options.shellAvailability ?? shellToolAvailability;
+    this.#nodeRuntimeState = {
+      nodeRuntime: options.nodeRuntime,
+      nodeRuntimeError: options.nodeRuntimeError,
+    };
+    this.#windowsSandboxInspector =
+      options.windowsSandboxInspector ??
+      (process.platform === "win32" && !options.shellAvailability
+        ? inspectCodexWindowsSandbox
+        : undefined);
     this.#brokeredBashV1 =
       options.brokeredBashV1 ?? brokeredBashV1Enabled(process.env[BROKERED_BASH_V1_FEATURE_FLAG]);
     this.#localWebSearchV2 =
@@ -488,6 +503,7 @@ export class ToolAppService {
           });
           this.#repository.markWorkspaceChangeSet(changeSet.id, "applied");
         },
+        { nodeRuntime: options.nodeRuntime, nodeRuntimeError: options.nodeRuntimeError },
       ),
       ...(this.#brokeredBashV1 && this.#brokeredBashRunnerMode === "fake"
         ? [
@@ -966,7 +982,7 @@ export class ToolAppService {
   }): Promise<ToolRuntimeReadiness[]> {
     const checkedAt = new Date().toISOString();
     const hostAvailability = await this.#safeHostAvailability();
-    const shellAvailability = this.#shellAvailability();
+    let shellAvailability = this.#shellAvailability();
     const brokeredBashRuntime = await this.#brokeredBashRuntimeAvailability();
     const readiness = (
       capability: ToolRuntimeCapability,
@@ -1009,6 +1025,21 @@ export class ToolAppService {
         return false;
       }
     });
+    const windowsSandboxInspection =
+      !this.#brokeredBashV1 && this.#windowsSandboxInspector
+        ? await this.#windowsSandboxInspector(
+            executionWorkspaceGrants.find(({ access }) => access === "read_write")?.rootPath ??
+              this.#defaultWorkspaceDirectory,
+          )
+        : undefined;
+    if (windowsSandboxInspection && !windowsSandboxInspection.available)
+      shellAvailability = {
+        availableToolNames: [],
+        unavailableReasons: {
+          openerx_shell:
+            windowsSandboxInspection.reason ?? "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE",
+        },
+      };
     const shellHostAvailable = shellAvailability.availableToolNames.includes("openerx_shell");
     const writableWorkspaceAvailable =
       executionWorkspaceGrants.some(({ access }) => access === "read_write") ||
@@ -1018,6 +1049,23 @@ export class ToolAppService {
     return [
       readiness("builtin.compute", "available", null, ["openerx_calculate"]),
       readiness("builtin.structured_data", "available", null, ["openerx_structured_data"]),
+      readiness(
+        "skill",
+        this.#nodeRuntimeState.nodeRuntime && shellHostAvailable ? "available" : "unavailable",
+        this.#nodeRuntimeState.nodeRuntimeError ??
+          (!this.#nodeRuntimeState.nodeRuntime
+            ? "MANAGED_NODE_RUNTIME_MISSING"
+            : !shellHostAvailable
+              ? "SHELL_OS_SANDBOX_UNAVAILABLE"
+              : null),
+        this.#nodeRuntimeState.nodeRuntime && shellHostAvailable ? ["openerx_skill_script"] : [],
+        [
+          "Skill 文本读取：可用",
+          this.#nodeRuntimeState.nodeRuntime
+            ? `受控 Node.js ${this.#nodeRuntimeState.nodeRuntime.nodeVersion} / npm ${this.#nodeRuntimeState.nodeRuntime.npmVersion}`
+            : "受控脚本运行时不可用；文本读取不受影响",
+        ],
+      ),
       readiness("file", "available", null, [
         "openerx_file_list",
         "openerx_file_search",
@@ -1114,9 +1162,10 @@ export class ToolAppService {
               "网络：默认拒绝",
               `工作区：${executionWorkspaceGrants.length} 个有效授权`,
             ]
-          : process.platform === "win32"
+          : process.platform === "win32" || windowsSandboxInspection
             ? [
-                ...windowsShellIsolationDetails(shellHostAvailable),
+                ...(windowsSandboxInspection?.details ??
+                  windowsShellIsolationDetails(shellHostAvailable)),
                 "命令：argv 直传；网络默认拒绝",
                 `默认工作区：${this.#defaultWorkspaceDirectory}`,
                 ...(this.#defaultWorkspaceFallback

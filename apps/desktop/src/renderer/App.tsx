@@ -28,6 +28,7 @@ import {
   settingsSectionUrl,
 } from "./settings-navigation";
 import { useConversationTarget } from "./use-conversation-target";
+import { WindowsSandboxSetup, windowsSandboxReasonLabels } from "./WindowsSandboxSetup";
 import { useWorkspaceComposerDraft } from "./workspace-drafts";
 import { workspaceHomePath } from "./workspace-navigation";
 
@@ -317,6 +318,12 @@ const toolCatalog = [
     detail: "排序、选择与去重",
   },
   {
+    namespace: "builtin",
+    capability: "skill",
+    name: "Skill 脚本运行时",
+    detail: "使用应用内 Node.js 执行已授权的 Skill 脚本；文本读取始终可用",
+  },
+  {
     namespace: "files",
     capability: "file",
     name: "文件访问",
@@ -368,6 +375,9 @@ const toolRuntimeReasonLabels: Record<string, string> = {
   MAIN_CAPABILITY_AVAILABILITY_TIMEOUT: "桌面 Host 检测超时，请重试或重启应用",
   APP_SERVICE_START_TIMEOUT: "后台服务启动超时，请重启应用",
   SHELL_OS_SANDBOX_UNAVAILABLE: "当前系统缺少安全 Shell 沙箱",
+  MANAGED_NODE_RUNTIME_MISSING: "应用内脚本运行时缺失，请更新或重新安装应用",
+  MANAGED_NODE_RUNTIME_INTEGRITY_FAILED: "应用内脚本运行时校验失败，请重新安装应用",
+  MANAGED_NODE_RUNTIME_TARGET_UNSUPPORTED: "当前平台缺少兼容的应用内脚本运行时",
   SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE: "Codex Windows 安全沙箱尚未就绪",
   WORKSPACE_WRITE_GRANT_REQUIRED: "需先授权一个可写工作区",
   WORKSPACE_READ_REQUIRED: "补丁未写入：请先在本轮读取待修改文件，再重试；无需再次授权",
@@ -403,7 +413,9 @@ const toolRuntimeReasonLabels: Record<string, string> = {
 
 function toolRuntimeReason(reason: string | null): string | null {
   if (!reason) return null;
-  return toolRuntimeReasonLabels[reason] ?? "运行状态暂不可确认";
+  return (
+    toolRuntimeReasonLabels[reason] ?? windowsSandboxReasonLabels[reason] ?? "运行状态暂不可确认"
+  );
 }
 
 const systemPermissionLabels: Record<DesktopNativePermission, string> = {
@@ -7779,6 +7791,13 @@ export function ToolCenter({
             </div>
 
             {!managed && selectedRow.capability === "browser" ? <BrowserSettingsPanel /> : null}
+
+            {selectedRow.capability === "shell" ? (
+              <WindowsSandboxSetup
+                reason={selectedReadiness?.reason ?? null}
+                refresh={() => runtimeReadiness.refetch({ throwOnError: true })}
+              />
+            ) : null}
 
             {managed &&
             selectedRow.capability !== "desktop" &&

@@ -10,7 +10,9 @@ import { MakerZIP } from "@electron-forge/maker-zip";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { releaseUpdateConfigurationSchema } from "@openerx/contracts";
+import { copyCodexRuntime } from "../../scripts/prepare-codex-runtime.mjs";
 import { resolveMacSigningIdentity } from "./scripts/mac-signing.mjs";
+import { copyNodeRuntime } from "./scripts/managed-node-runtime.mjs";
 import { signWindowsFile, verifyWindowsFile } from "./scripts/windows-signing.mjs";
 import { buildInfo } from "./vite.build-info";
 
@@ -90,7 +92,9 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
     if (!identity) return {};
     const osxSign = {
       identity,
-      ignore: (filePath: string) => /\.(?:asar|bin|dat|pak)$/iu.test(filePath),
+      ignore: (filePath: string) =>
+        /\.(?:asar|bin|dat|pak)$/iu.test(filePath) ||
+        /[\\/]runtime[\\/]node[\\/]files[\\/]bin[\\/]node$/u.test(filePath),
       optionsForFile: (filePath: string) => ({
         hardenedRuntime: true,
         entitlements:
@@ -120,13 +124,16 @@ function signingConfiguration(): Partial<ForgeConfig["packagerConfig"]> {
     return {
       windowsSign: {
         hookFunction: async (filePath: string) => {
+          // Preserve every byte of the independently pinned official Codex distribution.
+          if (/[\\/]runtime[\\/]codex[\\/]files[\\/]/iu.test(filePath)) return;
           // The helper is signed before its hash is sealed inside app.asar.
           // Signing it again here would invalidate that protected manifest.
           const helper =
             /[\\/]native[\\/]windows-desktop-control[\\/]openerx-desktop-helper\.exe$/iu.test(
               filePath,
             );
-          if (helper) verifyWindowsFile(filePath, process.env, undefined, true);
+          if (helper || /[\\/]runtime[\\/]node[\\/]files[\\/]node\.exe$/iu.test(filePath))
+            verifyWindowsFile(filePath, process.env, undefined, true);
           else signWindowsFile(filePath);
         },
       },
@@ -142,7 +149,7 @@ const config: ForgeConfig = {
     buildVersion: buildInfo.nativeBuildNumber,
     asar: {
       unpack:
-        "**/{*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1,openerx-desktop-helper.exe}",
+        "**/{runtime/node/files/**,runtime/codex/files/**,*.node,openerx-browser-accessibility,windows-browser-accessibility.ps1,openerx-desktop-helper.exe}",
     },
     appBundleId: "com.openerx.desktop",
     icon: path.join(desktopDirectory, "public", "assets", "openerx"),
@@ -175,6 +182,30 @@ const config: ForgeConfig = {
       }
     },
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
+      const macSigning = forgeConfig.packagerConfig.osxSign;
+      const nodeSign =
+        ["darwin", "mas"].includes(platform) &&
+        typeof macSigning === "object" &&
+        macSigning.identity
+          ? (file: string) =>
+              execFileSync(
+                "codesign",
+                [
+                  "--force",
+                  "--sign",
+                  macSigning.identity!,
+                  "--options",
+                  "runtime",
+                  "--timestamp",
+                  "--entitlements",
+                  macChildEntitlements,
+                  file,
+                ],
+                { stdio: "inherit" },
+              )
+          : undefined;
+      await copyNodeRuntime(buildPath, platform === "mas" ? "darwin" : platform, arch, nodeSign);
+      await copyCodexRuntime(buildPath, platform === "mas" ? "darwin" : platform, arch);
       writeFileSync(
         path.join(buildPath, "build-info.json"),
         JSON.stringify(buildInfo, null, 2) + "\n",

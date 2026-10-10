@@ -8,6 +8,7 @@ import {
 } from "./chat";
 import { errorEnvelopeSchema } from "./errors";
 import { modelAuthorizationSchema } from "./hosted-model";
+import { managedNodeRuntimeErrorSchema, managedNodeRuntimeSchema } from "./managed-node-runtime";
 import { automaticMemoryCreatedEventSchema } from "./memory";
 import { hostToolAvailabilitySchema } from "./model";
 import { projectCommandEnvelopeSchema } from "./project";
@@ -29,6 +30,8 @@ export const appServiceBootstrapSchema = z
     piHostNonce: processNonceSchema,
     profileDirectory: z.string().min(1),
     defaultWorkspaceDirectory: z.string().min(1),
+    nodeRuntime: managedNodeRuntimeSchema.optional(),
+    nodeRuntimeError: managedNodeRuntimeErrorSchema.optional(),
     ownerProfileId: z.string().min(1),
     deviceId: entityIdSchema,
   })

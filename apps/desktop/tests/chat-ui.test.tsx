@@ -447,6 +447,9 @@ function createBridge(): DesktopBridge {
     previewArtifact: vi.fn(),
     saveArtifact: vi.fn(),
     listToolRuntimeReadiness: vi.fn().mockResolvedValue([]),
+    startWindowsSandboxSetup: vi
+      .fn()
+      .mockResolvedValue({ success: true, reason: null, details: [] }),
     getLocalWebSearchSettings: vi.fn().mockResolvedValue({
       providerId: "direct:baidu-json",
       locale: "zh-CN",

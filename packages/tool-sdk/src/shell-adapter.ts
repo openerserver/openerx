@@ -2,10 +2,12 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import type {
   HostToolAvailability,
+  ManagedNodeRuntime,
+  ManagedNodeRuntimeError,
   NormalizedToolResult,
+  ResolvedShellEncoding,
   ToolOperation,
   WorkspaceGrant,
 } from "@openerx/contracts";
@@ -14,7 +16,17 @@ import {
   codexWindowsSandboxReady,
   type WindowsSandboxCommandHost,
 } from "./codex-windows-shell-adapter";
+import { managedNodeRuntimeEnvironment, resolveManagedNodeCommand } from "./managed-node-runtime";
 import type { PlatformSandboxWorkspaceChanges } from "./platform-sandbox-engine";
+import {
+  appendShellOutput,
+  encodeShellInput,
+  normalizeShellEncoding,
+  type ShellOutputDecodingError,
+  type ShellOutputStream,
+  ShellTextOutputDecoder,
+  shellOutputDecodingMessage,
+} from "./shell-text-codec";
 import { type ToolAdapter, ToolAdapterError, type ToolExecutionContext } from "./types";
 import {
   captureWorkspaceWriteBaseline,
@@ -68,6 +80,8 @@ interface ProcessRecord {
   cwd: string;
   output: string;
   outputTruncated: boolean;
+  encoding: ResolvedShellEncoding;
+  outputDecodingErrors: ShellOutputDecodingError[];
   isolation: "macos-sandbox";
   state: "running" | "completed" | "failed" | "stopped" | "timed_out";
   exitCode: number | null;
@@ -94,13 +108,9 @@ function shellEnvironment(cwd: string): NodeJS.ProcessEnv {
 }
 
 function appendOutput(record: ProcessRecord, text: string): void {
-  const remaining = Math.max(0, OUTPUT_LIMIT - record.output.length);
-  let addition = text.slice(0, remaining);
-  if (addition.length < text.length) {
-    record.outputTruncated = true;
-    if (/[\uD800-\uDBFF]$/u.test(addition)) addition = addition.slice(0, -1);
-  }
-  record.output += addition;
+  const appended = appendShellOutput(record.output, text, OUTPUT_LIMIT);
+  record.output = appended.text;
+  record.outputTruncated ||= appended.truncated;
 }
 
 function sandboxPath(value: string): string {
@@ -125,6 +135,7 @@ function sandboxedCommand(
   cwd: string,
   workspaceRoot: string,
   allowNetwork: boolean,
+  readOnlyRoots: readonly string[] = [],
 ): { command: string; args: string[]; isolation: "macos-sandbox" } {
   if (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec")) {
     throw new Error("SHELL_OS_SANDBOX_UNAVAILABLE");
@@ -143,7 +154,7 @@ function sandboxedCommand(
     "/dev",
     "/opt/homebrew",
   ].filter(existsSync);
-  const readRules = [workspaceRoot, ...systemReadRoots]
+  const readRules = [workspaceRoot, ...systemReadRoots, ...readOnlyRoots]
     .map((root) => `(subpath "${sandboxPath(root)}")`)
     .join(" ");
   const profile = [
@@ -156,6 +167,7 @@ function sandboxedCommand(
     '(allow file-read-data (literal "/"))',
     `(allow file-read* ${readRules} (literal "${sandboxPath(executable)}"))`,
     `(allow file-write* (subpath "${sandboxPath(workspaceRoot)}"))`,
+    ...readOnlyRoots.map((root) => `(deny file-write* (subpath "${sandboxPath(root)}"))`),
     // Discarded stdio opens /dev/null for writing, including child processes.
     '(allow file-write* (literal "/dev/null"))',
     allowNetwork ? "(allow network*)" : "(deny network*)",
@@ -188,6 +200,10 @@ export class ShellToolAdapter implements ToolAdapter {
       changes: PlatformSandboxWorkspaceChanges,
       context: ToolExecutionContext,
     ) => void,
+    private readonly options: {
+      nodeRuntime?: ManagedNodeRuntime;
+      nodeRuntimeError?: ManagedNodeRuntimeError;
+    } = {},
   ) {
     this.#workspaceRoots = workspaceRoots.map((root) => realpathSync(root));
     if (process.platform === "win32" && (windowsHost || codexWindowsSandboxReady())) {
@@ -195,6 +211,7 @@ export class ShellToolAdapter implements ToolAdapter {
         workspaceRoots,
         resolveWorkspaceGrant,
         windowsHost,
+        options,
       );
     }
   }
@@ -321,6 +338,7 @@ export class ShellToolAdapter implements ToolAdapter {
     operation: Extract<ToolOperation, { operation: "shell_execute" }>,
     context: ToolExecutionContext,
   ): Promise<NormalizedToolResult> {
+    const encoding = normalizeShellEncoding(operation.encoding);
     if (
       operation.command.includes("\0") ||
       operation.args.some((argument) => argument.includes("\0"))
@@ -357,16 +375,28 @@ export class ShellToolAdapter implements ToolAdapter {
       if (!approvedRoot) throw new Error("SHELL_CWD_OUT_OF_SCOPE");
       workspaceRoot = approvedRoot;
     }
-    const command = sandboxedCommand(
+    const resolved = resolveManagedNodeCommand(
+      this.options.nodeRuntime,
       operation.command,
       operation.args,
+      this.options.nodeRuntimeError,
+    );
+    const command = sandboxedCommand(
+      resolved.command,
+      resolved.args,
       cwd,
       workspaceRoot,
       operation.allowNetwork,
+      resolved.readOnlyRoots,
     );
     const child = spawn(command.command, command.args, {
       cwd,
-      env: shellEnvironment(cwd),
+      env: {
+        ...shellEnvironment(cwd),
+        ...(this.options.nodeRuntime
+          ? managedNodeRuntimeEnvironment(this.options.nodeRuntime, { cwd })
+          : {}),
+      },
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
@@ -378,6 +408,8 @@ export class ShellToolAdapter implements ToolAdapter {
       cwd,
       output: "",
       outputTruncated: false,
+      encoding,
+      outputDecodingErrors: [],
       isolation: command.isolation,
       state: "running",
       exitCode: null,
@@ -389,14 +421,39 @@ export class ShellToolAdapter implements ToolAdapter {
       }, operation.timeoutMs),
     };
     this.#processes.set(record.id, record);
-    const stdoutDecoder = new StringDecoder("utf8");
-    const stderrDecoder = new StringDecoder("utf8");
+    const decoders = {
+      stdout: new ShellTextOutputDecoder(encoding.stdout),
+      stderr: new ShellTextOutputDecoder(encoding.stderr),
+    };
+    const bytes = { stdout: 0, stderr: 0 };
+    const rawTruncated = { stdout: false, stderr: false };
+    const decode = (stream: ShellOutputStream, chunk?: Buffer) => {
+      try {
+        if (!chunk) {
+          appendOutput(record, decoders[stream].finish(rawTruncated[stream]));
+          return;
+        }
+        const available = Math.max(0, OUTPUT_LIMIT - bytes[stream]);
+        const accepted = chunk.subarray(0, available);
+        bytes[stream] += accepted.length;
+        rawTruncated[stream] ||= chunk.length > available;
+        record.outputTruncated ||= rawTruncated[stream];
+        appendOutput(record, decoders[stream].write(accepted));
+      } catch {
+        if (!record.outputDecodingErrors.some((item) => item.stream === stream))
+          record.outputDecodingErrors.push({
+            stream,
+            encoding: encoding[stream],
+            code: "SHELL_OUTPUT_DECODING_FAILED",
+          });
+      }
+    };
     child.stdout.on("data", (chunk: Buffer) => {
-      appendOutput(record, stdoutDecoder.write(chunk));
+      decode("stdout", chunk);
       context.update(record.output.slice(-2_000));
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      appendOutput(record, stderrDecoder.write(chunk));
+      decode("stderr", chunk);
       context.update(record.output.slice(-2_000));
     });
     const completed = new Promise<void>((resolve, reject) => {
@@ -408,8 +465,8 @@ export class ShellToolAdapter implements ToolAdapter {
         reject(error);
       });
       child.once("close", (exitCode) => {
-        appendOutput(record, stdoutDecoder.end());
-        appendOutput(record, stderrDecoder.end());
+        decode("stdout");
+        decode("stderr");
         clearTimeout(record.timeout);
         record.exitCode = exitCode;
         record.completedAt = Date.now();
@@ -431,7 +488,13 @@ export class ShellToolAdapter implements ToolAdapter {
       return {
         summary: `进程已启动：${record.id}`,
         content: [{ type: "text", text: `进程已启动：${record.id}` }],
-        data: { processId: record.id, state: record.state, isolation: command.isolation },
+        data: {
+          processId: record.id,
+          state: record.state,
+          isolation: command.isolation,
+          encoding,
+          outputDecodingErrors: record.outputDecodingErrors,
+        },
         sources: [],
         artifacts: [],
         sideEffectCommitted: true,
@@ -453,6 +516,8 @@ export class ShellToolAdapter implements ToolAdapter {
           exitCode: record.exitCode,
           outputTruncated: record.outputTruncated,
           isolation: command.isolation,
+          encoding,
+          outputDecodingErrors: record.outputDecodingErrors,
         },
         sources: [],
         artifacts: [],
@@ -460,35 +525,72 @@ export class ShellToolAdapter implements ToolAdapter {
         durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
       });
     }
-    return {
-      summary: record.output || `进程退出码 ${record.exitCode}`,
-      content: [{ type: "text", text: record.output || `进程退出码 ${record.exitCode}` }],
+    const result: NormalizedToolResult = {
+      summary: [
+        record.output || `进程退出码 ${record.exitCode}`,
+        shellOutputDecodingMessage(record.outputDecodingErrors),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      content: [
+        {
+          type: "text",
+          text: [
+            record.output || `进程退出码 ${record.exitCode}`,
+            shellOutputDecodingMessage(record.outputDecodingErrors),
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ],
       data: {
         processId: record.id,
         state: record.state,
         exitCode: record.exitCode,
         isolation: command.isolation,
         outputTruncated: record.outputTruncated,
+        encoding,
+        outputDecodingErrors: record.outputDecodingErrors,
       },
       sources: [],
       artifacts: [],
       sideEffectCommitted: true,
       durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
     };
+    if (record.outputDecodingErrors.length > 0)
+      throw new ToolAdapterError("SHELL_OUTPUT_DECODING_FAILED", result);
+    return result;
   }
 
   #status(processId: string): NormalizedToolResult {
     const record = this.#processes.get(processId);
     if (!record) throw new Error("SHELL_PROCESS_NOT_FOUND");
     return {
-      summary: record.output.slice(-8_000) || record.state,
-      content: [{ type: "text", text: record.output.slice(-8_000) || record.state }],
+      summary: [
+        record.output.slice(-8_000) || record.state,
+        shellOutputDecodingMessage(record.outputDecodingErrors),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      content: [
+        {
+          type: "text",
+          text: [
+            record.output.slice(-8_000) || record.state,
+            shellOutputDecodingMessage(record.outputDecodingErrors),
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ],
       data: {
         processId: record.id,
         state: record.state,
         exitCode: record.exitCode,
         outputTruncated: record.outputTruncated,
         isolation: record.isolation,
+        encoding: record.encoding,
+        outputDecodingErrors: record.outputDecodingErrors,
       },
       sources: [],
       artifacts: [],
@@ -500,7 +602,7 @@ export class ShellToolAdapter implements ToolAdapter {
   #input(processId: string, input: string): NormalizedToolResult {
     const record = this.#processes.get(processId);
     if (record?.state !== "running") throw new Error("SHELL_PROCESS_NOT_RUNNING");
-    record.child.stdin.write(input);
+    record.child.stdin.write(encodeShellInput(input, record.encoding.stdin));
     return {
       summary: "输入已发送",
       content: [{ type: "text", text: "输入已发送" }],

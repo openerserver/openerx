@@ -149,6 +149,7 @@ import {
   toolPermissionModeSetInputSchema,
   toolScopeRevokeInputSchema,
   usageQueryInputSchema,
+  windowsSandboxSetupResultSchema,
   workItemGetInputSchema,
   workspaceChooseInputSchema,
   workspaceGrantSchema,
@@ -798,6 +799,10 @@ const bridge: DesktopBridge = {
   },
   listToolRuntimeReadiness: async () =>
     invokeChat(ipcChannels.toolRuntimeReadiness, "tool.runtime.readiness", {}),
+  startWindowsSandboxSetup: async () =>
+    windowsSandboxSetupResultSchema.parse(
+      await ipcRenderer.invoke(ipcChannels.windowsSandboxSetup),
+    ),
   getLocalWebSearchSettings: async () =>
     invokeChat(ipcChannels.localWebSearchSettingsGet, "tool.webSearch.settings.get", {}),
   updateLocalWebSearchSettings: async (input) =>

@@ -21,6 +21,8 @@ export function inScope(file) {
     [
       "scripts/desktop-parity.mjs",
       "scripts/test-desktop-common.mjs",
+      "scripts/prepare-codex-runtime.mjs",
+      "scripts/prepare-codex-runtime.d.mts",
       "tests/desktop-parity.test.mjs",
       "scripts/forge-runner.mjs",
       "scripts/dmg-image-size.mjs",

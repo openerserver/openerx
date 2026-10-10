@@ -1,13 +1,40 @@
 import { type ChildProcessWithoutNullStreams, execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
-import type { NormalizedToolResult, ToolOperation, WorkspaceGrant } from "@openerx/contracts";
+import type {
+  ManagedNodeRuntime,
+  ManagedNodeRuntimeError,
+  NormalizedToolResult,
+  ResolvedShellEncoding,
+  ShellEncoding,
+  ToolOperation,
+  WorkspaceGrant,
+} from "@openerx/contracts";
+import { managedNodeRuntimeEnvironment, resolveManagedNodeCommand } from "./managed-node-runtime";
+import {
+  appendShellOutput,
+  encodeShellInput,
+  normalizeShellEncoding,
+  type ShellOutputDecodingError,
+  ShellTextOutputDecoder,
+} from "./shell-text-codec";
 import { type ToolAdapter, ToolAdapterError, type ToolExecutionContext } from "./types";
+import { windowsCodexRuntimeState } from "./windows-codex-runtime";
+import { windowsManagedNodeLaunch } from "./windows-managed-node-launcher";
+import { resolveWindowsPowerShellCommand } from "./windows-powershell";
+import {
+  sandboxDiagnosticText,
+  type WindowsSandboxDiagnostic,
+  WindowsSandboxError,
+  type WindowsSandboxStage,
+  windowsSandboxDiagnosticDetails,
+  windowsSandboxFailure,
+} from "./windows-sandbox-diagnostics";
 
 const OUTPUT_LIMIT = 2_000_000;
 
@@ -16,10 +43,11 @@ interface JsonRpcResponse {
   method?: string;
   params?: unknown;
   result?: unknown;
-  error?: { message?: string };
+  error?: { message?: string; code?: string | number; data?: unknown };
 }
 
 interface PendingRequest {
+  stage: WindowsSandboxStage;
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: NodeJS.Timeout;
@@ -32,6 +60,7 @@ interface CommandResult {
   timedOut?: boolean;
   stopped?: boolean;
   outputTruncated?: boolean;
+  outputDecodingErrors?: ShellOutputDecodingError[];
 }
 
 interface WindowsSandboxCommandInput {
@@ -40,12 +69,14 @@ interface WindowsSandboxCommandInput {
   writableRoot: string;
   timeoutMs: number;
   allowNetwork: boolean;
+  encoding?: ShellEncoding;
   signal?: AbortSignal;
   onOutput(delta: string, stream: "stdout" | "stderr", truncated: boolean): void;
 }
 
 export interface WindowsSandboxCommandHandle {
   readonly processId: string;
+  readonly isolation?: CodexWindowsSandboxIsolation;
   readonly completion: Promise<CommandResult>;
   write(input: string): Promise<void>;
   stop(): Promise<void>;
@@ -100,9 +131,9 @@ export async function selectCodexWindowsSandboxBackend(
 const execFileAsync = promisify(execFile);
 const mxcProbes = new Map<string, { checkedAt: number; supported: Promise<boolean> }>();
 
-async function mxcSupported(codexExecutable: string): Promise<boolean> {
+async function mxcSupported(codexExecutable: string, cwd: string): Promise<boolean> {
   try {
-    const key = `${codexExecutable}:${statSync(codexExecutable).mtimeMs}`;
+    const key = `${codexExecutable}:${statSync(codexExecutable).mtimeMs}:${realpathSync(cwd)}`;
     const cached = mxcProbes.get(key);
     if (cached && Date.now() - cached.checkedAt < 60_000) return cached.supported;
     const supported = execFileAsync(
@@ -110,8 +141,6 @@ async function mxcSupported(codexExecutable: string): Promise<boolean> {
       [
         "-c",
         "windows.sandbox=mxc",
-        "--disable",
-        "prefer_mxc",
         "sandbox",
         "--include-managed-config",
         "--permission-profile",
@@ -123,7 +152,7 @@ async function mxcSupported(codexExecutable: string): Promise<boolean> {
         "echo OPENERX_MXC_READY",
       ],
       {
-        cwd: path.dirname(codexExecutable),
+        cwd,
         env: safeAppServerEnvironment(),
         encoding: "utf8",
         timeout: 10_000,
@@ -131,16 +160,32 @@ async function mxcSupported(codexExecutable: string): Promise<boolean> {
         maxBuffer: 1024,
       },
     ).then(
-      ({ stdout }) => stdout.trim() === "OPENERX_MXC_READY",
-      () => false,
+      ({ stdout }) => {
+        if (stdout.trim() !== "OPENERX_MXC_READY")
+          throw new Error("SHELL_WINDOWS_CODEX_MXC_UNAVAILABLE");
+        return true;
+      },
+      (error: unknown) => {
+        throw windowsSandboxFailure(
+          error,
+          "compatibility",
+          "mxc",
+          "SHELL_WINDOWS_CODEX_MXC_UNAVAILABLE",
+        );
+      },
     );
     mxcProbes.set(key, { checkedAt: Date.now(), supported });
-    void supported.then((ready) => {
-      if (!ready && mxcProbes.get(key)?.supported === supported) mxcProbes.delete(key);
+    void supported.catch(() => {
+      if (mxcProbes.get(key)?.supported === supported) mxcProbes.delete(key);
     });
     return supported;
-  } catch {
-    return false;
+  } catch (error) {
+    throw windowsSandboxFailure(
+      error,
+      "compatibility",
+      "mxc",
+      "SHELL_WINDOWS_CODEX_MXC_UNAVAILABLE",
+    );
   }
 }
 
@@ -150,18 +195,7 @@ function codexHome(): string | null {
 }
 
 export function findCodexExecutable(): string | null {
-  const configured = process.env.OPENERX_CODEX_EXECUTABLE;
-  if (configured && existsSync(configured)) return realpathSync(configured);
-  const localAppData = process.env.LOCALAPPDATA;
-  if (!localAppData) return null;
-  const binRoot = path.join(localAppData, "OpenAI", "Codex", "bin");
-  if (!existsSync(binRoot)) return null;
-  const candidates = readdirSync(binRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(binRoot, entry.name, "codex.exe"))
-    .filter(existsSync)
-    .sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs);
-  return candidates[0] ? realpathSync(candidates[0]) : null;
+  return windowsCodexRuntimeState().executable ?? null;
 }
 
 function helpersExist(codexExecutable: string): boolean {
@@ -271,23 +305,31 @@ interface CommandConnection {
   commands: Map<string, StreamingCommand>;
   stderr: string;
   closed: boolean;
+  key: string;
+  backend: ResolvedCodexWindowsSandboxBackend;
+  setupCompleted?: (result: { success?: boolean; error?: unknown }) => void;
 }
 
 interface StreamingCommand {
   onOutput: WindowsSandboxCommandInput["onOutput"];
-  decoders: Record<"stdout" | "stderr", StringDecoder>;
+  decoders: Record<"stdout" | "stderr", ShellTextOutputDecoder>;
+  encoding: ResolvedShellEncoding;
+  decodingErrors: Set<"stdout" | "stderr">;
   output: Record<"stdout" | "stderr", string>;
   truncated: Record<"stdout" | "stderr", boolean>;
 }
 
 /** Trusted host dependencies, separate from model-controlled command parameters. */
 export interface CodexWindowsCommandHostRuntime {
+  nodeRuntime?: ManagedNodeRuntime;
+  nodeRuntimeError?: ManagedNodeRuntimeError;
   validateProtocol(executable: string): Promise<void>;
   selectBackend(
     executable: string,
     preference: CodexWindowsSandboxBackend,
+    cwd?: string,
   ): Promise<ResolvedCodexWindowsSandboxBackend>;
-  spawn(executable: string, args: string[]): ChildProcessWithoutNullStreams;
+  spawn(executable: string, args: string[], cwd?: string): ChildProcessWithoutNullStreams;
 }
 
 const protocolProbes = new Map<string, { checkedAt: number; supported: Promise<void> }>();
@@ -376,8 +418,14 @@ export async function validateCodexWindowsCommandProtocol(executable: string): P
         !schemaHasMethod(notifications, "command/exec/outputDelta")
       )
         throw new Error(PROTOCOL_UNSUPPORTED);
-    } catch {
-      throw new Error(PROTOCOL_UNSUPPORTED);
+    } catch (error) {
+      if (error instanceof Error && error.message === PROTOCOL_UNSUPPORTED) throw error;
+      throw windowsSandboxFailure(
+        error,
+        "protocol",
+        undefined,
+        "SHELL_WINDOWS_CODEX_PROTOCOL_CHECK_FAILED",
+      );
     } finally {
       // Only remove the directory created by this probe, under its resolved temp parent.
       await removeSchemaDirectory(directory, parent);
@@ -406,8 +454,10 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
   readonly #backendPreference: CodexWindowsSandboxBackend;
   readonly #runtime: CodexWindowsCommandHostRuntime;
   #backend?: ResolvedCodexWindowsSandboxBackend;
-  #connection?: CommandConnection;
-  #startPromise?: Promise<CommandConnection>;
+  readonly #connections = new Map<string, CommandConnection>();
+  readonly #startPromises = new Map<string, Promise<CommandConnection>>();
+  readonly #shutdowns = new Set<Promise<void>>();
+  readonly diagnostics: WindowsSandboxDiagnostic[] = [];
   #nextId = 1;
   #epoch = 0;
 
@@ -421,19 +471,23 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
     this.#backendPreference = backend;
     this.#runtime = {
       validateProtocol: validateCodexWindowsCommandProtocol,
-      selectBackend: async (executable, preference) => {
+      selectBackend: async (executable, preference, cwd = path.dirname(executable)) => {
         if (!codexWindowsSandboxReady({ codexExecutable: executable, backend: preference })) {
-          throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE");
+          throw new Error(
+            preference === "elevated"
+              ? "SHELL_WINDOWS_CODEX_SETUP_REQUIRED"
+              : "SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE",
+          );
         }
         return await selectCodexWindowsSandboxBackend(preference, {
-          mxcSupported: () => mxcSupported(executable),
+          mxcSupported: () => mxcSupported(executable, cwd),
           elevatedReady: () =>
             codexWindowsSandboxReady({ codexExecutable: executable, backend: "elevated" }),
         });
       },
-      spawn: (executable, args) =>
+      spawn: (executable, args, cwd = path.dirname(executable)) =>
         spawn(executable, args, {
-          cwd: path.dirname(executable),
+          cwd,
           env: safeAppServerEnvironment(),
           windowsHide: true,
           stdio: ["pipe", "pipe", "pipe"],
@@ -447,17 +501,120 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
     return this.#backend === "mxc" ? "codex-windows-mxc" : "codex-windows-restricted-token";
   }
 
+  async probe(cwd: string): Promise<ResolvedCodexWindowsSandboxBackend> {
+    const connection = await this.#ensureStarted(cwd);
+    // Readiness alone can report ready while the sandbox account cannot log on.
+    // Execute only this fixed, side-effect-free command during inspection.
+    try {
+      const handle = await this.start({
+        command: [
+          path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"),
+          "/d",
+          "/c",
+          "echo OPENERX_SANDBOX_READY",
+        ],
+        cwd,
+        writableRoot: cwd,
+        timeoutMs: 5_000,
+        allowNetwork: false,
+        onOutput: () => undefined,
+      });
+      const result = await handle.completion;
+      if (result.exitCode !== 0 || result.stdout.trim() !== "OPENERX_SANDBOX_READY")
+        throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE");
+      return connection.backend;
+    } catch (error) {
+      const failure = windowsSandboxFailure(error, "readiness", connection.backend);
+      throw new WindowsSandboxError({ ...failure.diagnostic, stage: "readiness" });
+    }
+  }
+
+  /** Called only from the explicit desktop settings action, never from a readiness probe. */
+  async setup(cwd: string): Promise<void> {
+    await this.#runtime.validateProtocol(this.#codexExecutable);
+    const connection = await this.#connect("elevated", realpathSync(cwd), this.#epoch, true);
+    let timer: NodeJS.Timeout | undefined;
+    const completion = new Promise<void>((resolve, reject) => {
+      connection.setupCompleted = (result) => {
+        if (result.success === true) resolve();
+        else
+          reject(
+            windowsSandboxFailure(
+              new Error(
+                typeof result.error === "string"
+                  ? result.error
+                  : "Windows sandbox setup did not complete",
+              ),
+              "setup",
+              "elevated",
+              "SHELL_WINDOWS_CODEX_SETUP_REQUIRED",
+            ),
+          );
+      };
+      timer = setTimeout(
+        () =>
+          reject(
+            windowsSandboxFailure(
+              new Error("Windows sandbox setup timed out"),
+              "setup",
+              "elevated",
+            ),
+          ),
+        120_000,
+      );
+    });
+    // A pipe failure can settle this while the setupStart acknowledgement is pending.
+    void completion.catch(() => undefined);
+    try {
+      const result = (await this.#request(
+        connection,
+        "windowsSandbox/setupStart",
+        { mode: "elevated", cwd: realpathSync(cwd) },
+        5_000,
+      )) as { started?: boolean };
+      if (result.started !== true) throw new Error("SHELL_WINDOWS_CODEX_SETUP_REQUIRED");
+      await completion;
+      mxcProbes.clear();
+    } finally {
+      clearTimeout(timer);
+      connection.setupCompleted = undefined;
+    }
+  }
+
   async start(input: WindowsSandboxCommandInput): Promise<WindowsSandboxCommandHandle> {
     input.signal?.throwIfAborted();
-    const [command, ...args] = input.command;
+    const encoding = normalizeShellEncoding(input.encoding);
+    const [command, ...originalArgs] = input.command;
     if (!command) throw new Error("SHELL_EXECUTABLE_NOT_FOUND");
-    const executable = resolveWindowsExecutable(command);
-    const connection = await abortable(this.#ensureStarted(), input.signal);
+    const interpreter = resolveWindowsPowerShellCommand(command, originalArgs);
+    const resolved = resolveManagedNodeCommand(
+      this.#runtime.nodeRuntime,
+      interpreter.command,
+      interpreter.args,
+      this.#runtime.nodeRuntimeError,
+    );
+    const executable = resolveWindowsExecutable(resolved.command);
+    const args = resolved.args;
+    if (
+      this.#runtime.nodeRuntime &&
+      inside(realpathSync(input.writableRoot), this.#runtime.nodeRuntime.rootDirectory)
+    )
+      throw new Error("SHELL_MANAGED_RUNTIME_WORKSPACE_OVERLAP");
+    const connection = await abortable(this.#ensureStarted(input.cwd), input.signal);
+    const launch =
+      connection.backend === "mxc"
+        ? windowsManagedNodeLaunch(this.#runtime.nodeRuntime, executable, args)
+        : { command: executable, args };
     input.signal?.throwIfAborted();
     const processId = randomUUID();
     const stream: StreamingCommand = {
       onOutput: input.onOutput,
-      decoders: { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") },
+      decoders: {
+        stdout: new ShellTextOutputDecoder(encoding.stdout),
+        stderr: new ShellTextOutputDecoder(encoding.stderr),
+      },
+      encoding,
+      decodingErrors: new Set(),
       output: { stdout: "", stderr: "" },
       truncated: { stdout: false, stderr: false },
     };
@@ -489,13 +646,20 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
       "command/exec",
       {
         processId,
-        command: [executable, ...args],
+        command: [launch.command, ...launch.args],
         timeoutMs: input.timeoutMs + 5_000,
         streamStdin: true,
         streamStdoutStderr: true,
         outputBytesCap: OUTPUT_LIMIT,
         cwd: input.cwd,
-        env: { TEMP: input.cwd, TMP: input.cwd, TMPDIR: input.cwd },
+        env: {
+          TEMP: input.cwd,
+          TMP: input.cwd,
+          TMPDIR: input.cwd,
+          ...(this.#runtime.nodeRuntime
+            ? managedNodeRuntimeEnvironment(this.#runtime.nodeRuntime, { cwd: input.cwd })
+            : {}),
+        },
         sandboxPolicy: {
           type: "workspaceWrite",
           writableRoots: [input.writableRoot],
@@ -523,8 +687,14 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
           for (const channel of ["stdout", "stderr"] as const) {
             // Streaming results must not silently fall back to buffered legacy execution.
             if (result[channel]) throw new Error(PROTOCOL_UNSUPPORTED);
-            if (!stream.truncated[channel])
-              this.#output(stream, channel, stream.decoders[channel].end(), false);
+            let suffix: string;
+            try {
+              suffix = stream.decoders[channel].finish(stream.truncated[channel]);
+            } catch {
+              stream.decodingErrors.add(channel);
+              continue;
+            }
+            this.#output(stream, channel, suffix, false);
           }
           return {
             exitCode: result.exitCode,
@@ -532,6 +702,11 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
             timedOut: reason === "timed_out",
             stopped: reason === "stopped",
             outputTruncated: stream.truncated.stdout || stream.truncated.stderr,
+            outputDecodingErrors: [...stream.decodingErrors].map((channel) => ({
+              stream: channel,
+              encoding: encoding[channel],
+              code: "SHELL_OUTPUT_DECODING_FAILED" as const,
+            })),
           };
         },
         (error: unknown) => {
@@ -559,6 +734,8 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
     if (input.signal?.aborted) abort();
     return {
       processId,
+      isolation:
+        connection.backend === "mxc" ? "codex-windows-mxc" : "codex-windows-restricted-token",
       completion,
       write: async (text) => {
         if (settled || reason) throw new Error("SHELL_PROCESS_NOT_RUNNING");
@@ -567,7 +744,7 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
           "command/exec/write",
           {
             processId,
-            deltaBase64: Buffer.from(text, "utf8").toString("base64"),
+            deltaBase64: encodeShellInput(text, encoding.stdin).toString("base64"),
             closeStdin: false,
           },
           5_000,
@@ -583,50 +760,92 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
 
   async close(): Promise<void> {
     this.#epoch++;
-    const connection = this.#connection;
-    this.#connection = undefined;
-    this.#startPromise = undefined;
-    if (connection)
+    for (const connection of this.#connections.values())
       this.#disconnect(connection, new Error("SHELL_WINDOWS_CODEX_APP_SERVER_DISCONNECTED"));
+    this.#connections.clear();
+    this.#startPromises.clear();
+    await Promise.all(this.#shutdowns);
+    this.#shutdowns.clear();
   }
 
-  async #ensureStarted(): Promise<CommandConnection> {
-    this.#startPromise ??= this.#start();
-    const pending = this.#startPromise;
+  async #ensureStarted(cwd: string): Promise<CommandConnection> {
+    const key = realpathSync(cwd);
+    const pending = this.#startPromises.get(key) ?? this.#start(key);
+    this.#startPromises.set(key, pending);
     try {
       const connection = await pending;
       if (connection.closed) throw new Error("SHELL_WINDOWS_CODEX_APP_SERVER_DISCONNECTED");
       return connection;
     } catch (error) {
-      if (this.#startPromise === pending) this.#startPromise = undefined;
+      if (this.#startPromises.get(key) === pending) this.#startPromises.delete(key);
       throw error;
     }
   }
 
-  async #start(): Promise<CommandConnection> {
+  async #start(cwd: string): Promise<CommandConnection> {
     const epoch = this.#epoch;
     await this.#runtime.validateProtocol(this.#codexExecutable);
-    const backend = await this.#runtime.selectBackend(
-      this.#codexExecutable,
-      this.#backendPreference,
-    );
+    let backend: ResolvedCodexWindowsSandboxBackend | undefined;
+    try {
+      backend = await this.#runtime.selectBackend(
+        this.#codexExecutable,
+        this.#backendPreference,
+        cwd,
+      );
+      if (epoch !== this.#epoch) throw new Error("SHELL_WINDOWS_CODEX_APP_SERVER_DISCONNECTED");
+      return await this.#connect(backend, cwd, epoch);
+    } catch (error) {
+      const primary = windowsSandboxFailure(
+        error,
+        "compatibility",
+        backend ?? (this.#backendPreference === "elevated" ? "elevated" : "mxc"),
+      );
+      this.diagnostics.push(primary.diagnostic);
+      // No command/exec has been sent. Once a user command is sent it is never replayed.
+      if (this.#backendPreference !== "auto" || backend === "elevated" || epoch !== this.#epoch)
+        throw primary;
+      try {
+        const fallback = await this.#runtime.selectBackend(this.#codexExecutable, "elevated", cwd);
+        if (epoch !== this.#epoch) throw new Error("SHELL_WINDOWS_CODEX_APP_SERVER_DISCONNECTED");
+        return await this.#connect(fallback, cwd, epoch);
+      } catch (fallbackError) {
+        const failure = windowsSandboxFailure(fallbackError, "readiness", "elevated");
+        this.diagnostics.push(failure.diagnostic);
+        throw failure;
+      }
+    }
+  }
+
+  async #connect(
+    backend: ResolvedCodexWindowsSandboxBackend,
+    cwd: string,
+    epoch: number,
+    setup = false,
+  ): Promise<CommandConnection> {
     if (epoch !== this.#epoch) throw new Error("SHELL_WINDOWS_CODEX_APP_SERVER_DISCONNECTED");
-    const child = this.#runtime.spawn(this.#codexExecutable, [
-      "-c",
-      `windows.sandbox=${backend}`,
-      "-c",
-      "features.prefer_mxc=false",
-      "app-server",
-      "--stdio",
-    ]);
+    const child = this.#runtime.spawn(
+      this.#codexExecutable,
+      [
+        "-c",
+        `windows.sandbox=${backend}`,
+        // Native prefer_mxc can override windows.sandbox=elevated. Pin the
+        // selected backend; a managed feature requirement may reject this.
+        ...(backend === "elevated" ? ["-c", "features.prefer_mxc=false"] : []),
+        "app-server",
+        "--stdio",
+      ],
+      cwd,
+    );
     const connection: CommandConnection = {
       child,
       pending: new Map(),
       commands: new Map(),
       stderr: "",
       closed: false,
+      key: cwd,
+      backend,
     };
-    this.#connection = connection;
+    this.#connections.set(cwd, connection);
     this.#backend = backend;
     const decoder = new StringDecoder("utf8");
     const stderrDecoder = new StringDecoder("utf8");
@@ -664,17 +883,35 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
         },
         5_000,
       );
+      if (setup) return connection;
       const readiness = (await this.#request(
         connection,
         "windowsSandbox/readiness",
         null,
         5_000,
-      )) as { status?: string };
-      if (readiness.status !== "ready") throw new Error("SHELL_WINDOWS_CODEX_SANDBOX_UNAVAILABLE");
+      )) as { status?: string; error?: unknown; reason?: unknown };
+      if (readiness.status !== "ready") {
+        throw windowsSandboxFailure(
+          new Error(sandboxDiagnosticText(JSON.stringify(readiness))),
+          "readiness",
+          backend,
+          backend === "elevated"
+            ? "SHELL_WINDOWS_CODEX_SETUP_REQUIRED"
+            : "SHELL_WINDOWS_CODEX_MXC_UNAVAILABLE",
+        );
+      }
       return connection;
     } catch (error) {
       this.#disconnect(connection, new Error("SHELL_WINDOWS_CODEX_APP_SERVER_DISCONNECTED"));
-      throw error;
+      throw error instanceof WindowsSandboxError
+        ? error
+        : windowsSandboxFailure(
+            Object.assign(new Error(error instanceof Error ? error.message : String(error)), {
+              stderr: connection.stderr,
+            }),
+            "initialize",
+            backend,
+          );
     }
   }
 
@@ -697,7 +934,15 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
         if (onTimeout) void onTimeout().then(finish, finish);
         else finish();
       }, timeoutMs);
-      connection.pending.set(id, { resolve, reject, timer });
+      const stage =
+        method === "initialize"
+          ? "initialize"
+          : method === "windowsSandbox/readiness"
+            ? "readiness"
+            : method.startsWith("windowsSandbox/setup")
+              ? "setup"
+              : "command";
+      connection.pending.set(id, { resolve, reject, timer, stage });
       child.stdin.write(`${JSON.stringify({ method, id, params })}\n`, (error) => {
         if (!error) return;
         this.#disconnect(connection, new Error("SHELL_WINDOWS_CODEX_APP_SERVER_DISCONNECTED"));
@@ -728,6 +973,14 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
     } catch {
       return;
     }
+    if (message.method === "windowsSandbox/setupCompleted") {
+      const data = message.params as
+        | { mode?: string; success?: boolean; error?: unknown }
+        | undefined;
+      if (data?.mode === "elevated" && typeof data.success === "boolean")
+        connection.setupCompleted?.(data);
+      return;
+    }
     if (message.method === "command/exec/outputDelta") {
       const data = message.params as
         | { processId?: string; stream?: string; deltaBase64?: string; capReached?: boolean }
@@ -742,7 +995,14 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
         return;
       const stream = connection.commands.get(data.processId);
       if (!stream) return;
-      const delta = stream.decoders[data.stream].write(Buffer.from(data.deltaBase64, "base64"));
+      let delta: string;
+      try {
+        delta = stream.decoders[data.stream].write(Buffer.from(data.deltaBase64, "base64"));
+      } catch {
+        stream.decodingErrors.add(data.stream);
+        stream.truncated[data.stream] ||= data.capReached;
+        return;
+      }
       this.#output(stream, data.stream, delta, data.capReached);
       return;
     }
@@ -751,24 +1011,129 @@ export class CodexWindowsSandboxCommandHost implements WindowsSandboxCommandHost
     if (!pending) return;
     clearTimeout(pending.timer);
     connection.pending.delete(message.id);
-    if (message.error) pending.reject(new Error(message.error.message ?? "CODEX_APP_SERVER_ERROR"));
+    if (message.error)
+      pending.reject(
+        windowsSandboxFailure(
+          Object.assign(new Error(message.error.message ?? "CODEX_APP_SERVER_ERROR"), {
+            code: message.error.code,
+            stderr: sandboxDiagnosticText(JSON.stringify(message.error.data ?? "")),
+          }),
+          pending.stage,
+          connection.backend,
+        ),
+      );
     else pending.resolve(message.result);
   }
 
   #disconnect(connection: CommandConnection, error: Error): void {
     if (connection.closed) return;
     connection.closed = true;
-    if (this.#connection === connection) {
-      this.#connection = undefined;
-      this.#startPromise = undefined;
+    connection.setupCompleted?.({ success: false, error: error.message });
+    if (this.#connections.get(connection.key) === connection) {
+      this.#connections.delete(connection.key);
+      this.#startPromises.delete(connection.key);
     }
     for (const pending of connection.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
     }
     connection.pending.clear();
+    if (connection.child.exitCode === null) {
+      const shutdown = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("SHELL_WINDOWS_CODEX_SHUTDOWN_TIMEOUT")),
+          5_000,
+        );
+        connection.child.once("close", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      void shutdown.catch(() => undefined);
+      this.#shutdowns.add(shutdown);
+    }
     connection.child.stdin.end();
     if (connection.child.exitCode === null && !connection.child.killed) connection.child.kill();
+  }
+}
+
+export interface WindowsSandboxInspection {
+  available: boolean;
+  backend?: ResolvedCodexWindowsSandboxBackend;
+  reason: string | null;
+  details: string[];
+}
+
+export async function inspectCodexWindowsSandbox(cwd: string): Promise<WindowsSandboxInspection> {
+  const runtime = windowsCodexRuntimeState();
+  const executable = runtime.executable;
+  if (!executable)
+    return {
+      available: false,
+      reason: runtime.error ?? "MANAGED_CODEX_RUNTIME_UNAVAILABLE",
+      details: ["应用随包执行组件缺失或校验失败，请重新安装应用"],
+    };
+  let host: CodexWindowsSandboxCommandHost | undefined;
+  try {
+    host = new CodexWindowsSandboxCommandHost(executable);
+    const backend = await host.probe(cwd);
+    return {
+      available: true,
+      backend,
+      reason: null,
+      details: [
+        `Backend：${backend === "mxc" ? "Codex Windows MXC" : "Codex Windows elevated"}`,
+        "检查：工作区兼容性、原生服务与实际沙箱执行",
+        ...host.diagnostics.flatMap(windowsSandboxDiagnosticDetails).slice(0, 6),
+      ],
+    };
+  } catch (error) {
+    const failure = windowsSandboxFailure(error, "readiness");
+    return {
+      available: false,
+      reason: failure.message,
+      details: [
+        ...(host?.diagnostics.flatMap(windowsSandboxDiagnosticDetails) ?? []),
+        ...windowsSandboxDiagnosticDetails(failure.diagnostic),
+      ].slice(0, 10),
+    };
+  } finally {
+    await host?.close();
+  }
+}
+
+export async function setupCodexWindowsSandbox(): Promise<{
+  success: boolean;
+  reason: string | null;
+  details: string[];
+}> {
+  if (process.platform !== "win32")
+    return { success: false, reason: "SHELL_OS_SANDBOX_UNAVAILABLE", details: [] };
+  const runtime = windowsCodexRuntimeState();
+  const executable = runtime.executable;
+  if (!executable)
+    return {
+      success: false,
+      reason: runtime.error ?? "MANAGED_CODEX_RUNTIME_UNAVAILABLE",
+      details: [],
+    };
+  const host = new CodexWindowsSandboxCommandHost(executable, "elevated");
+  try {
+    await host.setup(process.env.USERPROFILE ?? tmpdir());
+    return {
+      success: true,
+      reason: null,
+      details: ["传统 Windows 沙箱初始化完成，请重新检测工具状态"],
+    };
+  } catch (error) {
+    const failure = windowsSandboxFailure(error, "setup", "elevated");
+    return {
+      success: false,
+      reason: failure.message,
+      details: windowsSandboxDiagnosticDetails(failure.diagnostic),
+    };
+  } finally {
+    await host.close();
   }
 }
 
@@ -786,6 +1151,8 @@ interface ProcessRecord {
   completedAt: number | null;
   isolation: CodexWindowsSandboxIsolation;
   outputTruncated: boolean;
+  encoding: ResolvedShellEncoding;
+  outputDecodingErrors: ShellOutputDecodingError[];
   completion: Promise<void>;
   failureCode?: string;
 }
@@ -796,17 +1163,14 @@ function inside(root: string, target: string): boolean {
 }
 
 function appendBounded(current: string, delta: string): string {
-  const remaining = OUTPUT_LIMIT - Buffer.byteLength(current, "utf8");
-  if (remaining <= 0) return current;
-  const bytes = Buffer.from(delta, "utf8");
-  if (bytes.length <= remaining) return current + delta;
-  return current + new StringDecoder("utf8").write(bytes.subarray(0, remaining));
+  return appendShellOutput(current, delta, OUTPUT_LIMIT).text;
 }
 
 export class CodexWindowsShellToolAdapter implements ToolAdapter {
   readonly operations = ["shell_execute", "shell_status", "shell_input", "shell_stop"] as const;
   readonly #workspaceRoots: string[];
   readonly #processes = new Map<string, ProcessRecord>();
+  private readonly host: WindowsSandboxCommandHost;
 
   constructor(
     workspaceRoots: readonly string[],
@@ -814,8 +1178,10 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
       workspaceGrantId: string,
       conversationId: string,
     ) => WorkspaceGrant,
-    private readonly host: WindowsSandboxCommandHost = new CodexWindowsSandboxCommandHost(),
+    host?: WindowsSandboxCommandHost,
+    options: { nodeRuntime?: ManagedNodeRuntime; nodeRuntimeError?: ManagedNodeRuntimeError } = {},
   ) {
+    this.host = host ?? new CodexWindowsSandboxCommandHost(undefined, undefined, options);
     this.#workspaceRoots = workspaceRoots.map((root) => realpathSync(root));
   }
 
@@ -858,6 +1224,7 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
     operation: Extract<ToolOperation, { operation: "shell_execute" }>,
     context: ToolExecutionContext,
   ): Promise<NormalizedToolResult> {
+    const encoding = normalizeShellEncoding(operation.encoding);
     if (operation.command.includes("\0") || operation.args.some((arg) => arg.includes("\0"))) {
       throw new Error("SHELL_INVALID_ARGUMENT");
     }
@@ -913,6 +1280,7 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
       writableRoot: workspaceRoot,
       timeoutMs: operation.timeoutMs,
       allowNetwork: operation.allowNetwork,
+      encoding,
       signal: context.signal,
       onOutput: output,
     });
@@ -926,8 +1294,10 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
       exitCode: null,
       startedAt,
       completedAt: null,
-      isolation: this.host.isolation ?? "codex-windows-restricted-token",
+      isolation: handle.isolation ?? this.host.isolation ?? "codex-windows-restricted-token",
       outputTruncated: false,
+      encoding,
+      outputDecodingErrors: [],
       completion: Promise.resolve(),
     };
     this.#processes.set(record.id, record);
@@ -943,6 +1313,7 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
           record.exitCode = result.exitCode;
           record.completedAt = Date.now();
           record.outputTruncated ||= result.outputTruncated === true;
+          record.outputDecodingErrors = result.outputDecodingErrors ?? [];
           if (result.timedOut) record.state = "timed_out";
           else if (result.stopped) record.state = "stopped";
           else if (record.state === "running") {
@@ -980,6 +1351,8 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
     if (record.state === "timed_out")
       throw new ToolAdapterError("SHELL_TIMEOUT", this.#normalized(record));
     if (record.state === "stopped") throw new Error("SHELL_STOPPED");
+    if (record.outputDecodingErrors.length > 0)
+      throw new ToolAdapterError("SHELL_OUTPUT_DECODING_FAILED", this.#normalized(record));
     return this.#normalized(record);
   }
 
@@ -1006,16 +1379,31 @@ export class CodexWindowsShellToolAdapter implements ToolAdapter {
   }
 
   #normalized(record: ProcessRecord, summary?: string): NormalizedToolResult {
-    const text = summary ?? (record.output || record.state);
+    const decodingError =
+      record.outputDecodingErrors.length > 0
+        ? `终端输出无法按声明的编码解码（${record.outputDecodingErrors.map((item) => `${item.stream}: ${item.encoding}`).join(", ")}）；真实退出码已保留。`
+        : "";
+    const text = [summary ?? (record.output || record.state), decodingError]
+      .filter(Boolean)
+      .join("\n");
     return {
       summary: text.slice(-8_000),
-      content: [{ type: "text", text: record.output || text }],
+      content: [
+        {
+          type: "text",
+          text: [record.output || summary || record.state, decodingError]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ],
       data: {
         processId: record.id,
         state: record.state,
         exitCode: record.exitCode,
         outputTruncated: record.outputTruncated,
         isolation: record.isolation,
+        encoding: record.encoding,
+        outputDecodingErrors: record.outputDecodingErrors,
       },
       sources: [],
       artifacts: [],

@@ -46,15 +46,17 @@ npm run dev:desktop
 
 Skill 描述任务方法，工具提供执行能力。内置 Skill 位于 `packages/skills/src/builtins.ts`；修改资源后需要递增对应版本，再运行 `npm run update:builtin-skills:v2` 更新快照。
 
-Windows Shell 默认自动选择外部 Codex 的可用沙箱，无需设置环境变量。工具就绪状态只做初步安装检查；执行用户命令前异步检查 MXC 兼容性，成功结果缓存 60 秒，兼容时选择 MXC，否则检查已配置的 `elevated` 沙箱；两者均不可用时拒绝执行。选定后，初始化或命令失败均不会切换后端重试。MXC 使用 Windows 原生进程隔离、当前账户和每次命令独立的私有临时目录，已在 Codex CLI 0.162 上验证；`elevated` 使用独立的离线/在线账户，临时目录位于工作区，仍需满足当前命令协议要求。需要固定后端时可设置 `OPENERX_WINDOWS_SANDBOX_BACKEND=mxc` 或 `elevated`；显式选择不可用时直接拒绝执行。`auto`、空值和未设置均使用自动选择，其他值无效。应用不修改 Codex 全局配置。两种后端均按授权限制工作区写入和网络，当前 `workspaceWrite` 策略不承诺工作区外的读取隔离。外部程序路径可用 `OPENERX_CODEX_EXECUTABLE` 指定。
+Windows Shell 默认使用应用内锁定版本的 Codex 沙箱运行时，校验清单与文件后自动选择可用沙箱，无需在系统中安装 Codex 或设置环境变量。工具状态会检查工作目录的 MXC 兼容性、原生服务与固定命令的实际沙箱执行，优先使用 MXC；在尚未发送用户命令时，兼容性或服务启动失败可回退到已配置的 `elevated` 沙箱。用户命令发出后不会切换后端重跑。MXC 使用 Windows 原生进程隔离、当前账户和每次命令独立的私有临时目录；`elevated` 使用独立的离线/在线账户。工具设置会区分组件缺失、初始化、系统策略、账户登录和协议错误；只有需要初始化时才提供“初始化 Windows 沙箱”按钮，点击后可能出现系统管理员授权提示，完成后重新检测。读取工具状态或发送聊天消息不会自动初始化，也不会自动触发 UAC；系统策略禁止运行时需联系管理员。需要固定后端时可设置 `OPENERX_WINDOWS_SANDBOX_BACKEND=mxc` 或 `elevated`；显式选择不可用时直接拒绝执行。`auto`、空值和未设置均使用自动选择，其他值无效。应用不修改 Codex 全局配置。两种后端均按授权限制工作区写入和网络，当前 `workspaceWrite` 策略不承诺工作区外的读取隔离。未打包的开发或测试环境（`NODE_ENV=development` 或 `test`）可用 `OPENERX_CODEX_EXECUTABLE` 显式指定兼容可执行文件；打包应用忽略该覆盖并使用应用内运行时，缺失或校验失败时提示更新或重新安装应用。开发启动从官方固定版本与哈希准备本机缓存，离线时需已有校验通过的完整缓存。
 
 Chrome 扩展位于 `apps/desktop/browser-extension/`。已有标签页需显式配对授权；独立浏览器和系统辅助功能后端有不同的能力与平台权限要求。
 
-终端的 `command` 是可执行程序，`args` 按原始参数传递。Windows 内建命令、重定向和 npm 等批处理入口需显式使用 `cmd.exe /d /c`；PowerShell 使用 `powershell.exe -NoLogo -NoProfile -NonInteractive -Command`。Windows PowerShell 5 的默认代码页可能丢失 emoji 等字符，输出 Unicode 时在命令中设置 `[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)`。macOS 的 shell 语法需显式使用 `/bin/sh -c` 等解释器；Linux 的普通终端工具当前因缺少支持的 OS 沙箱而不可用。Node、npm、Git、Bash 等程序需安装并出现在应用启动时的 PATH 中；开发服务器附加的工具路径不会自动成为桌面应用的系统依赖。Skill 的 JavaScript 脚本依赖可用的 Node，Windows Store 的 Python 别名也不代表安装了 Python。
+终端的 `command` 是可执行程序，`args` 按原始参数传递。Windows 内建命令、重定向和外部批处理入口需显式使用 `cmd.exe /d /c`。`openerx-powershell` 是明确的脚本入口，`args` 必须只有一个脚本字符串；它用编码参数传递脚本并设置 UTF-8 输入、输出。直接调用 `powershell.exe` 时仍保留原始参数，需要自行设置合适的编码。macOS 的 shell 语法需显式使用 `/bin/sh -c` 等解释器；Linux 的普通终端工具当前因缺少支持的 OS 沙箱而不可用。
 
-进程输出与输入采用 UTF-8；原生流协议返回程序的原始字节，`cmd` 等程序的旧代码页输出不会自动转码，即使 `chcp 65001` 成功也不保证重定向输出为 UTF-8。需要中文等非 ASCII 输出时优先使用显式设置 UTF-8 的 PowerShell，旧编码输出当前属于已知限制。
+桌面包自带锁定版本的 Node.js、npm 和 npx，校验运行时清单与文件后提供给 Shell 和 Skill JavaScript 脚本，不依赖系统 PATH 中的 Node/npm，也不安装全局工具。Shell 可直接调用 `node`、`npm` 或 `npx`，子进程通过沙箱 PATH 使用同一运行时。MXC 下通过沙箱内固定系统启动器启动已校验的 Node，保留原始参数、字节流和退出码；停止命令会结束其进程树。npm 缓存和安装前缀限制在当前授权目录。开发启动会从官方固定版本及哈希准备本机运行时缓存；离线时需已有完整且校验通过的缓存。Git、Bash、Python 等外部程序仍需单独安装；Windows Store 的 Python 别名不代表安装了 Python。MCP STDIO 的外部启动命令仍需有可用运行环境。npm 下载依赖仍受网络授权和缓存状态约束。
 
-Windows 进程控制依赖外部 Codex 的沙箱命令流协议，执行前会核验协议字段，不支持时返回明确错误并要求更新外部程序。进程使用管道，可读取实时输出、发送 UTF-8 标准输入及停止单个后台命令；需要后续输入的程序应使用 `background=true`，完整交互式 TTY 程序另需终端能力。超时和取消结束对应命令，后台完成后自动收录工作区产物；输出截断会保留明确标志。
+终端默认按 UTF-8 处理输入、标准输出和标准错误。`encoding` 可分别指定 `stdin`、`stdout`、`stderr` 为 `utf8`、`cp936` 或 `utf16le`；未指定的流仍使用 UTF-8。例如旧版 `cmd` 中文输出应明确设置 `stdout: "cp936"`，`cmd /u` 输出应设置 `stdout: "utf16le"`。应用不会猜测编码、执行 `chcp` 或改写普通程序参数。输出按流增量解码，非法字节报告 `SHELL_OUTPUT_DECODING_FAILED`，保留真实退出码、状态及出错流信息；不会重跑命令或用替换字符伪装成功。无法用指定编码表达的输入会在写入前拒绝，例如 CP936 下的 emoji。
+
+Windows 进程控制使用应用内 Codex 的沙箱命令流协议，执行前会核验协议字段，不支持时返回明确错误并提示更新或重新安装应用。进程使用管道，可读取实时输出、按声明的编码发送标准输入及停止单个后台命令；需要后续输入的程序应使用 `background=true`，完整交互式 TTY 程序另需终端能力。超时和取消结束对应命令，后台完成后自动收录工作区产物；输出截断会保留明确标志。
 
 ## 提交代码
 

@@ -1,4 +1,9 @@
-import type { NormalizedToolResult, ToolOperation } from "@openerx/contracts";
+import type {
+  ManagedNodeRuntime,
+  ManagedNodeRuntimeError,
+  NormalizedToolResult,
+  ToolOperation,
+} from "@openerx/contracts";
 import { ShellToolAdapter, type ToolAdapter, type ToolExecutionContext } from "@openerx/tool-sdk";
 import type { SkillPackageService } from "./package-service";
 import { readSkillScriptOutputs, type SkillScriptOutputFile } from "./script-outputs";
@@ -18,10 +23,18 @@ export class SkillToolAdapter implements ToolAdapter {
     private readonly versions?: ReadonlyMap<string, string>,
     private readonly options: {
       isolatedScripts?: boolean;
+      nodeRuntime?: ManagedNodeRuntime;
+      nodeRuntimeError?: ManagedNodeRuntimeError;
       collectOutputs?: SkillScriptOutputCollector;
     } = {},
   ) {
-    this.#shell = new ShellToolAdapter([skills.packagesDirectory()]);
+    this.#shell = new ShellToolAdapter(
+      [skills.packagesDirectory()],
+      undefined,
+      undefined,
+      undefined,
+      { nodeRuntime: options.nodeRuntime, nodeRuntimeError: options.nodeRuntimeError },
+    );
   }
 
   async execute(
@@ -65,10 +78,13 @@ export class SkillToolAdapter implements ToolAdapter {
       operation.allowNetwork,
       this.versions?.get(operation.installationId),
     );
+    if (this.options.nodeRuntimeError) throw new Error(this.options.nodeRuntimeError);
     const extension = script.absolutePath.split(".").at(-1)?.toLowerCase();
-    const command = process.platform === "win32" ? "node.exe" : "/usr/bin/env";
+    const command =
+      this.options.nodeRuntime?.nodeExecutable ??
+      (process.platform === "win32" ? "node.exe" : "/usr/bin/env");
     const args =
-      process.platform === "win32"
+      this.options.nodeRuntime || process.platform === "win32"
         ? [script.absolutePath, ...operation.args]
         : ["node", script.absolutePath, ...operation.args];
     if (extension !== "js" && extension !== "mjs" && extension !== "cjs") {
@@ -84,7 +100,12 @@ export class SkillToolAdapter implements ToolAdapter {
       : undefined;
     let shell: ShellToolAdapter | undefined;
     try {
-      shell = copy ? new ShellToolAdapter([copy.packagePath]) : this.#shell;
+      shell = copy
+        ? new ShellToolAdapter([copy.packagePath], undefined, undefined, undefined, {
+            nodeRuntime: this.options.nodeRuntime,
+            nodeRuntimeError: this.options.nodeRuntimeError,
+          })
+        : this.#shell;
       if (copy) this.#isolatedShells.add(shell);
       context.signal.throwIfAborted();
       const result = await shell.execute(
@@ -92,7 +113,9 @@ export class SkillToolAdapter implements ToolAdapter {
           operation: "shell_execute",
           idempotencyKey: operation.idempotencyKey,
           cwd: copy?.packagePath ?? script.packagePath,
-          command: copy ? (process.platform === "win32" ? "node.exe" : "node") : command,
+          command:
+            this.options.nodeRuntime?.nodeExecutable ??
+            (copy ? (process.platform === "win32" ? "node.exe" : "node") : command),
           args: copy ? [copy.absolutePath, ...operation.args] : args,
           timeoutMs: operation.timeoutMs,
           background: false,

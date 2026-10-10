@@ -96,6 +96,8 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
     repository: toolRepository,
     workspaceDirectory,
     defaultWorkspaceDirectory: bootstrap.defaultWorkspaceDirectory,
+    nodeRuntime: bootstrap.nodeRuntime,
+    nodeRuntimeError: bootstrap.nodeRuntimeError,
     host: mainCapabilities,
     oauth: mainCapabilities,
     resolveUploadPath: (fileId) => files.resolvePersonalFilePath(fileId),
@@ -114,7 +116,12 @@ async function bootstrapAppService(bootstrapEvent: Electron.MessageEvent): Promi
     selectedModelRef: (assistantMessageId) =>
       repository.selectedModelForMessage(assistantMessageId),
     emit: (event) => service.emitExternal(event),
-    additionalAdapters: [new SkillToolAdapter(skills)],
+    additionalAdapters: [
+      new SkillToolAdapter(skills, undefined, {
+        nodeRuntime: bootstrap.nodeRuntime,
+        nodeRuntimeError: bootstrap.nodeRuntimeError,
+      }),
+    ],
   });
   const projectRepository = new ProjectRepository(
     path.join(bootstrap.profileDirectory, "openerx-v2.sqlite"),

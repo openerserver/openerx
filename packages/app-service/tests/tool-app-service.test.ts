@@ -38,7 +38,11 @@ const liveMacOSSandbox =
 function fixture(
   options: {
     now?: () => string;
+    nodeRuntimeError?: import("@openerx/contracts").ManagedNodeRuntimeError;
     shellAvailability?: () => HostToolAvailability;
+    windowsSandboxInspector?: ConstructorParameters<
+      typeof ToolAppService
+    >[0]["windowsSandboxInspector"];
     brokeredBashV1?: boolean;
     brokeredBashRunnerMode?: BrokeredBashRunnerMode;
     platformSandboxEngine?: PlatformSandboxEngine;
@@ -88,6 +92,7 @@ function fixture(
     clear: vi.fn(async () => undefined),
   };
   const service = new ToolAppService({
+    nodeRuntimeError: options.nodeRuntimeError,
     repository: tools,
     workspaceDirectory: directory,
     defaultWorkspaceDirectory,
@@ -100,6 +105,9 @@ function fixture(
     selectedModelRef: () => "platform/auto",
     emit: (event) => events.push(event),
     ...(options.shellAvailability ? { shellAvailability: options.shellAvailability } : {}),
+    ...(options.windowsSandboxInspector
+      ? { windowsSandboxInspector: options.windowsSandboxInspector }
+      : {}),
     brokeredBashV1: options.brokeredBashV1 ?? false,
     localWebSearchV2: options.localWebSearchV2 ?? false,
     ...(options.localWebSearchPolicy ? { localWebSearchPolicy: options.localWebSearchPolicy } : {}),
@@ -260,6 +268,83 @@ afterEach(() => {
 });
 
 describe("ToolAppService", () => {
+  it.each(["MANAGED_NODE_RUNTIME_MISSING", "MANAGED_NODE_RUNTIME_INTEGRITY_FAILED"] as const)(
+    "keeps native shell readiness independent of unavailable Skill runtime (%s)",
+    async (nodeRuntimeError) => {
+      const f = fixture({
+        nodeRuntimeError,
+        shellAvailability: () => ({
+          availableToolNames: ["openerx_shell"],
+          unavailableReasons: {},
+        }),
+        windowsSandboxInspector: async () => ({
+          available: true,
+          backend: "mxc",
+          reason: null,
+          details: [],
+        }),
+      });
+      try {
+        const readiness = await f.service.listRuntimeReadiness({
+          authenticated: false,
+          platformConfigured: false,
+        });
+        expect(readiness.find(({ capability }) => capability === "skill")).toMatchObject({
+          status: "unavailable",
+          reason: nodeRuntimeError,
+          availableToolNames: [],
+          details: expect.arrayContaining(["Skill 文本读取：可用"]),
+        });
+        expect(readiness.find(({ capability }) => capability === "shell")).toMatchObject({
+          status: "available",
+        });
+        for (const entry of readiness) toolRuntimeReadinessSchema.parse(entry);
+      } finally {
+        await f.service.close();
+        f.chat.close();
+      }
+    },
+  );
+  it("uses asynchronous native readiness rather than installation presence for shell status", async () => {
+    let ready = false;
+    const inspector = vi.fn(async () =>
+      ready
+        ? {
+            available: true,
+            backend: "mxc" as const,
+            reason: null,
+            details: ["Backend：Codex Windows MXC"],
+          }
+        : {
+            available: false,
+            reason: "SHELL_WINDOWS_CODEX_POLICY_DENIED",
+            details: ["检查阶段：compatibility / mxc"],
+          },
+    );
+    const { service, chat, defaultWorkspaceDirectory } = fixture({
+      shellAvailability: () => ({ availableToolNames: ["openerx_shell"], unavailableReasons: {} }),
+      windowsSandboxInspector: inspector,
+    });
+    const input = { authenticated: false, platformConfigured: false };
+    expect(
+      (await service.listRuntimeReadiness(input)).find(({ capability }) => capability === "shell"),
+    ).toMatchObject({
+      status: "unavailable",
+      reason: "SHELL_WINDOWS_CODEX_POLICY_DENIED",
+      availableToolNames: [],
+    });
+    expect(inspector).toHaveBeenCalledWith(defaultWorkspaceDirectory);
+    ready = true;
+    expect(
+      (await service.listRuntimeReadiness(input)).find(({ capability }) => capability === "shell"),
+    ).toMatchObject({
+      status: "available",
+      reason: null,
+      details: expect.arrayContaining(["Backend：Codex Windows MXC"]),
+    });
+    await service.close();
+    chat.close();
+  });
   it("cancels one nested tool request without canceling its sibling and preserves parent audit", async () => {
     const signals = new Map<string, AbortSignal>();
     const releases = new Map<string, () => void>();

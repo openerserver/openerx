@@ -27,6 +27,7 @@ import {
   type DesktopControlSession,
   type DesktopExecutionContext,
   type HostToolAvailability,
+  type ManagedNodeRuntime,
   type ModelAuthorization,
   type ModelAuthorizationRequest,
   mainAutomationContextRequestFrameSchema,
@@ -158,6 +159,8 @@ export class AppServiceSupervisor {
     deviceId = "00000000-0000-4000-8000-000000000000",
     capabilityHostFactory: ((profileDirectory: string) => MainCapabilityHost) | null = null,
     defaultWorkspaceDirectory = resolveDefaultWorkspaceDirectory(profileDirectory),
+    private readonly nodeRuntime?: ManagedNodeRuntime,
+    private readonly nodeRuntimeError?: import("@openerx/contracts").ManagedNodeRuntimeError,
   ) {
     this.#profileDirectory = profileDirectory;
     this.#piHostEntry = piHostEntry;
@@ -477,6 +480,8 @@ export class AppServiceSupervisor {
         piHostNonce,
         profileDirectory: this.#profileDirectory,
         defaultWorkspaceDirectory: this.#defaultWorkspaceDirectory,
+        ...(this.nodeRuntime ? { nodeRuntime: this.nodeRuntime } : {}),
+        ...(this.nodeRuntimeError ? { nodeRuntimeError: this.nodeRuntimeError } : {}),
         ownerProfileId: this.#ownerProfileId,
         deviceId: this.#deviceId,
       },

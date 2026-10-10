@@ -3,8 +3,9 @@ import { accessSync, constants, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractFile, listPackage } from "@electron/asar";
-
+import { verifyPreparedCodexRuntime } from "../../../scripts/prepare-codex-runtime.mjs";
 import { desktopArtifactIdentity } from "./desktop-artifact-identity.mjs";
+import { verifyPreparedNodeRuntime } from "./managed-node-runtime.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const product = desktopArtifactIdentity(desktopRoot);
@@ -39,6 +40,31 @@ for (const archive of packages) {
     listedEntries.map((entry) => [entry.replaceAll("\\", "/"), entry]),
   );
   const entries = [...originalEntryByNormalized.keys()];
+  const runtimeManifestEntry = originalEntryByNormalized.get("/runtime/node/manifest.json");
+  if (!runtimeManifestEntry) throw new Error("RELEASE_NODE_RUNTIME_MANIFEST_MISSING");
+  const runtimeManifest = JSON.parse(
+    extractFile(archive, runtimeManifestEntry.replace(/^[/\\]/u, "")).toString("utf8"),
+  );
+  const [runtimePlatform, runtimeArchitecture] = target.split("-");
+  if (runtimePlatform === "win32") {
+    const codexManifestEntry = originalEntryByNormalized.get("/runtime/codex/manifest.json");
+    if (!codexManifestEntry) throw new Error("RELEASE_CODEX_RUNTIME_MANIFEST_MISSING");
+    const codexManifest = JSON.parse(
+      extractFile(archive, codexManifestEntry.replace(/^[/\\]/u, "")).toString("utf8"),
+    );
+    verifyPreparedCodexRuntime(
+      path.join(`${archive}.unpacked`, "runtime", "codex"),
+      runtimePlatform,
+      runtimeArchitecture,
+      codexManifest,
+    );
+  }
+  verifyPreparedNodeRuntime(
+    path.join(`${archive}.unpacked`, "runtime", "node"),
+    runtimePlatform === "mas" ? "darwin" : runtimePlatform,
+    runtimeArchitecture,
+    runtimeManifest,
+  );
   if (target === "win32-x64") {
     const manifestEntry = originalEntryByNormalized.get(
       "/native/windows-desktop-control/manifest.json",

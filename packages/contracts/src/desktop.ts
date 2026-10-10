@@ -22,6 +22,7 @@ import type { ReleaseUpdateBridge } from "./release";
 import type { SkillBridge } from "./skill";
 import type { SyncBridge } from "./sync";
 import type { ToolBridge } from "./tool";
+import type { WindowsSandboxSetupBridge } from "./windows-sandbox";
 import type { WorkspaceBridge } from "./workspace";
 
 export const ipcChannels = Object.freeze({
@@ -145,6 +146,7 @@ export const ipcChannels = Object.freeze({
   toolScopesList: "tool:scopes:list",
   toolScopeRevoke: "tool:scope:revoke",
   toolRuntimeReadiness: "tool:runtime:readiness",
+  windowsSandboxSetup: "desktop:windows-sandbox:setup",
   localWebSearchSettingsGet: "tool:web-search:settings:get",
   localWebSearchSettingsUpdate: "tool:web-search:settings:update",
   localWebSearchRuntimeReset: "tool:web-search:runtime:reset",
@@ -249,6 +251,7 @@ export interface DesktopBridge
     SkillBridge,
     PiRuntimeBridge,
     RemoteDesktopBridge,
+    WindowsSandboxSetupBridge,
     ReleaseUpdateBridge {
   getEnvironment(): Promise<DesktopEnvironment>;
   getLoginStartupSettings(): Promise<DesktopLoginStartupSettings>;

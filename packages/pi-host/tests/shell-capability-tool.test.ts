@@ -45,13 +45,20 @@ describe("shell platform guidance", () => {
         workspaceGrantId: randomUUID(),
         command: "node",
         args,
+        encoding: { stdout: "cp936", stderr: "utf16le" },
       },
       undefined,
       undefined,
       {} as never,
     );
     expect(request.mock.calls[0]?.[0]).toMatchObject({
-      operation: { command: "node", args, allowNetwork: false, background: false },
+      operation: {
+        command: "node",
+        args,
+        allowNetwork: false,
+        background: false,
+        encoding: { stdin: "utf8", stdout: "cp936", stderr: "utf16le" },
+      },
     });
   });
 });

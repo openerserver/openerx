@@ -20,6 +20,7 @@
     "@openerx/domain": "0.0.0",
     "@openerx/storage": "0.0.0",
     "diff": "8.0.4",
+    "iconv-lite": "0.7.3",
     "parse5": "8.0.1"
   },
   "devDependencies": {

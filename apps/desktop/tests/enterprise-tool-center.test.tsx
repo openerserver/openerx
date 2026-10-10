@@ -21,6 +21,7 @@ afterEach(() => {
 const capabilities: ToolRuntimeCapability[] = [
   "builtin.compute",
   "builtin.structured_data",
+  "skill",
   "file",
   "browser",
   "shell",
@@ -31,22 +32,24 @@ const capabilities: ToolRuntimeCapability[] = [
 ];
 const readiness: ToolRuntimeReadiness[] = capabilities.map((capability) => ({
   capability,
-  status: capability.startsWith("builtin.")
-    ? "available"
-    : ["file", "browser", "shell"].includes(capability)
-      ? "authorization_required"
-      : "unavailable",
+  status:
+    capability.startsWith("builtin.") || capability === "skill"
+      ? "available"
+      : ["file", "browser", "shell"].includes(capability)
+        ? "authorization_required"
+        : "unavailable",
   reason: null,
   availableToolNames: [],
   checkedAt: new Date().toISOString(),
   details: [`企业任务 ${capability} 使用说明`],
 }));
-function mount(read = vi.fn().mockResolvedValue(readiness)) {
+function mount(read = vi.fn().mockResolvedValue(readiness), setup?: () => Promise<unknown>) {
   const unsupported = vi.fn(() => {
     throw new Error("UNSUPPORTED_CONFIG_MUST_NOT_BE_CALLED");
   });
   const bridge = new Proxy({ listToolRuntimeReadiness: read } as unknown as DesktopBridge, {
     get(target, name) {
+      if (name === "startWindowsSandboxSetup" && setup) return setup;
       return name === "listToolRuntimeReadiness" ? target.listToolRuntimeReadiness : unsupported;
     },
   });
@@ -62,6 +65,28 @@ function mount(read = vi.fn().mockResolvedValue(readiness)) {
   );
   return { read, unsupported };
 }
+test("managed shell details offer explicit host initialization without invoking enterprise task execution", async () => {
+  const read = vi
+    .fn()
+    .mockResolvedValue(
+      readiness.map((tool) =>
+        tool.capability === "shell"
+          ? { ...tool, reason: "SHELL_WINDOWS_CODEX_SETUP_REQUIRED" }
+          : tool,
+      ),
+    );
+  const setup = vi.fn().mockResolvedValue({ success: true, reason: null, details: [] });
+  const f = mount(read, setup);
+  const row = (await screen.findByText("终端")).closest("article");
+  if (!row) throw new Error("shell tool missing");
+  fireEvent.click(within(row).getByRole("button", { name: "查看详情" }));
+  expect(setup).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "初始化 Windows 沙箱" }));
+  await screen.findByText("Windows 沙箱初始化已完成。");
+  await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(1));
+  expect(setup).toHaveBeenCalledExactlyOnceWith();
+  expect(f.unsupported).not.toHaveBeenCalled();
+});
 test("managed tool center reads enterprise readiness without querying or exposing personal configuration", async () => {
   const f = mount();
   await screen.findByText("企业任务 file 使用说明");

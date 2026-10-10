@@ -9,6 +9,109 @@ import { afterEach, expect, test, vi } from "vitest";
 import { SkillPackageService, SkillToolAdapter } from "../src";
 
 const roots: string[] = [];
+test.each(["MANAGED_NODE_RUNTIME_MISSING", "MANAGED_NODE_RUNTIME_INTEGRITY_FAILED"] as const)(
+  "Skill text remains readable while script dispatch fails closed for %s",
+  async (nodeRuntimeError) => {
+    const f = fixture();
+    const execute = vi.spyOn(ShellToolAdapter.prototype, "execute");
+    const adapter = new SkillToolAdapter(f.service, new Map([[f.skillId, "1.0.0"]]), {
+      nodeRuntimeError,
+      isolatedScripts: true,
+    });
+    const context = { toolCallId: randomUUID(), signal: new AbortController().signal, update() {} };
+    try {
+      const text = await adapter.execute(
+        {
+          operation: "skill_read",
+          installationId: f.skillId,
+          relativePath: "SKILL.md",
+          idempotencyKey: "runtime-text",
+        },
+        context,
+      );
+      expect(text.summary).toContain("Loaded company-script/SKILL.md");
+      await expect(
+        adapter.execute(
+          {
+            operation: "skill_script_execute",
+            installationId: f.skillId,
+            relativePath: "scripts/helper.mjs",
+            args: [],
+            timeoutMs: 1000,
+            allowNetwork: false,
+            idempotencyKey: "runtime-refused",
+          },
+          context,
+        ),
+      ).rejects.toThrow(nodeRuntimeError);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      await adapter.stopAll();
+      f.service.close();
+    }
+  },
+);
+test.each([false, true])(
+  "managed Node is explicit for normal and isolated Skill scripts (isolated=%s)",
+  async (isolatedScripts) => {
+    const f = fixture();
+    const nodeRuntime = {
+      nodeVersion: "24.21.0",
+      npmVersion: "11.19.0",
+      platform: "win32" as const,
+      architecture: "x64" as const,
+      rootDirectory: f.root,
+      binDirectory: f.root,
+      nodeExecutable: path.join(f.root, "trusted-node.exe"),
+      npmCli: path.join(f.root, "npm-cli.js"),
+      npxCli: path.join(f.root, "npx-cli.js"),
+      manifestPath: path.join(f.root, "manifest.json"),
+      manifestSha256: "a".repeat(64),
+    };
+    const execute = vi
+      .spyOn(ShellToolAdapter.prototype, "execute")
+      .mockImplementation(async (operation) => {
+        if (operation.operation !== "shell_execute") throw new Error("unexpected operation");
+        expect(operation.command).toBe(nodeRuntime.nodeExecutable);
+        expect(operation.args).toEqual([
+          path.join(operation.cwd!, "scripts/helper.mjs"),
+          "argument with spaces",
+          "& literal",
+        ]);
+        expect(operation.allowNetwork).toBe(false);
+        return {
+          summary: "trusted runtime",
+          content: [],
+          sources: [],
+          artifacts: [],
+          sideEffectCommitted: true,
+          durationMs: 1,
+        };
+      });
+    const adapter = new SkillToolAdapter(f.service, new Map([[f.skillId, "1.0.0"]]), {
+      isolatedScripts,
+      nodeRuntime,
+    });
+    try {
+      await adapter.execute(
+        {
+          operation: "skill_script_execute",
+          installationId: f.skillId,
+          relativePath: "scripts/helper.mjs",
+          args: ["argument with spaces", "& literal"],
+          timeoutMs: 1000,
+          allowNetwork: false,
+          idempotencyKey: "managed-runtime-script",
+        },
+        { toolCallId: randomUUID(), signal: new AbortController().signal, update() {} },
+      );
+      expect(execute).toHaveBeenCalledTimes(1);
+    } finally {
+      await adapter.stopAll();
+      f.service.close();
+    }
+  },
+);
 afterEach(() => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });

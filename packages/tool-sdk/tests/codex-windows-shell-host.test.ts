@@ -6,9 +6,11 @@ import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type CodexWindowsSandboxBackend,
   CodexWindowsSandboxCommandHost,
   CodexWindowsShellToolAdapter,
   codexWindowsSandboxReady,
+  type ResolvedCodexWindowsSandboxBackend,
 } from "../src/codex-windows-shell-adapter";
 import type { ToolExecutionContext } from "../src/types";
 
@@ -33,6 +35,8 @@ class CommandServer extends EventEmitter {
   killed = false;
   holdInitialize = false;
   lateClose = false;
+  readinessError: string | undefined;
+  probeError: string | undefined;
   timers = new Set<NodeJS.Timeout>();
   stdin = new Writable({
     write: (bytes, _encoding, done) => {
@@ -77,9 +81,18 @@ class CommandServer extends EventEmitter {
     if (this.killed) return;
     if (request.method === "initialize") {
       if (!this.holdInitialize) this.reply(request, {});
-    } else if (request.method === "windowsSandbox/readiness")
-      this.reply(request, { status: "ready" });
-    else if (request.method === "command/exec") {
+    } else if (request.method === "windowsSandbox/readiness") {
+      if (this.readinessError)
+        this.stdout.write(
+          `${JSON.stringify({ id: request.id, error: { code: -32000, message: this.readinessError } })}\n`,
+        );
+      else this.reply(request, { status: "ready" });
+    } else if (request.method === "windowsSandbox/setupStart") {
+      this.reply(request, { started: true });
+      this.stdout.write(
+        `${JSON.stringify({ method: "windowsSandbox/setupCompleted", params: { mode: "elevated", success: true } })}\n`,
+      );
+    } else if (request.method === "command/exec") {
       const p = request.params;
       expect(p).toMatchObject({
         streamStdin: true,
@@ -91,7 +104,22 @@ class CommandServer extends EventEmitter {
       const processId = p.processId as string;
       this.commands.set(processId, { request, outputBytes: { stdout: 0, stderr: 0 } });
       const mode = (p.command as string[])[1];
-      if (mode === "unicode") {
+      if ((p.command as string[]).includes("echo OPENERX_SANDBOX_READY")) {
+        if (this.probeError) {
+          this.stdout.write(
+            `${JSON.stringify({ id: request.id, error: { code: 1385, message: this.probeError } })}\n`,
+          );
+          this.commands.delete(processId);
+        } else {
+          this.output(processId, Buffer.from("OPENERX_SANDBOX_READY\r\n"));
+          this.finish(processId);
+        }
+      } else if (mode === "fail-native") {
+        this.stdout.write(
+          `${JSON.stringify({ id: request.id, error: { code: 1385, message: "Windows logon type denied: 1385" } })}\n`,
+        );
+        this.commands.delete(processId);
+      } else if (mode === "unicode") {
         for (const stream of ["stdout", "stderr"] as const) {
           for (const byte of Buffer.from("中文😀\n"))
             this.output(processId, Buffer.from([byte]), stream);
@@ -100,6 +128,20 @@ class CommandServer extends EventEmitter {
       } else if (mode === "large") {
         this.output(processId, Buffer.alloc(2_100_000, "x"));
         this.finish(processId);
+      } else if (mode === "declared-codecs") {
+        for (const byte of Buffer.from("d6d0cec4", "hex"))
+          this.output(processId, Buffer.from([byte]));
+        for (const byte of Buffer.from("中文🙂", "utf16le"))
+          this.output(processId, Buffer.from([byte]), "stderr");
+        this.finish(processId);
+      } else if (mode === "invalid-tail") {
+        this.output(processId, Buffer.from("e4b8", "hex"));
+        this.finish(processId);
+      } else if (mode === "large-cp936") {
+        this.output(processId, Buffer.from("d6d0".repeat(700_000), "hex"));
+        this.finish(processId);
+      } else if (mode === "encoded-input") {
+        // Keep pending without emitting bytes in an assumed codec.
       } else if (mode === "exit124") this.finish(processId, 124);
       else this.output(processId, Buffer.from("ready:"));
     } else if (request.method === "command/exec/write") {
@@ -137,8 +179,14 @@ function fakeHost(configure?: (server: CommandServer, index: number) => void) {
   const servers: CommandServer[] = [];
   const runtime = {
     validateProtocol: vi.fn(async () => undefined),
-    selectBackend: vi.fn(async () => "mxc" as const),
-    spawn: vi.fn(() => {
+    selectBackend: vi.fn(
+      async (
+        _executable: string,
+        _preference: CodexWindowsSandboxBackend,
+        _cwd?: string,
+      ): Promise<ResolvedCodexWindowsSandboxBackend> => "mxc",
+    ),
+    spawn: vi.fn((_executable: string, _args: string[], _cwd?: string) => {
       const server = new CommandServer();
       configure?.(server, servers.length);
       servers.push(server);
@@ -184,6 +232,86 @@ afterEach(async () => {
 });
 
 describe("sandboxed Windows command JSON-RPC", () => {
+  it("decodes declared streams independently without changing argv or guessing encodings", async () => {
+    const { host, servers } = fakeHost();
+    const input = command(workspace(), "declared-codecs", {
+      encoding: { stdout: "cp936", stderr: "utf16le" },
+    });
+    const handle = await host.start(input);
+    await expect(handle.completion).resolves.toMatchObject({
+      stdout: "中文",
+      stderr: "中文🙂",
+      outputDecodingErrors: [],
+      outputTruncated: false,
+    });
+    const request = servers[0]!.requests.find((item) => item.method === "command/exec");
+    expect(request?.params.command).toEqual(input.command);
+    expect(request?.params).not.toHaveProperty("encoding");
+  });
+
+  it("reports invalid output with the real successful exit status instead of replacing text", async () => {
+    const { host } = fakeHost();
+    const root = workspace();
+    const adapter = new CodexWindowsShellToolAdapter([root], undefined, host);
+    await expect(adapter.execute(operation(root, "invalid-tail"), context())).rejects.toMatchObject(
+      {
+        code: "SHELL_OUTPUT_DECODING_FAILED",
+        result: {
+          data: {
+            state: "completed",
+            exitCode: 0,
+            outputDecodingErrors: [
+              { stream: "stdout", encoding: "utf8", code: "SHELL_OUTPUT_DECODING_FAILED" },
+            ],
+          },
+        },
+      },
+    );
+  });
+
+  it("caps decoded CP936 output by UTF-8 bytes even below the native raw-byte limit", async () => {
+    const { host } = fakeHost();
+    const handle = await host.start(
+      command(workspace(), "large-cp936", { encoding: { stdout: "cp936" } }),
+    );
+    const result = await handle.completion;
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBe(1_999_998);
+    expect(result.outputTruncated).toBe(true);
+    expect(result.outputDecodingErrors).toEqual([]);
+    expect(result.stdout).not.toContain("\uFFFD");
+  });
+
+  it("encodes stdin per process and refuses unrepresentable input before a write RPC", async () => {
+    const { host, servers } = fakeHost();
+    const root = workspace();
+    const cp936 = await host.start(
+      command(root, "encoded-input", { encoding: { stdin: "cp936", stdout: "cp936" } }),
+    );
+    const utf16 = await host.start(
+      command(root, "encoded-input", { encoding: { stdin: "utf16le", stdout: "utf16le" } }),
+    );
+    await expect(cp936.write("🙂")).rejects.toThrow("SHELL_INPUT_ENCODING_UNREPRESENTABLE");
+    expect(
+      servers[0]!.requests.filter((item) => item.method === "command/exec/write"),
+    ).toHaveLength(0);
+    await cp936.write("中文");
+    await utf16.write("中文🙂");
+    await expect(cp936.completion).resolves.toMatchObject({ stdout: "中文" });
+    await expect(utf16.completion).resolves.toMatchObject({ stdout: "中文🙂" });
+    const writes = servers[0]!.requests.filter((item) => item.method === "command/exec/write");
+    expect(Buffer.from(writes[0]!.params.deltaBase64 as string, "base64").toString("hex")).toBe(
+      "d6d0cec4",
+    );
+  });
+
+  it("rejects unknown declared encoding before starting a server or executing argv", async () => {
+    const { host, runtime } = fakeHost();
+    await expect(
+      host.start(command(workspace(), "interactive", { encoding: { stdout: "auto" } })),
+    ).rejects.toThrow("SHELL_ENCODING_UNSUPPORTED");
+    expect(runtime.spawn).not.toHaveBeenCalled();
+  });
+
   it("streams split UTF-8 independently for stdout/stderr without duplicating final output", async () => {
     const { host, servers } = fakeHost();
     const input = command(workspace(), "unicode");
@@ -357,16 +485,169 @@ describe("sandboxed Windows command JSON-RPC", () => {
     // Node cannot generate Codex's protocol. This exercises the real asynchronous
     // capability check and its temporary schema-directory cleanup, without a model.
     await expect(host.start(command(workspace(), "interactive"))).rejects.toThrow(
-      "SHELL_WINDOWS_CODEX_COMMAND_PROTOCOL_UNSUPPORTED",
+      "SHELL_WINDOWS_CODEX_PROTOCOL_CHECK_FAILED",
     );
     expect(spawn).not.toHaveBeenCalled();
     expect(selectBackend).not.toHaveBeenCalled();
   });
 });
 
+describe("Windows sandbox startup recovery", () => {
+  it("does not mark an unusable sandbox account ready", async () => {
+    const { host } = fakeHost((server) => {
+      server.probeError = "Windows logon type denied: 1385";
+    });
+    await expect(host.probe(workspace())).rejects.toMatchObject({
+      diagnostic: { stage: "readiness", code: "SHELL_WINDOWS_CODEX_LOGON_DENIED" },
+    });
+  });
+
+  it("checks actual sandbox execution during readiness inspection", async () => {
+    const { host, servers } = fakeHost();
+    const root = workspace();
+    await expect(host.probe(root)).resolves.toBe("mxc");
+    const probe = servers[0]?.requests.find(({ method }) => method === "command/exec");
+    expect(probe?.params).toMatchObject({
+      cwd: root,
+      sandboxPolicy: { writableRoots: [root], networkAccess: false },
+    });
+    expect(probe?.params.command).toContain("echo OPENERX_SANDBOX_READY");
+  });
+
+  it("falls back only before user execution when MXC initialization fails", async () => {
+    const { host, runtime, servers } = fakeHost((server, index) => {
+      if (index === 0) server.readinessError = "MXC unavailable";
+    });
+    runtime.selectBackend.mockImplementation(async (_executable, preference) =>
+      preference === "elevated" ? "elevated" : "mxc",
+    );
+    const handle = await host.start(command(workspace(), "unicode"));
+    await expect(handle.completion).resolves.toMatchObject({ exitCode: 0, stdout: "中文😀\n" });
+    expect(handle.isolation).toBe("codex-windows-restricted-token");
+    expect(runtime.spawn.mock.calls[0]?.[1]).not.toContain("features.prefer_mxc=false");
+    expect(runtime.spawn.mock.calls[1]?.[1]).toContain("features.prefer_mxc=false");
+    expect(servers[0]!.requests.some(({ method }) => method === "command/exec")).toBe(false);
+    expect(servers[1]!.requests.filter(({ method }) => method === "command/exec")).toHaveLength(1);
+  });
+
+  it("preserves command failure details and never retries an already dispatched command", async () => {
+    const { host, runtime, servers } = fakeHost();
+    const handle = await host.start(command(workspace(), "fail-native"));
+    await expect(handle.completion).rejects.toMatchObject({
+      diagnostic: {
+        stage: "command",
+        nativeCode: "1385",
+        code: "SHELL_WINDOWS_CODEX_LOGON_DENIED",
+      },
+    });
+    expect(runtime.selectBackend).toHaveBeenCalledTimes(1);
+    expect(servers).toHaveLength(1);
+    expect(servers[0]!.requests.filter(({ method }) => method === "command/exec")).toHaveLength(1);
+  });
+
+  it("keeps explicit MXC selection strict and does not fall back", async () => {
+    const { runtime } = fakeHost((server) => {
+      server.readinessError = "MXC unavailable";
+    });
+    const host = new CodexWindowsSandboxCommandHost(process.execPath, "mxc", runtime);
+    hosts.push(host);
+    await expect(host.start(command(workspace(), "unicode"))).rejects.toMatchObject({
+      diagnostic: { backend: "mxc" },
+    });
+    expect(runtime.selectBackend).toHaveBeenCalledTimes(1);
+    expect(runtime.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses separate native configuration contexts for separate workspaces", async () => {
+    const { host, runtime, servers } = fakeHost();
+    const first = workspace();
+    const second = workspace();
+    await (await host.start(command(first, "unicode"))).completion;
+    await (await host.start(command(second, "unicode"))).completion;
+    expect(servers).toHaveLength(2);
+    expect(runtime.spawn.mock.calls.map((call) => call[2])).toEqual([first, second]);
+  });
+
+  it("initializes legacy setup only through the explicit setup API", async () => {
+    const { host, servers } = fakeHost();
+    await host.setup(workspace());
+    expect(servers[0]!.requests.map(({ method }) => method)).toEqual([
+      "initialize",
+      "windowsSandbox/setupStart",
+    ]);
+    expect(servers[0]!.requests.some(({ method }) => method === "command/exec")).toBe(false);
+  });
+});
+
 describe.runIf(process.platform === "win32" && codexWindowsSandboxReady())(
   "native Windows sandbox command lifecycle",
   () => {
+    it("runs the explicit UTF-8 PowerShell entrypoint including Chinese and emoji stdin", async () => {
+      const host = new CodexWindowsSandboxCommandHost();
+      hosts.push(host);
+      const handle = await host.start({
+        ...command(workspace(), "unused"),
+        command: [
+          "openerx-powershell",
+          "[Console]::WriteLine('中文🙂'); [Console]::WriteLine([Console]::ReadLine())",
+        ],
+      });
+      await handle.write("输入😀\n");
+      await expect(handle.completion).resolves.toMatchObject({
+        exitCode: 0,
+        stdout: "中文🙂\r\n输入😀\r\n",
+      });
+    }, 30_000);
+    it("decodes explicit CP936 cmd and UTF16LE cmd /u output without changing either argv", async () => {
+      const root = workspace();
+      const host = new CodexWindowsSandboxCommandHost();
+      hosts.push(host);
+      const cmd = path.join(process.env.SystemRoot ?? "C:/Windows", "System32", "cmd.exe");
+      for (const [args, encoding] of [
+        [["/d", "/c", "echo CMD_中文"], "cp936"],
+        [["/d", "/u", "/c", "echo CMD_中文🙂"], "utf16le"],
+      ] as const) {
+        const handle = await host.start({
+          ...command(root, "unused"),
+          command: [cmd, ...args],
+          encoding: { stdout: encoding },
+        });
+        const result = await handle.completion;
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.trim()).toBe(encoding === "cp936" ? "CMD_中文" : "CMD_中文🙂");
+        expect(result.outputDecodingErrors).toEqual([]);
+      }
+    }, 30_000);
+
+    it("round trips declared legacy stdin through actual native pipes", async () => {
+      const root = workspace();
+      const host = new CodexWindowsSandboxCommandHost();
+      hosts.push(host);
+      for (const encoding of ["cp936", "utf16le"] as const) {
+        const updates: string[] = [];
+        const handle = await host.start({
+          ...command(root, "unused"),
+          encoding: { stdin: encoding, stdout: encoding },
+          command: [
+            process.execPath,
+            "-e",
+            `process.stdout.write(Buffer.from('ready:',${JSON.stringify(encoding === "cp936" ? "ascii" : "utf16le")}));process.stdin.once('data',b=>{process.stdout.write(b);process.exit(0)});setInterval(()=>{},1000)`,
+          ],
+          onOutput: (text) => updates.push(text),
+        });
+        await vi.waitFor(() => expect(updates.join("")).toBe("ready:"), { timeout: 10_000 });
+        if (encoding === "cp936")
+          await expect(handle.write("🙂")).rejects.toThrow("SHELL_INPUT_ENCODING_UNREPRESENTABLE");
+        const text = encoding === "cp936" ? "中文" : "中文🙂";
+        await handle.write(text);
+        await expect(handle.completion).resolves.toMatchObject({
+          exitCode: 0,
+          stdout: `ready:${text}`,
+          outputDecodingErrors: [],
+        });
+      }
+    }, 30_000);
+
     it("streams input and concurrent output while stop leaves another command alive", async () => {
       const host = new CodexWindowsSandboxCommandHost();
       hosts.push(host);

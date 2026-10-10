@@ -14,6 +14,18 @@ import { thinkingLevelSchema, toolSystemPermissionSchema } from "./model";
 import { modelUsageRecordSchema } from "./model-usage";
 import { workspaceEditSummarySchema, workspaceInstructionSourceSchema } from "./workspace";
 
+export const shellTextEncodingSchema = z.enum(["utf8", "cp936", "utf16le"]);
+export const shellEncodingSchema = z
+  .object({
+    stdin: shellTextEncodingSchema.default("utf8"),
+    stdout: shellTextEncodingSchema.default("utf8"),
+    stderr: shellTextEncodingSchema.default("utf8"),
+  })
+  .strict();
+export type ShellTextEncoding = z.infer<typeof shellTextEncodingSchema>;
+export type ShellEncoding = z.input<typeof shellEncodingSchema>;
+export type ResolvedShellEncoding = z.output<typeof shellEncodingSchema>;
+
 export const skillScriptOutputSchema = z
   .object({
     relativePath: z
@@ -55,6 +67,7 @@ export const toolCapabilitySchema = z.enum([
 ]);
 
 export const toolRuntimeCapabilitySchema = z.enum([
+  "skill",
   "builtin.compute",
   "builtin.structured_data",
   "file",
@@ -451,6 +464,7 @@ export const toolOperationSchema = z.discriminatedUnion("operation", [
     .object({
       ...toolOperationBase,
       operation: z.literal("shell_execute"),
+      encoding: shellEncodingSchema.optional(),
       cwd: z.string().min(1).max(4_096).optional(),
       workspaceGrantId: entityIdSchema.optional(),
       relativeCwd: z.string().max(2_048).optional(),

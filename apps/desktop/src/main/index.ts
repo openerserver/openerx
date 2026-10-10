@@ -1,7 +1,9 @@
 import { isByokModelRef } from "@openerx/contracts";
 import { HttpPlatformModelTransport } from "@openerx/pi-host/platform-provider";
+import { setupCodexWindowsSandbox } from "@openerx/tool-sdk";
 import { HostedModelAccess } from "./hosted-model-access";
 import { LegacyPersonalDataReader } from "./legacy-personal-data";
+import { createWindowsSandboxSetupHandler } from "./windows-sandbox-setup";
 import { assertWorkspaceExecutionAllowed } from "./workspace-execution-policy";
 
 declare const __OPENERX_BUILD_INFO__: { version: string; buildId: string };
@@ -183,6 +185,7 @@ import { HtmlPreviewRegistry } from "./html-preview";
 import { assertTrustedIpcSender } from "./ipc-security";
 import { DesktopLoginStartupService, isBackgroundLoginStartup } from "./login-startup";
 import { requestMacScreenCapture } from "./macos-screen-permission";
+import { desktopNodeRuntimeState } from "./managed-node-runtime";
 import { mcpCredentialReferences, saveMcpSettings } from "./mcp-settings";
 import { memoryNotificationContent } from "./memory-notification";
 import { ModelServiceSettingsStore } from "./model-service-settings";
@@ -308,6 +311,10 @@ function registerIpcHandlers(
       appVersion: app.getVersion(),
     });
   });
+  ipcMain.handle(
+    ipcChannels.windowsSandboxSetup,
+    createWindowsSandboxSetupHandler(setupCodexWindowsSandbox),
+  );
   ipcMain.handle(ipcChannels.loginStartupSettingsGet, (event) => {
     assertTrustedIpcSender(event);
     return desktopLoginStartupSettingsSchema.parse(loginStartup.state());
@@ -1590,6 +1597,8 @@ app.whenReady().then(async () => {
         new ToolCredentialVault(path.join(directory, "credentials", "tool-credentials.bin")),
       ),
     resolveDefaultWorkspaceDirectory(app.getPath("documents")),
+    desktopNodeRuntimeState().nodeRuntime,
+    desktopNodeRuntimeState().nodeRuntimeError,
   );
   if (process.platform === "win32") {
     globalShortcut.register("Control+Alt+Shift+F12", () => supervisor?.stopDesktopControl());
