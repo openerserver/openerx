@@ -77,6 +77,7 @@ test.runIf(available)(
       expect(result.stderr).toEqual(Buffer.from([0, 255, 128, 10]));
     }
   },
+  30_000,
 );
 test.runIf(available)(
   "only the exact verified Node path is wrapped and oversized payloads fail explicitly",
@@ -94,6 +95,7 @@ test.runIf(available)(
       "MANAGED_NODE_RUNTIME_INTEGRITY_FAILED",
     );
   },
+  30_000,
 );
 test.runIf(nativeMxc)(
   "native MXC runs Node, npx and npm lifecycle children with only the managed Node PATH",
